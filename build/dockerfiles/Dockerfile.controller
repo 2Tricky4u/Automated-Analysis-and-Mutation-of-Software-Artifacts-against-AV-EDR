@@ -1,0 +1,7 @@
+# Minimal controller Dockerfile
+FROM scratch
+
+# Add a dummy file so the build context is valid
+COPY . /app
+
+# No actual build steps
