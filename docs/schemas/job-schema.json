@@ -1,0 +1,123 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "EDR Analysis Job",
+  "description": "Schema for defining an EDR analysis job",
+  "type": "object",
+  "required": ["job_id", "artifact", "configuration"],
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "pattern": "^job-[0-9]{6}$",
+      "description": "Unique job identifier"
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["type", "source"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["exe", "dll", "shellcode", "script"],
+          "description": "Type of artifact to analyze"
+        },
+        "source": {
+          "type": "string",
+          "description": "Path or reference to the artifact source code"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 hash of the artifact"
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "properties": {
+        "mutations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "string_obfuscation",
+              "api_hashing",
+              "control_flow_flattening",
+              "junk_code_insertion",
+              "syscall_direct"
+            ]
+          },
+          "description": "List of mutation strategies to apply"
+        },
+        "target": {
+          "type": "string",
+          "enum": ["x86_64-pc-windows-gnu", "x86_64-unknown-linux-gnu"],
+          "default": "x86_64-pc-windows-gnu"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 600,
+          "default": 300
+        },
+        "enable_etw": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable ETW telemetry collection"
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["queued", "building", "running", "completed", "failed"]
+        },
+        "progress": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "results": {
+      "type": "object",
+      "properties": {
+        "detected": {
+          "type": "boolean",
+          "description": "Whether the artifact was detected by AV/EDR"
+        },
+        "detection_type": {
+          "type": "string",
+          "enum": ["static", "dynamic", "behavioral", "none"]
+        },
+        "telemetry_events": {
+          "type": "integer",
+          "description": "Number of telemetry events captured"
+        },
+        "iocs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["file", "registry", "network", "process"]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
