@@ -1,0 +1,152 @@
+syntax = "proto3";
+
+package edr.controller;
+
+import "common.proto";
+
+// Controller Service - orchestrates the analysis pipeline
+service Controller {
+  // Schedule a new analysis job
+  rpc ScheduleJob(JobRequest) returns (JobResponse);
+
+  // Get job status
+  rpc GetJobStatus(JobStatusRequest) returns (JobStatusResponse);
+
+  // Submit triage results
+  rpc SubmitTriage(TriageRequest) returns (TriageResponse);
+
+  // Query analysis results
+  rpc QueryResults(QueryRequest) returns (QueryResponse);
+}
+
+// Selector Service - mutation selection with feedback
+service Selector {
+  // Get next mutation to try
+  rpc SelectMutation(SelectionRequest) returns (SelectionResponse);
+
+  // Report mutation outcome (feedback loop)
+  rpc ReportOutcome(OutcomeReport) returns (OutcomeAck);
+}
+
+// Triage Service - hypothesis generation
+service Triage {
+  // Analyze run and generate hypotheses
+  rpc AnalyzeRun(AnalysisRequest) returns (AnalysisResponse);
+
+  // Get feature-avoid list
+  rpc GetAvoidList(AvoidListRequest) returns (AvoidListResponse);
+}
+
+// Job scheduling
+message JobRequest {
+  string name = 1;
+  string artifact_type = 2;  // exe, dll, shellcode
+  string source = 3;
+  repeated string mutation_strategies = 4;
+  int32 priority = 5;
+}
+
+message JobResponse {
+  edr.common.JobId job_id = 1;
+  bool accepted = 2;
+  string message = 3;
+  int64 estimated_duration_seconds = 4;
+}
+
+// Job status query
+message JobStatusRequest {
+  string job_id = 1;
+}
+
+message JobStatusResponse {
+  string job_id = 1;
+  string status = 2;  // queued, building, running, completed, failed
+  int32 progress_percent = 3;
+  string current_phase = 4;
+  repeated string logs = 5;
+}
+
+// Triage submission
+message TriageRequest {
+  string job_id = 1;
+  bool detected = 2;
+  string av_product = 3;
+  string detection_type = 4;
+  map<string, string> iocs = 5;
+}
+
+message TriageResponse {
+  string job_id = 1;
+  bool stored = 2;
+  string triage_id = 3;
+}
+
+// Query results
+message QueryRequest {
+  repeated string job_ids = 1;
+  string date_from = 2;
+  string date_to = 3;
+  map<string, string> filters = 4;
+}
+
+message QueryResponse {
+  repeated AnalysisResult results = 1;
+  int32 total_count = 2;
+}
+
+message AnalysisResult {
+  string job_id = 1;
+  string artifact_hash = 2;
+  bool detected = 3;
+  string detection_rate = 4;
+  repeated string evasion_techniques = 5;
+  map<string, string> telemetry_summary = 6;
+}
+
+// Selection messages
+message SelectionRequest {
+  edr.common.JobId job_id = 1;
+  repeated string avoid_features = 2;  // From triage feedback
+}
+
+message SelectionResponse {
+  repeated edr.common.Mutation mutations = 1;
+  float exploration_probability = 2;
+  string rationale = 3;
+}
+
+message OutcomeReport {
+  edr.common.RunId run_id = 1;
+  edr.common.RunResult result = 2;
+}
+
+message OutcomeAck {
+  bool received = 1;
+}
+
+// Triage messages
+message AnalysisRequest {
+  edr.common.RunId run_id = 1;
+  string elastic_index = 2;  // Query this index for events
+}
+
+message AnalysisResponse {
+  repeated Hypothesis hypotheses = 1;
+  repeated string avoid_features = 2;
+}
+
+message Hypothesis {
+  int32 rank = 1;
+  string description = 2;
+  repeated string evidence_fields = 3;
+  float confidence = 4;
+  string recommendation = 5;  // avoid or seek
+}
+
+message AvoidListRequest {
+  edr.common.JobId job_id = 1;
+}
+
+message AvoidListResponse {
+  repeated string features = 1;
+}

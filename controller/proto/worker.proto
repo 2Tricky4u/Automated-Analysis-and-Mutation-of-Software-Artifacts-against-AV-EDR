@@ -1,0 +1,112 @@
+syntax = "proto3";
+
+package edr.worker;
+
+import "common.proto";
+
+// Worker Agent Service - handles build and execution tasks
+service WorkerAgent {
+  // Execute a build task on the worker
+  rpc ExecuteBuild(BuildRequest) returns (BuildResponse);
+
+  // Run a sample for analysis
+  rpc RunSample(SampleRequest) returns (SampleResponse);
+
+  // Get worker health status
+  rpc HealthCheck(HealthRequest) returns (HealthResponse);
+
+  // Stream telemetry data
+  rpc StreamTelemetry(stream TelemetryData) returns (TelemetryAck);
+}
+
+// Harness Service - sample execution with monitoring
+service Harness {
+  // Execute artifact with timeout and monitoring
+  rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+
+  // Monitor execution status
+  rpc Monitor(MonitorRequest) returns (stream MonitorEvent);
+}
+
+// Build task request
+message BuildRequest {
+  string job_id = 1;
+  string source_code = 2;
+  string language = 3;  // rust, cpp, csharp
+  map<string, string> build_options = 4;
+  repeated edr.common.Mutation mutations = 5;
+}
+
+message BuildResponse {
+  string job_id = 1;
+  bool success = 2;
+  string artifact_path = 3;
+  edr.common.ArtifactId artifact_id = 4;
+  string error_message = 5;
+  int64 build_time_ms = 6;
+}
+
+// Sample execution request
+message SampleRequest {
+  string job_id = 1;
+  string artifact_path = 2;
+  int32 timeout_seconds = 3;
+  bool enable_etw = 4;
+}
+
+message SampleResponse {
+  string job_id = 1;
+  bool success = 2;
+  int32 exit_code = 3;
+  string output = 4;
+  repeated string telemetry_ids = 5;
+}
+
+// Health check
+message HealthRequest {
+  string worker_id = 1;
+}
+
+message HealthResponse {
+  string worker_id = 1;
+  bool healthy = 2;
+  int32 cpu_percent = 3;
+  int32 memory_percent = 4;
+  int32 active_jobs = 5;
+}
+
+// Telemetry data streaming
+message TelemetryData {
+  string job_id = 1;
+  string event_type = 2;  // etw, procmon, network
+  int64 timestamp = 3;
+  bytes payload = 4;
+  map<string, string> metadata = 5;
+}
+
+message TelemetryAck {
+  bool received = 1;
+  int32 events_count = 2;
+}
+
+// Harness messages
+message ExecuteRequest {
+  edr.common.JobId job_id = 1;
+  string artifact_path = 2;
+  int32 timeout_seconds = 3;
+  repeated string telemetry_providers = 4;
+}
+
+message ExecuteResponse {
+  edr.common.RunResult result = 1;
+}
+
+message MonitorRequest {
+  edr.common.RunId run_id = 1;
+}
+
+message MonitorEvent {
+  string event_type = 1;  // started, running, crashed, completed
+  int64 timestamp = 2;
+  string details = 3;
+}
