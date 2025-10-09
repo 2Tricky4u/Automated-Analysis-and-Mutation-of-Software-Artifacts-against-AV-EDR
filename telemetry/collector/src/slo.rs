@@ -2,7 +2,6 @@
 ///
 /// Implements CLAUDE.md Section 6: Collector Config Facts
 /// Records ETW buffer sizes, lost events, parser configuration, etc.
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,10 +49,7 @@ impl Default for CollectorConfigFacts {
                 parser: "sliding".to_string(),
             },
             semantic_enrichment: SemanticConfig {
-                fixups: vec![
-                    "filekey->name".to_string(),
-                    "thread->process".to_string(),
-                ],
+                fixups: vec!["filekey->name".to_string(), "thread->process".to_string()],
             },
             stack: StackConfig {
                 user_hash: String::new(),

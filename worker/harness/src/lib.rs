@@ -7,7 +7,6 @@
 /// - Monitor for crashes/hangs/detections
 /// - Sandbox integration (AppContainer/Job Objects on Windows)
 /// - RedEDR telemetry integration
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +33,11 @@ impl Harness {
         Self {}
     }
 
-    pub async fn execute(&self, _artifact_path: &str, _config: &ExecutionConfig) -> Result<Outcome> {
+    pub async fn execute(
+        &self,
+        _artifact_path: &str,
+        _config: &ExecutionConfig,
+    ) -> Result<Outcome> {
         // Placeholder
         Ok(Outcome::Success)
     }

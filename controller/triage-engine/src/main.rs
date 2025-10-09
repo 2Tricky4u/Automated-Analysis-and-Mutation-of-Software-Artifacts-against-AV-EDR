@@ -7,7 +7,6 @@
 /// - Analyzes runs to generate explainable hypotheses
 /// - Maintains avoid-features list from surrogate classifier
 /// - Provides feedback to Selector for adaptive mutation
-
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::info;
 

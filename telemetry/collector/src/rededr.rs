@@ -1,7 +1,6 @@
 /// RedEDR JSON parser and normalizer
 ///
 /// Parses RedEDR output files and converts to canonical telemetry format
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

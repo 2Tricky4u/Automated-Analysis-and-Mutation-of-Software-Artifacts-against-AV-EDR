@@ -7,7 +7,6 @@
 /// - Parse and normalize events
 /// - Ship to Elasticsearch with bulk API
 /// - Support for ETW, Event Log, Defender API, RedEDR
-
 pub mod feature_extractor;
 pub mod rededr;
 pub mod slo;

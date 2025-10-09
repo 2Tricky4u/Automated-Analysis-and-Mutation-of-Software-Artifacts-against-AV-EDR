@@ -3,7 +3,6 @@
 /// Implements CLAUDE.md Section 2: "Controller: UI"
 /// Provides HTTP REST API as alternative to gRPC CLI
 /// for job submission, status monitoring, and report viewing.
-
 use axum::{
     extract::Path,
     routing::{get, post},
