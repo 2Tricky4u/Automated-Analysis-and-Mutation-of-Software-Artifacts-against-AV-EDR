@@ -33,7 +33,7 @@ struct SchedulerState {
 
 #[derive(Debug)]
 pub struct SchedulerService {
-    state: Arc<Mutex<SchedulerState>>, 
+    state: Arc<Mutex<SchedulerState>>,
 }
 
 impl SchedulerService {
