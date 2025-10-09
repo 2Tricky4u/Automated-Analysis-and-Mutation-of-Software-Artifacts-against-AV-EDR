@@ -1,5 +1,102 @@
 # syntax=docker/dockerfile:1
-FROM alpine:3.19
+
+# === Stage 1: Builder ===
+FROM rust:1.75-slim AS builder
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    protobuf-compiler \
+    libssl-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy workspace manifests
+COPY Cargo.toml Cargo.lock ./
+COPY controller/scheduler/Cargo.toml controller/scheduler/
+COPY controller/queue/Cargo.toml controller/queue/
+COPY controller/selector/Cargo.toml controller/selector/
+COPY controller/mutator/Cargo.toml controller/mutator/
+COPY controller/triage-engine/Cargo.toml controller/triage-engine/
+COPY controller/rule-manager/Cargo.toml controller/rule-manager/
+COPY controller/differential-analyzer/Cargo.toml controller/differential-analyzer/
+COPY controller/triage-client/Cargo.toml controller/triage-client/
+COPY controller/proto/ controller/proto/
+COPY build/emitter/Cargo.toml build/emitter/
+COPY worker/harness-ipc/Cargo.toml worker/harness-ipc/
+COPY ui/backend/Cargo.toml ui/backend/
+COPY config/Cargo.toml config/
+
+# Create dummy src files to cache dependencies
+RUN mkdir -p controller/scheduler/src && \
+    echo "fn main() {}" > controller/scheduler/src/main.rs && \
+    mkdir -p controller/queue/src && echo "fn main() {}" > controller/queue/src/main.rs && \
+    mkdir -p controller/selector/src && echo "fn main() {}" > controller/selector/src/main.rs && \
+    mkdir -p controller/mutator/src && echo "pub fn placeholder() {}" > controller/mutator/src/lib.rs && \
+    mkdir -p controller/triage-engine/src && \
+    echo "pub fn placeholder() {}" > controller/triage-engine/src/lib.rs && \
+    echo "fn main() {}" > controller/triage-engine/src/main.rs && \
+    mkdir -p controller/rule-manager/src && echo "pub fn placeholder() {}" > controller/rule-manager/src/lib.rs && \
+    mkdir -p controller/differential-analyzer/src && echo "pub fn placeholder() {}" > controller/differential-analyzer/src/lib.rs && \
+    mkdir -p controller/triage-client/src && echo "fn main() {}" > controller/triage-client/src/main.rs && \
+    mkdir -p build/emitter/src && echo "pub fn placeholder() {}" > build/emitter/src/lib.rs && \
+    mkdir -p worker/harness-ipc/src && echo "pub fn placeholder() {}" > worker/harness-ipc/src/lib.rs && \
+    mkdir -p ui/backend/src && echo "fn main() {}" > ui/backend/src/main.rs && \
+    mkdir -p config/src && echo "pub fn placeholder() {}" > config/src/lib.rs
+
+# Build dependencies (cached layer)
+RUN cargo build --release || true
+
+# Copy actual source code
+COPY controller/ controller/
+COPY build/ build/
+COPY worker/harness-ipc/ worker/harness-ipc/
+COPY ui/ ui/
+COPY config/ config/
+
+# Build final binaries
+RUN cargo build --release -p scheduler && \
+    cargo build --release -p selector && \
+    cargo build --release -p triage-engine && \
+    cargo build --release -p ui-backend
+
+# === Stage 2: Runtime ===
+FROM debian:bookworm-slim AS runtime
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy binaries from builder
+COPY --from=builder /build/target/release/scheduler /app/
+COPY --from=builder /build/target/release/selector /app/
+COPY --from=builder /build/target/release/triage-engine /app/
+COPY --from=builder /build/target/release/ui-backend /app/
+
+# Copy configuration
+COPY config.yml /app/config.yml
+
+# Create non-root user
+RUN useradd -m -u 1000 edr && chown -R edr:edr /app
+USER edr
+
+EXPOSE 50051
+
+# Run scheduler (main controller)
+CMD ["./scheduler"]
+
+# === Stage 3: Development ===
+FROM builder AS development
+
+# Install development tools
+RUN cargo install cargo-watch
+
 WORKDIR /app
 COPY . .
-CMD ["sh", "-c", "echo Controller image placeholder; sleep 1"]
+
+CMD ["cargo", "watch", "-x", "run -p scheduler"]

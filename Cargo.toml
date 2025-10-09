@@ -1,11 +1,33 @@
 [workspace]
 resolver = "2"
 members = [
+    # Controller components
     "controller/scheduler",
+    "controller/queue",
+    "controller/selector",
+    "controller/mutator",
+    "controller/triage-engine",
+    "controller/rule-manager",
+    "controller/differential-analyzer",
     "controller/triage-client",
+
+    # Worker components
     "worker/agent",
+    "worker/harness",
     "worker/harness-ipc",
+    "worker/monitor",
+
+    # Build system
     "build/emitter",
+
+    # Telemetry
+    "telemetry/collector",
+
+    # UI
+    "ui/backend",
+
+    # Shared libraries
+    "config",
 ]
 
 [workspace.package]

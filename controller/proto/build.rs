@@ -1,4 +1,14 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::compile_protos("edr.proto")?;
+    tonic_build::configure()
+        .build_server(true)
+        .build_client(true)
+        .compile(
+            &[
+                "proto/common.proto",
+                "proto/controller.proto",
+                "proto/worker.proto",
+            ],
+            &["proto"],
+        )?;
     Ok(())
 }
