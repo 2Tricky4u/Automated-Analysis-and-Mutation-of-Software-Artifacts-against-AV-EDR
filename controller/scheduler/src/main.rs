@@ -54,7 +54,7 @@ impl Controller for SchedulerService {
         let mut state = self.state.lock().await;
 
         state.job_counter += 1;
-        let job_id = format!("job-{{:06}}", state.job_counter);
+        let job_id = format!("job-{:06}", state.job_counter);
 
         let job = Job {
             id: job_id.clone(),
@@ -67,7 +67,7 @@ impl Controller for SchedulerService {
 
         state.jobs.insert(job_id.clone(), job);
 
-        info!("Scheduled job: {} ({{}})", job_id, req.name);
+        info!("Scheduled job: {} ({})", job_id, req.name);
 
         Ok(Response::new(JobResponse {
             job_id: job_id.clone(),
@@ -110,7 +110,7 @@ impl Controller for SchedulerService {
         );
 
         info!(
-            "Triage submitted for job {}: detected={{}}",
+            "Triage submitted for job {}: detected={}",
             req.job_id, req.detected
         );
 
@@ -141,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "0.0.0.0:50051".parse()?;
     let scheduler = SchedulerService::new();
 
-    info!("Controller/Scheduler starting on {{}}", addr);
+    info!("Controller/Scheduler starting on {}", addr);
 
     Server::builder()
         .add_service(ControllerServer::new(scheduler))
