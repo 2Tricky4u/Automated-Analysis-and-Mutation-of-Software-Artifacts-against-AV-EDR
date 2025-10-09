@@ -36,6 +36,12 @@ pub struct SchedulerService {
     state: Arc<Mutex<SchedulerState>>,
 }
 
+impl Default for SchedulerService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SchedulerService {
     pub fn new() -> Self {
         Self {
