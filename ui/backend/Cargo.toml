@@ -1,0 +1,13 @@
+[package]
+name = "ui-backend"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "fs"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

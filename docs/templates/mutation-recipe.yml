@@ -1,0 +1,52 @@
+# Mutation Recipe
+# This YAML defines a set of mutations to apply to an artifact
+# See CLAUDE.md Section 7 for DSL specification
+
+mutations:
+  # AST-level mutations
+  - id: ast.import_reshape
+    params:
+      delay_load: true
+      indirection: "getprocaddr-hash"
+
+  - id: ast.string_obfuscation
+    params:
+      encoding: "xor"
+      key_length: 16
+
+  - id: ast.control_flow_jitter
+    params:
+      opaque_predicates: true
+      complexity: "medium"
+
+  # Behavioral mutations
+  - id: beh.preamble.fs
+    params:
+      fs_ops: 3
+      hkcu_queries: 2
+      dns_warmup: 1
+
+  - id: beh.timing
+    params:
+      min_delay_ms: 100
+      max_delay_ms: 1000
+
+  # Binary-level mutations (if AST unavailable)
+  - id: bin.splice
+    params:
+      regions: 2
+      preserve_semantics: true
+
+# Constraints based on triage feedback
+constraints:
+  - avoid_features:
+      - "mem.rwx_short_window"
+      - "thread.start.anon"
+      - "proc.parent.unsigned"
+
+# Target configuration
+targets:
+  - harness: "loader_v1"
+    seed: "abc123def456"
+    timeout_seconds: 300
+    enable_etw: true

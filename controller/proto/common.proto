@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package edr.common;
+
+// Common types shared across services
+
+message JobId {
+  string value = 1;  // Format: job-NNNNNN
+}
+
+message ArtifactId {
+  string sha256 = 1;
+}
+
+message WorkerId {
+  string value = 1;  // Format: worker-NN
+}
+
+message RunId {
+  string uuid = 1;
+}
+
+message Timestamp {
+  int64 unix_ms = 1;
+}
+
+// Mutation specification
+message Mutation {
+  string id = 1;  // e.g., "ast.import_reshape"
+  map<string, string> params = 2;
+}
+
+// Labels for run outcomes (CLAUDE.md Section 6)
+message RunLabels {
+  bool telemetry_seen = 1;
+  string alert_level = 2;  // none, low, med, high
+  bool blocked = 3;
+  int32 detection_latency_ms = 4;
+}
+
+// Performance metrics (CLAUDE.md Section 6)
+message PerfMetrics {
+  float cpu_pct = 1;
+  int32 mem_mb = 2;
+  int32 event_to_record_ms_p95 = 3;
+}
+
+// Canonical RunResult (CLAUDE.md Section 6)
+message RunResult {
+  RunId run_id = 1;
+  ArtifactId artifact_id = 2;
+  WorkerId worker_id = 3;
+  repeated Mutation mutations = 4;
+  Timestamp start_ts = 5;
+  Timestamp end_ts = 6;
+  string status = 7;  // detected | not_detected | noisy | crash
+  RunLabels labels = 8;
+  PerfMetrics perf = 9;
+  string notes = 10;
+}
