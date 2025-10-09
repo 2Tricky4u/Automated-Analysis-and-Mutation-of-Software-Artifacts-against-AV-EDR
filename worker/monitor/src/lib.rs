@@ -2,7 +2,6 @@
 ///
 /// Implements CLAUDE.md Section 3: Monitor component
 /// "Monitor: labels outcomes: detected | not_detected | noisy | crashed, returns metrics."
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -2,7 +2,6 @@
 ///
 /// Implements CLAUDE.md Section 5: typed features
 /// "For every channel, index small, typed features (booleans, enums, counts, hashes, min/max/Δt), not raw streams."
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

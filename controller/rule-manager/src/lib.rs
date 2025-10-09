@@ -6,7 +6,6 @@
 /// - Export detection rules to Sigma/KQL format
 /// - Import rules from Elastic
 /// - Safe rule generation (no PII, defensive only)
-
 use anyhow::Result;
 
 pub struct RuleManager {}

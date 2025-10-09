@@ -2,7 +2,6 @@
 ///
 /// Loads configuration from config.yml for all services
 /// Ensures reproducibility and centralized configuration management
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
