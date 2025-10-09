@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # === Stage 1: Builder ===
-FROM rust:1.75-slim AS builder
+FROM rust:1.90-slim AS builder
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
