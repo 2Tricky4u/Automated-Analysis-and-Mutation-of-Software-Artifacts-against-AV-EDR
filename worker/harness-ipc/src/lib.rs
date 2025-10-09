@@ -29,7 +29,7 @@ impl HarnessMessage {
                 .as_secs(),
         }
     }
-    
+
     pub fn with_payload(mut self, key: &str, value: &str) -> Self {
         self.payload.insert(key.to_string(), value.to_string());
         self
@@ -42,9 +42,8 @@ mod tests {
 
     #[test]
     fn test_message_creation() {
-        let msg = HarnessMessage::new(MessageType::Start)
-            .with_payload("job_id", "test-001");
-        
+        let msg = HarnessMessage::new(MessageType::Start).with_payload("job_id", "test-001");
+
         assert!(msg.payload.contains_key("job_id"));
         assert_eq!(msg.payload.get("job_id").unwrap(), "test-001");
     }
