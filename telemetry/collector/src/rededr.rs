@@ -13,6 +13,12 @@ pub struct RedEdrEvent {
 
 pub struct RedEdrParser {}
 
+impl Default for RedEdrParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RedEdrParser {
     pub fn new() -> Self {
         Self {}

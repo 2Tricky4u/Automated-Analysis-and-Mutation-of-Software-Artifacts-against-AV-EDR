@@ -59,8 +59,11 @@ async fn list_jobs() -> Json<Vec<Job>> {
     }])
 }
 
-async fn submit_job(Json(_payload): Json<SubmitJobRequest>) -> Json<Job> {
-    info!("Submitting new job");
+async fn submit_job(Json(payload): Json<SubmitJobRequest>) -> Json<Job> {
+    info!(
+        "Submitting new job: artifact={}, budget={}",
+        payload.artifact_path, payload.mutation_budget
+    );
     // TODO: Call controller gRPC ScheduleJob
     Json(Job {
         id: "job-000002".to_string(),
