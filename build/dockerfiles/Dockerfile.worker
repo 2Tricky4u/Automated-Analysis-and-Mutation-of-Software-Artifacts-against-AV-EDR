@@ -2,4 +2,4 @@
 FROM alpine:3.19
 WORKDIR /app
 COPY . .
-CMD ["sh", "-c", "echo Controller image placeholder; sleep 1"]
+CMD ["sh", "-c", "echo Worker image placeholder; sleep 1"]

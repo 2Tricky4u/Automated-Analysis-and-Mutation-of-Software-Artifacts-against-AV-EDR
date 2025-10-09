@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "controller/scheduler",
+    "controller/triage-client",
+    "worker/agent",
+    "worker/harness-ipc",
+    "build/emitter",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["EDR Lab Team"]
+
+[workspace.dependencies]
+tokio = { version = "1.35", features = ["full"] }
+tonic = "0.11"
+prost = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1.0"
+thiserror = "1.0"
