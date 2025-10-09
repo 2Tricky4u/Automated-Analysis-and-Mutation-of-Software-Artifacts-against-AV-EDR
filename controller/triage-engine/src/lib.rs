@@ -35,6 +35,7 @@ pub enum Recommendation {
     Neutral,
 }
 
+#[derive(Default)]
 pub struct TriageEngine {}
 
 impl TriageEngine {
@@ -50,12 +51,6 @@ impl TriageEngine {
             avoid_features: Vec::new(),
             confidence_score: 0.5,
         })
-    }
-}
-
-impl Default for TriageEngine {
-    fn default() -> Self {
-        Self {}
     }
 }
 
