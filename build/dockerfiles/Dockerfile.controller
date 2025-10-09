@@ -24,7 +24,11 @@ COPY controller/differential-analyzer/Cargo.toml controller/differential-analyze
 COPY controller/triage-client/Cargo.toml controller/triage-client/
 COPY controller/proto/ controller/proto/
 COPY build/emitter/Cargo.toml build/emitter/
+COPY worker/agent/Cargo.toml worker/agent/
+COPY worker/harness/Cargo.toml worker/harness/
 COPY worker/harness-ipc/Cargo.toml worker/harness-ipc/
+COPY worker/monitor/Cargo.toml worker/monitor/
+COPY telemetry/collector/Cargo.toml telemetry/collector/
 COPY ui/backend/Cargo.toml ui/backend/
 COPY config/Cargo.toml config/
 
@@ -41,7 +45,11 @@ RUN mkdir -p controller/scheduler/src && \
     mkdir -p controller/differential-analyzer/src && echo "pub fn placeholder() {}" > controller/differential-analyzer/src/lib.rs && \
     mkdir -p controller/triage-client/src && echo "fn main() {}" > controller/triage-client/src/main.rs && \
     mkdir -p build/emitter/src && echo "pub fn placeholder() {}" > build/emitter/src/lib.rs && \
+    mkdir -p worker/agent/src && echo "fn main() {}" > worker/agent/src/main.rs && \
+    mkdir -p worker/harness/src && echo "pub fn placeholder() {}" > worker/harness/src/lib.rs && \
     mkdir -p worker/harness-ipc/src && echo "pub fn placeholder() {}" > worker/harness-ipc/src/lib.rs && \
+    mkdir -p worker/monitor/src && echo "pub fn placeholder() {}" > worker/monitor/src/lib.rs && \
+    mkdir -p telemetry/collector/src && echo "fn main() {}" > telemetry/collector/src/main.rs && \
     mkdir -p ui/backend/src && echo "fn main() {}" > ui/backend/src/main.rs && \
     mkdir -p config/src && echo "pub fn placeholder() {}" > config/src/lib.rs
 
@@ -51,7 +59,8 @@ RUN cargo build --release || true
 # Copy actual source code
 COPY controller/ controller/
 COPY build/ build/
-COPY worker/harness-ipc/ worker/harness-ipc/
+COPY worker/ worker/
+COPY telemetry/ telemetry/
 COPY ui/ ui/
 COPY config/ config/
 
