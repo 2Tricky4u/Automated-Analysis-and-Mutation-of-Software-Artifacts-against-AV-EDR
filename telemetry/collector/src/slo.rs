@@ -60,7 +60,7 @@ impl Default for CollectorConfigFacts {
 }
 
 /// SLO metrics for collector performance monitoring
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SloMetrics {
     /// P95 latency from event generation to record in Elasticsearch
     pub event_to_record_ms_p95: u32,
@@ -70,14 +70,4 @@ pub struct SloMetrics {
 
     /// Parser throughput (events/second)
     pub events_per_second: u32,
-}
-
-impl Default for SloMetrics {
-    fn default() -> Self {
-        Self {
-            event_to_record_ms_p95: 0,
-            dropped_events: 0,
-            events_per_second: 0,
-        }
-    }
 }
