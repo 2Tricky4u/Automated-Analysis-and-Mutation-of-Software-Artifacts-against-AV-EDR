@@ -1,0 +1,187 @@
+# AutoMutate++ Controller Configuration Template
+# Copy to config/controller.toml and adjust as needed
+
+[server]
+# gRPC server bind address
+bind_address = "0.0.0.0:50051"
+
+# Maximum concurrent connections
+max_connections = 100
+
+# Request timeout (seconds)
+request_timeout_secs = 300
+
+# Enable TLS (requires certificates)
+tls_enabled = false
+# tls_cert_path = "/path/to/cert.pem"
+# tls_key_path = "/path/to/key.pem"
+
+[elasticsearch]
+# Elasticsearch cluster URL
+url = "http://localhost:9200"
+
+# Index prefix for all AutoMutate indices
+index_prefix = "automutate-"
+
+# ETW telemetry index pattern
+etw_index = "etw-*"
+
+# RedEDR telemetry index pattern
+rededr_index = "rededr-*"
+
+# Run results index
+runs_index = "runs"
+
+# Bulk indexing settings
+bulk_size = 100
+bulk_timeout_ms = 5000
+bulk_max_retries = 3
+
+# Index lifecycle management
+ilm_enabled = true
+ilm_max_age_days = 90
+ilm_max_size_gb = 50
+
+[triage]
+# Surrogate model type: "logistic" | "tree" | "forest" | "nn"
+model_type = "forest"
+
+# Confidence threshold for hypotheses (0.0-1.0)
+confidence_threshold = 0.7
+
+# Minimum support count for feature ranking
+min_support_count = 10
+
+# Maximum hypotheses to return
+max_hypotheses = 10
+
+# Feature importance method: "shap" | "permutation" | "builtin"
+feature_importance_method = "shap"
+
+[mutator]
+# Mutation selector scoring weights
+selector_weights = { coverage = 1.5, evasion = 3.0, similarity = 0.5 }
+
+# Maximum mutations per artifact
+max_mutations_per_artifact = 5
+
+# Mutation probabilities (0.0-1.0)
+[mutator.probabilities]
+ast_transform = 0.7
+binary_transform = 0.5
+behavioral_transform = 0.6
+
+# AST transformation passes
+[mutator.ast]
+control_flow_jitter = true
+opaque_predicates = true
+constant_encoding = true
+import_reshaping = true
+api_indirection = true
+
+# Binary transformation options
+[mutator.binary]
+splice_enabled = true
+shellcode_reencoding = true
+preserve_semantics = true
+
+# Behavioral transformation options
+[mutator.behavioral]
+benign_preambles = true
+staged_execution = true
+timing_randomization = true
+
+[scheduler]
+# Worker queue capacity
+queue_capacity = 1000
+
+# Maximum concurrent runs per worker
+max_concurrent_runs_per_worker = 1
+
+# Run timeout (seconds)
+run_timeout_secs = 300
+
+# Retry policy
+max_retries = 3
+retry_backoff_secs = 30
+
+[corpus]
+# Corpus storage path
+storage_path = "/var/lib/automutate/corpus"
+
+# Maximum corpus size (entries)
+max_size = 10000
+
+# Prioritization strategy: "coverage" | "evasion" | "hybrid"
+prioritization = "hybrid"
+
+# Novelty threshold (Jaccard distance)
+novelty_threshold = 0.1
+
+[logging]
+# Log level: "trace" | "debug" | "info" | "warn" | "error"
+level = "info"
+
+# Log format: "json" | "pretty"
+format = "json"
+
+# Log to file
+file_enabled = true
+file_path = "/var/log/automutate/controller.log"
+file_rotation = "daily"
+file_retention_days = 30
+
+[metrics]
+# Prometheus metrics endpoint
+metrics_enabled = true
+metrics_bind_address = "0.0.0.0:9090"
+
+[telemetry]
+# Telemetry collection settings
+collection_interval_ms = 100
+
+# ETW providers (Windows-specific, configured on workers)
+# Listed here for reference only
+# etw_providers = [
+#   "Microsoft-Windows-Kernel-Process",
+#   "Microsoft-Windows-Kernel-File",
+#   "Microsoft-Windows-Kernel-Network",
+#   "Microsoft-Windows-Threat-Intelligence"
+# ]
+
+# RedEDR integration
+rededr_enabled = true
+rededr_data_path = "C:\\RedEDR\\Data"
+
+# Thread-aware API tracing
+api_tracing_enabled = true
+api_trace_format = "newline-json"
+
+# Basic-block coverage
+bb_coverage_enabled = true
+bb_bitmap_size = 65536
+
+# Line-level tracing (diagnostic only)
+line_tracing_enabled = false
+line_trace_targeted = false
+line_trace_around_bb = []
+
+[differential]
+# Multi-level differential analysis
+enabled = true
+
+# Comparison layers
+layers = ["event_counts", "api_sequences", "bb_coverage", "argument_patterns"]
+
+# Lift-based ranking
+lift_threshold = 1.2
+min_confidence = 0.5
+
+[experiments]
+# Experiment tracking
+track_experiments = true
+experiment_metadata_required = true
+
+# Reproducibility
+require_deterministic_seeds = true
+require_artifact_ids = true

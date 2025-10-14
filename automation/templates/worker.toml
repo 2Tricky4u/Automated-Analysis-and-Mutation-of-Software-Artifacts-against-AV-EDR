@@ -1,0 +1,169 @@
+# AutoMutate++ Worker Configuration Template
+# Copy to C:\AutoMutate\worker.toml on each Worker VM
+
+[worker]
+# Worker identification
+worker_id = "win11-worker-01"  # CHANGE FOR EACH WORKER
+
+# Static IP address
+ip_address = "192.168.200.100"  # CHANGE FOR EACH WORKER
+
+# Operating system
+os_version = "windows11"  # "windows10" or "windows11"
+
+[controller]
+# Controller gRPC endpoint
+controller_address = "192.168.200.1:50051"
+
+# Connection settings
+connect_timeout_secs = 30
+request_timeout_secs = 300
+keepalive_interval_secs = 30
+
+# Enable TLS (requires certificates)
+tls_enabled = false
+# tls_ca_cert_path = "C:\\AutoMutate\\certs\\ca.pem"
+
+[harness]
+# Harness execution settings
+working_directory = "C:\\AutoMutate\\runs"
+
+# Execution timeout per artifact (seconds)
+execution_timeout_secs = 120
+
+# Cleanup after each run
+cleanup_enabled = true
+
+# Sandbox constraints
+sandbox_enabled = true
+sandbox_low_integrity = true
+sandbox_job_object = true
+
+# Process monitoring
+monitor_children = true
+max_child_depth = 3
+
+[telemetry]
+# Telemetry streaming settings
+stream_buffer_size = 10000
+flush_interval_ms = 1000
+
+# ETW configuration
+[telemetry.etw]
+enabled = true
+buffer_size_kb = 1024
+lost_event_threshold = 100
+
+# ETW providers (minimal set)
+providers = [
+    "Microsoft-Windows-Kernel-Process",
+    "Microsoft-Windows-Kernel-File",
+    "Microsoft-Windows-Kernel-Network",
+    "Microsoft-Windows-Threat-Intelligence"
+]
+
+# Event Log collection
+[telemetry.eventlog]
+enabled = true
+channels = [
+    "Security",
+    "System",
+    "Application",
+    "Microsoft-Windows-Windows Defender/Operational"
+]
+
+# Windows Defender integration
+[telemetry.defender]
+enabled = true
+alert_polling_interval_ms = 500
+scan_timeout_secs = 60
+
+# RedEDR integration
+[telemetry.rededr]
+enabled = true
+base_url = "http://localhost:8080"
+data_path = "C:\\RedEDR\\Data"
+file_watch_enabled = true
+
+# Thread-aware API tracing
+[telemetry.api_tracing]
+enabled = true
+per_thread = true
+output_format = "newline-json"
+output_path = "C:\\AutoMutate\\traces"
+
+# Basic-block coverage
+[telemetry.bb_coverage]
+enabled = true
+bitmap_size = 65536
+output_path = "C:\\AutoMutate\\coverage"
+
+# Line-level tracing (diagnostic only - keep disabled by default)
+[telemetry.line_tracing]
+enabled = false
+mode = "off"  # "off" | "full" | "targeted"
+# targeted_bbs = []  # e.g., ["bb_123", "bb_456"]
+output_path = "C:\\AutoMutate\\lines"
+
+# Last-seen-event capture (death-bed telemetry)
+[telemetry.last_seen]
+enabled = true
+ring_buffer_size = 100
+flush_on_abnormal_exit = true
+
+[build]
+# Build/emitter settings for deterministic builds
+rust_toolchain = "stable"
+llvm_version = "17"
+
+# Trace flags (passed to emitter)
+# Examples: "off", "api", "bb", "api+bb", "lines", "lines-around-bb=123", "all"
+default_trace_mode = "api+bb"
+
+# Compilation flags
+optimization_level = "2"  # 0-3 or "s" or "z"
+debug_info = false
+strip_symbols = true
+
+[storage]
+# Local storage paths
+artifacts_path = "C:\\AutoMutate\\artifacts"
+results_path = "C:\\AutoMutate\\results"
+logs_path = "C:\\AutoMutate\\logs"
+
+# Cleanup policy
+max_artifact_age_days = 7
+max_log_age_days = 30
+max_storage_gb = 50
+
+[logging]
+# Worker logging
+level = "info"  # "trace" | "debug" | "info" | "warn" | "error"
+format = "json"
+output_path = "C:\\AutoMutate\\logs\\worker.log"
+rotation = "daily"
+retention_days = 14
+
+[health]
+# Health check settings
+health_check_interval_secs = 60
+
+# Resource thresholds
+max_cpu_percent = 90
+max_memory_percent = 80
+max_disk_percent = 90
+
+# Auto-revert on failure
+auto_revert_on_hang = true
+hang_detection_timeout_secs = 600
+
+[security]
+# Security hardening
+disable_network = false  # Set to true for offline artifact testing
+block_internet = true    # Block internet but allow local network
+allow_controller_only = true  # Only allow connections to controller
+
+# Process mitigation policies (read-only, for verification)
+verify_dep = true
+verify_aslr = true
+verify_cfg = false  # May break some artifacts

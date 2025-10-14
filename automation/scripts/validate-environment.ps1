@@ -1,0 +1,300 @@
+<#
+.SYNOPSIS
+    Comprehensive health check for AutoMutate++ environment
+
+.PARAMETER ConfigPath
+    Path to config.yaml (default: ..\config.yaml)
+
+.PARAMETER Quick
+    Skip long-running checks (snapshot validation, disk space)
+
+.EXAMPLE
+    .\validate-environment.ps1
+
+.EXAMPLE
+    .\validate-environment.ps1 -Quick
+#>
+
+[CmdletBinding()]
+param(
+    [Parameter()]
+    [string]$ConfigPath = "..\config.yaml",
+
+    [Parameter()]
+    [switch]$Quick
+)
+
+$ErrorActionPreference = "Stop"
+function Write-Pass { param($M) Write-Host "[✓] $M" -ForegroundColor Green }
+function Write-Fail { param($M) Write-Host "[✗] $M" -ForegroundColor Red }
+function Write-Info { param($M) Write-Host "[i] $M" -ForegroundColor Cyan }
+function Write-Section { param($M) Write-Host "`n==> $M" -ForegroundColor Magenta }
+
+$FailCount = 0
+
+Write-Host @"
+
+╔═══════════════════════════════════════════════════════════════╗
+║         AutoMutate++ Environment Validation                   ║
+╚═══════════════════════════════════════════════════════════════╝
+
+"@ -ForegroundColor Cyan
+
+# Parse config
+$config = @{}
+$section = $null
+Get-Content $ConfigPath | ForEach-Object {
+    if ($_ -match '^(\w+):$') { $section = $matches[1]; $config[$section] = @{} }
+    elseif ($_ -match '^\s+(\w+):\s*"?(.+?)\"?$' -and $section) { $config[$section][$matches[1]] = $matches[2].Trim('"') }
+}
+
+# Section 1: Windows Features
+Write-Section "Windows Features"
+
+$features = @("Microsoft-Hyper-V-All", "Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform")
+foreach ($feature in $features) {
+    $state = (Get-WindowsOptionalFeature -Online -FeatureName $feature -ErrorAction SilentlyContinue).State
+    if ($state -eq "Enabled") {
+        Write-Pass "$feature enabled"
+    } else {
+        Write-Fail "$feature NOT enabled"
+        $FailCount++
+    }
+}
+
+# Section 2: WSL2
+Write-Section "WSL2"
+
+$wslList = wsl --list -q 2>$null
+if ($wslList -match "Ubuntu") {
+    Write-Pass "WSL2 Ubuntu installed"
+
+    $wslRunning = wsl --list --running 2>$null | Select-String "Ubuntu"
+    if ($wslRunning) {
+        Write-Pass "WSL2 Ubuntu running"
+    } else {
+        Write-Fail "WSL2 Ubuntu NOT running"
+        $FailCount++
+    }
+} else {
+    Write-Fail "WSL2 Ubuntu NOT installed"
+    $FailCount++
+}
+
+# Section 3: Network
+Write-Section "Network Configuration"
+
+$SwitchName = $config.network.switch_name
+$HostIP = $config.network.host_ip
+
+$switch = Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue
+if ($switch) {
+    Write-Pass "Switch '$SwitchName' exists"
+
+    if ($switch.SwitchType -eq "Internal") {
+        Write-Pass "Switch type: Internal"
+    } else {
+        Write-Fail "Switch type: $($switch.SwitchType) (expected Internal)"
+        $FailCount++
+    }
+} else {
+    Write-Fail "Switch '$SwitchName' NOT found"
+    $FailCount++
+}
+
+$adapter = Get-NetAdapter | Where-Object { $_.Name -like "*$SwitchName*" } | Select-Object -First 1
+if ($adapter) {
+    Write-Pass "vEthernet adapter found"
+
+    $ipConfig = Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+    if ($ipConfig -and $ipConfig.IPAddress -eq $HostIP) {
+        Write-Pass "Host IP configured: $HostIP"
+    } else {
+        Write-Fail "Host IP NOT configured correctly (expected $HostIP)"
+        $FailCount++
+    }
+} else {
+    Write-Fail "vEthernet adapter NOT found"
+    $FailCount++
+}
+
+# Section 4: Controller Services
+Write-Section "Controller Services"
+
+# Elasticsearch
+try {
+    $response = Invoke-WebRequest -Uri "http://localhost:9200" -TimeoutSec 5 -ErrorAction Stop
+    if ($response.StatusCode -eq 200) {
+        Write-Pass "Elasticsearch responding (http://localhost:9200)"
+    } else {
+        Write-Fail "Elasticsearch unexpected status: $($response.StatusCode)"
+        $FailCount++
+    }
+} catch {
+    Write-Fail "Elasticsearch NOT responding"
+    $FailCount++
+}
+
+# Kibana
+try {
+    $response = Invoke-WebRequest -Uri "http://localhost:5601" -TimeoutSec 5 -ErrorAction Stop
+    if ($response.StatusCode -eq 200) {
+        Write-Pass "Kibana responding (http://localhost:5601)"
+    } else {
+        Write-Fail "Kibana unexpected status: $($response.StatusCode)"
+        $FailCount++
+    }
+} catch {
+    Write-Fail "Kibana NOT responding"
+    $FailCount++
+}
+
+# Section 5: Worker VMs
+Write-Section "Worker VMs"
+
+# Extract workers
+$ConfigContent = Get-Content $ConfigPath -Raw
+$WorkersSection = ($ConfigContent -split 'workers:')[1] -split 'storage:' | Select-Object -First 1
+$WorkerMatches = [regex]::Matches($WorkersSection, '- name:\s*"([^"]+)"[^\-]*?ip:\s*"([^"]+)"')
+
+$Workers = @()
+foreach ($match in $WorkerMatches) {
+    $Workers += @{
+        Name = $match.Groups[1].Value
+        IP = $match.Groups[2].Value
+    }
+}
+
+Write-Info "Found $($Workers.Count) worker(s) in config"
+
+foreach ($worker in $Workers) {
+    Write-Host ""
+    Write-Host "  Worker: $($worker.Name)" -ForegroundColor Yellow
+
+    $vm = Get-VM -Name $worker.Name -ErrorAction SilentlyContinue
+    if ($vm) {
+        Write-Pass "  VM exists"
+
+        if ($vm.State -eq "Running") {
+            Write-Pass "  VM running"
+        } else {
+            Write-Fail "  VM NOT running (state: $($vm.State))"
+            $FailCount++
+        }
+
+        # Check Generation
+        if ($vm.Generation -eq 2) {
+            Write-Pass "  Generation 2"
+        } else {
+            Write-Fail "  Generation $($vm.Generation) (expected 2)"
+            $FailCount++
+        }
+
+        # Check TPM
+        $tpmEnabled = (Get-VMSecurity -VMName $worker.Name).TpmEnabled
+        if ($tpmEnabled) {
+            Write-Pass "  TPM enabled"
+        } else {
+            Write-Fail "  TPM NOT enabled"
+            $FailCount++
+        }
+
+        # Check baseline checkpoint
+        if (-not $Quick) {
+            $baseline = Get-VMSnapshot -VMName $worker.Name -Name "$($worker.Name)-baseline" -ErrorAction SilentlyContinue
+            if ($baseline) {
+                Write-Pass "  Baseline checkpoint exists"
+            } else {
+                Write-Fail "  Baseline checkpoint NOT found"
+                $FailCount++
+            }
+        }
+
+    } else {
+        Write-Fail "  VM NOT found"
+        $FailCount++
+    }
+}
+
+# Section 6: Storage
+if (-not $Quick) {
+    Write-Section "Storage"
+
+    $VhdRoot = $config.storage.vhd_root
+    if (Test-Path $VhdRoot) {
+        Write-Pass "VHD root exists: $VhdRoot"
+
+        $drive = Split-Path $VhdRoot -Qualifier
+        $disk = Get-PSDrive $drive.TrimEnd(':')
+        $freeGB = [math]::Round($disk.Free / 1GB, 2)
+        $usedGB = [math]::Round($disk.Used / 1GB, 2)
+        $totalGB = [math]::Round(($disk.Free + $disk.Used) / 1GB, 2)
+
+        Write-Info "  Drive $drive`: $freeGB GB free / $totalGB GB total"
+
+        if ($freeGB -lt 50) {
+            Write-Fail "  Low disk space (< 50 GB free)"
+            $FailCount++
+        } else {
+            Write-Pass "  Disk space sufficient"
+        }
+    } else {
+        Write-Fail "VHD root NOT found: $VhdRoot"
+        $FailCount++
+    }
+}
+
+# Section 7: Firewall Rules
+Write-Section "Firewall Rules"
+
+$ports = @($config.controller.grpc_port, $config.controller.elasticsearch_port, $config.controller.kibana_port)
+foreach ($port in $ports) {
+    $ruleName = "AutoMutate-Allow-$port"
+    $rule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+    if ($rule) {
+        Write-Pass "Firewall rule: $ruleName"
+    } else {
+        Write-Fail "Firewall rule NOT found: $ruleName"
+        $FailCount++
+    }
+}
+
+# Section 8: Port Forwarding
+Write-Section "Port Forwarding"
+
+foreach ($port in $ports) {
+    $proxy = netsh interface portproxy show v4tov4 | Select-String "$HostIP.*$port"
+    if ($proxy) {
+        Write-Pass "Port proxy: $HostIP:$port -> 127.0.0.1:$port"
+    } else {
+        Write-Fail "Port proxy NOT configured for port $port"
+        $FailCount++
+    }
+}
+
+# Summary
+Write-Host ""
+Write-Host "="*70 -ForegroundColor Cyan
+Write-Host "VALIDATION SUMMARY" -ForegroundColor Magenta
+Write-Host "="*70 -ForegroundColor Cyan
+
+if ($FailCount -eq 0) {
+    Write-Host ""
+    Write-Pass "All checks passed! Environment ready."
+    Write-Host ""
+    Write-Info "Next steps:"
+    Write-Info "  1. Start environment: .\start-environment.ps1"
+    Write-Info "  2. Deploy artifacts and run experiments"
+    Write-Host ""
+    exit 0
+} else {
+    Write-Host ""
+    Write-Fail "$FailCount check(s) failed"
+    Write-Host ""
+    Write-Info "Troubleshooting:"
+    Write-Info "  1. Re-run setup: ..\setup-all.ps1"
+    Write-Info "  2. Check logs: Get-Content ..\logs\setup-*.log"
+    Write-Info "  3. See automation\README.md Section 8 (Troubleshooting)"
+    Write-Host ""
+    exit 1
+}

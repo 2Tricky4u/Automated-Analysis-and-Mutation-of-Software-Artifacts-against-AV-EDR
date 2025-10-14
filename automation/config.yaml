@@ -1,0 +1,103 @@
+# AutoMutate++ Environment Configuration
+# Edit this file before running setup-all.ps1
+
+# Network configuration
+network:
+  switch_name: "IsolationSwitch"
+  subnet: "192.168.200.0/24"
+  host_ip: "192.168.200.1"
+  gateway: "192.168.200.1"
+  dns: "192.168.200.1"
+
+# Controller configuration (runs in WSL2)
+controller:
+  grpc_port: 50051
+  elasticsearch_port: 9200
+  kibana_port: 5601
+  triage_port: 8080
+
+# Elasticsearch configuration
+elasticsearch:
+  version: "8.11.0"
+  memory_gb: 4
+  data_path: "/var/lib/elasticsearch"
+
+# Worker VMs configuration
+workers:
+  # Windows 10 workers
+  - name: "win10-worker-01"
+    os: "windows10"
+    edition: "Pro"
+    iso_path: "C:\\ISOs\\Win10_22H2_English_x64.iso"
+    ip: "192.168.200.100"
+    cpu_count: 2
+    memory_gb: 4
+    disk_gb: 64
+
+  # Windows 11 workers
+  - name: "win11-worker-01"
+    os: "windows11"
+    edition: "Pro"
+    iso_path: "C:\\ISOs\\Win11_24H2_English_x64.iso"
+    ip: "192.168.200.110"
+    cpu_count: 2
+    memory_gb: 6
+    disk_gb: 80
+
+  - name: "win11-worker-02"
+    os: "windows11"
+    edition: "Pro"
+    iso_path: "C:\\ISOs\\Win11_24H2_English_x64.iso"
+    ip: "192.168.200.111"
+    cpu_count: 2
+    memory_gb: 6
+    disk_gb: 80
+
+# VM storage paths
+storage:
+  vhd_root: "C:\\HyperV\\VHDs"
+  iso_root: "C:\\ISOs"
+  backup_root: "D:\\Backups\\AutoMutate"
+
+# Rust toolchain configuration
+rust:
+  stable_version: "1.75.0"
+  nightly_date: "2024-01-15"
+  components:
+    - "llvm-tools-preview"
+    - "rust-src"
+
+# Protobuf configuration
+protobuf:
+  version: "25.1"
+
+# RedEDR configuration (deployed to workers)
+rededr:
+  version: "latest"
+  api_port: 8080
+  data_dir: "C:\\RedEDR\\Data"
+  enable_etw: true
+  enable_etwti: true
+  enable_kernel: true
+  enable_dll: true
+
+# Security settings
+security:
+  disable_enhanced_session: true
+  disable_guest_services: true
+  enable_mtls: false  # Set to true for production
+  mtls_ca_path: "./certs/ca.crt"
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARN, ERROR
+  log_dir: "./logs"
+  max_log_size_mb: 100
+  max_log_files: 10
+
+# Advanced settings
+advanced:
+  enable_unattended_install: false  # Requires autounattend.xml
+  enable_snapshot_compression: true
+  parallel_vm_creation: 3  # Max workers to create in parallel
+  checkpoint_retention_days: 30
