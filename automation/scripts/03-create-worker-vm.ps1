@@ -57,7 +57,12 @@ $CpuCount = 2
 $MemoryGB = if ($Os -eq "windows11") { 6 } else { 4 }
 $DiskGB = if ($Os -eq "windows11") { 80 } else { 64 }
 
-Write-Info "Creating VM: $WorkerName ($Os) - $StaticIP"
+# CRITICAL: Use Gen1 (BIOS) for Windows 10, Gen2 (UEFI) for Windows 11
+# Gen2 VMs often fail to boot from ISO with Windows 10 (UEFI firmware issues)
+# Gen2 is required for Windows 11 (needs TPM 2.0 + Secure Boot)
+$Generation = if ($Os -eq "windows11") { 2 } else { 1 }
+
+Write-Info "Creating VM: $WorkerName ($Os, Gen$Generation) - $StaticIP"
 
 # Validate ISO
 if (-not (Test-Path $IsoPath)) {
@@ -78,13 +83,13 @@ if (-not (Test-Path $VhdPath)) {
     Write-Success "Created VHDX: $VhdPath"
 }
 
-# Create Gen2 VM
+# Create VM (Gen1 for Win10, Gen2 for Win11)
 if (-not (Get-VM -Name $WorkerName -ErrorAction SilentlyContinue)) {
     New-VM -Name $WorkerName -MemoryStartupBytes ($MemoryGB * 1GB) `
-        -Generation 2 -VHDPath $VhdPath -SwitchName $SwitchName | Out-Null
-    Write-Success "Created VM: $WorkerName"
+        -Generation $Generation -VHDPath $VhdPath -SwitchName $SwitchName | Out-Null
+    Write-Success "Created VM: $WorkerName (Generation $Generation)"
 } else {
-    Write-Info "VM $WorkerName already exists"
+    Write-Info "VM $WorkerName already exists (will reconfigure)"
 }
 
 # Configure VM
@@ -98,38 +103,53 @@ if (-not $dvd) {
 } else {
     Set-VMDvdDrive -VMName $WorkerName -Path $IsoPath
 }
-Set-VMFirmware -VMName $WorkerName -FirstBootDevice (Get-VMDvdDrive -VMName $WorkerName)
 Write-Success "Attached ISO"
 
-# Secure Boot & TPM Configuration
-if ($Os -eq "windows11") {
-    # Windows 11 requires both Secure Boot and TPM 2.0
+# Configure boot order and firmware (Gen2 only - Gen1 uses BIOS boot menu)
+if ($Generation -eq 2) {
+    # Gen2: Configure UEFI firmware settings (boot order + Secure Boot)
+    # CRITICAL: Use FirstBootDevice method (simpler and more reliable than explicit BootOrder)
+    $dvdDrive = Get-VMDvdDrive -VMName $WorkerName
 
-    # Use MicrosoftWindows template (most compatible with official ISOs)
-    Set-VMFirmware -VMName $WorkerName -EnableSecureBoot On `
-        -SecureBootTemplate "MicrosoftWindows"
-    Write-Success "Enabled Secure Boot (MicrosoftWindows template)"
+    if (-not $dvdDrive) {
+        Write-Error "DVD drive not found after attachment"
+        exit 1
+    }
 
-    # Enable TPM 2.0 (required for Windows 11)
+    if ($Os -eq "windows11") {
+        # Windows 11: Requires Secure Boot + TPM
+        # CRITICAL: Enable Secure Boot FIRST, then TPM (reverse order from before)
+        Set-VMFirmware -VMName $WorkerName -FirstBootDevice $dvdDrive `
+            -EnableSecureBoot On -SecureBootTemplate "MicrosoftWindows"
+        Write-Success "Configured firmware: DVD first boot + Secure Boot enabled"
+    } else {
+        # Windows 10 Gen2: Keep Secure Boot OFF (better compatibility with older ISOs)
+        Set-VMFirmware -VMName $WorkerName -FirstBootDevice $dvdDrive `
+            -EnableSecureBoot Off
+        Write-Success "Configured firmware: DVD first boot, Secure Boot disabled"
+    }
+} else {
+    # Gen1: BIOS-based boot (DVD automatically detected, no firmware config needed)
+    Write-Info "Gen1 VM uses BIOS boot (DVD will auto-boot if bootable)"
+}
+
+# Enable TPM AFTER Secure Boot is configured (Gen2 only - Gen1 doesn't support TPM)
+# CRITICAL: For Windows 11, TPM must be enabled AFTER Secure Boot is ON
+$tpmEnabled = $false
+if ($Generation -eq 2 -and $Os -eq "windows11") {
     try {
         Enable-VMTPM -VMName $WorkerName -ErrorAction Stop
         Write-Success "Enabled TPM 2.0"
+        $tpmEnabled = $true
     } catch {
-        Write-Error "TPM enable failed: $_. Windows 11 requires TPM 2.0. Check host TPM support."
-        exit 1
+        $errorMsg = $_.Exception.Message
+        Write-Warning "TPM enable failed: $errorMsg"
+        Write-Warning "Windows 11 installation may fail without TPM."
+        Write-Info "You can enable TPM manually: VM Settings → Security → Enable Trusted Platform Module"
+        Write-Info "Continuing anyway..."
     }
-} else {
-    # Windows 10 doesn't require Secure Boot or TPM
-    Set-VMFirmware -VMName $WorkerName -EnableSecureBoot Off
-    Write-Success "Secure Boot disabled (not required for Windows 10)"
-
-    # Enable TPM anyway (good practice, optional for Win10)
-    try {
-        Enable-VMTPM -VMName $WorkerName -ErrorAction Stop
-        Write-Success "Enabled TPM 2.0 (optional for Windows 10)"
-    } catch {
-        Write-Info "TPM enable failed (not critical for Windows 10): $_"
-    }
+} elseif ($Generation -eq 1) {
+    Write-Info "Gen1 VM - TPM not available (not needed for Windows 10)"
 }
 
 # Disable Guest Services (security)
@@ -138,5 +158,28 @@ Get-VMIntegrationService -VMName $WorkerName | Where-Object { $_.Name -eq "Guest
 Write-Success "VM $WorkerName ready for Windows install"
 Write-Info "Next: Start VM in Hyper-V Manager and install Windows"
 Write-Info "After install, run: .\04-vm-init.ps1 -StaticIP $StaticIP -WorkerName $WorkerName"
+
+# Display final configuration for troubleshooting
+$firmwareType = if ($Generation -eq 2) { "UEFI" } else { "BIOS" }
+$secureBootStatus = if ($Generation -eq 2) {
+    if ($Os -eq "windows11") { "Enabled (MicrosoftWindows)" } else { "Disabled" }
+} else {
+    "N/A (Gen1)"
+}
+$tpmStatus = if ($Generation -eq 2) {
+    if ($tpmEnabled) { "Enabled" } else { "Failed/Not Available" }
+} else {
+    "N/A (Gen1)"
+}
+
+Write-Host "`n--- VM Configuration Summary ---" -ForegroundColor Cyan
+Write-Host "Name:         $WorkerName" -ForegroundColor White
+Write-Host "OS Type:      $Os" -ForegroundColor White
+Write-Host "Generation:   $Generation ($firmwareType)" -ForegroundColor White
+Write-Host "Secure Boot:  $secureBootStatus" -ForegroundColor White
+Write-Host "TPM 2.0:      $tpmStatus" -ForegroundColor White
+Write-Host "First Boot:   DVD (ISO)" -ForegroundColor White
+Write-Host "ISO Path:     $IsoPath" -ForegroundColor White
+Write-Host "-------------------------------`n" -ForegroundColor Cyan
 
 exit 0

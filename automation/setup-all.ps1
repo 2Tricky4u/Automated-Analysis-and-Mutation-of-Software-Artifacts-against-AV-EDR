@@ -185,15 +185,15 @@ $ConfigContent = Get-Content $ConfigPath -Raw
 $WorkersSection = ($ConfigContent -split 'workers:')[1] -split 'storage:' | Select-Object -First 1
 $WorkerConfigs = @()
 
-# Extract worker blocks
-$WorkerMatches = [regex]::Matches($WorkersSection, '- name:\s*"([^"]+)"[\s\S]*?ip:\s*"([^"]+)"[\s\S]*?iso_path:\s*"([^"]+)"[\s\S]*?os:\s*"([^"]+)"')
+# Extract worker blocks (order-independent matching)
+$WorkerMatches = [regex]::Matches($WorkersSection, '- name:\s*"([^"]+)"[\s\S]*?os:\s*"([^"]+)"[\s\S]*?iso_path:\s*"([^"]+)"[\s\S]*?ip:\s*"([^"]+)"')
 
 foreach ($match in $WorkerMatches) {
     $WorkerConfigs += @{
         Name = $match.Groups[1].Value
-        IP = $match.Groups[2].Value
+        Os = $match.Groups[2].Value
         IsoPath = $match.Groups[3].Value
-        Os = $match.Groups[4].Value
+        IP = $match.Groups[4].Value
     }
 }
 
