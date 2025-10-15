@@ -31,9 +31,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-function Write-Success { param($M) Write-Host "[✓] $M" -ForegroundColor Green }
-function Write-Info { param($M) Write-Host "[i] $M" -ForegroundColor Cyan }
-function Write-Warn { param($M) Write-Host "[!] $M" -ForegroundColor Yellow }
+function Write-Success { param($M) Write-Host "[OK] $M" -ForegroundColor Green }
+function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
+function Write-Warn { param($M) Write-Host "[WARN] $M" -ForegroundColor Yellow }
 
 Write-Host @"
 

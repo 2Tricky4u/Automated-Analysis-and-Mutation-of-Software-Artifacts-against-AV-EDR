@@ -25,9 +25,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-function Write-Pass { param($M) Write-Host "[✓] $M" -ForegroundColor Green }
-function Write-Fail { param($M) Write-Host "[✗] $M" -ForegroundColor Red }
-function Write-Info { param($M) Write-Host "[i] $M" -ForegroundColor Cyan }
+function Write-Pass { param($M) Write-Host "[OK] $M" -ForegroundColor Green }
+function Write-Fail { param($M) Write-Host "[ERROR] $M" -ForegroundColor Red }
+function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
 function Write-Section { param($M) Write-Host "`n==> $M" -ForegroundColor Magenta }
 
 $FailCount = 0

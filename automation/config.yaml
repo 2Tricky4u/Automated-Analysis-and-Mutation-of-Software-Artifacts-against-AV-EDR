@@ -37,7 +37,7 @@ workers:
   - name: "win10-worker-01"
     os: "windows10"
     edition: "Pro"
-    iso_path: "C:\\ISOs\\Win10_22H2_English_x64.iso"
+    iso_path: "C:\\ISOs\\Win10_22H2_English_x64v1.iso"
     ip: "192.168.200.100"
     cpu_count: 2
     memory_gb: 4
@@ -47,7 +47,7 @@ workers:
   - name: "win11-worker-01"
     os: "windows11"
     edition: "Pro"
-    iso_path: "C:\\ISOs\\Win11_24H2_English_x64.iso"
+    iso_path: "C:\\ISOs\\Win11_25H2_English_x64.iso"
     ip: "192.168.200.110"
     cpu_count: 2
     memory_gb: 6
