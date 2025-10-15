@@ -56,7 +56,7 @@ workers:
   - name: "win11-worker-02"
     os: "windows11"
     edition: "Pro"
-    iso_path: "C:\\ISOs\\Win11_24H2_English_x64.iso"
+    iso_path: "C:\\ISOs\\Win11_25H2_English_x64.iso"
     ip: "192.168.200.111"
     cpu_count: 2
     memory_gb: 6
