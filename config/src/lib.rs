@@ -307,7 +307,7 @@ pub struct LastSeenConfig {
     pub flush_on_abnormal_exit: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExternalTelemetryConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -808,17 +808,6 @@ impl WorkerConfig {
 }
 
 // === External Telemetry Defaults ===
-
-impl Default for ExternalTelemetryConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            cortex: CortexConfig::default(),
-            mde: MdeConfig::default(),
-            custom_http: CustomHttpConfig::default(),
-        }
-    }
-}
 
 impl Default for CortexConfig {
     fn default() -> Self {
