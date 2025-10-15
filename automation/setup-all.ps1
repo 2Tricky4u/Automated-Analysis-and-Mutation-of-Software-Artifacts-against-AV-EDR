@@ -35,10 +35,10 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 # Color output functions
-function Write-Success { param($Message) Write-Host "[✓] $Message" -ForegroundColor Green }
-function Write-Info { param($Message) Write-Host "[i] $Message" -ForegroundColor Cyan }
-function Write-Warning { param($Message) Write-Host "[!] $Message" -ForegroundColor Yellow }
-function Write-Error { param($Message) Write-Host "[✗] $Message" -ForegroundColor Red }
+function Write-Success { param($Message) Write-Host "[OK] $Message" -ForegroundColor Green }
+function Write-Info { param($Message) Write-Host "[INFO] $Message" -ForegroundColor Cyan }
+function Write-Warning { param($Message) Write-Host "[WARN] $Message" -ForegroundColor Yellow }
+function Write-Error { param($Message) Write-Host "[ERROR] $Message" -ForegroundColor Red }
 function Write-Step { param($Message) Write-Host "`n==> $Message" -ForegroundColor Magenta }
 
 # Check admin privileges
@@ -49,12 +49,15 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 Write-Host @"
 
-╔═══════════════════════════════════════════════════════════════╗
-║                                                               ║
-║         AutoMutate++ Environment Setup                        ║
-║         EDR Triage & Mutation Framework                       ║
-║                                                               ║
-╚═══════════════════════════════════════════════════════════════╝
++=================================================================+
+|                                                                 |
+|                  A U T O M U T A T E ++                         |
+|                 Environment Setup                               |
+|                                                                 |
+|                 EDR Triage & Mutation Framework                 |
+|                                                                 |
++=================================================================+
+
 
 "@ -ForegroundColor Cyan
 

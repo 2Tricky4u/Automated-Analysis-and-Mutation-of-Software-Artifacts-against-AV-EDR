@@ -73,23 +73,23 @@ EOF
 if command -v docker &>/dev/null; then
     echo "[i] Starting Elasticsearch + Kibana..."
     docker-compose up -d
-    echo "[✓] Elasticsearch: http://localhost:9200"
-    echo "[✓] Kibana: http://localhost:5601"
+    echo "[OK] Elasticsearch: http://localhost:9200"
+    echo "[OK] Kibana: http://localhost:5601"
 else
-    echo "[!] Docker not found. Install Docker Desktop with WSL integration."
+    echo "[WARN] Docker not found. Install Docker Desktop with WSL integration."
     exit 1
 fi
 
 # Build Controller binaries
 cd "$PROJECT_ROOT"
 echo "[i] Building Controller binaries..."
-cargo build --release -p controller-scheduler -p controller-selector -p controller-mutator \
-    -p controller-triage-engine --target-dir "$PROJECT_ROOT/target"
+cargo build --release -p scheduler -p selector -p queue -p triage-engine \
+    --target-dir "$PROJECT_ROOT/target"
 
 if [ $? -eq 0 ]; then
-    echo "[✓] Controller binaries built: $PROJECT_ROOT/target/release/"
+    echo "[OK] Controller binaries built: $PROJECT_ROOT/target/release/"
 else
-    echo "[!] Build failed. Check Cargo.toml and dependencies."
+    echo "[WARN] Build failed. Check Cargo.toml and dependencies."
     exit 1
 fi
 
@@ -110,8 +110,8 @@ bulk_timeout_ms = 5000
 confidence_threshold = 0.7
 EOF
 
-echo "[✓] WSL2 bootstrap complete"
+echo "[OK] WSL2 bootstrap complete"
 echo ""
 echo "Start controller:"
 echo "  cd $PROJECT_ROOT"
-echo "  ./target/release/controller-scheduler --config config/controller.toml"
+echo "  ./target/release/scheduler --config config/controller.toml"

@@ -21,10 +21,10 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Color output
-function Write-Success { param($M) Write-Host "[✓] $M" -ForegroundColor Green }
-function Write-Info { param($M) Write-Host "[i] $M" -ForegroundColor Cyan }
-function Write-Warn { param($M) Write-Host "[!] $M" -ForegroundColor Yellow }
-function Write-Err { param($M) Write-Host "[✗] $M" -ForegroundColor Red }
+function Write-Success { param($M) Write-Host "[OK] $M" -ForegroundColor Green }
+function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
+function Write-Warn { param($M) Write-Host "[WARN] $M" -ForegroundColor Yellow }
+function Write-Err { param($M) Write-Host "[ERROR] $M" -ForegroundColor Red }
 
 # Load config (simplified YAML parser)
 $config = @{}
@@ -121,7 +121,7 @@ foreach ($port in $ports) {
     netsh interface portproxy delete v4tov4 listenaddress=$HostIP listenport=$port 2>$null | Out-Null
     netsh interface portproxy add v4tov4 listenaddress=$HostIP listenport=$port `
         connectaddress=127.0.0.1 connectport=$port | Out-Null
-    Write-Success "Port proxy: $HostIP:$port -> 127.0.0.1:$port"
+    Write-Success "Port proxy: ${HostIP}:$port -> 127.0.0.1:$port"
 }
 
 Write-Success "Host setup complete"
