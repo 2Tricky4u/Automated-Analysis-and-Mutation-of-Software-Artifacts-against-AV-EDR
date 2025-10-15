@@ -9,6 +9,15 @@ network:
   gateway: "192.168.200.1"
   dns: "192.168.200.1"
 
+  # External network support (VPN/RPC machines)
+  allow_external: false          # Set to true to enable VPN connectivity
+  vpn_gateway: ""                # VPN gateway IP (e.g., "10.0.0.1")
+  external_dns: "8.8.8.8"        # DNS for external resolution
+
+  # Optional: Bridge to existing network instead of isolated switch
+  # bridge_adapter: ""           # Name of host network adapter to bridge
+  # bridge_mode: false           # Set to true to use bridge instead of NAT
+
 # Controller configuration (runs in WSL2)
 controller:
   grpc_port: 50051
@@ -85,8 +94,50 @@ rededr:
 security:
   disable_enhanced_session: true
   disable_guest_services: true
-  enable_mtls: false  # Set to true for production
+  enable_mtls: false  # Set to true for production/VPN
   mtls_ca_path: "./certs/ca.crt"
+  mtls_cert_path: "./certs/client.crt"
+  mtls_key_path: "./certs/client.key"
+
+# External telemetry destinations (Cortex, MDE, etc.)
+external_telemetry:
+  # Cortex (Prometheus-compatible TSDB)
+  cortex:
+    enabled: false
+    endpoint: ""                # e.g., "https://cortex.vpn:9009/write"
+    bearer_token: ""            # API token for authentication
+    # OR use mTLS:
+    use_mtls: false
+    tls_cert_path: ""           # e.g., "./certs/cortex-client.crt"
+    tls_key_path: ""            # e.g., "./certs/cortex-client.key"
+    tls_ca_path: ""             # e.g., "./certs/cortex-ca.crt"
+    batch_size: 1000            # Events per batch
+    flush_interval_secs: 10     # Max time before flush
+
+  # Microsoft Defender for Endpoint (MDE)
+  mde:
+    enabled: false
+    endpoint: ""                # e.g., "https://api.securitycenter.microsoft.com"
+    tenant_id: ""               # Azure AD tenant ID
+    client_id: ""               # App registration client ID
+    client_secret: ""           # App registration secret
+    # OR use certificate auth:
+    use_cert_auth: false
+    cert_path: ""               # e.g., "./certs/mde-client.pfx"
+    cert_password: ""
+    batch_size: 100             # Events per batch
+    flush_interval_secs: 30
+
+  # Generic HTTP endpoint (for custom collectors)
+  custom_http:
+    enabled: false
+    endpoint: ""                # e.g., "https://custom-collector.vpn:8443/events"
+    method: "POST"              # HTTP method
+    headers:                    # Custom headers
+      Content-Type: "application/json"
+      # Authorization: "Bearer YOUR_TOKEN"
+    batch_size: 500
+    flush_interval_secs: 15
 
 # Logging
 logging:

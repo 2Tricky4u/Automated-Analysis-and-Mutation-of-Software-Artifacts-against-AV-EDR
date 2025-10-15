@@ -60,32 +60,67 @@ jobs:
     - name: Run tests
       run: cargo test --verbose --workspace
 
-  docker:
-    name: Docker Build
+  # Validate native builds (matches automation/ deployment)
+  validate-controller:
+    name: Validate Controller (Linux)
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Build Controller Image
-      uses: docker/build-push-action@v5
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
       with:
-        context: .
-        file: build/dockerfiles/Dockerfile.controller
-        push: false
-        tags: edr-controller:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-    
-    - name: Build Worker Image
-      uses: docker/build-push-action@v5
+        profile: minimal
+        toolchain: stable
+        override: true
+
+    - name: Install Protobuf
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+    - name: Build Controller binaries
+      run: |
+        cargo build --release \
+          -p controller-scheduler \
+          -p controller-selector \
+          -p controller-mutator \
+          -p controller-triage-engine
+
+    - name: Verify binaries exist
+      run: |
+        test -f target/release/controller-scheduler
+        test -f target/release/controller-selector
+        test -f target/release/controller-mutator
+        test -f target/release/controller-triage-engine
+        echo "✓ All Controller binaries built successfully"
+
+  validate-worker:
+    name: Validate Worker (Windows)
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
       with:
-        context: .
-        file: build/dockerfiles/Dockerfile.worker
-        push: false
-        tags: edr-worker:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        profile: minimal
+        toolchain: stable-x86_64-pc-windows-msvc
+        override: true
+
+    - name: Install Protobuf (Windows)
+      run: |
+        choco install protoc -y
+        refreshenv
+
+    - name: Build Worker binaries
+      run: |
+        cargo build --release -p worker-agent -p worker-harness
+
+    - name: Verify binaries exist
+      run: |
+        if (!(Test-Path "target\release\worker-agent.exe")) { throw "worker-agent.exe missing" }
+        if (!(Test-Path "target\release\worker-harness.exe")) { throw "worker-harness.exe missing" }
+        Write-Host "✓ All Worker binaries built successfully"
