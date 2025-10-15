@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn test_harness_creation() {
-        let harness = Harness::new();
-        assert!(true);
+        let _harness = Harness::new();
+        // Harness creation succeeds if we get here
     }
 }

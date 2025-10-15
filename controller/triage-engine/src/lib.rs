@@ -60,7 +60,7 @@ mod tests {
 
     #[test]
     fn test_triage_engine_creation() {
-        let engine = TriageEngine::new().unwrap();
-        assert!(true);
+        let _engine = TriageEngine::new().unwrap();
+        // Triage engine creation succeeds if we get here
     }
 }
