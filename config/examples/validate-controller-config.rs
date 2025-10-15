@@ -2,7 +2,6 @@
 ///
 /// This binary validates that automation/templates/controller.toml parses correctly.
 /// Used by CI to catch config errors early.
-
 use edr_config::ControllerConfig;
 
 fn main() {
@@ -27,16 +26,31 @@ fn main() {
 
             println!("\n  Triage:");
             println!("    - Model type: {}", config.triage.model_type);
-            println!("    - Confidence threshold: {}", config.triage.confidence_threshold);
+            println!(
+                "    - Confidence threshold: {}",
+                config.triage.confidence_threshold
+            );
 
             println!("\n  Mutator:");
-            println!("    - Max mutations per artifact: {}", config.mutator.max_mutations_per_artifact);
-            println!("    - Selector weights: {:?}", config.mutator.selector_weights);
+            println!(
+                "    - Max mutations per artifact: {}",
+                config.mutator.max_mutations_per_artifact
+            );
+            println!(
+                "    - Selector weights: {:?}",
+                config.mutator.selector_weights
+            );
 
             println!("\n  Telemetry:");
             println!("    - RedEDR enabled: {}", config.telemetry.rededr_enabled);
-            println!("    - API tracing enabled: {}", config.telemetry.api_tracing_enabled);
-            println!("    - BB coverage enabled: {}", config.telemetry.bb_coverage_enabled);
+            println!(
+                "    - API tracing enabled: {}",
+                config.telemetry.api_tracing_enabled
+            );
+            println!(
+                "    - BB coverage enabled: {}",
+                config.telemetry.bb_coverage_enabled
+            );
 
             println!("\n✅ All checks passed!");
             std::process::exit(0);

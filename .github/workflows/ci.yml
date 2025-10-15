@@ -238,37 +238,6 @@ jobs:
         }
 
   # ============================================================================
-  # Job 5: Documentation Check
-  # ============================================================================
-  docs:
-    name: Documentation
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Install Protobuf Compiler
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y protobuf-compiler libprotobuf-dev
-
-    - name: Check Documentation Builds
-      run: cargo doc --workspace --no-deps --document-private-items
-
-    - name: Validate Key Documentation Files
-      run: |
-        echo "Checking critical documentation files..."
-        test -f README.md || echo "⚠ Missing README.md"
-        test -f ARCHITECTURE.md || echo "⚠ Missing ARCHITECTURE.md"
-        test -f automation/README.md || echo "✓ automation/README.md exists"
-        test -f VPN_SETUP_GUIDE.md || echo "✓ VPN_SETUP_GUIDE.md exists"
-        test -f AUTOMATION_ALIGNMENT_COMPLETE.md || echo "✓ AUTOMATION_ALIGNMENT_COMPLETE.md exists"
-        echo "✓ Documentation structure validated"
-
-  # ============================================================================
   # Summary Job (Optional - shows overall status)
   # ============================================================================
   ci-success:

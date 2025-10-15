@@ -2,7 +2,6 @@
 ///
 /// This binary validates that automation/templates/worker.toml parses correctly.
 /// Used by CI to catch config errors early.
-
 use edr_config::WorkerConfig;
 
 fn main() {
@@ -21,32 +20,71 @@ fn main() {
             println!("\n  Controller Connection:");
             println!("    - Address: {}", config.controller.controller_address);
             println!("    - TLS enabled: {}", config.controller.tls_enabled);
-            println!("    - Connect timeout: {}s", config.controller.connect_timeout_secs);
+            println!(
+                "    - Connect timeout: {}s",
+                config.controller.connect_timeout_secs
+            );
 
             println!("\n  Harness:");
-            println!("    - Working directory: {}", config.harness.working_directory);
-            println!("    - Execution timeout: {}s", config.harness.execution_timeout_secs);
+            println!(
+                "    - Working directory: {}",
+                config.harness.working_directory
+            );
+            println!(
+                "    - Execution timeout: {}s",
+                config.harness.execution_timeout_secs
+            );
             println!("    - Sandbox enabled: {}", config.harness.sandbox_enabled);
 
             println!("\n  Telemetry:");
             println!("    - ETW enabled: {}", config.telemetry.etw.enabled);
-            println!("    - Event Log enabled: {}", config.telemetry.eventlog.enabled);
-            println!("    - Defender enabled: {}", config.telemetry.defender.enabled);
+            println!(
+                "    - Event Log enabled: {}",
+                config.telemetry.eventlog.enabled
+            );
+            println!(
+                "    - Defender enabled: {}",
+                config.telemetry.defender.enabled
+            );
             println!("    - RedEDR enabled: {}", config.telemetry.rededr.enabled);
-            println!("    - API tracing enabled: {}", config.telemetry.api_tracing.enabled);
-            println!("    - BB coverage enabled: {}", config.telemetry.bb_coverage.enabled);
+            println!(
+                "    - API tracing enabled: {}",
+                config.telemetry.api_tracing.enabled
+            );
+            println!(
+                "    - BB coverage enabled: {}",
+                config.telemetry.bb_coverage.enabled
+            );
 
             println!("\n  External Telemetry:");
-            println!("    - External enabled: {}", config.telemetry.external.enabled);
-            println!("    - Cortex enabled: {}", config.telemetry.external.cortex.enabled);
-            println!("    - MDE enabled: {}", config.telemetry.external.mde.enabled);
-            println!("    - Custom HTTP enabled: {}", config.telemetry.external.custom_http.enabled);
+            println!(
+                "    - External enabled: {}",
+                config.telemetry.external.enabled
+            );
+            println!(
+                "    - Cortex enabled: {}",
+                config.telemetry.external.cortex.enabled
+            );
+            println!(
+                "    - MDE enabled: {}",
+                config.telemetry.external.mde.enabled
+            );
+            println!(
+                "    - Custom HTTP enabled: {}",
+                config.telemetry.external.custom_http.enabled
+            );
 
             println!("\n  Security:");
             println!("    - Disable network: {}", config.security.disable_network);
             println!("    - Block internet: {}", config.security.block_internet);
-            println!("    - Allow controller only: {}", config.security.allow_controller_only);
-            println!("    - Allowed IPs: {} entries", config.security.allowed_ips.len());
+            println!(
+                "    - Allow controller only: {}",
+                config.security.allow_controller_only
+            );
+            println!(
+                "    - Allowed IPs: {} entries",
+                config.security.allowed_ips.len()
+            );
 
             println!("\n✅ All checks passed!");
             std::process::exit(0);
