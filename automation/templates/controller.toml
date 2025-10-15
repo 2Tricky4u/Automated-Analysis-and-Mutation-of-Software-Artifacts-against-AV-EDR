@@ -12,9 +12,15 @@ max_connections = 100
 request_timeout_secs = 300
 
 # Enable TLS (requires certificates)
+# Set to true for production and when workers connect over VPN
 tls_enabled = false
-# tls_cert_path = "/path/to/cert.pem"
-# tls_key_path = "/path/to/key.pem"
+tls_cert_path = "/path/to/cert.pem"
+tls_key_path = "/path/to/key.pem"
+
+# Client certificate verification (mTLS)
+# Enable this to require workers to present valid certificates
+require_client_cert = false
+client_ca_cert_path = "/path/to/ca.pem"
 
 [elasticsearch]
 # Elasticsearch cluster URL
