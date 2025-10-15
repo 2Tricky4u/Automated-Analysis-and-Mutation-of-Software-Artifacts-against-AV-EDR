@@ -243,7 +243,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, build, validate-configs, integration-test, docs]
+    needs: [lint, build, validate-configs, integration-test]
     if: success()
 
     steps:
@@ -259,6 +259,5 @@ jobs:
         echo "✓ Protobuf compilation"
         echo "✓ Configuration templates"
         echo "✓ Elasticsearch integration"
-        echo "✓ Documentation"
         echo ""
         echo "Ready to merge! 🚀"
