@@ -101,19 +101,35 @@ if (-not $dvd) {
 Set-VMFirmware -VMName $WorkerName -FirstBootDevice (Get-VMDvdDrive -VMName $WorkerName)
 Write-Success "Attached ISO"
 
-# Secure Boot
+# Secure Boot & TPM Configuration
 if ($Os -eq "windows11") {
-    Set-VMFirmware -VMName $WorkerName -EnableSecureBoot On `
-        -SecureBootTemplate "MicrosoftUEFICertificateAuthority"
-    Write-Success "Enabled Secure Boot (MS UEFI CA)"
-}
+    # Windows 11 requires both Secure Boot and TPM 2.0
 
-# TPM
-try {
-    Enable-VMTPM -VMName $WorkerName -ErrorAction Stop
-    Write-Success "Enabled TPM 2.0"
-} catch {
-    Write-Warning "TPM enable failed: $_. Enable manually or check host TPM support."
+    # Use MicrosoftWindows template (most compatible with official ISOs)
+    Set-VMFirmware -VMName $WorkerName -EnableSecureBoot On `
+        -SecureBootTemplate "MicrosoftWindows"
+    Write-Success "Enabled Secure Boot (MicrosoftWindows template)"
+
+    # Enable TPM 2.0 (required for Windows 11)
+    try {
+        Enable-VMTPM -VMName $WorkerName -ErrorAction Stop
+        Write-Success "Enabled TPM 2.0"
+    } catch {
+        Write-Error "TPM enable failed: $_. Windows 11 requires TPM 2.0. Check host TPM support."
+        exit 1
+    }
+} else {
+    # Windows 10 doesn't require Secure Boot or TPM
+    Set-VMFirmware -VMName $WorkerName -EnableSecureBoot Off
+    Write-Success "Secure Boot disabled (not required for Windows 10)"
+
+    # Enable TPM anyway (good practice, optional for Win10)
+    try {
+        Enable-VMTPM -VMName $WorkerName -ErrorAction Stop
+        Write-Success "Enabled TPM 2.0 (optional for Windows 10)"
+    } catch {
+        Write-Info "TPM enable failed (not critical for Windows 10): $_"
+    }
 }
 
 # Disable Guest Services (security)

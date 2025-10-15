@@ -1,0 +1,12 @@
+[server]
+bind_address = "0.0.0.0:50051"
+max_connections = 100
+
+[elasticsearch]
+url = "http://localhost:9200"
+index_prefix = "etw-"
+bulk_size = 100
+bulk_timeout_ms = 5000
+
+[triage]
+confidence_threshold = 0.7
