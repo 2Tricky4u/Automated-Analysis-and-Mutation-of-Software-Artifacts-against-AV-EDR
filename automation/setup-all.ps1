@@ -245,20 +245,22 @@ foreach ($worker in $WorkerConfigs) {
 
 Write-Host @"
 
-2. During Windows installation:
-   - Use local account (username: worker-admin)
-   - Skip Microsoft account login
-   - Disable telemetry and Cortana
-   - DO NOT enable Enhanced Session Mode
+2. Windows will install automatically (via autounattend.xml floppy):
+   - Local account: worker-admin / AutoMutate!Password
+   - Fully unattended setup (no user input required)
+   - Boots directly to desktop after ~10-15 minutes
 
 3. After Windows installation completes, configure each VM:
 
 "@ -ForegroundColor Green
 
 foreach ($worker in $WorkerConfigs) {
+    $credNote = if ($worker.Os -eq "windows11") { " (use: worker-admin / AutoMutate!Password)" } else { " (use: worker-admin / AutoMutate!Password)" }
     Write-Host @"
-   $($worker.Name):
-   Invoke-Command -VMName "$($worker.Name)" -FilePath ".\scripts\04-vm-init.ps1" -ArgumentList "$($worker.IP)", "$($worker.Name)"
+   $($worker.Name)$credNote
+   `$cred = Get-Credential -UserName 'worker-admin' -Message 'Enter VM password'
+   Invoke-Command -VMName "$($worker.Name)" -FilePath ".\scripts\04-vm-init.ps1" ``
+     -ArgumentList "$($worker.IP)", "$($worker.Name)" -Credential `$cred
 
 "@ -ForegroundColor Cyan
 }
@@ -277,10 +279,16 @@ foreach ($worker in $WorkerConfigs) {
 
 Write-Host @"
 
-5. Validate installation:
+5. DISABLE NAT for lab isolation (RECOMMENDED):
+   .\scripts\disable-nat.ps1
+
+   ⚠️  NAT is currently ENABLED - VMs can access the internet
+   After VM initialization, disable NAT to confine VMs to the lab network
+
+6. Validate installation:
    .\validate-environment.ps1
 
-6. Start environment:
+7. Start environment:
    .\scripts\start-environment.ps1
 
 For detailed instructions, see: automation\README.md
