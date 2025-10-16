@@ -105,7 +105,32 @@ if (-not $existingIp) {
     Write-Success "Host IP $HostIP already assigned"
 }
 
-# 5) Firewall rules
+# 5) Configure NAT (allows VMs to access internet via host)
+Write-Info "Configuring NAT for VM internet access..."
+$natName = "IsolationNAT"
+$existingNat = Get-NetNat -Name $natName -ErrorAction SilentlyContinue
+
+if ($existingNat) {
+    # Check if NAT subnet matches config
+    $natSubnet = $existingNat.InternalIPInterfaceAddressPrefix
+    $configSubnet = $config.network.subnet
+
+    if ($natSubnet -ne $configSubnet) {
+        Write-Info "Updating NAT subnet from $natSubnet to $configSubnet..."
+        Remove-NetNat -Name $natName -Confirm:$false
+        New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix $configSubnet | Out-Null
+        Write-Success "NAT updated: $natName ($configSubnet)"
+    } else {
+        Write-Success "NAT already configured: $natName ($natSubnet)"
+    }
+} else {
+    New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix $config.network.subnet | Out-Null
+    Write-Success "NAT created: $natName ($($config.network.subnet))"
+}
+
+Write-Info "VMs can now access internet through host (gateway: $HostIP)"
+
+# 6) Firewall rules
 $ports = @($GrpcPort, $EsPort, $KibanaPort)
 foreach ($port in $ports) {
     $ruleName = "AutoMutate-Allow-$port"
@@ -116,7 +141,7 @@ foreach ($port in $ports) {
     }
 }
 
-# 6) Port proxy (Host IP -> WSL2 localhost)
+# 7) Port proxy (Host IP -> WSL2 localhost)
 foreach ($port in $ports) {
     netsh interface portproxy delete v4tov4 listenaddress=$HostIP listenport=$port 2>$null | Out-Null
     netsh interface portproxy add v4tov4 listenaddress=$HostIP listenport=$port `
