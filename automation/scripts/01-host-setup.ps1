@@ -219,34 +219,27 @@ if ($currentRouting -ne 1) {
     Write-Success "Global IP routing already enabled"
 }
 
-# Create firewall rule: Allow forwarding from VM subnet to any destination
-$forwardRule = "AutoMutate-VM-Forward"
-if (-not (Get-NetFirewallRule -DisplayName $forwardRule -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName $forwardRule -Direction Forward -Action Allow `
-        -LocalAddress $config.network.subnet -Profile Any | Out-Null
-    Write-Success "Created forwarding rule: $forwardRule"
+# Create firewall rules for IP forwarding (requires both Inbound + Outbound)
+# Windows Firewall doesn't have a "Forward" direction - we simulate it with:
+#   1. Inbound: Allow traffic FROM VMs arriving at internal switch
+#   2. Outbound: Allow traffic FROM internal switch going to internet
+
+$vmInboundRule = "AutoMutate-VM-Inbound"
+if (-not (Get-NetFirewallRule -DisplayName $vmInboundRule -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -DisplayName $vmInboundRule -Direction Inbound -Action Allow `
+        -InterfaceAlias $adapterAlias -RemoteAddress $config.network.subnet -Profile Any | Out-Null
+    Write-Success "Created inbound rule: $vmInboundRule (allows VM traffic to host)"
 } else {
-    Write-Success "Forwarding rule already exists: $forwardRule"
+    Write-Success "Inbound rule already exists: $vmInboundRule"
 }
 
-# Allow VMs to reach internet (outbound from internal switch)
 $vmOutboundRule = "AutoMutate-VM-Outbound"
 if (-not (Get-NetFirewallRule -DisplayName $vmOutboundRule -ErrorAction SilentlyContinue)) {
     New-NetFirewallRule -DisplayName $vmOutboundRule -Direction Outbound -Action Allow `
         -InterfaceAlias $adapterAlias -Profile Any | Out-Null
-    Write-Success "Created outbound rule: $vmOutboundRule"
+    Write-Success "Created outbound rule: $vmOutboundRule (allows forwarded traffic to internet)"
 } else {
     Write-Success "Outbound rule already exists: $vmOutboundRule"
-}
-
-# Allow inbound traffic from VMs (ICMP, TCP, UDP for diagnostics)
-$vmInboundRule = "AutoMutate-VM-Inbound"
-if (-not (Get-NetFirewallRule -DisplayName $vmInboundRule -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName $vmInboundRule -Direction Inbound -Action Allow `
-        -InterfaceAlias $adapterAlias -Profile Any | Out-Null
-    Write-Success "Created inbound rule: $vmInboundRule"
-} else {
-    Write-Success "Inbound rule already exists: $vmInboundRule"
 }
 
 Write-Success "VM internet access configured via IP forwarding"
