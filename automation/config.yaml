@@ -4,10 +4,10 @@
 # Network configuration
 network:
   switch_name: "IsolationSwitch"
-  subnet: "192.168.200.0/24"
-  host_ip: "192.168.200.1"
-  gateway: "192.168.200.1"
-  dns: "192.168.200.1"
+  subnet: "10.200.200.0/24"
+  host_ip: "10.200.200.1"
+  gateway: "10.200.200.1"
+  dns: "10.200.200.1"
 
   # External network support (VPN/RPC machines)
   allow_external: false          # Set to true to enable VPN connectivity
@@ -38,7 +38,7 @@ workers:
     os: "windows10"
     edition: "Pro"
     iso_path: "C:\\ISOs\\Win10_22H2_English_x64v1.iso"
-    ip: "192.168.200.100"
+    ip: "10.200.200.100"
     cpu_count: 2
     memory_gb: 4
     disk_gb: 64
@@ -48,7 +48,7 @@ workers:
     os: "windows11"
     edition: "Pro"
     iso_path: "C:\\ISOs\\Win11_25H2_English_x64.iso"
-    ip: "192.168.200.110"
+    ip: "10.200.200.110"
     cpu_count: 2
     memory_gb: 6
     disk_gb: 80
@@ -57,7 +57,7 @@ workers:
     os: "windows11"
     edition: "Pro"
     iso_path: "C:\\ISOs\\Win11_25H2_English_x64.iso"
-    ip: "192.168.200.111"
+    ip: "10.200.200.111"
     cpu_count: 2
     memory_gb: 6
     disk_gb: 80

@@ -245,63 +245,6 @@ if (-not (Get-NetFirewallRule -DisplayName $vmOutboundRule -ErrorAction Silently
 Write-Success "VM internet access configured via IP forwarding"
 Write-Info "VMs use gateway: $HostIP (routes through host's default gateway)"
 Write-Info "WSL NAT preserved - no conflicts"
-
-# 6b) Configure DNS forwarding for VMs
-Write-Info "Configuring DNS forwarding for VMs..."
-
-# Check if DNS Server service is available (optional Windows feature)
-$dnsService = Get-Service -Name "DNS" -ErrorAction SilentlyContinue
-
-if ($dnsService) {
-    # DNS Server feature is installed - configure forwarders
-    Write-Info "Windows DNS Server detected - configuring forwarders..."
-
-    # Get current DNS forwarders
-    try {
-        $existingForwarders = Get-DnsServerForwarder -ErrorAction Stop
-        if ($existingForwarders.IPAddress.Count -eq 0) {
-            # No forwarders configured - add public DNS
-            Add-DnsServerForwarder -IPAddress "8.8.8.8","8.8.4.4" -ErrorAction SilentlyContinue
-            Write-Success "Configured DNS forwarders: 8.8.8.8, 8.8.4.4"
-        } else {
-            Write-Success "DNS forwarders already configured: $($existingForwarders.IPAddress -join ', ')"
-        }
-    } catch {
-        Write-Info "DNS Server forwarder configuration skipped (not critical)"
-    }
-} else {
-    # DNS Server feature not installed - use Windows host's DNS resolution
-    Write-Info "Windows DNS Server not installed (using host's DNS resolver)"
-    Write-Info "VMs will use host's DNS settings via ICS (Internet Connection Sharing)"
-
-    # Verify host has DNS configured
-    $hostDns = Get-DnsClientServerAddress -AddressFamily IPv4 |
-               Where-Object { $_.ServerAddresses.Count -gt 0 -and $_.InterfaceAlias -notlike "*$SwitchName*" } |
-               Select-Object -First 1
-
-    if ($hostDns) {
-        Write-Success "Host DNS servers: $($hostDns.ServerAddresses -join ', ')"
-        Write-Info "VMs will inherit these DNS settings through host routing"
-    } else {
-        Write-Warn "No DNS servers configured on host - VMs may not resolve names"
-        Write-Info "To fix: Configure DNS on your primary network adapter"
-    }
-}
-
-# Create firewall rule for DNS forwarding (port 53 UDP/TCP)
-$dnsInboundRule = "AutoMutate-DNS-Forwarding"
-if (-not (Get-NetFirewallRule -DisplayName $dnsInboundRule -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName $dnsInboundRule -Direction Inbound -Action Allow `
-        -InterfaceAlias $adapterAlias -Protocol UDP -LocalPort 53 -RemoteAddress $config.network.subnet -Profile Any | Out-Null
-    New-NetFirewallRule -DisplayName "$dnsInboundRule-TCP" -Direction Inbound -Action Allow `
-        -InterfaceAlias $adapterAlias -Protocol TCP -LocalPort 53 -RemoteAddress $config.network.subnet -Profile Any | Out-Null
-    Write-Success "Created DNS forwarding firewall rules (UDP/TCP port 53)"
-} else {
-    Write-Success "DNS forwarding firewall rules already exist"
-}
-
-Write-Success "DNS forwarding configured (VMs -> Host -> External DNS)"
-
 # 7) Firewall rules
 $ports = @($GrpcPort, $EsPort, $KibanaPort)
 foreach ($port in $ports) {
@@ -320,6 +263,30 @@ foreach ($port in $ports) {
         connectaddress=127.0.0.1 connectport=$port | Out-Null
     Write-Success "Port proxy: ${HostIP}:$port -> 127.0.0.1:$port"
 }
+
+# 9) Configure NAT for VM internet access
+Write-Info "Configuring NAT for VM internet access..."
+$natName = "AutoMutateVMNAT"
+$existingNat = Get-NetNat -Name $natName -ErrorAction SilentlyContinue
+
+if ($existingNat) {
+    if ($existingNat.InternalIPInterfaceAddressPrefix -eq $config.network.subnet) {
+        Write-Success "NAT already configured for $($config.network.subnet)"
+    } else {
+        Write-Warn "NAT exists but for wrong subnet: $($existingNat.InternalIPInterfaceAddressPrefix)"
+        Write-Warn "Removing and recreating NAT..."
+        Remove-NetNat -Name $natName -Confirm:$false
+        New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix $config.network.subnet | Out-Null
+        Write-Success "NAT recreated for $($config.network.subnet)"
+    }
+} else {
+    New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix $config.network.subnet | Out-Null
+    Write-Success "NAT created for $($config.network.subnet)"
+}
+
+Write-Info "VMs will have internet access via NAT"
+Write-Info "To disable VM internet: .\scripts\toggle-vm-internet.ps1 -Action Disable"
+Write-Info "To enable VM internet:  .\scripts\toggle-vm-internet.ps1 -Action Enable"
 
 Write-Success "Host setup complete"
 exit 0
