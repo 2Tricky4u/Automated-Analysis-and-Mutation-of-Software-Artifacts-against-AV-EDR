@@ -99,8 +99,8 @@ if ($failedVMs.Count -gt 0) {
 
 if ($successCount -gt 0) {
     Write-Host "`nNext steps:" -ForegroundColor Green
-    Write-Host "  1. Disable NAT for lab isolation (RECOMMENDED):" -ForegroundColor Cyan
-    Write-Host "     .\scripts\disable-nat.ps1" -ForegroundColor Gray
+    Write-Host "  1. Disable internet access for lab isolation (RECOMMENDED):" -ForegroundColor Cyan
+    Write-Host "     .\scripts\toggle-vm-internet.ps1 -Action Disable" -ForegroundColor Gray
     Write-Host ""
     Write-Host "  2. Validate environment:" -ForegroundColor Cyan
     Write-Host "     .\scripts\validate-environment.ps1" -ForegroundColor Gray
@@ -110,8 +110,8 @@ if ($successCount -gt 0) {
     Write-Host "     cd /mnt/c/.../controller" -ForegroundColor Gray
     Write-Host "     cargo run --bin mutator -- --config ../automation/config.yaml" -ForegroundColor Gray
     Write-Host ""
-    Write-Info "⚠️  NAT is currently ENABLED - VMs can access the internet"
-    Write-Info "   For a confined lab, disable NAT now"
+    Write-Info "⚠️  Internet access is currently ENABLED - VMs can reach the internet"
+    Write-Info "   For a confined lab, disable internet access now with toggle-vm-internet.ps1"
 }
 
 exit 0
