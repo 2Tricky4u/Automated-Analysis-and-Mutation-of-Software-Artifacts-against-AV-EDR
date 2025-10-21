@@ -285,13 +285,16 @@ Write-Host ""
 Write-Host @"
 
 5. Optional: Isolate VMs from internet (recommended for malware testing):
-   The current setup uses IP FORWARDING (not NAT) - VMs can reach internet via host
-   To disable internet access for VMs, remove firewall rules:
+   Use the internet kill switch to air-gap VMs during artifact testing:
 
-   Get-NetFirewallRule -DisplayName "AutoMutate-VM-*" | Disable-NetFirewallRule
+   To disable internet access (air-gap mode):
+   .\scripts\toggle-vm-internet.ps1 -Action Disable
 
-   To re-enable later:
-   Get-NetFirewallRule -DisplayName "AutoMutate-VM-*" | Enable-NetFirewallRule
+   To re-enable internet access (for updates/downloads):
+   .\scripts\toggle-vm-internet.ps1 -Action Enable
+
+   To check current status:
+   .\scripts\toggle-vm-internet.ps1 -Action Status
 
 6. Validate installation:
    .\validate-environment.ps1
@@ -310,10 +313,11 @@ Stop-Transcript
 # Summary
 Write-Host "`n" + "="*70 + "`n"
 Write-Host "SUMMARY:" -ForegroundColor Magenta
-Write-Success "Host configured (Hyper-V, WSL2, IP forwarding)"
+Write-Success "Host configured (Hyper-V, WSL2, NAT for VM internet)"
 Write-Success "Controller bootstrapped (Rust, Docker, Elasticsearch, Kibana)"
 Write-Success "Worker VM shells created ($($WorkerConfigs.Count) total - awaiting Windows install)"
 Write-Host ""
 Write-Info "NEXT: Install Windows on each VM, then run 04-vm-init.ps1 for configuration"
 Write-Info "THEN: Create baselines with 05-create-baseline.ps1"
+Write-Info "NOTE: Use .\scripts\toggle-vm-internet.ps1 to control VM internet access"
 Write-Host "`n" + "="*70 + "`n"
