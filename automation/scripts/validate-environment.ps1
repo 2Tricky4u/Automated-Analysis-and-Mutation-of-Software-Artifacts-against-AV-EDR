@@ -265,7 +265,7 @@ Write-Section "Port Forwarding"
 foreach ($port in $ports) {
     $proxy = netsh interface portproxy show v4tov4 | Select-String "$HostIP.*$port"
     if ($proxy) {
-        Write-Pass "Port proxy: $HostIP:$port -> 127.0.0.1:$port"
+        Write-Pass "Port proxy: ${HostIP}:${port} -> 127.0.0.1:${port}"
     } else {
         Write-Fail "Port proxy NOT configured for port $port"
         $FailCount++
