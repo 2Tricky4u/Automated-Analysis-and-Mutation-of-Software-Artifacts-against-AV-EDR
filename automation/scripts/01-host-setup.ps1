@@ -82,7 +82,76 @@ if (-not (wsl -l -q 2>$null | Select-String "Ubuntu")) {
 # Set default to WSL 2
 wsl --set-default-version 2 2>$null
 
-# 3) Create Internal switch
+# 3) Configure WSL2 networking
+Write-Info "Configuring WSL2 networking for internet access..."
+
+# Create .wslconfig to ensure proper networking mode
+$wslConfigPath = "$env:USERPROFILE\.wslconfig"
+$wslConfigContent = @"
+[wsl2]
+# Use NAT networking mode (default, ensures internet access)
+networkingMode=nat
+
+# DNS tunneling (resolves DNS through Windows)
+dnsTunneling=true
+
+# Windows firewall integration
+firewall=true
+
+# Automatic proxy detection
+autoProxy=true
+
+# Memory and processor limits (adjust based on host resources)
+memory=8GB
+processors=4
+"@
+
+if (-not (Test-Path $wslConfigPath)) {
+    $wslConfigContent | Out-File -FilePath $wslConfigPath -Encoding utf8
+    Write-Success "Created .wslconfig with NAT networking"
+} else {
+    Write-Info ".wslconfig already exists at $wslConfigPath"
+    Write-Info "Verify it contains: networkingMode=nat, dnsTunneling=true"
+}
+
+# Ensure WSL's vEthernet adapter has proper firewall rules
+Write-Info "Configuring firewall for WSL network adapter..."
+$wslAdapter = Get-NetAdapter | Where-Object { $_.Name -like "*WSL*" } | Select-Object -First 1
+
+if ($wslAdapter) {
+    Write-Success "Found WSL adapter: $($wslAdapter.Name)"
+
+    # Allow outbound traffic from WSL adapter
+    $wslOutboundRule = "WSL-Internet-Outbound"
+    if (-not (Get-NetFirewallRule -DisplayName $wslOutboundRule -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $wslOutboundRule -Direction Outbound -Action Allow `
+            -InterfaceAlias $wslAdapter.Name -Profile Any | Out-Null
+        Write-Success "Created firewall rule: $wslOutboundRule"
+    } else {
+        Write-Success "Firewall rule already exists: $wslOutboundRule"
+    }
+
+    # Allow inbound for DNS and DHCP
+    $wslInboundRule = "WSL-Network-Services"
+    if (-not (Get-NetFirewallRule -DisplayName $wslInboundRule -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $wslInboundRule -Direction Inbound -Action Allow `
+            -InterfaceAlias $wslAdapter.Name -Protocol UDP -LocalPort 53,67,68 -Profile Any | Out-Null
+        Write-Success "Created firewall rule: $wslInboundRule"
+    } else {
+        Write-Success "Firewall rule already exists: $wslInboundRule"
+    }
+} else {
+    Write-Warn "WSL vEthernet adapter not found yet (will be created on first WSL launch)"
+    Write-Info "After first WSL launch, firewall rules will be auto-created on next run"
+}
+
+# Restart WSL to apply .wslconfig changes
+Write-Info "Restarting WSL to apply network configuration..."
+wsl --shutdown 2>$null
+Start-Sleep -Seconds 3
+Write-Success "WSL2 networking configured"
+
+# 4) Create Internal switch
 if (-not (Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue)) {
     New-VMSwitch -Name $SwitchName -SwitchType Internal | Out-Null
     Write-Success "Created internal switch: $SwitchName"
@@ -90,7 +159,7 @@ if (-not (Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue)) {
     Write-Success "Switch $SwitchName exists"
 }
 
-# 4) Assign host IP
+# 5) Assign host IP
 $adapter = Get-NetAdapter | Where-Object { $_.Name -like "*$SwitchName*" } | Select-Object -First 1
 if (-not $adapter) {
     Write-Err "vEthernet adapter for $SwitchName not found"
@@ -105,7 +174,7 @@ if (-not $existingIp) {
     Write-Success "Host IP $HostIP already assigned"
 }
 
-# 5) Configure NAT (allows VMs to access internet via host)
+# 6) Configure NAT (allows VMs to access internet via host)
 Write-Info "Configuring NAT for VM internet access..."
 $natName = "IsolationNAT"
 $existingNat = Get-NetNat -Name $natName -ErrorAction SilentlyContinue
@@ -130,7 +199,7 @@ if ($existingNat) {
 
 Write-Info "VMs can now access internet through host (gateway: $HostIP)"
 
-# 6) Firewall rules
+# 7) Firewall rules
 $ports = @($GrpcPort, $EsPort, $KibanaPort)
 foreach ($port in $ports) {
     $ruleName = "AutoMutate-Allow-$port"
@@ -141,7 +210,7 @@ foreach ($port in $ports) {
     }
 }
 
-# 7) Port proxy (Host IP -> WSL2 localhost)
+# 8) Port proxy (Host IP -> WSL2 localhost)
 foreach ($port in $ports) {
     netsh interface portproxy delete v4tov4 listenaddress=$HostIP listenport=$port 2>$null | Out-Null
     netsh interface portproxy add v4tov4 listenaddress=$HostIP listenport=$port `
