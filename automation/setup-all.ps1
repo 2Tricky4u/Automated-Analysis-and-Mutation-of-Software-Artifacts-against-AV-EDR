@@ -240,7 +240,7 @@ Next steps (MANUAL):
 "@ -ForegroundColor Green
 
 foreach ($worker in $WorkerConfigs) {
-    Write-Host "   • $($worker.Name): Start VM in Hyper-V Manager" -ForegroundColor Yellow
+    Write-Host "   - $($worker.Name): Start VM in Hyper-V Manager" -ForegroundColor Yellow
 }
 
 Write-Host @"

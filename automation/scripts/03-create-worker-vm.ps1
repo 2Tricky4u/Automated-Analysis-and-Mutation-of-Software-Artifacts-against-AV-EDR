@@ -110,74 +110,7 @@ if (-not $dvd) {
 } else {
     Set-VMDvdDrive -VMName $WorkerName -Path $IsoPath
 }
-Write-Success "Attached ISO"
-
-# Create autounattend ISO (Gen2 VMs don't support floppy drives)
-$templatesDir = Join-Path (Split-Path $PSScriptRoot -Parent) "templates"
-$autounattendXml = Join-Path $templatesDir "autounattend.xml"
-$autounattendIso = Join-Path $templatesDir "autounattend.iso"
-
-if (-not (Test-Path $autounattendXml)) {
-    Write-Warning "autounattend.xml not found: $autounattendXml"
-    Write-Info "Installation will require manual input"
-} else {
-    Write-Info "Creating autounattend ISO for secondary DVD drive..."
-
-    # Create temp directory for ISO contents
-    $tempIsoDir = Join-Path $env:TEMP "autounattend_iso_$(Get-Random)"
-    New-Item -ItemType Directory -Path $tempIsoDir -Force | Out-Null
-
-    # Copy autounattend.xml to temp directory
-    Copy-Item $autounattendXml (Join-Path $tempIsoDir "autounattend.xml") -Force
-
-    # Simple method: Create ISO using mkisofs/genisoimage if available, or skip for now
-    $mkisofs = $null
-    $searchPaths = @(
-        "C:\Program Files\cdrtools\mkisofs.exe",
-        "C:\cdrtools\mkisofs.exe",
-        "${env:ProgramFiles(x86)}\cdrtools\mkisofs.exe"
-    )
-
-    foreach ($path in $searchPaths) {
-        if (Test-Path $path) { $mkisofs = $path; break }
-    }
-
-    if ($mkisofs) {
-        & $mkisofs -o $autounattendIso -V "AUTOUNATTEND" -J -R $tempIsoDir 2>&1 | Out-Null
-        if (Test-Path $autounattendIso) {
-            Write-Success "Created autounattend ISO: $autounattendIso"
-        }
-    } else {
-        # For now, just skip the ISO and provide instructions
-        Write-Info "Skipping autounattend ISO creation (no ISO tools found)"
-        Write-Info ""
-        Write-Info "WORKAROUND: Add autounattend.xml to Windows ISO manually:"
-        Write-Info "  1. Mount your Windows ISO (double-click)"
-        Write-Info "  2. Copy contents to a folder (e.g., C:\WinISO)"
-        Write-Info "  3. Copy autounattend.xml to that folder root"
-        Write-Info "  4. Use Rufus or similar to create new ISO"
-        Write-Info ""
-        Write-Info "OR: Continue without autounattend - install Windows manually"
-        Write-Info "    Username: worker-admin"
-        Write-Info "    Password: AutoMutate!Password"
-        Write-Info ""
-    }
-
-    Remove-Item $tempIsoDir -Recurse -Force -ErrorAction SilentlyContinue
-
-    # Attach autounattend ISO as second DVD drive (Gen2 VMs support multiple DVDs)
-    if (Test-Path $autounattendIso) {
-        # Check if second DVD drive exists
-        $dvdDrives = Get-VMDvdDrive -VMName $WorkerName
-        if ($dvdDrives.Count -lt 2) {
-            Add-VMDvdDrive -VMName $WorkerName -Path $autounattendIso
-            Write-Success "Attached autounattend ISO as secondary DVD"
-        } else {
-            Set-VMDvdDrive -VMName $WorkerName -ControllerNumber 0 -ControllerLocation 1 -Path $autounattendIso
-            Write-Success "Attached autounattend ISO to existing secondary DVD"
-        }
-    }
-}
+Write-Success "Attached ISO: $IsoPath"
 
 # Enable TPM with proper key protector
 $tpmEnabled = $false
@@ -219,21 +152,76 @@ if ($Os -eq "windows11") {
 # Disable Guest Services (security)
 Get-VMIntegrationService -VMName $WorkerName | Where-Object { $_.Name -eq "Guest Service Interface" } | Disable-VMIntegrationService
 
-Write-Success "VM $WorkerName ready for Windows install"
-Write-Info "Next: Start VM in Hyper-V Manager and install Windows"
-Write-Info "After install, run: .\04-vm-init.ps1 -StaticIP $StaticIP -WorkerName $WorkerName"
+Write-Success "VM $WorkerName ready for Windows installation"
 
-# Display final configuration for troubleshooting
+# Display final configuration
 $secureBootStatus = if ($Os -eq "windows11") { "Enabled (MicrosoftWindows)" } else { "Disabled" }
+$tpmStatus = if ($tpmEnabled) { "Enabled" } else { "Failed (check logs)" }
 
-Write-Host "`n--- VM Configuration Summary ---" -ForegroundColor Cyan
-Write-Host "Name:        $WorkerName" -ForegroundColor White
-Write-Host "OS Type:     $Os" -ForegroundColor White
-Write-Host "Generation:  2 (UEFI)" -ForegroundColor White
-Write-Host "Secure Boot: $secureBootStatus" -ForegroundColor White
-Write-Host "TPM 2.0:     Attempted (check logs above for status)" -ForegroundColor White
-Write-Host "Boot Order:  DVD → HDD" -ForegroundColor White
-Write-Host "ISO Path:    $IsoPath" -ForegroundColor White
-Write-Host "-------------------------------`n" -ForegroundColor Cyan
+Write-Host "`n╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+Write-Host "║          VM Configuration Summary                              ║" -ForegroundColor Cyan
+Write-Host "╠════════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
+Write-Host "║ Name:        $WorkerName".PadRight(66) + "║" -ForegroundColor White
+Write-Host "║ OS Type:     $Os".PadRight(66) + "║" -ForegroundColor White
+Write-Host "║ IP Address:  $StaticIP".PadRight(66) + "║" -ForegroundColor White
+Write-Host "║ Generation:  2 (UEFI)".PadRight(66) + "║" -ForegroundColor White
+Write-Host "║ Secure Boot: $secureBootStatus".PadRight(66) + "║" -ForegroundColor White
+Write-Host "║ TPM 2.0:     $tpmStatus".PadRight(66) + "║" -ForegroundColor White
+Write-Host "║ Boot Order:  DVD → HDD".PadRight(66) + "║" -ForegroundColor White
+Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+
+Write-Host "`n╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
+Write-Host "║          MANUAL INSTALLATION REQUIRED                          ║" -ForegroundColor Yellow
+Write-Host "╠════════════════════════════════════════════════════════════════╣" -ForegroundColor Yellow
+Write-Host "║                                                                ║" -ForegroundColor White
+Write-Host "║  Step 1: Start VM and Install Windows                         ║" -ForegroundColor White
+Write-Host "║  ────────────────────────────────────────────────────────────  ║" -ForegroundColor DarkGray
+Write-Host "║    • Open Hyper-V Manager                                      ║" -ForegroundColor White
+Write-Host "║    • Right-click '$WorkerName' → Connect → Start".PadRight(66) + "║" -ForegroundColor White
+Write-Host "║    • Wait for Windows Setup to boot from ISO                   ║" -ForegroundColor White
+Write-Host "║                                                                ║" -ForegroundColor White
+Write-Host "║  Step 2: Windows Setup Choices (MINIMAL INPUT REQUIRED)       ║" -ForegroundColor White
+Write-Host "║  ────────────────────────────────────────────────────────────  ║" -ForegroundColor DarkGray
+Write-Host "║    • Language: English (United States) → Next                  ║" -ForegroundColor White
+Write-Host "║    • Install now                                               ║" -ForegroundColor White
+Write-Host "║    • Product key: Skip / I don't have a product key            ║" -ForegroundColor White
+Write-Host "║    • Edition: Windows 10/11 Pro → Next                         ║" -ForegroundColor White
+Write-Host "║    • Accept license → Next                                     ║" -ForegroundColor White
+Write-Host "║    • Custom: Install Windows only (advanced)                   ║" -ForegroundColor White
+Write-Host "║    • Partition: Select 'Drive 0 Unallocated Space' → Next      ║" -ForegroundColor White
+Write-Host "║      (Windows will auto-create partitions)                     ║" -ForegroundColor DarkGray
+Write-Host "║                                                                ║" -ForegroundColor White
+Write-Host "║  Step 3: OOBE (Out-of-Box Experience)                          ║" -ForegroundColor White
+Write-Host "║  ────────────────────────────────────────────────────────────  ║" -ForegroundColor DarkGray
+Write-Host "║    • Region: United States → Yes                               ║" -ForegroundColor White
+Write-Host "║    • Keyboard: US → Yes                                        ║" -ForegroundColor White
+Write-Host "║    • Skip second keyboard layout                               ║" -ForegroundColor White
+Write-Host "║    • Network: 'I don't have internet' (bottom-left)            ║" -ForegroundColor White
+Write-Host "║      OR 'Skip for now' / 'Continue with limited setup'         ║" -ForegroundColor DarkGray
+Write-Host "║    • Account name:  worker-admin                               ║" -ForegroundColor Cyan
+Write-Host "║    • Password:      AutoMutate!Password                        ║" -ForegroundColor Cyan
+Write-Host "║    • Security questions: Answer anything (write them down)     ║" -ForegroundColor White
+Write-Host "║    • Privacy settings: Disable all (faster)                    ║" -ForegroundColor White
+Write-Host "║                                                                ║" -ForegroundColor White
+Write-Host "║  Step 4: After Desktop Appears (5-10 min)                      ║" -ForegroundColor White
+Write-Host "║  ────────────────────────────────────────────────────────────  ║" -ForegroundColor DarkGray
+Write-Host "║    • From HOST PowerShell (Admin), run:                        ║" -ForegroundColor White
+Write-Host "║                                                                ║" -ForegroundColor White
+Write-Host "║      `$cred = Get-Credential -UserName 'worker-admin'           ║" -ForegroundColor Green
+Write-Host "║      (Enter password: AutoMutate!Password)                     ║" -ForegroundColor DarkGray
+Write-Host "║                                                                ║" -ForegroundColor White
+Write-Host "║      Invoke-Command -VMName '$WorkerName' ``".PadRight(66) + "║" -ForegroundColor Green
+Write-Host "║        -FilePath '.\scripts\04-vm-init.ps1' ``".PadRight(66) + "║" -ForegroundColor Green
+Write-Host "║        -ArgumentList '$StaticIP', '$WorkerName' ``".PadRight(66) + "║" -ForegroundColor Green
+Write-Host "║        -Credential `$cred".PadRight(66) + "║" -ForegroundColor Green
+Write-Host "║                                                                ║" -ForegroundColor White
+Write-Host "║    The script will configure network, install tools, etc.      ║" -ForegroundColor DarkGray
+Write-Host "║                                                                ║" -ForegroundColor White
+Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
+
+Write-Host "`nCredentials Summary:" -ForegroundColor Magenta
+Write-Host "  Username: worker-admin" -ForegroundColor Cyan
+Write-Host "  Password: AutoMutate!Password" -ForegroundColor Cyan
+Write-Host "  IP:       $StaticIP (will be configured by 04-vm-init.ps1)`n" -ForegroundColor Cyan
 
 exit 0
