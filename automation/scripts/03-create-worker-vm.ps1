@@ -51,6 +51,8 @@ Get-Content $ConfigPath | ForEach-Object {
 
 $SwitchName = $config.network.switch_name
 $VhdRoot = $config.storage.vhd_root
+$Gateway = $config.network.gateway
+$Prefix = ($config.network.subnet -split '/')[1]
 
 # Worker config (find in config.yaml workers list - simplified)
 $CpuCount = 2
@@ -387,7 +389,7 @@ Write-Host "|      (Enter password: AutoMutate!Password)                     |" 
 Write-Host "|                                                                |" -ForegroundColor White
 Write-Host "|      Invoke-Command -VMName '$WorkerName' ``".PadRight(64) "|" -ForegroundColor Green
 Write-Host "|        -FilePath '.\scripts\04-vm-init.ps1' ``".PadRight(64) "|" -ForegroundColor Green
-Write-Host "|        -ArgumentList '$StaticIP', '$WorkerName' ``".PadRight(64) "|" -ForegroundColor Green
+Write-Host "|        -ArgumentList '$StaticIP', '$WorkerName', '$Gateway', $Prefix ``".PadRight(64) "|" -ForegroundColor Green
 Write-Host "|        -Credential `$cred".PadRight(64) "|" -ForegroundColor Green
 Write-Host "|                                                                |" -ForegroundColor White
 Write-Host "|    The script will configure network, install tools, etc.      |" -ForegroundColor DarkGray
@@ -413,7 +415,7 @@ Write-Host "+================================================================+" 
     Write-Host "|     `$cred = Get-Credential -UserName 'worker-admin'            |" -ForegroundColor Cyan
     Write-Host "|     Invoke-Command -VMName '$WorkerName' ``".PadRight(64) "|" -ForegroundColor Cyan
     Write-Host "|       -FilePath '.\scripts\04-vm-init.ps1' ``".PadRight(64) "|" -ForegroundColor Cyan
-    Write-Host "|       -ArgumentList '$StaticIP', '$WorkerName' ``".PadRight(64) "|" -ForegroundColor Cyan
+    Write-Host "|       -ArgumentList '$StaticIP', '$WorkerName', '$Gateway', $Prefix ``".PadRight(64) "|" -ForegroundColor Cyan
     Write-Host "|       -Credential `$cred".PadRight(64) "|" -ForegroundColor Cyan
     Write-Host "|                                                                |" -ForegroundColor White
     Write-Host "+================================================================+" -ForegroundColor Green

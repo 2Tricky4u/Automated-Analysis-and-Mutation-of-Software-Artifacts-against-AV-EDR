@@ -9,6 +9,12 @@
 .PARAMETER WorkerName
     VM name for reference
 
+.PARAMETER Gateway
+    Gateway IP (default: 192.168.200.1)
+
+.PARAMETER Prefix
+    Network prefix length (default: 24)
+
 .PARAMETER SkipReboot
     Skip automatic reboot at the end
 
@@ -32,6 +38,12 @@ param(
     [string]$WorkerName,
 
     [Parameter()]
+    [string]$Gateway = "192.168.200.1",
+
+    [Parameter()]
+    [int]$Prefix = 24,
+
+    [Parameter()]
     [switch]$SkipReboot
 )
 
@@ -40,12 +52,12 @@ function Write-Success { param($M) Write-Host "[OK] $M" -ForegroundColor Green }
 function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
 function Write-Warn { param($M) Write-Host "[WARN] $M" -ForegroundColor Yellow }
 
-$Gateway = "192.168.200.1"
-$Prefix = 24
+# Network parameters are now passed via function parameters (with defaults)
+# $Gateway and $Prefix are defined in the param block above
 
 Write-Host "`n+================================================================+" -ForegroundColor Cyan
 Write-Host "|          Worker VM Initialization                              |" -ForegroundColor Cyan
-Write-Host "|          $WorkerName -> $StaticIP".PadRight(66) + "|" -ForegroundColor Cyan
+Write-Host "|          $WorkerName -> $StaticIP".PadRight(64) "|" -ForegroundColor Cyan
 Write-Host "+================================================================+`n" -ForegroundColor Cyan
 
 # ===== SECTION 1: System Configuration (autounattend.xml equivalent) =====
@@ -116,7 +128,8 @@ if ($adapter) {
     if (Test-Connection -ComputerName $Gateway -Count 1 -Quiet) {
         Write-Success "Gateway reachable: $Gateway"
     } else {
-        Write-Warn "Gateway not reachable (may need host NAT enabled)"
+        Write-Warn "Gateway not reachable (check if host IP forwarding is enabled)"
+        Write-Info "On host, verify: Get-NetIPInterface -InterfaceAlias 'vEthernet (IsolationSwitch)' | Select Forwarding"
     }
 } else {
     Write-Warn "No active network adapter found"
@@ -279,8 +292,8 @@ Write-Host "|    * Environment variables (PATH)                              |" 
 Write-Host "|                                                                |" -ForegroundColor White
 Write-Host "|  After reboot, create baseline checkpoint (from host):        |" -ForegroundColor White
 Write-Host "|                                                                |" -ForegroundColor White
-Write-Host "|    Checkpoint-VM -VMName '$WorkerName' ``".PadRight(66) + "|" -ForegroundColor Cyan
-Write-Host "|      -SnapshotName '$WorkerName-baseline'".PadRight(66) + "|" -ForegroundColor Cyan
+Write-Host "|    Checkpoint-VM -VMName '$WorkerName' ``".PadRight(64) "|" -ForegroundColor Cyan
+Write-Host "|      -SnapshotName '$WorkerName-baseline'".PadRight(64) "|" -ForegroundColor Cyan
 Write-Host "|                                                                |" -ForegroundColor White
 Write-Host "+================================================================+" -ForegroundColor Yellow
 
