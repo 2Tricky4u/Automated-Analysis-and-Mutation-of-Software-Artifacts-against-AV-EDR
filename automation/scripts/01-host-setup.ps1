@@ -66,7 +66,8 @@ foreach ($feature in $features) {
 }
 
 if ($rebootNeeded) {
-    Write-Warn "Reboot required. Restart and re-run this script."
+    Write-Warn "Reboot required (features or IP routing enabled)"
+    Write-Info "After reboot, re-run this script to complete setup"
     exit 3010
 }
 
@@ -174,30 +175,83 @@ if (-not $existingIp) {
     Write-Success "Host IP $HostIP already assigned"
 }
 
-# 6) Configure NAT (allows VMs to access internet via host)
-Write-Info "Configuring NAT for VM internet access..."
-$natName = "IsolationNAT"
-$existingNat = Get-NetNat -Name $natName -ErrorAction SilentlyContinue
+# 6) Configure VM internet access via IP Forwarding (WSL-safe)
+# CRITICAL: Windows only supports ONE NetNat properly. WSL2 uses its own implicit NAT.
+# Creating a second NAT (IsolationNAT) breaks WSL2's internet access.
+# Solution: Use IP forwarding + routing instead of NAT
 
-if ($existingNat) {
-    # Check if NAT subnet matches config
-    $natSubnet = $existingNat.InternalIPInterfaceAddressPrefix
-    $configSubnet = $config.network.subnet
+Write-Info "Configuring VM internet access (WSL-safe IP forwarding)..."
 
-    if ($natSubnet -ne $configSubnet) {
-        Write-Info "Updating NAT subnet from $natSubnet to $configSubnet..."
-        Remove-NetNat -Name $natName -Confirm:$false
-        New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix $configSubnet | Out-Null
-        Write-Success "NAT updated: $natName ($configSubnet)"
-    } else {
-        Write-Success "NAT already configured: $natName ($natSubnet)"
-    }
-} else {
-    New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix $config.network.subnet | Out-Null
-    Write-Success "NAT created: $natName ($($config.network.subnet))"
+# Always check for existing NAT conflicts (cleanup from previous runs)
+$allNats = Get-NetNat -ErrorAction SilentlyContinue
+$isolationNat = $allNats | Where-Object { $_.Name -eq "IsolationNAT" }
+$wslNat = $allNats | Where-Object { $_.InternalIPInterfaceAddressPrefix -like "172.*" }
+
+if ($isolationNat) {
+    Write-Warn "Found conflicting IsolationNAT from previous run - removing..."
+    Remove-NetNat -Name "IsolationNAT" -Confirm:$false
+    Write-Success "Removed IsolationNAT (preserves WSL connectivity)"
 }
 
-Write-Info "VMs can now access internet through host (gateway: $HostIP)"
+if ($wslNat) {
+    Write-Info "Detected WSL NAT: $($wslNat.InternalIPInterfaceAddressPrefix)"
+    Write-Success "WSL NAT preserved (no conflict)"
+}
+
+# Enable IP forwarding on internal switch adapter
+Write-Info "Enabling IP forwarding on vEthernet ($SwitchName)..."
+$adapterAlias = "vEthernet ($SwitchName)"
+
+# Enable forwarding at interface level
+Set-NetIPInterface -InterfaceAlias $adapterAlias -Forwarding Enabled -ErrorAction SilentlyContinue
+Write-Success "IP forwarding enabled on $adapterAlias"
+
+# Enable global IP routing (required for forwarding to work)
+$routingKey = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters"
+$currentRouting = (Get-ItemProperty -Path $routingKey -Name "IPEnableRouter" -ErrorAction SilentlyContinue).IPEnableRouter
+
+if ($currentRouting -ne 1) {
+    Set-ItemProperty -Path $routingKey -Name "IPEnableRouter" -Value 1 -Type DWord
+    Write-Info "Enabled global IP routing (registry: IPEnableRouter=1)"
+    Write-Warn "Reboot required for routing to take full effect"
+    $script:rebootNeeded = $true
+} else {
+    Write-Success "Global IP routing already enabled"
+}
+
+# Create firewall rule: Allow forwarding from VM subnet to any destination
+$forwardRule = "AutoMutate-VM-Forward"
+if (-not (Get-NetFirewallRule -DisplayName $forwardRule -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -DisplayName $forwardRule -Direction Forward -Action Allow `
+        -LocalAddress $config.network.subnet -Profile Any | Out-Null
+    Write-Success "Created forwarding rule: $forwardRule"
+} else {
+    Write-Success "Forwarding rule already exists: $forwardRule"
+}
+
+# Allow VMs to reach internet (outbound from internal switch)
+$vmOutboundRule = "AutoMutate-VM-Outbound"
+if (-not (Get-NetFirewallRule -DisplayName $vmOutboundRule -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -DisplayName $vmOutboundRule -Direction Outbound -Action Allow `
+        -InterfaceAlias $adapterAlias -Profile Any | Out-Null
+    Write-Success "Created outbound rule: $vmOutboundRule"
+} else {
+    Write-Success "Outbound rule already exists: $vmOutboundRule"
+}
+
+# Allow inbound traffic from VMs (ICMP, TCP, UDP for diagnostics)
+$vmInboundRule = "AutoMutate-VM-Inbound"
+if (-not (Get-NetFirewallRule -DisplayName $vmInboundRule -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -DisplayName $vmInboundRule -Direction Inbound -Action Allow `
+        -InterfaceAlias $adapterAlias -Profile Any | Out-Null
+    Write-Success "Created inbound rule: $vmInboundRule"
+} else {
+    Write-Success "Inbound rule already exists: $vmInboundRule"
+}
+
+Write-Success "VM internet access configured via IP forwarding"
+Write-Info "VMs use gateway: $HostIP (routes through host's default gateway)"
+Write-Info "WSL NAT preserved - no conflicts"
 
 # 7) Firewall rules
 $ports = @($GrpcPort, $EsPort, $KibanaPort)
