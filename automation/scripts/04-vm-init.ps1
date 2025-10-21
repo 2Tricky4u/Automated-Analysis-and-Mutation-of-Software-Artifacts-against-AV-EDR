@@ -121,14 +121,18 @@ if ($adapter) {
     # Configure static IP
     New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $StaticIP -PrefixLength $Prefix -DefaultGateway $Gateway | Out-Null
 
-    # Configure DNS: Try gateway first, then fall back to public DNS if gateway doesn't forward
-    # This ensures VMs work even if host doesn't have DNS Server feature installed
-    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses @($Gateway, "8.8.8.8", "8.8.4.4")
+    # Configure DNS: Use public DNS directly (8.8.8.8 primary) for reliability
+    # Gateway DNS can be slow or unreliable depending on host configuration
+    Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses @("8.8.8.8", "8.8.4.4", $Gateway)
     Write-Success "Static IP configured: $StaticIP/$Prefix (gateway: $Gateway)"
-    Write-Info "DNS servers: $Gateway (primary), 8.8.8.8, 8.8.4.4 (fallback)"
+    Write-Info "DNS servers: 8.8.8.8 (primary), 8.8.4.4, $Gateway (fallback)"
 
-    # Test connectivity (using TCP instead of ICMP ping, which is often blocked)
-    Start-Sleep -Seconds 2
+    # Flush DNS cache to ensure fresh resolution
+    Clear-DnsClientCache -ErrorAction SilentlyContinue
+    ipconfig /flushdns | Out-Null
+
+    # Wait for network stack to stabilize
+    Start-Sleep -Seconds 3
     Write-Info "Testing network connectivity..."
 
     # Test 1: Check if gateway route exists
@@ -139,16 +143,33 @@ if ($adapter) {
         Write-Warn "Default route not found (may cause connectivity issues)"
     }
 
-    # Test 2: Try DNS resolution (requires gateway + internet)
-    $dnsTest = $null
-    try {
-        $dnsTest = Resolve-DnsName -Name "google.com" -Type A -DnsOnly -ErrorAction Stop 2>$null
-        if ($dnsTest) {
-            Write-Success "Internet connectivity verified (DNS resolution works)"
+    # Test 2: Try DNS resolution with retry (requires gateway + internet)
+    Write-Info "Waiting for DNS resolution to stabilize (up to 30 seconds)..."
+    $dnsWorking = $false
+    $maxRetries = 10
+    $retryCount = 0
+
+    while (-not $dnsWorking -and $retryCount -lt $maxRetries) {
+        $retryCount++
+        try {
+            $dnsTest = Resolve-DnsName -Name "google.com" -Type A -DnsOnly -ErrorAction Stop 2>$null
+            if ($dnsTest) {
+                Write-Success "Internet connectivity verified (DNS resolution works after $retryCount attempt(s))"
+                $dnsWorking = $true
+                break
+            }
+        } catch {
+            if ($retryCount -lt $maxRetries) {
+                Write-Info "DNS attempt $retryCount/$maxRetries failed, retrying in 3 seconds..."
+                Start-Sleep -Seconds 3
+            }
         }
-    } catch {
-        Write-Warn "DNS resolution failed - internet may not be accessible yet"
-        Write-Info "This is normal during initial setup. Internet will be available after installation completes."
+    }
+
+    if (-not $dnsWorking) {
+        Write-Warn "DNS resolution still failing after $maxRetries attempts"
+        Write-Info "This may cause issues with Chocolatey/Rust installation"
+        Write-Info "If installation fails, check NAT status on host: Get-NetNat"
     }
 
     # Test 3: Optional ICMP ping (may fail due to firewall, but that's OK)
@@ -192,8 +213,33 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
     Write-Info "Installing Chocolatey package manager..."
     Set-ExecutionPolicy Bypass -Scope Process -Force
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-    iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-    Write-Success "Chocolatey installed"
+
+    # Retry loop for Chocolatey download (DNS might still be propagating)
+    $chocoInstalled = $false
+    $maxChocoRetries = 5
+    $chocoRetryCount = 0
+
+    while (-not $chocoInstalled -and $chocoRetryCount -lt $maxChocoRetries) {
+        $chocoRetryCount++
+        try {
+            Write-Info "Attempting to download Chocolatey installer (attempt $chocoRetryCount/$maxChocoRetries)..."
+            $webClient = New-Object System.Net.WebClient
+            $installScript = $webClient.DownloadString('https://community.chocolatey.org/install.ps1')
+            iex $installScript
+            $chocoInstalled = $true
+            Write-Success "Chocolatey installed successfully"
+        } catch {
+            Write-Warn "Chocolatey download failed: $($_.Exception.Message)"
+            if ($chocoRetryCount -lt $maxChocoRetries) {
+                Write-Info "Retrying in 5 seconds..."
+                Start-Sleep -Seconds 5
+            } else {
+                Write-Warn "Chocolatey installation failed after $maxChocoRetries attempts"
+                Write-Info "You may need to install manually after reboot when DNS is stable"
+                Write-Info "Run: Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"
+            }
+        }
+    }
 } else {
     Write-Success "Chocolatey already installed"
 }
@@ -202,10 +248,35 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
 if (-not (Test-Path "$env:USERPROFILE\.cargo\bin\rustc.exe")) {
     Write-Info "Installing Rust toolchain (this may take 5-10 minutes)..."
     $rustExe = "$env:TEMP\rustup-init.exe"
-    Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $rustExe -UseBasicParsing
-    Start-Process -FilePath $rustExe -ArgumentList "-y --default-toolchain stable" -NoNewWindow -Wait
-    $env:Path += ";$env:USERPROFILE\.cargo\bin"
-    Write-Success "Rust installed"
+
+    # Retry download for Rust installer
+    $rustDownloaded = $false
+    $maxRustRetries = 5
+    $rustRetryCount = 0
+
+    while (-not $rustDownloaded -and $rustRetryCount -lt $maxRustRetries) {
+        $rustRetryCount++
+        try {
+            Write-Info "Downloading Rust installer (attempt $rustRetryCount/$maxRustRetries)..."
+            Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $rustExe -UseBasicParsing -ErrorAction Stop
+            $rustDownloaded = $true
+        } catch {
+            Write-Warn "Rust download failed: $($_.Exception.Message)"
+            if ($rustRetryCount -lt $maxRustRetries) {
+                Write-Info "Retrying in 5 seconds..."
+                Start-Sleep -Seconds 5
+            } else {
+                Write-Warn "Rust installer download failed after $maxRustRetries attempts"
+                Write-Info "You may need to install manually after reboot"
+            }
+        }
+    }
+
+    if ($rustDownloaded) {
+        Start-Process -FilePath $rustExe -ArgumentList "-y --default-toolchain stable" -NoNewWindow -Wait
+        $env:Path += ";$env:USERPROFILE\.cargo\bin"
+        Write-Success "Rust installed"
+    }
 } else {
     Write-Success "Rust already installed"
 }
@@ -214,14 +285,39 @@ if (-not (Test-Path "$env:USERPROFILE\.cargo\bin\rustc.exe")) {
 if (-not (Test-Path "C:\protoc\bin\protoc.exe")) {
     Write-Info "Installing protoc 25.1..."
     $zip = "$env:TEMP\protoc.zip"
-    Invoke-WebRequest -Uri "https://github.com/protocolbuffers/protobuf/releases/download/v25.1/protoc-25.1-win64.zip" -OutFile $zip -UseBasicParsing
-    Expand-Archive -Path $zip -DestinationPath "C:\protoc" -Force
-    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    if ($machinePath -notlike "*C:\protoc\bin*") {
-        [Environment]::SetEnvironmentVariable("Path", "$machinePath;C:\protoc\bin", "Machine")
+
+    # Retry download for protoc
+    $protocDownloaded = $false
+    $maxProtocRetries = 5
+    $protocRetryCount = 0
+
+    while (-not $protocDownloaded -and $protocRetryCount -lt $maxProtocRetries) {
+        $protocRetryCount++
+        try {
+            Write-Info "Downloading protoc (attempt $protocRetryCount/$maxProtocRetries)..."
+            Invoke-WebRequest -Uri "https://github.com/protocolbuffers/protobuf/releases/download/v25.1/protoc-25.1-win64.zip" -OutFile $zip -UseBasicParsing -ErrorAction Stop
+            $protocDownloaded = $true
+        } catch {
+            Write-Warn "protoc download failed: $($_.Exception.Message)"
+            if ($protocRetryCount -lt $maxProtocRetries) {
+                Write-Info "Retrying in 5 seconds..."
+                Start-Sleep -Seconds 5
+            } else {
+                Write-Warn "protoc download failed after $maxProtocRetries attempts"
+                Write-Info "You may need to install manually after reboot"
+            }
+        }
     }
-    Remove-Item $zip -Force -ErrorAction SilentlyContinue
-    Write-Success "protoc installed"
+
+    if ($protocDownloaded) {
+        Expand-Archive -Path $zip -DestinationPath "C:\protoc" -Force
+        $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+        if ($machinePath -notlike "*C:\protoc\bin*") {
+            [Environment]::SetEnvironmentVariable("Path", "$machinePath;C:\protoc\bin", "Machine")
+        }
+        Remove-Item $zip -Force -ErrorAction SilentlyContinue
+        Write-Success "protoc installed"
+    }
 } else {
     Write-Success "protoc already installed"
 }
