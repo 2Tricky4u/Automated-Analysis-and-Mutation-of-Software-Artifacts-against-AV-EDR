@@ -43,10 +43,10 @@ function Write-Warn { param($M) Write-Host "[WARN] $M" -ForegroundColor Yellow }
 $Gateway = "192.168.200.1"
 $Prefix = 24
 
-Write-Host "`n╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║          Worker VM Initialization                              ║" -ForegroundColor Cyan
-Write-Host "║          $WorkerName → $StaticIP".PadRight(66) + "║" -ForegroundColor Cyan
-Write-Host "╚════════════════════════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+Write-Host "`n+================================================================+" -ForegroundColor Cyan
+Write-Host "|          Worker VM Initialization                              |" -ForegroundColor Cyan
+Write-Host "|          $WorkerName -> $StaticIP".PadRight(66) + "|" -ForegroundColor Cyan
+Write-Host "+================================================================+`n" -ForegroundColor Cyan
 
 # ===== SECTION 1: System Configuration (autounattend.xml equivalent) =====
 Write-Info "[1/8] System-level configuration..."
@@ -54,7 +54,7 @@ Write-Info "[1/8] System-level configuration..."
 # 1a) Set computer name
 $currentName = $env:COMPUTERNAME
 if ($currentName -ne $WorkerName) {
-    Write-Info "Renaming computer: $currentName → $WorkerName"
+    Write-Info "Renaming computer: $currentName -> $WorkerName"
     Rename-Computer -NewName $WorkerName -Force -ErrorAction SilentlyContinue
     Write-Success "Computer renamed (requires reboot)"
 } else {
@@ -251,9 +251,9 @@ $verificationResults += [PSCustomObject]@{
 }
 
 # Display results
-Write-Host "`n╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "║          Initialization Complete - Verification                ║" -ForegroundColor Green
-Write-Host "╠════════════════════════════════════════════════════════════════╣" -ForegroundColor Green
+Write-Host "`n+================================================================+" -ForegroundColor Green
+Write-Host "|          Initialization Complete - Verification                |" -ForegroundColor Green
+Write-Host "+================================================================+" -ForegroundColor Green
 
 foreach ($result in $verificationResults) {
     $statusColor = switch ($result.Status) {
@@ -261,28 +261,28 @@ foreach ($result in $verificationResults) {
         "WARN" { "Yellow" }
         "FAIL" { "Red" }
     }
-    $line = "║ [$($result.Status.PadRight(4))] $($result.Component.PadRight(15)) $($result.Details)"
-    Write-Host $line.PadRight(66) + "║" -ForegroundColor $statusColor
+    $line = "| [$($result.Status.PadRight(4))] $($result.Component.PadRight(15)) $($result.Details)"
+    Write-Host $line.PadRight(66) + "|" -ForegroundColor $statusColor
 }
 
-Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host "+================================================================+" -ForegroundColor Green
 
 # Reboot prompt
-Write-Host "`n╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
-Write-Host "║          REBOOT REQUIRED                                       ║" -ForegroundColor Yellow
-Write-Host "╠════════════════════════════════════════════════════════════════╣" -ForegroundColor Yellow
-Write-Host "║                                                                ║" -ForegroundColor White
-Write-Host "║  Changes requiring reboot:                                     ║" -ForegroundColor White
-Write-Host "║    • Computer name change                                      ║" -ForegroundColor White
-Write-Host "║    • UAC disabled                                              ║" -ForegroundColor White
-Write-Host "║    • Environment variables (PATH)                              ║" -ForegroundColor White
-Write-Host "║                                                                ║" -ForegroundColor White
-Write-Host "║  After reboot, create baseline checkpoint (from host):        ║" -ForegroundColor White
-Write-Host "║                                                                ║" -ForegroundColor White
-Write-Host "║    Checkpoint-VM -VMName '$WorkerName' ``".PadRight(66) + "║" -ForegroundColor Cyan
-Write-Host "║      -SnapshotName '$WorkerName-baseline'".PadRight(66) + "║" -ForegroundColor Cyan
-Write-Host "║                                                                ║" -ForegroundColor White
-Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
+Write-Host "`n+================================================================+" -ForegroundColor Yellow
+Write-Host "|          REBOOT REQUIRED                                       |" -ForegroundColor Yellow
+Write-Host "+================================================================+" -ForegroundColor Yellow
+Write-Host "|                                                                |" -ForegroundColor White
+Write-Host "|  Changes requiring reboot:                                     |" -ForegroundColor White
+Write-Host "|    * Computer name change                                      |" -ForegroundColor White
+Write-Host "|    * UAC disabled                                              |" -ForegroundColor White
+Write-Host "|    * Environment variables (PATH)                              |" -ForegroundColor White
+Write-Host "|                                                                |" -ForegroundColor White
+Write-Host "|  After reboot, create baseline checkpoint (from host):        |" -ForegroundColor White
+Write-Host "|                                                                |" -ForegroundColor White
+Write-Host "|    Checkpoint-VM -VMName '$WorkerName' ``".PadRight(66) + "|" -ForegroundColor Cyan
+Write-Host "|      -SnapshotName '$WorkerName-baseline'".PadRight(66) + "|" -ForegroundColor Cyan
+Write-Host "|                                                                |" -ForegroundColor White
+Write-Host "+================================================================+" -ForegroundColor Yellow
 
 if (-not $SkipReboot) {
     Write-Host "`nRebooting in 10 seconds (Ctrl+C to cancel)..." -ForegroundColor Yellow

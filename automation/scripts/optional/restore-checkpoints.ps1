@@ -38,9 +38,9 @@ function Write-Err { param($M) Write-Host "[ERROR] $M" -ForegroundColor Red }
 
 Write-Host @"
 
-╔═══════════════════════════════════════════════════════════════╗
-║         Restore Worker Checkpoints                            ║
-╚═══════════════════════════════════════════════════════════════╝
++===============================================================+
+|         Restore Worker Checkpoints                            |
++===============================================================+
 
 "@ -ForegroundColor Cyan
 

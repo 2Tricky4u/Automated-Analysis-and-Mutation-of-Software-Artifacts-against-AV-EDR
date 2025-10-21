@@ -31,9 +31,9 @@ function Write-Warn { param($M) Write-Host "[WARN] $M" -ForegroundColor Yellow }
 
 Write-Host @"
 
-╔═══════════════════════════════════════════════════════════════╗
-║         mTLS Certificate Generation                           ║
-╚═══════════════════════════════════════════════════════════════╝
++===============================================================+
+|         mTLS Certificate Generation                           |
++===============================================================+
 
 "@ -ForegroundColor Cyan
 

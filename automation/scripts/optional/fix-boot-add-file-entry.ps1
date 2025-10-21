@@ -45,9 +45,9 @@ $netAdapter = Get-VMNetworkAdapter -VMName $VMName
 
 Write-Host "`n[SOLUTION 1] Manually add via Hyper-V Manager:" -ForegroundColor Cyan
 Write-Host "  1. Open Hyper-V Manager" -ForegroundColor White
-Write-Host "  2. Right-click $VMName → Settings" -ForegroundColor White
-Write-Host "  3. Go to Firmware → Boot Order" -ForegroundColor White
-Write-Host "  4. Click 'Add' → Select 'File' → Click OK" -ForegroundColor White
+Write-Host "  2. Right-click $VMName -> Settings" -ForegroundColor White
+Write-Host "  3. Go to Firmware -> Boot Order" -ForegroundColor White
+Write-Host "  4. Click 'Add' -> Select 'File' -> Click OK" -ForegroundColor White
 Write-Host "  5. Move File entry to the TOP of the list" -ForegroundColor White
 Write-Host "  6. Apply and OK" -ForegroundColor White
 
