@@ -332,13 +332,13 @@ $installStatus = if ($windowsInstalled) { "Installed" } else { "Not Installed" }
 Write-Host "`n+================================================================+" -ForegroundColor Cyan
 Write-Host "|          VM Configuration Summary                              |" -ForegroundColor Cyan
 Write-Host "+================================================================+" -ForegroundColor Cyan
-Write-Host "| Name:        $WorkerName".PadRight(66) + "|" -ForegroundColor White
-Write-Host "| OS Type:     $Os".PadRight(66) + "|" -ForegroundColor White
-Write-Host "| IP Address:  $StaticIP".PadRight(66) + "|" -ForegroundColor White
-Write-Host "| Generation:  2 (UEFI)".PadRight(66) + "|" -ForegroundColor White
-Write-Host "| Windows:     $installStatus".PadRight(66) + "|" -ForegroundColor $(if ($windowsInstalled) { "Green" } else { "Yellow" })
-Write-Host "| Secure Boot: $secureBootStatus".PadRight(66) + "|" -ForegroundColor White
-Write-Host "| TPM 2.0:     $tpmStatus".PadRight(66) + "|" -ForegroundColor White
+Write-Host "| Name:        $WorkerName".PadRight(64) "|" -ForegroundColor White
+Write-Host "| OS Type:     $Os".PadRight(64) "|" -ForegroundColor White
+Write-Host "| IP Address:  $StaticIP".PadRight(64) "|" -ForegroundColor White
+Write-Host "| Generation:  2 (UEFI)".PadRight(64) "|" -ForegroundColor White
+Write-Host "| Windows:     $installStatus".PadRight(64) "|" -ForegroundColor $(if ($windowsInstalled) { "Green" } else { "Yellow" })
+Write-Host "| Secure Boot: $secureBootStatus".PadRight(64) "|" -ForegroundColor White
+Write-Host "| TPM 2.0:     $tpmStatus".PadRight(64) "|" -ForegroundColor White
 Write-Host "+================================================================+" -ForegroundColor Cyan
 
 # Only show installation instructions if Windows is not installed
@@ -350,7 +350,7 @@ Write-Host "|                                                                |" 
 Write-Host "|  Step 1: Start VM and Install Windows                          |" -ForegroundColor White
 Write-Host "|  ----------------------------------------------------------    |" -ForegroundColor DarkGray
 Write-Host "|    * Open Hyper-V Manager                                      |" -ForegroundColor White
-Write-Host "|    * Right-click '$WorkerName' -> Connect -> Start".PadRight(63) "|" -ForegroundColor White
+Write-Host "|    * Right-click '$WorkerName' -> Connect -> Start".PadRight(64) "|" -ForegroundColor White
 Write-Host "|    * Wait for Windows Setup to boot from ISO                   |" -ForegroundColor White
 Write-Host "|    * UEFI fails! Restart will appear-> press tab and then space|" -ForegroundColor White
 Write-Host "|                                                                |" -ForegroundColor White
@@ -372,7 +372,7 @@ Write-Host "|    * Keyboard: US -> Yes                                       |" 
 Write-Host "|    * Skip second keyboard layout                               |" -ForegroundColor White
 Write-Host "|    * Network: 'I don't have internet' (bottom-left)            |" -ForegroundColor White
 Write-Host "|      OR 'Skip for now' / 'Continue with limited setup'         |" -ForegroundColor DarkGray
-Write-Host "|    * If not an option press shift + F10 and type OOBE\BYPASSNRO|" -ForegroundColor Yellow
+Write-Host "|      If not an option press shift + F10 and type OOBE\BYPASSNRO|" -ForegroundColor Yellow
 Write-Host "|    * Account name:  worker-admin                               |" -ForegroundColor Cyan
 Write-Host "|    * Password:      AutoMutate!Password                        |" -ForegroundColor Cyan
 Write-Host "|    * Security questions: Answer anything (write them down)     |" -ForegroundColor White
@@ -385,10 +385,10 @@ Write-Host "|                                                                |" 
 Write-Host "|      `$cred = Get-Credential -UserName 'worker-admin'           |" -ForegroundColor Green
 Write-Host "|      (Enter password: AutoMutate!Password)                     |" -ForegroundColor DarkGray
 Write-Host "|                                                                |" -ForegroundColor White
-Write-Host "|      Invoke-Command -VMName '$WorkerName' ``".PadRight(66) + "|" -ForegroundColor Green
-Write-Host "|        -FilePath '.\scripts\04-vm-init.ps1' ``".PadRight(66) + "|" -ForegroundColor Green
-Write-Host "|        -ArgumentList '$StaticIP', '$WorkerName' ``".PadRight(66) + "|" -ForegroundColor Green
-Write-Host "|        -Credential `$cred".PadRight(66) + "|" -ForegroundColor Green
+Write-Host "|      Invoke-Command -VMName '$WorkerName' ``".PadRight(64) "|" -ForegroundColor Green
+Write-Host "|        -FilePath '.\scripts\04-vm-init.ps1' ``".PadRight(64) "|" -ForegroundColor Green
+Write-Host "|        -ArgumentList '$StaticIP', '$WorkerName' ``".PadRight(64) "|" -ForegroundColor Green
+Write-Host "|        -Credential `$cred".PadRight(64) "|" -ForegroundColor Green
 Write-Host "|                                                                |" -ForegroundColor White
 Write-Host "|    The script will configure network, install tools, etc.      |" -ForegroundColor DarkGray
 Write-Host "|                                                                |" -ForegroundColor White
@@ -407,14 +407,14 @@ Write-Host "+================================================================+" 
     Write-Host "|  Windows is already installed. Next steps:                     |" -ForegroundColor White
     Write-Host "|                                                                |" -ForegroundColor White
     Write-Host "|  1. Start the VM:                                              |" -ForegroundColor White
-    Write-Host "|     Start-VM -Name '$WorkerName'".PadRight(66) + "|" -ForegroundColor Cyan
+    Write-Host "|     Start-VM -Name '$WorkerName'".PadRight(64) "|" -ForegroundColor Cyan
     Write-Host "|                                                                |" -ForegroundColor White
     Write-Host "|  2. If needed, run initialization script:                      |" -ForegroundColor White
     Write-Host "|     `$cred = Get-Credential -UserName 'worker-admin'            |" -ForegroundColor Cyan
-    Write-Host "|     Invoke-Command -VMName '$WorkerName' ``".PadRight(66) + "|" -ForegroundColor Cyan
-    Write-Host "|       -FilePath '.\scripts\04-vm-init.ps1' ``".PadRight(66) + "|" -ForegroundColor Cyan
-    Write-Host "|       -ArgumentList '$StaticIP', '$WorkerName' ``".PadRight(66) + "|" -ForegroundColor Cyan
-    Write-Host "|       -Credential `$cred".PadRight(66) + "|" -ForegroundColor Cyan
+    Write-Host "|     Invoke-Command -VMName '$WorkerName' ``".PadRight(64) "|" -ForegroundColor Cyan
+    Write-Host "|       -FilePath '.\scripts\04-vm-init.ps1' ``".PadRight(64) "|" -ForegroundColor Cyan
+    Write-Host "|       -ArgumentList '$StaticIP', '$WorkerName' ``".PadRight(64) "|" -ForegroundColor Cyan
+    Write-Host "|       -Credential `$cred".PadRight(64) "|" -ForegroundColor Cyan
     Write-Host "|                                                                |" -ForegroundColor White
     Write-Host "+================================================================+" -ForegroundColor Green
     Write-Host ""
