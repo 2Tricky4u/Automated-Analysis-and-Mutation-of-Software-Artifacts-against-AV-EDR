@@ -240,24 +240,27 @@ Next steps (MANUAL):
 "@ -ForegroundColor Green
 
 foreach ($worker in $WorkerConfigs) {
-    Write-Host "   - $($worker.Name): Start VM in Hyper-V Manager" -ForegroundColor Yellow
+    Write-Host "   - Start VM: $($worker.Name) in Hyper-V Manager" -ForegroundColor Yellow
+    Write-Host "   - Boot from ISO: $($worker.IsoPath)" -ForegroundColor Gray
 }
 
 Write-Host @"
 
-2. Windows will install automatically (via autounattend.xml floppy):
-   - Local account: worker-admin / AutoMutate!Password
-   - Fully unattended setup (no user input required)
-   - Boots directly to desktop after ~10-15 minutes
+2. Complete Windows Setup manually:
+   - During installation, create local account: worker-admin
+   - Recommended password: AutoMutate!Password (or choose your own)
+   - Complete OOBE (Out-of-Box Experience)
+   - Installation takes ~10-20 minutes depending on hardware
 
-3. After Windows installation completes, configure each VM:
+3. After Windows desktop loads, configure each VM:
 
 "@ -ForegroundColor Green
 
 foreach ($worker in $WorkerConfigs) {
-    $credNote = if ($worker.Os -eq "windows11") { " (use: worker-admin / AutoMutate!Password)" } else { " (use: worker-admin / AutoMutate!Password)" }
     Write-Host @"
-   $($worker.Name)$credNote
+   VM: $($worker.Name) (IP: $($worker.IP))
+   Run via PowerShell Direct (from host):
+
    `$cred = Get-Credential -UserName 'worker-admin' -Message 'Enter VM password'
    Invoke-Command -VMName "$($worker.Name)" -FilePath ".\scripts\04-vm-init.ps1" ``
      -ArgumentList "$($worker.IP)", "$($worker.Name)" -Credential `$cred
@@ -281,11 +284,14 @@ Write-Host ""
 
 Write-Host @"
 
-5. DISABLE NAT for lab isolation (RECOMMENDED):
-   .\scripts\disable-nat.ps1
+5. Optional: Isolate VMs from internet (recommended for malware testing):
+   The current setup uses IP FORWARDING (not NAT) - VMs can reach internet via host
+   To disable internet access for VMs, remove firewall rules:
 
-   ⚠️  NAT is currently ENABLED - VMs can access the internet
-   After VM initialization, disable NAT to confine VMs to the lab network
+   Get-NetFirewallRule -DisplayName "AutoMutate-VM-*" | Disable-NetFirewallRule
+
+   To re-enable later:
+   Get-NetFirewallRule -DisplayName "AutoMutate-VM-*" | Enable-NetFirewallRule
 
 6. Validate installation:
    .\validate-environment.ps1
@@ -304,8 +310,10 @@ Stop-Transcript
 # Summary
 Write-Host "`n" + "="*70 + "`n"
 Write-Host "SUMMARY:" -ForegroundColor Magenta
-Write-Success "Host configured (Hyper-V, WSL2, network)"
-Write-Success "Controller bootstrapped (Rust, Elasticsearch, Kibana)"
-Write-Success "Worker VMs created ($($WorkerConfigs.Count) total)"
-Write-Info "Awaiting manual Windows installation and baseline creation"
+Write-Success "Host configured (Hyper-V, WSL2, IP forwarding)"
+Write-Success "Controller bootstrapped (Rust, Docker, Elasticsearch, Kibana)"
+Write-Success "Worker VM shells created ($($WorkerConfigs.Count) total - awaiting Windows install)"
+Write-Host ""
+Write-Info "NEXT: Install Windows on each VM, then run 04-vm-init.ps1 for configuration"
+Write-Info "THEN: Create baselines with 05-create-baseline.ps1"
 Write-Host "`n" + "="*70 + "`n"
