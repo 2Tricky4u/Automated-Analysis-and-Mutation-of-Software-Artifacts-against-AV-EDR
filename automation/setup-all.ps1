@@ -70,7 +70,7 @@ if (-not (Test-Path $ConfigPath)) {
 
 Write-Info "Using configuration: $ConfigPath"
 
-# Parse YAML config (basic parser for simple YAML)
+# Parse YAML config
 function Parse-YamlConfig {
     param([string]$Path)
 
@@ -180,7 +180,7 @@ Write-Info "Kibana: http://localhost:5601"
 # Step 3: Create Worker VMs
 Write-Step "Step 3/4: Worker VM Creation"
 
-# Parse workers from config (this is simplified; full YAML parser would be better)
+# Parse workers from config
 $ConfigContent = Get-Content $ConfigPath -Raw
 $WorkersSection = ($ConfigContent -split 'workers:')[1] -split 'storage:' | Select-Object -First 1
 $WorkerConfigs = @()
@@ -266,16 +266,18 @@ foreach ($worker in $WorkerConfigs) {
 }
 
 Write-Host @"
-4. Create baseline checkpoints:
+4. Create baseline checkpoints for all VMs:
+   .\scripts\create-all-baselines.ps1
 
+   OR manually for each VM:
 "@ -ForegroundColor Green
 
 foreach ($worker in $WorkerConfigs) {
     Write-Host @"
    .\scripts\05-create-baseline.ps1 -WorkerName "$($worker.Name)"
-
 "@ -ForegroundColor Cyan
 }
+Write-Host ""
 
 Write-Host @"
 

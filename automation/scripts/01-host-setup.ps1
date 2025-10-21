@@ -26,7 +26,7 @@ function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
 function Write-Warn { param($M) Write-Host "[WARN] $M" -ForegroundColor Yellow }
 function Write-Err { param($M) Write-Host "[ERROR] $M" -ForegroundColor Red }
 
-# Load config (simplified YAML parser)
+# Load config
 $config = @{}
 $section = $null
 Get-Content $ConfigPath | ForEach-Object {

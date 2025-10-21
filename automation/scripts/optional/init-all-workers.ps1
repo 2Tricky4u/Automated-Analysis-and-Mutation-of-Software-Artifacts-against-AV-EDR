@@ -111,10 +111,10 @@ if ($failedVMs.Count -gt 0) {
 if ($successCount -gt 0) {
     Write-Host "`nNext steps:" -ForegroundColor Green
     Write-Host "  1. Create baseline checkpoints:" -ForegroundColor Cyan
-    Write-Host "     .\scripts\create-all-baselines.ps1" -ForegroundColor Gray
+    Write-Host "     .\create-all-baselines.ps1" -ForegroundColor Gray
     Write-Host ""
     Write-Host "  2. Disable NAT for lab isolation (RECOMMENDED):" -ForegroundColor Cyan
-    Write-Host "     .\scripts\disable-nat.ps1" -ForegroundColor Gray
+    Write-Host "     .\disable-nat.ps1" -ForegroundColor Gray
     Write-Host ""
     Write-Info "⚠️  NAT is currently ENABLED - VMs can access the internet"
     Write-Info "   For a confined lab, disable NAT after creating baselines"
