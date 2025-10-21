@@ -49,7 +49,58 @@ cd "$WORKDIR"
 
 # Update packages
 sudo apt update
-sudo apt install -y build-essential curl git unzip jq ca-certificates gnupg lsb-release docker-compose
+sudo apt install -y build-essential curl git unzip jq ca-certificates gnupg lsb-release
+
+# Install Docker Engine (not Docker Desktop - WSL2 native)
+if ! command -v docker &>/dev/null; then
+    echo "[i] Installing Docker Engine in WSL2..."
+
+    # Add Docker's official GPG key
+    sudo install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+    # Add Docker repository
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    # Install Docker Engine + Compose plugin
+    sudo apt update
+    sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+    # Add current user to docker group (avoid sudo docker)
+    sudo usermod -aG docker $USER
+
+    # Start Docker daemon (systemd may not be available in WSL2)
+    if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null; then
+        sudo systemctl enable docker
+        sudo systemctl start docker
+    else
+        echo "[i] Starting Docker daemon manually (WSL2 without systemd)..."
+        sudo dockerd > /var/log/docker.log 2>&1 &
+        sleep 3
+    fi
+
+    echo "[OK] Docker Engine installed"
+else
+    echo "[i] Docker already installed"
+fi
+
+# Verify Docker is running
+if ! docker info &>/dev/null; then
+    echo "[WARN] Docker daemon not running. Starting..."
+    sudo dockerd > /var/log/docker.log 2>&1 &
+    sleep 5
+
+    if ! docker info &>/dev/null; then
+        echo "[ERROR] Docker daemon failed to start. Check /var/log/docker.log"
+        echo "Alternative: Install Docker Desktop for Windows with WSL integration"
+        exit 1
+    fi
+fi
+
+echo "[OK] Docker daemon is running"
 
 # Rust
 if ! command -v rustc &>/dev/null; then
@@ -109,15 +160,22 @@ volumes:
 EOF
 
 # Start Elasticsearch + Kibana
-if command -v docker &>/dev/null; then
-    echo "[i] Starting Elasticsearch + Kibana..."
+echo "[i] Starting Elasticsearch + Kibana..."
+
+# Use Docker Compose V2 (plugin) if available, fallback to V1 (standalone)
+if docker compose version &>/dev/null; then
+    # Docker Compose V2 (docker compose)
+    docker compose up -d
+elif command -v docker-compose &>/dev/null; then
+    # Docker Compose V1 (docker-compose)
     docker-compose up -d
-    echo "[OK] Elasticsearch: http://localhost:9200"
-    echo "[OK] Kibana: http://localhost:5601"
 else
-    echo "[WARN] Docker not found. Install Docker Desktop with WSL integration."
+    echo "[ERROR] Docker Compose not found (neither 'docker compose' nor 'docker-compose')"
     exit 1
 fi
+
+echo "[OK] Elasticsearch: http://localhost:9200"
+echo "[OK] Kibana: http://localhost:5601"
 
 # Build Controller binaries
 cd "$PROJECT_ROOT"
