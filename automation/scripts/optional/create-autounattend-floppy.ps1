@@ -166,7 +166,7 @@ detach vdisk
     Write-Warning "Automatic floppy creation failed."
     Write-Info "Manual workaround:"
     Write-Info "  1. In Windows Explorer, double-click: $OutputPath"
-    Write-Info "  2. Right-click the mounted drive → Format → FAT → Start"
+    Write-Info "  2. Right-click the mounted drive -> Format -> FAT -> Start"
     Write-Info "  3. Copy $AutounattendPath to the drive"
     Write-Info "  4. Eject the drive"
     Write-Info ""

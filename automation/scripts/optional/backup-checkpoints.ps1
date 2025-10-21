@@ -37,9 +37,9 @@ function Write-Warn { param($M) Write-Host "[WARN] $M" -ForegroundColor Yellow }
 
 Write-Host @"
 
-╔═══════════════════════════════════════════════════════════════╗
-║         Backup Worker Checkpoints                             ║
-╚═══════════════════════════════════════════════════════════════╝
++===============================================================+
+|         Backup Worker Checkpoints                             |
++===============================================================+
 
 "@ -ForegroundColor Cyan
 

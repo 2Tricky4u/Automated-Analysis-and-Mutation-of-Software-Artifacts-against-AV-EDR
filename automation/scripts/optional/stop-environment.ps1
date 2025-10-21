@@ -43,9 +43,9 @@ function Write-Step { param($M) Write-Host "`n==> $M" -ForegroundColor Magenta }
 
 Write-Host @"
 
-╔═══════════════════════════════════════════════════════════════╗
-║         Stopping AutoMutate++ Environment                     ║
-╚═══════════════════════════════════════════════════════════════╝
++===============================================================+
+|         Stopping AutoMutate++ Environment                     |
++===============================================================+
 
 "@ -ForegroundColor Cyan
 

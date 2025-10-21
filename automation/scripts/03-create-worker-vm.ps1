@@ -158,66 +158,67 @@ Write-Success "VM $WorkerName ready for Windows installation"
 $secureBootStatus = if ($Os -eq "windows11") { "Enabled (MicrosoftWindows)" } else { "Disabled" }
 $tpmStatus = if ($tpmEnabled) { "Enabled" } else { "Failed (check logs)" }
 
-Write-Host "`n╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║          VM Configuration Summary                              ║" -ForegroundColor Cyan
-Write-Host "╠════════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
-Write-Host "║ Name:        $WorkerName".PadRight(66) + "║" -ForegroundColor White
-Write-Host "║ OS Type:     $Os".PadRight(66) + "║" -ForegroundColor White
-Write-Host "║ IP Address:  $StaticIP".PadRight(66) + "║" -ForegroundColor White
-Write-Host "║ Generation:  2 (UEFI)".PadRight(66) + "║" -ForegroundColor White
-Write-Host "║ Secure Boot: $secureBootStatus".PadRight(66) + "║" -ForegroundColor White
-Write-Host "║ TPM 2.0:     $tpmStatus".PadRight(66) + "║" -ForegroundColor White
-Write-Host "║ Boot Order:  DVD → HDD".PadRight(66) + "║" -ForegroundColor White
-Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "`n+================================================================+" -ForegroundColor Cyan
+Write-Host "|          VM Configuration Summary                              |" -ForegroundColor Cyan
+Write-Host "+================================================================+" -ForegroundColor Cyan
+Write-Host "| Name:        $WorkerName".PadRight(66) + "|" -ForegroundColor White
+Write-Host "| OS Type:     $Os".PadRight(66) + "|" -ForegroundColor White
+Write-Host "| IP Address:  $StaticIP".PadRight(66) + "|" -ForegroundColor White
+Write-Host "| Generation:  2 (UEFI)".PadRight(66) + "|" -ForegroundColor White
+Write-Host "| Secure Boot: $secureBootStatus".PadRight(66) + "|" -ForegroundColor White
+Write-Host "| TPM 2.0:     $tpmStatus".PadRight(66) + "|" -ForegroundColor White
+Write-Host "| Boot Order:  DVD -> HDD".PadRight(66) + "|" -ForegroundColor White
+Write-Host "+================================================================+" -ForegroundColor Cyan
 
-Write-Host "`n╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
-Write-Host "║          MANUAL INSTALLATION REQUIRED                          ║" -ForegroundColor Yellow
-Write-Host "╠════════════════════════════════════════════════════════════════╣" -ForegroundColor Yellow
-Write-Host "║                                                                ║" -ForegroundColor White
-Write-Host "║  Step 1: Start VM and Install Windows                         ║" -ForegroundColor White
-Write-Host "║  ────────────────────────────────────────────────────────────  ║" -ForegroundColor DarkGray
-Write-Host "║    • Open Hyper-V Manager                                      ║" -ForegroundColor White
-Write-Host "║    • Right-click '$WorkerName' → Connect → Start".PadRight(66) + "║" -ForegroundColor White
-Write-Host "║    • Wait for Windows Setup to boot from ISO                   ║" -ForegroundColor White
-Write-Host "║                                                                ║" -ForegroundColor White
-Write-Host "║  Step 2: Windows Setup Choices (MINIMAL INPUT REQUIRED)       ║" -ForegroundColor White
-Write-Host "║  ────────────────────────────────────────────────────────────  ║" -ForegroundColor DarkGray
-Write-Host "║    • Language: English (United States) → Next                  ║" -ForegroundColor White
-Write-Host "║    • Install now                                               ║" -ForegroundColor White
-Write-Host "║    • Product key: Skip / I don't have a product key            ║" -ForegroundColor White
-Write-Host "║    • Edition: Windows 10/11 Pro → Next                         ║" -ForegroundColor White
-Write-Host "║    • Accept license → Next                                     ║" -ForegroundColor White
-Write-Host "║    • Custom: Install Windows only (advanced)                   ║" -ForegroundColor White
-Write-Host "║    • Partition: Select 'Drive 0 Unallocated Space' → Next      ║" -ForegroundColor White
-Write-Host "║      (Windows will auto-create partitions)                     ║" -ForegroundColor DarkGray
-Write-Host "║                                                                ║" -ForegroundColor White
-Write-Host "║  Step 3: OOBE (Out-of-Box Experience)                          ║" -ForegroundColor White
-Write-Host "║  ────────────────────────────────────────────────────────────  ║" -ForegroundColor DarkGray
-Write-Host "║    • Region: United States → Yes                               ║" -ForegroundColor White
-Write-Host "║    • Keyboard: US → Yes                                        ║" -ForegroundColor White
-Write-Host "║    • Skip second keyboard layout                               ║" -ForegroundColor White
-Write-Host "║    • Network: 'I don't have internet' (bottom-left)            ║" -ForegroundColor White
-Write-Host "║      OR 'Skip for now' / 'Continue with limited setup'         ║" -ForegroundColor DarkGray
-Write-Host "║    • Account name:  worker-admin                               ║" -ForegroundColor Cyan
-Write-Host "║    • Password:      AutoMutate!Password                        ║" -ForegroundColor Cyan
-Write-Host "║    • Security questions: Answer anything (write them down)     ║" -ForegroundColor White
-Write-Host "║    • Privacy settings: Disable all (faster)                    ║" -ForegroundColor White
-Write-Host "║                                                                ║" -ForegroundColor White
-Write-Host "║  Step 4: After Desktop Appears (5-10 min)                      ║" -ForegroundColor White
-Write-Host "║  ────────────────────────────────────────────────────────────  ║" -ForegroundColor DarkGray
-Write-Host "║    • From HOST PowerShell (Admin), run:                        ║" -ForegroundColor White
-Write-Host "║                                                                ║" -ForegroundColor White
-Write-Host "║      `$cred = Get-Credential -UserName 'worker-admin'           ║" -ForegroundColor Green
-Write-Host "║      (Enter password: AutoMutate!Password)                     ║" -ForegroundColor DarkGray
-Write-Host "║                                                                ║" -ForegroundColor White
-Write-Host "║      Invoke-Command -VMName '$WorkerName' ``".PadRight(66) + "║" -ForegroundColor Green
-Write-Host "║        -FilePath '.\scripts\04-vm-init.ps1' ``".PadRight(66) + "║" -ForegroundColor Green
-Write-Host "║        -ArgumentList '$StaticIP', '$WorkerName' ``".PadRight(66) + "║" -ForegroundColor Green
-Write-Host "║        -Credential `$cred".PadRight(66) + "║" -ForegroundColor Green
-Write-Host "║                                                                ║" -ForegroundColor White
-Write-Host "║    The script will configure network, install tools, etc.      ║" -ForegroundColor DarkGray
-Write-Host "║                                                                ║" -ForegroundColor White
-Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
+Write-Host "`n+================================================================+" -ForegroundColor Yellow
+Write-Host "|          MANUAL INSTALLATION REQUIRED                          |" -ForegroundColor Yellow
+Write-Host "+================================================================+" -ForegroundColor Yellow
+Write-Host "|                                                                |" -ForegroundColor White
+Write-Host "|  Step 1: Start VM and Install Windows                          |" -ForegroundColor White
+Write-Host "|  ----------------------------------------------------------    |" -ForegroundColor DarkGray
+Write-Host "|    * Open Hyper-V Manager                                      |" -ForegroundColor White
+Write-Host "|    * Right-click '$WorkerName' -> Connect -> Start".PadRight(63) "|" -ForegroundColor White
+Write-Host "|    * Wait for Windows Setup to boot from ISO                   |" -ForegroundColor White
+Write-Host "|    * UEFI fails! Restart will appear-> press tab and then space|" -ForegroundColor White
+Write-Host "|                                                                |" -ForegroundColor White
+Write-Host "|  Step 2: Windows Setup Choices (MINIMAL INPUT REQUIRED)        |" -ForegroundColor White
+Write-Host "|  ----------------------------------------------------------    |" -ForegroundColor DarkGray
+Write-Host "|    * Language: English (United States) -> Next                 |" -ForegroundColor White
+Write-Host "|    * Install now                                               |" -ForegroundColor White
+Write-Host "|    * Product key: Skip / I don't have a product key            |" -ForegroundColor White
+Write-Host "|    * Edition: Windows 10/11 Pro -> Next                        |" -ForegroundColor White
+Write-Host "|    * Accept license -> Next                                    |" -ForegroundColor White
+Write-Host "|    * Custom: Install Windows only (advanced)                   |" -ForegroundColor White
+Write-Host "|    * Partition: Select 'Drive 0 Unallocated Space' -> Next     |" -ForegroundColor White
+Write-Host "|      (Windows will auto-create partitions)                     |" -ForegroundColor DarkGray
+Write-Host "|                                                                |" -ForegroundColor White
+Write-Host "|  Step 3: OOBE (Out-of-Box Experience)                          |" -ForegroundColor White
+Write-Host "|  ----------------------------------------------------------    |" -ForegroundColor DarkGray
+Write-Host "|    * Region: United States -> Yes                              |" -ForegroundColor White
+Write-Host "|    * Keyboard: US -> Yes                                       |" -ForegroundColor White
+Write-Host "|    * Skip second keyboard layout                               |" -ForegroundColor White
+Write-Host "|    * Network: 'I don't have internet' (bottom-left)            |" -ForegroundColor White
+Write-Host "|      OR 'Skip for now' / 'Continue with limited setup'         |" -ForegroundColor DarkGray
+Write-Host "|    * Account name:  worker-admin                               |" -ForegroundColor Cyan
+Write-Host "|    * Password:      AutoMutate!Password                        |" -ForegroundColor Cyan
+Write-Host "|    * Security questions: Answer anything (write them down)     |" -ForegroundColor White
+Write-Host "|    * Privacy settings: Disable all (faster)                    |" -ForegroundColor White
+Write-Host "|                                                                |" -ForegroundColor White
+Write-Host "|  Step 4: After Desktop Appears (5-10 min)                      |" -ForegroundColor White
+Write-Host "|  ----------------------------------------------------------    |" -ForegroundColor DarkGray
+Write-Host "|    * From HOST PowerShell (Admin), run:                        |" -ForegroundColor White
+Write-Host "|                                                                |" -ForegroundColor White
+Write-Host "|      `$cred = Get-Credential -UserName 'worker-admin'           |" -ForegroundColor Green
+Write-Host "|      (Enter password: AutoMutate!Password)                     |" -ForegroundColor DarkGray
+Write-Host "|                                                                |" -ForegroundColor White
+Write-Host "|      Invoke-Command -VMName '$WorkerName' ``".PadRight(66) + "|" -ForegroundColor Green
+Write-Host "|        -FilePath '.\scripts\04-vm-init.ps1' ``".PadRight(66) + "|" -ForegroundColor Green
+Write-Host "|        -ArgumentList '$StaticIP', '$WorkerName' ``".PadRight(66) + "|" -ForegroundColor Green
+Write-Host "|        -Credential `$cred".PadRight(66) + "|" -ForegroundColor Green
+Write-Host "|                                                                |" -ForegroundColor White
+Write-Host "|    The script will configure network, install tools, etc.      |" -ForegroundColor DarkGray
+Write-Host "|                                                                |" -ForegroundColor White
+Write-Host "+================================================================+" -ForegroundColor Yellow
 
 Write-Host "`nCredentials Summary:" -ForegroundColor Magenta
 Write-Host "  Username: worker-admin" -ForegroundColor Cyan
