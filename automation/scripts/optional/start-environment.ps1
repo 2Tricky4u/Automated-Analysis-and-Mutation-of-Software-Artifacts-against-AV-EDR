@@ -73,7 +73,8 @@ if (-not $SkipController) {
     $ProjectRoot = Split-Path $PSScriptRoot -Parent | Split-Path -Parent
     $WslProjectRoot = $ProjectRoot -replace '\\', '/' -replace 'C:', '/mnt/c'
 
-    wsl -d Ubuntu bash -c "cd '$WslProjectRoot/automation' && docker-compose up -d" 2>$null
+    # Use Docker Compose V2 if available, fallback to V1
+    wsl -d Ubuntu bash -c "cd '$WslProjectRoot/automation' && (docker compose up -d 2>/dev/null || docker-compose up -d)" 2>$null
 
     # Wait for Elasticsearch to be ready
     Write-Info "Waiting for Elasticsearch (http://localhost:9200)..."
