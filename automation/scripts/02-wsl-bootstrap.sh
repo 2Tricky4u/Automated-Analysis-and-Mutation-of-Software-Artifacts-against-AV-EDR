@@ -195,18 +195,32 @@ if ! command -v protoc &>/dev/null; then
     rm -rf "$TMPDIR"
 fi
 
-# Docker Compose for Elasticsearch + Kibana
-cat > "$WORKDIR/docker-compose.yml" <<'EOF'
+# Parse config.yaml to get Elasticsearch settings
+ES_VERSION=$(grep -A5 '^elasticsearch:' "$WORKDIR/config.yaml" | grep 'version:' | sed 's/.*version: *"\(.*\)".*/\1/')
+ES_MEMORY=$(grep -A5 '^elasticsearch:' "$WORKDIR/config.yaml" | grep 'memory_gb:' | sed 's/.*memory_gb: *\([0-9]*\).*/\1/')
+ES_PORT=$(grep -A10 '^controller:' "$WORKDIR/config.yaml" | grep 'elasticsearch_port:' | sed 's/.*elasticsearch_port: *\([0-9]*\).*/\1/')
+KIBANA_PORT=$(grep -A10 '^controller:' "$WORKDIR/config.yaml" | grep 'kibana_port:' | sed 's/.*kibana_port: *\([0-9]*\).*/\1/')
+
+# Use defaults if parsing failed
+ES_VERSION="${ES_VERSION:-8.11.0}"
+ES_MEMORY="${ES_MEMORY:-4}"
+ES_PORT="${ES_PORT:-9200}"
+KIBANA_PORT="${KIBANA_PORT:-5601}"
+
+echo "[i] Using Elasticsearch version: $ES_VERSION, memory: ${ES_MEMORY}g, ports: ES=$ES_PORT, Kibana=$KIBANA_PORT"
+
+# Docker Compose for Elasticsearch + Kibana (using config values)
+cat > "$WORKDIR/docker-compose.yml" <<EOF
 version: '3.8'
 services:
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    image: docker.elastic.co/elasticsearch/elasticsearch:$ES_VERSION
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms4g -Xmx4g"
+      - "ES_JAVA_OPTS=-Xms${ES_MEMORY}g -Xmx${ES_MEMORY}g"
     ports:
-      - "9200:9200"
+      - "$ES_PORT:9200"
     volumes:
       - esdata:/usr/share/elasticsearch/data
     ulimits:
@@ -215,9 +229,9 @@ services:
         hard: -1
 
   kibana:
-    image: docker.elastic.co/kibana/kibana:8.11.0
+    image: docker.elastic.co/kibana/kibana:$ES_VERSION
     ports:
-      - "5601:5601"
+      - "$KIBANA_PORT:5601"
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
     depends_on:
@@ -262,7 +276,7 @@ echo "[i] Waiting for Elasticsearch to be ready (max 60 seconds)..."
 MAX_RETRIES=30
 RETRY_COUNT=0
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if curl -s http://localhost:9200 > /dev/null 2>&1; then
+    if curl -s http://localhost:$ES_PORT > /dev/null 2>&1; then
         echo "[OK] Elasticsearch is ready"
         break
     fi
@@ -279,17 +293,17 @@ if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
     echo "Containers may still be starting. You can verify access later"
 else
     # Test from within WSL
-    ES_RESPONSE=$(curl -s http://localhost:9200 2>/dev/null || echo "failed")
+    ES_RESPONSE=$(curl -s http://localhost:$ES_PORT 2>/dev/null || echo "failed")
     if [[ "$ES_RESPONSE" == *"cluster_name"* ]]; then
-        echo "[OK] Elasticsearch accessible: http://localhost:9200"
+        echo "[OK] Elasticsearch accessible: http://localhost:$ES_PORT"
     fi
 fi
 
 echo ""
 echo "=========================================="
 echo "Service Endpoints (accessible from Windows & WSL):"
-echo "  Elasticsearch: http://localhost:9200"
-echo "  Kibana:        http://localhost:5601"
+echo "  Elasticsearch: http://localhost:$ES_PORT"
+echo "  Kibana:        http://localhost:$KIBANA_PORT"
 echo "=========================================="
 echo ""
 echo "Background Processes:"
@@ -326,7 +340,7 @@ bind_address = "0.0.0.0:50051"
 max_connections = 100
 
 [elasticsearch]
-url = "http://localhost:9200"
+url = "http://localhost:$ES_PORT"
 index_prefix = "etw-"
 bulk_size = 100
 bulk_timeout_ms = 5000
