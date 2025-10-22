@@ -31,33 +31,26 @@ elasticsearch:
   memory_gb: 4
   data_path: "/var/lib/elasticsearch"
 
-# Worker VMs configuration
+# Worker VMs configuration (TEMPLATE-BASED)
 workers:
-  # Windows 10 workers
-  - name: "win10-worker-01"
-    os: "windows10"
+  # Windows 10 template
+  windows10:
+    count: 2                    # Number of Windows 10 VMs to create
     edition: "Pro"
     iso_path: "C:\\ISOs\\Win10_22H2_English_x64v1.iso"
-    ip: "10.200.200.100"
+    name_prefix: "win10-worker"
+    ip_start: "10.200.200.100"  # First VM: .100, second: .101, etc.
     cpu_count: 2
     memory_gb: 4
     disk_gb: 64
 
-  # Windows 11 workers
-  - name: "win11-worker-01"
-    os: "windows11"
+  # Windows 11 template
+  windows11:
+    count: 2                    # Number of Windows 11 VMs to create
     edition: "Pro"
     iso_path: "C:\\ISOs\\Win11_25H2_English_x64.iso"
-    ip: "10.200.200.110"
-    cpu_count: 2
-    memory_gb: 6
-    disk_gb: 80
-
-  - name: "win11-worker-02"
-    os: "windows11"
-    edition: "Pro"
-    iso_path: "C:\\ISOs\\Win11_25H2_English_x64.iso"
-    ip: "10.200.200.111"
+    name_prefix: "win11-worker"
+    ip_start: "10.200.200.110"  # First VM: .110, second: .111, etc.
     cpu_count: 2
     memory_gb: 6
     disk_gb: 80

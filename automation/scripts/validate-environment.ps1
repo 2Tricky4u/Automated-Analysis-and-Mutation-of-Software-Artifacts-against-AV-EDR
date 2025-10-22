@@ -30,6 +30,9 @@ function Write-Fail { param($M) Write-Host "[ERROR] $M" -ForegroundColor Red }
 function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
 function Write-Section { param($M) Write-Host "`n==> $M" -ForegroundColor Magenta }
 
+# Import shared config module
+Import-Module "$PSScriptRoot\modules\AutoMutateConfig.psm1" -Force
+
 $FailCount = 0
 
 Write-Host @"
@@ -40,13 +43,8 @@ Write-Host @"
 
 "@ -ForegroundColor Cyan
 
-# Parse config
-$config = @{}
-$section = $null
-Get-Content $ConfigPath | ForEach-Object {
-    if ($_ -match '^(\w+):$') { $section = $matches[1]; $config[$section] = @{} }
-    elseif ($_ -match '^\s+(\w+):\s*"?(.+?)\"?$' -and $section) { $config[$section][$matches[1]] = $matches[2].Trim('"') }
-}
+# Parse config using shared module
+$config = Read-AutoMutateConfig -ConfigPath $ConfigPath
 
 # Section 1: Windows Features
 Write-Section "Windows Features"
@@ -150,18 +148,8 @@ try {
 # Section 5: Worker VMs
 Write-Section "Worker VMs"
 
-# Extract workers
-$ConfigContent = Get-Content $ConfigPath -Raw
-$WorkersSection = ($ConfigContent -split 'workers:')[1] -split 'storage:' | Select-Object -First 1
-$WorkerMatches = [regex]::Matches($WorkersSection, '- name:\s*"([^"]+)"[^\-]*?ip:\s*"([^"]+)"')
-
-$Workers = @()
-foreach ($match in $WorkerMatches) {
-    $Workers += @{
-        Name = $match.Groups[1].Value
-        IP = $match.Groups[2].Value
-    }
-}
+# Get workers using shared module
+$Workers = Get-AutoMutateWorkers -ConfigPath $ConfigPath
 
 Write-Info "Found $($Workers.Count) worker(s) in config"
 

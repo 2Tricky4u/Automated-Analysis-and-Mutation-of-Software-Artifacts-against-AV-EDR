@@ -23,18 +23,16 @@ function Write-Success { param($M) Write-Host "[OK] $M" -ForegroundColor Green }
 function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
 function Write-Warn { param($M) Write-Host "[WARN] $M" -ForegroundColor Yellow }
 
+# Import shared config module
+Import-Module "$PSScriptRoot\modules\AutoMutateConfig.psm1" -Force
+
 Write-Host "`n=== Baseline Checkpoint Creation ===" -ForegroundColor Cyan
 
-# Parse config
-$ConfigContent = Get-Content $ConfigPath -Raw
-$WorkersSection = ($ConfigContent -split 'workers:')[1] -split 'storage:' | Select-Object -First 1
-$WorkerMatches = [regex]::Matches($WorkersSection, '- name:\s*"([^"]+)"')
-
-$workers = @()
-foreach ($match in $WorkerMatches) {
-    $workers += @{
-        Name = $match.Groups[1].Value
-        SnapshotName = "$($match.Groups[1].Value)-baseline"
+# Get workers using shared module
+$workers = Get-AutoMutateWorkers -ConfigPath $ConfigPath | ForEach-Object {
+    @{
+        Name = $_.Name
+        SnapshotName = "$($_.Name)-baseline"
     }
 }
 

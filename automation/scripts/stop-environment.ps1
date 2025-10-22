@@ -35,6 +35,9 @@ function Write-Success { param($M) Write-Host "[OK] $M" -ForegroundColor Green }
 function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
 function Write-Step { param($M) Write-Host "`n==> $M" -ForegroundColor Magenta }
 
+# Import shared config module
+Import-Module "$PSScriptRoot\modules\AutoMutateConfig.psm1" -Force
+
 if ($WorkersOnly) { $SkipController = $true }
 
 Write-Host @"
@@ -45,26 +48,14 @@ Write-Host @"
 
 "@ -ForegroundColor Cyan
 
-# Parse config
-$config = @{}
-$section = $null
-Get-Content $ConfigPath | ForEach-Object {
-    if ($_ -match '^(\w+):$') { $section = $matches[1]; $config[$section] = @{} }
-    elseif ($_ -match '^\s+(\w+):\s*"?(.+?)\"?$' -and $section) { $config[$section][$matches[1]] = $matches[2].Trim('"') }
-}
+# Parse config using shared module
+$config = Read-AutoMutateConfig -ConfigPath $ConfigPath
 
 # Step 1: Stop Worker VMs
 Write-Step "Step 1/2: Stopping Worker VMs"
 
-# Extract worker names from config
-$ConfigContent = Get-Content $ConfigPath -Raw
-$WorkersSection = ($ConfigContent -split 'workers:')[1] -split 'storage:' | Select-Object -First 1
-$WorkerMatches = [regex]::Matches($WorkersSection, '- name:\s*"([^"]+)"')
-
-$WorkerNames = @()
-foreach ($match in $WorkerMatches) {
-    $WorkerNames += $match.Groups[1].Value
-}
+# Get worker names using shared module
+$WorkerNames = Get-AutoMutateWorkerNames -ConfigPath $ConfigPath
 
 Write-Info "Found $($WorkerNames.Count) worker(s)"
 

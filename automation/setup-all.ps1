@@ -34,6 +34,9 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+# Import shared config module
+Import-Module "$PSScriptRoot\scripts\modules\AutoMutateConfig.psm1" -Force
+
 # Color output functions
 function Write-Success { param($Message) Write-Host "[OK] $Message" -ForegroundColor Green }
 function Write-Info { param($Message) Write-Host "[INFO] $Message" -ForegroundColor Cyan }
@@ -70,40 +73,9 @@ if (-not (Test-Path $ConfigPath)) {
 
 Write-Info "Using configuration: $ConfigPath"
 
-# Parse YAML config
-function Parse-YamlConfig {
-    param([string]$Path)
-
-    $config = @{}
-    $currentSection = $null
-    $content = Get-Content $Path
-
-    foreach ($line in $content) {
-        $line = $line.Trim()
-
-        # Skip comments and empty lines
-        if ($line -match '^#' -or $line -eq '') { continue }
-
-        # Section header
-        if ($line -match '^(\w+):$') {
-            $currentSection = $matches[1]
-            $config[$currentSection] = @{}
-            continue
-        }
-
-        # Key-value pair
-        if ($line -match '^\s*(\w+):\s*"?(.+?)"?$' -and $currentSection) {
-            $key = $matches[1]
-            $value = $matches[2].Trim('"')
-            $config[$currentSection][$key] = $value
-        }
-    }
-
-    return $config
-}
-
+# Validate config can be parsed
 try {
-    $Config = Parse-YamlConfig -Path $ConfigPath
+    $Config = Read-AutoMutateConfig -ConfigPath $ConfigPath
     Write-Success "Configuration loaded successfully"
 } catch {
     Write-Error "Failed to parse config: $_"
@@ -180,22 +152,8 @@ Write-Info "Kibana: http://localhost:5601"
 # Step 3: Create Worker VMs
 Write-Step "Step 3/4: Worker VM Creation"
 
-# Parse workers from config
-$ConfigContent = Get-Content $ConfigPath -Raw
-$WorkersSection = ($ConfigContent -split 'workers:')[1] -split 'storage:' | Select-Object -First 1
-$WorkerConfigs = @()
-
-# Extract worker blocks (order-independent matching)
-$WorkerMatches = [regex]::Matches($WorkersSection, '- name:\s*"([^"]+)"[\s\S]*?os:\s*"([^"]+)"[\s\S]*?iso_path:\s*"([^"]+)"[\s\S]*?ip:\s*"([^"]+)"')
-
-foreach ($match in $WorkerMatches) {
-    $WorkerConfigs += @{
-        Name = $match.Groups[1].Value
-        Os = $match.Groups[2].Value
-        IsoPath = $match.Groups[3].Value
-        IP = $match.Groups[4].Value
-    }
-}
+# Get workers from template config using shared module
+$WorkerConfigs = Get-AutoMutateWorkers -ConfigPath $ConfigPath
 
 Write-Info "Found $($WorkerConfigs.Count) worker(s) in configuration"
 
