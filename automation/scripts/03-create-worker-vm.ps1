@@ -40,19 +40,15 @@ param(
 $ErrorActionPreference = "Stop"
 function Write-Success { param($M) Write-Host "[OK] $M" -ForegroundColor Green }
 function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
-
 function Get-GDriveFile {
     <#
     .SYNOPSIS
         Download a public Google Drive file (handles large-file confirm + uuid).
-
     .PARAMETER IdOrUrl
         File ID (e.g., 1AbC...) or a share URL like:
         https://drive.google.com/file/d/<ID>/view?usp=sharing
-
     .PARAMETER OutFile
         Destination path.
-
     .PARAMETER Sha256
         Optional SHA-256 hash to verify integrity.
     #>
@@ -63,94 +59,93 @@ function Get-GDriveFile {
         [string]$Sha256
     )
 
-    Set-StrictMode -Version Latest
-    $ErrorActionPreference = "Stop"
+    $ErrorActionPreference = 'Stop'
 
-    # --- Extract file ID cleanly ---
+    # --- Extract file ID (works for share links and plain IDs) ---
     $id = $IdOrUrl
     if ($IdOrUrl -match 'https?://(drive|docs)\.google\.com') {
         if ($IdOrUrl -match '/file/d/([^/]+)/') {
             $id = $Matches[1]
-        } elseif ($IdOrUrl -match '([?&]id=)([A-Za-z0-9_-]+)') {
-            $id = $Matches[2]
+        } elseif ($IdOrUrl -match '(?:\?|&)id=([A-Za-z0-9_-]+)') {
+            $id = $Matches[1]
         } else {
             throw "Could not extract Google Drive file ID from URL."
         }
     }
 
-    # --- Prepare paths, session, and headers ---
+    # --- Prepare paths/session/headers ---
     $null = New-Item -ItemType Directory -Force -Path (Split-Path -LiteralPath $OutFile) 2>$null
     $tmp  = "$OutFile.part"
 
-    $headers = @{
-        'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-    }
-
+    $headers = @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
     $baseUri = "https://drive.google.com/uc?export=download&id=$id"
 
-    # First call: capture cookies and potential interstitial
+    # First request: capture cookies/session (PS 5.1 returns BasicHtmlWebResponseObject)
     $initial = Invoke-WebRequest -Uri $baseUri -SessionVariable sess -Headers $headers
 
-    # Preempt EU consent (if applicable)
+    # Preempt EU consent (PS 5.1 CookieContainer requires Uri + Cookie)
     try {
-        $consent = New-Object System.Net.Cookie
-        $consent.Name   = 'CONSENT'
-        $consent.Value  = 'YES+'
-        $consent.Domain = '.google.com'
-        $consent.Path   = '/'
-        $sess.Cookies.Add($consent)
-    } catch { }
+        $consent = New-Object System.Net.Cookie('CONSENT','YES+','/','.google.com')
+        $sess.Cookies.Add([Uri]'https://google.com', $consent)
+    } catch {}
 
-    # If Google already sends the file, download directly
-    $isDirect =
-    ($initial.Headers.'Content-Disposition') -or
-            ($initial.ContentType -and $initial.ContentType -like 'application/octet-stream*')
+    # Helper: read a header from PS 5.1 response safely
+    function Get-Header {
+        param([object]$resp, [string]$name)
+        $val = $null
+        if ($resp.Headers -and $resp.Headers[$name]) { $val = $resp.Headers[$name] }
+        elseif ($resp.BaseResponse -and $resp.BaseResponse.Headers) {
+            try { $val = $resp.BaseResponse.Headers[$name] } catch {}
+        }
+        return $val
+    }
+
+    # Detect direct download
+    $cd = Get-Header -resp $initial -name 'Content-Disposition'
+    $ct = Get-Header -resp $initial -name 'Content-Type'
+    $isDirect = ($cd -and $cd -ne '') -or ($ct -and $ct -match 'application/octet-stream')
 
     if ($isDirect) {
         Invoke-WebRequest -Uri $baseUri -WebSession $sess -Headers $headers -OutFile $tmp
         Move-Item -Force -LiteralPath $tmp -Destination $OutFile
-        goto VerifyHash
     }
+    else {
+        # Interstitial page: find confirm token / uuid
+        $html  = $initial.Content
+        $token = $null
+        $uuid  = $null
 
-    # Otherwise parse the interstitial for a confirm token (and optional uuid)
-    $html  = $initial.Content
-    $token = $null
-    $uuid  = $null
-
-    # Classic link form: confirm=<token>
-    $m = [regex]::Match($html, 'confirm=([^&"''<> ]+)')
-    if ($m.Success) { $token = $m.Groups[1].Value }
-
-    # Hidden input form: name="confirm" value="..."
-    if (-not $token) {
-        $m = [regex]::Match($html, 'name="confirm"\s+value="([^"]+)"')
+        $m = [regex]::Match($html, 'confirm=([^&"''<> ]+)')
         if ($m.Success) { $token = $m.Groups[1].Value }
+
+        if (-not $token) {
+            $m = [regex]::Match($html, 'name="confirm"\s+value="([^"]+)"')
+            if ($m.Success) { $token = $m.Groups[1].Value }
+        }
+
+        $m = [regex]::Match($html, 'uuid=([0-9A-Za-z\-_]+)')
+        if ($m.Success) { $uuid = $m.Groups[1].Value }
+
+        # Fallback: cookie named download_warning* (must use Uri with PS 5.1)
+        if (-not $token) {
+            $cookieCol = $sess.Cookies.GetCookies([Uri]'https://drive.google.com')
+            $warn = $cookieCol | Where-Object { $_.Name -like 'download_warning*' } | Select-Object -First 1
+            if ($warn) { $token = $warn.Value }
+        }
+
+        if (-not $token) {
+            throw "Could not obtain Google Drive confirmation token (file may not be shared publicly or flow changed)."
+        }
+
+        # Final download URL served from usercontent host
+        $dl = "https://drive.usercontent.google.com/uc?export=download&id=$id&confirm=$token"
+        if ($uuid) { $dl += "&uuid=$uuid" }
+
+        Invoke-WebRequest -Uri $dl -WebSession $sess -Headers $headers -OutFile $tmp
+        Move-Item -Force -LiteralPath $tmp -Destination $OutFile
     }
 
-    # Optional uuid present on some variants
-    $m = [regex]::Match($html, 'uuid=([0-9A-Za-z\-_]+)')
-    if ($m.Success) { $uuid = $m.Groups[1].Value }
-
-    # Fallback: cookie named download_warning*
-    if (-not $token) {
-        $cookie = $sess.Cookies.GetCookies('https://drive.google.com') |
-                Where-Object { $_.Name -like 'download_warning*' } |
-                Select-Object -First 1
-        if ($cookie) { $token = $cookie.Value }
-    }
-
-    if (-not $token) {
-        throw "Could not obtain Google Drive confirmation token (file may not be shared publicly or flow changed)."
-    }
-
-    # Build final download URL on the usercontent host (where large files are served)
-    $dl = "https://drive.usercontent.google.com/uc?export=download&id=$id&confirm=$token"
-    if ($uuid) { $dl += "&uuid=$uuid" }
-
-    Invoke-WebRequest -Uri $dl -WebSession $sess -Headers $headers -OutFile $tmp
-    Move-Item -Force -LiteralPath $tmp -Destination $OutFile
-
-    :VerifyHash
+    # Optional integrity check
     if ($Sha256) {
         $actual = (Get-FileHash -Path $OutFile -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actual -ne $Sha256.ToLowerInvariant()) {
@@ -160,6 +155,7 @@ function Get-GDriveFile {
 
     Write-Host "[OK] Downloaded: $OutFile" -ForegroundColor Green
 }
+
 
 
 
