@@ -68,39 +68,98 @@ if (-not $SkipController) {
         Write-Success "WSL2 already running"
     }
 
-    # Start Elasticsearch + Kibana
-    Write-Info "Starting Elasticsearch + Kibana..."
+    # Start Docker daemon via systemctl
+    Write-Info "Ensuring Docker daemon is running..."
+    $dockerStatus = wsl -d Ubuntu bash -c "sudo systemctl is-active docker" 2>$null
+    if ($dockerStatus -ne "active") {
+        Write-Info "Starting Docker service..."
+        wsl -d Ubuntu bash -c "sudo systemctl start docker" 2>$null
+        Start-Sleep -Seconds 3
+    } else {
+        Write-Success "Docker daemon already running"
+    }
+
+    # Check and start Elasticsearch + Kibana
+    Write-Info "Checking Elasticsearch + Kibana status..."
+
     $ProjectRoot = Split-Path $PSScriptRoot -Parent | Split-Path -Parent
     $WslProjectRoot = $ProjectRoot -replace '\\', '/' -replace 'C:', '/mnt/c'
 
-    # Use Docker Compose V2 if available, fallback to V1
-    wsl -d Ubuntu bash -c "cd '$WslProjectRoot/automation' && (docker compose up -d 2>/dev/null || docker-compose up -d)" 2>$null
-
-    # Wait for Elasticsearch to be ready
-    Write-Info "Waiting for Elasticsearch (http://localhost:9200)..."
-    $maxRetries = 30
-    $retries = 0
-    while ($retries -lt $maxRetries) {
-        try {
-            $response = Invoke-WebRequest -Uri "http://localhost:9200" -TimeoutSec 2 -ErrorAction SilentlyContinue
-            if ($response.StatusCode -eq 200) {
-                Write-Success "Elasticsearch ready"
-                break
-            }
-        } catch {
-            # Continue
+    # Check if Elasticsearch is already accessible
+    $esRunning = $false
+    try {
+        $response = Invoke-WebRequest -Uri "http://localhost:9200" -TimeoutSec 2 -ErrorAction SilentlyContinue
+        if ($response.StatusCode -eq 200) {
+            $esRunning = $true
+            Write-Success "Elasticsearch already running"
         }
-        Start-Sleep -Seconds 2
-        $retries++
+    } catch {
+        # Not running
     }
 
-    if ($retries -eq $maxRetries) {
-        Write-Warning "Elasticsearch not responding after 60 seconds. Check logs: docker-compose logs elasticsearch"
+    # Check if Kibana is already accessible
+    $kibanaRunning = $false
+    try {
+        $response = Invoke-WebRequest -Uri "http://localhost:5601" -TimeoutSec 2 -ErrorAction SilentlyContinue
+        if ($response.StatusCode -in @(200, 302)) {
+            $kibanaRunning = $true
+            Write-Success "Kibana already running"
+        }
+    } catch {
+        # Not running
     }
 
-    Write-Success "Controller services started"
+    # Start services if needed
+    if (-not $esRunning -or -not $kibanaRunning) {
+        Write-Info "Starting required containers..."
+        Write-Info "Note: Containers run in foreground mode via background processes"
+        Write-Info "      (Required due to systemd compatibility with docker compose)"
+
+        if (-not $esRunning) {
+            Write-Info "Starting Elasticsearch container..."
+            $null = Start-Process -FilePath "wsl" -ArgumentList "-d Ubuntu bash -c `"cd '$WslProjectRoot/automation' && nohup docker compose up elasticsearch > /tmp/elasticsearch.log 2>&1 &`"" -WindowStyle Hidden
+            Start-Sleep -Seconds 3
+        }
+
+        if (-not $kibanaRunning) {
+            Write-Info "Starting Kibana container..."
+            $null = Start-Process -FilePath "wsl" -ArgumentList "-d Ubuntu bash -c `"cd '$WslProjectRoot/automation' && nohup docker compose up kibana > /tmp/kibana.log 2>&1 &`"" -WindowStyle Hidden
+            Start-Sleep -Seconds 3
+        }
+
+        # Wait for Elasticsearch to be ready (if it was just started)
+        if (-not $esRunning) {
+            Write-Info "Waiting for Elasticsearch (http://localhost:9200)..."
+            $maxRetries = 30
+            $retries = 0
+            while ($retries -lt $maxRetries) {
+                try {
+                    $response = Invoke-WebRequest -Uri "http://localhost:9200" -TimeoutSec 2 -ErrorAction SilentlyContinue
+                    if ($response.StatusCode -eq 200) {
+                        Write-Success "Elasticsearch ready"
+                        break
+                    }
+                } catch {
+                    # Continue
+                }
+                Start-Sleep -Seconds 2
+                $retries++
+            }
+
+            if ($retries -eq $maxRetries) {
+                Write-Warning "Elasticsearch not responding after 60 seconds."
+                Write-Info "Check logs in WSL: wsl -d Ubuntu tail -f /tmp/elasticsearch.log"
+            }
+        }
+    }
+
+    Write-Success "Controller services ready"
     Write-Info "Elasticsearch: http://localhost:9200"
     Write-Info "Kibana: http://localhost:5601"
+    Write-Info ""
+    Write-Info "Logs available in WSL:"
+    Write-Info "  wsl -d Ubuntu tail -f /tmp/elasticsearch.log"
+    Write-Info "  wsl -d Ubuntu tail -f /tmp/kibana.log"
 }
 
 # Step 2: Start Worker VMs

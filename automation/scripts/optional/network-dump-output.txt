@@ -1,0 +1,24 @@
+At C:\Users\xagao\RustroverProjects\Automated-Analysis-and-Mutation-of-Software-Artifacts-against-AV-EDR\automation\scr
+ipts\optional\detailed-network-dump.ps1:267 char:79
++ ... AGNOSTICS                                    |" -ForegroundColor Cyan
++                                                   ~~~~~~~~~~~~~~~~~~~~~~~
+Expressions are only allowed as the first element of a pipeline.
+At C:\Users\xagao\RustroverProjects\Automated-Analysis-and-Mutation-of-Software-Artifacts-against-AV-EDR\automation\scr
+ipts\optional\detailed-network-dump.ps1:268 char:82
++ ... ==========================================+`n") -ForegroundColor Cyan
++                                                  ~~~~~~~~~~~~~~~~~~~~~~~~
+The string is missing the terminator: ".
+At C:\Users\xagao\RustroverProjects\Automated-Analysis-and-Mutation-of-Software-Artifacts-against-AV-EDR\automation\scr
+ipts\optional\detailed-network-dump.ps1:253 char:26
++ if ($issues.Count -eq 0) {
++                          ~
+Missing closing '}' in statement block or type definition.
+At C:\Users\xagao\RustroverProjects\Automated-Analysis-and-Mutation-of-Software-Artifacts-against-AV-EDR\automation\scr
+ipts\optional\detailed-network-dump.ps1:267 char:79
++ ... AGNOSTICS                                    |" -ForegroundColor Cyan
++                                                   ~~~~~~~~~~~~~~~~~~~~~~~
+The assignment expression is not valid. The input to an assignment operator must be an object that is able to accept 
+assignments, such as a variable or a property.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : ExpressionsMustBeFirstInPipeline
+ 

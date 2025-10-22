@@ -65,19 +65,17 @@ foreach ($feature in $features) {
 # Section 2: WSL2
 Write-Section "WSL2"
 
-$wslList = wsl --list -q 2>$null
-if ($wslList -match "Ubuntu") {
-    Write-Pass "WSL2 Ubuntu installed"
-
-    $wslRunning = wsl --list --running 2>$null | Select-String "Ubuntu"
-    if ($wslRunning) {
-        Write-Pass "WSL2 Ubuntu running"
+# Simple test: try to run a command in Ubuntu
+try {
+    $ubuntuTest = wsl -d Ubuntu bash -c "echo ok" 2>&1
+    if ($ubuntuTest -match "ok") {
+        Write-Pass "WSL2 Ubuntu installed and running"
     } else {
-        Write-Fail "WSL2 Ubuntu NOT running"
+        Write-Fail "WSL2 Ubuntu NOT responding"
         $FailCount++
     }
-} else {
-    Write-Fail "WSL2 Ubuntu NOT installed"
+} catch {
+    Write-Fail "WSL2 Ubuntu NOT installed or not running"
     $FailCount++
 }
 
