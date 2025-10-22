@@ -261,6 +261,32 @@ try {
     }
 } catch { Write-Warn "VC++ runtime install failed: $($_.Exception.Message)" }
 
+# Visual Studio 2022
+
+try {
+    if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+        Write-Warn "Skipping VS2022 install (Chocolatey not present)"
+    } else {
+        Write-Info "Installing Visual Studio 2022 Community (full workloads; this is large)..."
+        # Install all workloads, recommended and optional components, English UI.
+        choco install visualstudio2022community `
+          --yes --no-progress --limit-output `
+          --execution-timeout=0 `
+          --package-parameters "'--allWorkloads --includeRecommended --includeOptional --passive --locale en-US --wait --norestart --installPath \"C:\Program Files\Microsoft Visual Studio\2022\Community\"'" # | Out-Null
+
+        # Verify devenv.exe exists
+        $vsDevenv = "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe"
+        if (Test-Path $vsDevenv) {
+            Write-Success "VS2022 installed: $vsDevenv"
+        } else {
+            Write-Warn "VS2022 install did not place devenv.exe in expected path. Check Visual Studio Installer."
+        }
+    }
+} catch {
+    Write-Warn "VS2022 installation failed: $($_.Exception.Message)"
+}
+
+
 # ===================== SECTION 6: AutoMutate Dirs (unchanged) =============
 Write-Info "[6/10] Creating AutoMutate project directories..."
 
