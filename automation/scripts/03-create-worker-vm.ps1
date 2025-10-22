@@ -41,6 +41,59 @@ $ErrorActionPreference = "Stop"
 function Write-Success { param($M) Write-Host "[OK] $M" -ForegroundColor Green }
 function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
 
+function Get-GDriveFile {
+    <#
+    .SYNOPSIS
+        Download a public Google Drive file (handles large-file confirm token).
+
+    .PARAMETER IdOrUrl
+        File ID (e.g. 1AbCdeF...) OR a share URL:
+        https://drive.google.com/file/d/<ID>/view?usp=sharing
+
+    .PARAMETER OutFile
+        Destination path.
+
+    .PARAMETER Sha256
+        Optional SHA256 to verify integrity.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$IdOrUrl,
+        [Parameter(Mandatory)] [string]$OutFile,
+        [string]$Sha256
+    )
+    $id = $IdOrUrl
+    if ($IdOrUrl -match 'drive\.google\.com') {
+        if ($IdOrUrl -match '/file/d/([^/]+)/') { $id = $Matches[1] }
+        elseif ($IdOrUrl -match '[?&]id=([A-Za-z0-9_-]+)') { $id = $Matches[1] }
+        else { throw "Could not extract Google Drive file ID from URL." }
+    }
+
+    $base = "https://drive.google.com/uc?export=download&id=$id"
+    $tmp  = "$OutFile.part"
+    $null = New-Item -ItemType Directory -Force -Path (Split-Path $OutFile) 2>$null
+    $ProgressPreference = 'SilentlyContinue'
+
+    $initial = Invoke-WebRequest -Uri $base -SessionVariable sess -Headers @{ 'User-Agent'='Mozilla/5.0' }
+
+    if ($initial.Headers.'Content-Disposition') {
+        Invoke-WebRequest -Uri $base -WebSession $sess -OutFile $tmp -Headers @{ 'User-Agent'='Mozilla/5.0' }
+    } else {
+        $html  = $initial.Content
+        $token = [regex]::Match($html, 'confirm=([0-9A-Za-z\-_]+)').Groups[1].Value
+        if (-not $token) { throw "Could not find Google Drive confirmation token. Is the file public?" }
+        Invoke-WebRequest -Uri "$base&confirm=$token" -WebSession $sess -OutFile $tmp -Headers @{ 'User-Agent'='Mozilla/5.0' }
+    }
+
+    Move-Item -Force $tmp $OutFile
+
+    if ($Sha256) {
+        $h = (Get-FileHash -Path $OutFile -Algorithm SHA256).Hash.ToLower()
+        if ($h -ne $Sha256.ToLower()) { throw "SHA256 mismatch for $OutFile. Expected $Sha256, got $h" }
+    }
+}
+
+
 # Load config
 $config = @{}
 $section = $null
@@ -54,6 +107,19 @@ $VhdRoot = $config.storage.vhd_root
 $Gateway = $config.network.gateway
 $Prefix = ($config.network.subnet -split '/')[1]
 
+# --- Google Drive ISO sources (fill these) ---
+$DriveSources = @{
+    windows10 = @{
+        IdOrUrl = "https://drive.google.com/file/d/15eBAxjCTP92Pu7Ru0d1fpVxznj3EtCRM/view?usp=drive_link"
+        Sha256  = "a6f470ca6d331eb353b815c043e327a347f594f37ff525f17764738fe812852e"
+    }
+    windows11 = @{
+        IdOrUrl = "https://drive.google.com/file/d/1SDeHFfgoDZAanISyZooNOnpZxwFCzzA9/view?usp=drive_link"
+        Sha256  = "d141f6030fed50f75e2b03e1eb2e53646c4b21e5386047cb860af5223f102a32"
+    }
+}
+
+
 # Worker config (find in config.yaml workers list - simplified)
 $CpuCount = 2
 $MemoryGB = if ($Os -eq "windows11") { 6 } else { 4 }
@@ -61,10 +127,29 @@ $DiskGB = if ($Os -eq "windows11") { 80 } else { 64 }
 
 Write-Info "Creating VM: $WorkerName ($Os) - $StaticIP"
 
-# Validate ISO
+# Validate or fetch ISO
 if (-not (Test-Path $IsoPath)) {
-    Write-Error "ISO not found: $IsoPath"
-    exit 1
+    Write-Info "ISO not found locally: $IsoPath"
+    if (-not $DriveSources.ContainsKey($Os)) {
+        Write-Error "No Google Drive source configured for OS '$Os'"
+        exit 1
+    }
+
+    $src   = $DriveSources[$Os]
+    $urlId = $src.IdOrUrl
+    $sha   = $src.Sha256
+
+    Write-Info "Downloading $Os ISO from Google Drive to $IsoPath ..."
+    try {
+        Get-GDriveFile -IdOrUrl $urlId -OutFile $IsoPath -Sha256 $sha
+        Write-Success "Downloaded ISO: $IsoPath"
+    }
+    catch {
+        Write-Error "Failed to download $Os ISO from Google Drive. $_"
+        exit 1
+    }
+} else {
+    Write-Success "ISO found: $IsoPath"
 }
 
 # Create VHD folder
