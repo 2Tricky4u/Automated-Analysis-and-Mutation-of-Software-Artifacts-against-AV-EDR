@@ -87,8 +87,9 @@ if (-not $SkipController) {
 
     # Check if Elasticsearch is already accessible
     $esRunning = $false
+    $esPort = $config.controller.elasticsearch_port
     try {
-        $response = Invoke-WebRequest -Uri "http://localhost:9200" -TimeoutSec 2 -ErrorAction SilentlyContinue
+        $response = Invoke-WebRequest -Uri "http://localhost:$esPort" -TimeoutSec 2 -ErrorAction SilentlyContinue
         if ($response.StatusCode -eq 200) {
             $esRunning = $true
             Write-Success "Elasticsearch already running"
@@ -99,8 +100,9 @@ if (-not $SkipController) {
 
     # Check if Kibana is already accessible
     $kibanaRunning = $false
+    $kibanaPort = $config.controller.kibana_port
     try {
-        $response = Invoke-WebRequest -Uri "http://localhost:5601" -TimeoutSec 2 -ErrorAction SilentlyContinue
+        $response = Invoke-WebRequest -Uri "http://localhost:$kibanaPort" -TimeoutSec 2 -ErrorAction SilentlyContinue
         if ($response.StatusCode -in @(200, 302)) {
             $kibanaRunning = $true
             Write-Success "Kibana already running"
@@ -129,12 +131,12 @@ if (-not $SkipController) {
 
         # Wait for Elasticsearch to be ready (if it was just started)
         if (-not $esRunning) {
-            Write-Info "Waiting for Elasticsearch (http://localhost:9200)..."
+            Write-Info "Waiting for Elasticsearch (http://localhost:$esPort)..."
             $maxRetries = 30
             $retries = 0
             while ($retries -lt $maxRetries) {
                 try {
-                    $response = Invoke-WebRequest -Uri "http://localhost:9200" -TimeoutSec 2 -ErrorAction SilentlyContinue
+                    $response = Invoke-WebRequest -Uri "http://localhost:$esPort" -TimeoutSec 2 -ErrorAction SilentlyContinue
                     if ($response.StatusCode -eq 200) {
                         Write-Success "Elasticsearch ready"
                         break
@@ -154,8 +156,8 @@ if (-not $SkipController) {
     }
 
     Write-Success "Controller services ready"
-    Write-Info "Elasticsearch: http://localhost:9200"
-    Write-Info "Kibana: http://localhost:5601"
+    Write-Info "Elasticsearch: http://localhost:$esPort"
+    Write-Info "Kibana: http://localhost:$kibanaPort"
     Write-Info ""
     Write-Info "Logs available in WSL:"
     Write-Info "  wsl -d Ubuntu tail -f /tmp/elasticsearch.log"
@@ -199,8 +201,8 @@ Write-Step "Step 3/3: Environment Status"
 Write-Host ""
 Write-Host "Controller:" -ForegroundColor Yellow
 if (-not $SkipController) {
-    Write-Host "  Elasticsearch: http://localhost:9200" -ForegroundColor Cyan
-    Write-Host "  Kibana: http://localhost:5601" -ForegroundColor Cyan
+    Write-Host "  Elasticsearch: http://localhost:$($config.controller.elasticsearch_port)" -ForegroundColor Cyan
+    Write-Host "  Kibana: http://localhost:$($config.controller.kibana_port)" -ForegroundColor Cyan
     Write-Host "  gRPC: $($config.network.host_ip):$($config.controller.grpc_port)" -ForegroundColor Cyan
 } else {
     Write-Host "  (skipped)" -ForegroundColor Gray

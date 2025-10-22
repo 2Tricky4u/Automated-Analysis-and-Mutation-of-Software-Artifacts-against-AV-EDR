@@ -33,8 +33,17 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     exit 1
 }
 
+# Load config to get subnet
+$ConfigPath = Join-Path $PSScriptRoot "..\config.yaml"
+$config = @{}
+$section = $null
+Get-Content $ConfigPath | ForEach-Object {
+    if ($_ -match '^(\w+):$') { $section = $matches[1]; $config[$section] = @{} }
+    elseif ($_ -match '^\s+(\w+):\s*"?(.+?)"?$' -and $section) { $config[$section][$matches[1]] = $matches[2].Trim('"') }
+}
+
 $natName = "AutoMutateVMNAT"
-$subnet = "10.200.200.0/24"
+$subnet = $config.network.subnet
 
 Write-Host "`n+================================================================+" -ForegroundColor Cyan
 Write-Host "|          VM Internet Access Control                            |" -ForegroundColor Cyan
