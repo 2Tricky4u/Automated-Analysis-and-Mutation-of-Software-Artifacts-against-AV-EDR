@@ -242,11 +242,7 @@ volumes:
 EOF
 
 # Start Elasticsearch + Kibana
-echo "[i] Starting Elasticsearch + Kibana in background..."
-echo ""
-echo "NOTE: Docker containers run in foreground mode via nohup"
-echo "      This is required due to systemd compatibility issues with 'docker compose up -d'"
-echo ""
+echo "[i] Starting Elasticsearch + Kibana..."
 
 # Determine Docker Compose command
 COMPOSE_CMD=""
