@@ -261,29 +261,139 @@ try {
     }
 } catch { Write-Warn "VC++ runtime install failed: $($_.Exception.Message)" }
 
-# Visual Studio 2022
+# 5e) Visual Studio 2022 Build Tools (unattended installation)
+$vsInstallPath = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools"
+$vsInstallerPath = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 
-try {
-    if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-        Write-Warn "Skipping VS2022 install (Chocolatey not present)"
-    } else {
-        Write-Info "Installing Visual Studio 2022 Community (full workloads; this is large)..."
-        # Install all workloads, recommended and optional components, English UI.
-        choco install visualstudio2022community `
-          --yes --no-progress --limit-output `
-          --execution-timeout=0 `
-          --package-parameters "'--allWorkloads --includeRecommended --includeOptional --passive --locale en-US --wait --norestart --installPath \"C:\Program Files\Microsoft Visual Studio\2022\Community\"'" # | Out-Null
+if (-not (Test-Path $vsInstallerPath) -and -not (Test-Path $vsInstallPath)) {
+    Write-Info "Installing Visual Studio 2022 Build Tools (this may take 15-30 minutes)..."
+    Write-Info "Components: C++ build tools, Windows SDK, MSBuild, CMake"
 
-        # Verify devenv.exe exists
-        $vsDevenv = "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe"
-        if (Test-Path $vsDevenv) {
-            Write-Success "VS2022 installed: $vsDevenv"
-        } else {
-            Write-Warn "VS2022 install did not place devenv.exe in expected path. Check Visual Studio Installer."
+    # Download VS Build Tools bootstrapper
+    $vsBootstrapper = "$env:TEMP\vs_buildtools.exe"
+    $vsUrl = "https://aka.ms/vs/17/release/vs_buildtools.exe"
+
+    # Retry download
+    $vsDownloaded = $false
+    $maxVsRetries = 5
+    $vsRetryCount = 0
+
+    while (-not $vsDownloaded -and $vsRetryCount -lt $maxVsRetries) {
+        $vsRetryCount++
+        try {
+            Write-Info "Downloading VS Build Tools bootstrapper (attempt $vsRetryCount/$maxVsRetries)..."
+            Invoke-WebRequest -Uri $vsUrl -OutFile $vsBootstrapper -UseBasicParsing -ErrorAction Stop
+            $vsDownloaded = $true
+        } catch {
+            Write-Warn "VS Build Tools download failed: $($_.Exception.Message)"
+            if ($vsRetryCount -lt $maxVsRetries) {
+                Write-Info "Retrying in 10 seconds..."
+                Start-Sleep -Seconds 10
+            } else {
+                Write-Warn "VS Build Tools download failed after $maxVsRetries attempts"
+                Write-Info "You may need to install manually after reboot"
+            }
         }
     }
-} catch {
-    Write-Warn "VS2022 installation failed: $($_.Exception.Message)"
+
+    if ($vsDownloaded) {
+        # Install VS Build Tools with required components
+        # --quiet: No UI, only show progress
+        # --wait: Wait for installer to complete
+        # --norestart: Don't restart automatically
+        # --nocache: Don't cache packages (saves disk space)
+        # --installPath: Installation directory
+        # --add: Components to install
+
+        $vsArgs = @(
+            "--quiet",
+            "--wait",
+            "--norestart",
+            "--nocache",
+            "--installPath", "`"$vsInstallPath`"",
+            "--add", "Microsoft.VisualStudio.Workload.VCTools",
+            "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "--add", "Microsoft.VisualStudio.Component.Windows11SDK.22621",
+            "--add", "Microsoft.VisualStudio.Component.VC.CMake.Project",
+            "--includeRecommended"
+        )
+
+        Write-Info "Starting VS Build Tools installation..."
+        Write-Info "Progress will be displayed below (this is a large download ~2-4 GB)..."
+        Write-Host ""
+
+        # Start installation with progress monitoring
+        $vsProcess = Start-Process -FilePath $vsBootstrapper -ArgumentList $vsArgs -NoNewWindow -PassThru
+
+        # Monitor progress by checking installer logs
+        $logPath = "$env:TEMP\dd_bootstrapper_*.log"
+        $lastProgress = ""
+        $progressChars = @('|', '/', '-', '\')
+        $progressIndex = 0
+
+        while (-not $vsProcess.HasExited) {
+            Start-Sleep -Seconds 5
+
+            # Simple spinner to show activity
+            $progressIndex = ($progressIndex + 1) % 4
+            $spinner = $progressChars[$progressIndex]
+            Write-Host "`r  [$spinner] Installing Visual Studio 2022 Build Tools... " -NoNewline -ForegroundColor Cyan
+        }
+
+        Write-Host "" # New line after progress
+
+        # Check exit code
+        $exitCode = $vsProcess.ExitCode
+        Write-Info "VS installer exited with code: $exitCode"
+
+        if ($exitCode -eq 0 -or $exitCode -eq 3010) {
+            # 0 = success, 3010 = success but reboot required
+            Write-Success "Visual Studio 2022 Build Tools installed successfully"
+            if ($exitCode -eq 3010) {
+                Write-Info "Reboot required to complete VS installation"
+            }
+
+            # Add VS tools to PATH
+            $vsMSBuildPath = "$vsInstallPath\MSBuild\Current\Bin"
+            $vsVCPath = "$vsInstallPath\VC\Tools\MSVC"
+
+            if (Test-Path $vsMSBuildPath) {
+                $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+                if ($machinePath -notlike "*$vsMSBuildPath*") {
+                    [Environment]::SetEnvironmentVariable("Path", "$machinePath;$vsMSBuildPath", "Machine")
+                    Write-Success "MSBuild added to PATH"
+                }
+            }
+
+            # Cleanup bootstrapper
+            Remove-Item $vsBootstrapper -Force -ErrorAction SilentlyContinue
+
+        } elseif ($exitCode -eq 5007) {
+            Write-Warn "VS Build Tools installation blocked by pending reboot"
+            Write-Info "Please reboot and run this script again"
+        } elseif ($exitCode -eq 1602) {
+            Write-Warn "VS Build Tools installation cancelled by user (exit code: $exitCode)"
+        } elseif ($exitCode -eq 1618) {
+            Write-Warn "Another installation is already in progress (exit code: $exitCode)"
+            Write-Info "Wait for other installations to complete, then retry"
+        } elseif ($exitCode -eq -2147205120 -or $exitCode -eq 2147762176) {
+            # 0x80070422 = Windows Update/BITS service disabled
+            Write-Warn "VS Build Tools requires Windows Update service (exit code: $exitCode)"
+            Write-Info "Enable Windows Update service and retry"
+        } else {
+            Write-Warn "VS Build Tools installation failed with exit code: $exitCode"
+            Write-Info "Check logs at: $env:TEMP\dd_*.log"
+            Write-Info "Common exit codes:"
+            Write-Info "  -2147205120 (0x80070422): Windows Update service disabled"
+            Write-Info "  1602: User cancelled"
+            Write-Info "  1618: Another installation in progress"
+            Write-Info "  5007: Pending reboot required"
+            Write-Info ""
+            Write-Info "Manual installation: https://aka.ms/vs/17/release/vs_buildtools.exe"
+        }
+    }
+} else {
+    Write-Success "Visual Studio 2022 Build Tools already installed"
 }
 
 
@@ -416,16 +526,82 @@ if (-not $DisableEtwTi) {
     Write-Info "ETW-TI setup skipped by request (-DisableEtwTi)."
 }
 
-# Desktop shortcut for a sensible default run: --all + web + hide + trace notepad.exe
+# Copy SYSTEM launcher helper script to RedEDR directory
+$helperScriptContent = @'
+<#
+.SYNOPSIS
+    Start RedEDR as SYSTEM (required for ETW tracing)
+.PARAMETER StopOnly
+    Stop running instance without starting new one
+#>
+param([switch]$StopOnly)
+
+$ErrorActionPreference = "Stop"
+function Write-Success { param($M) Write-Host "[OK] $M" -ForegroundColor Green }
+function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
+function Write-Warn { param($M) Write-Host "[WARN] $M" -ForegroundColor Yellow }
+
+$RedEdrExe = "C:\RedEDR\RedEdr.exe"
+$TaskName = "AutoMutate-RedEDR-SYSTEM"
+
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "[ERROR] Must run as Administrator" -ForegroundColor Red
+    exit 1
+}
+
+# Stop existing
+$existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($existingTask) {
+    Write-Info "Stopping existing RedEDR instance..."
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+}
+Get-Process -Name "RedEdr" -ErrorAction SilentlyContinue | Stop-Process -Force
+if ($StopOnly) {
+    Write-Success "RedEDR stopped"
+    exit 0
+}
+
+# Create task to run as SYSTEM
+Write-Info "Starting RedEDR as SYSTEM..."
+$action = New-ScheduledTaskAction -Execute $RedEdrExe -Argument "--all --web --hide" -WorkingDirectory "C:\RedEDR"
+$principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Days 365)
+
+Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+Start-ScheduledTask -TaskName $TaskName
+Start-Sleep -Seconds 3
+
+$proc = Get-Process -Name "RedEdr" -ErrorAction SilentlyContinue
+if ($proc) {
+    Write-Success "RedEDR started as SYSTEM (PID: $($proc.Id))"
+    Write-Info "Web UI: http://localhost:8080"
+    Write-Info "Stop: .\Start-RedEDR-SYSTEM.ps1 -StopOnly"
+} else {
+    Write-Warn "Process not detected - check Task Scheduler: $TaskName"
+}
+'@
+
+try {
+    $helperScript = Join-Path $RedEdrRoot "Start-RedEDR-SYSTEM.ps1"
+    $helperScriptContent | Out-File -FilePath $helperScript -Encoding UTF8 -Force
+    Write-Success "Created SYSTEM launcher: $helperScript"
+} catch {
+    Write-Warn "Could not create SYSTEM launcher: $($_.Exception.Message)"
+}
+
+# Desktop shortcut pointing to SYSTEM launcher (requires Admin but works properly)
 try {
     $WScriptShell = New-Object -ComObject WScript.Shell
-    $Shortcut = $WScriptShell.CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\RedEdr (web all trace).lnk")
-    $Shortcut.TargetPath = $rededrExe
+    $Shortcut = $WScriptShell.CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\RedEDR (SYSTEM).lnk")
+    $Shortcut.TargetPath = "powershell.exe"
+    $Shortcut.Arguments = "-ExecutionPolicy Bypass -NoProfile -File `"$helperScript`""
     $Shortcut.WorkingDirectory = $RedEdrRoot
-    $Shortcut.Arguments = "--all --web --hide --trace notepad.exe"
     $Shortcut.IconLocation = "$rededrExe,0"
     $Shortcut.Save()
-    Write-Success "Desktop shortcut created for quick start"
+    Write-Success "Desktop shortcut created: RedEDR (SYSTEM).lnk"
+    Write-Info "Right-click shortcut -> Run as Administrator to start RedEDR"
 } catch { Write-Warn "Could not create desktop shortcut: $($_.Exception.Message)" }
 
 # ===================== ORIGINAL VERIFICATION & SUMMARY (extended) ==========

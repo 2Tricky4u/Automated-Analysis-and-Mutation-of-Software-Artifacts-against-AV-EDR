@@ -245,6 +245,28 @@ foreach ($port in $ports) {
     }
 }
 
+# Check egress filtering status (informational only, not a failure)
+$egressBlockRule = Get-NetFirewallRule -DisplayName "AutoMutate-Egress-Block-Internet" -ErrorAction SilentlyContinue
+if ($egressBlockRule -and $egressBlockRule.Enabled -eq 'True') {
+    Write-Info "Egress filtering: ENABLED (whitelist mode)"
+
+    $whitelistRules = Get-NetFirewallRule -DisplayName "AutoMutate-Egress-Allow-*" -ErrorAction SilentlyContinue
+    if ($whitelistRules) {
+        Write-Info "  Whitelist rules: $($whitelistRules.Count)"
+    }
+} else {
+    Write-Info "Egress filtering: DISABLED (unrestricted)"
+}
+
+# Check VM-to-VM isolation status (informational only, not a failure)
+$vmIsolationInbound = Get-NetFirewallRule -DisplayName "AutoMutate-VM-Isolation-Block-Inbound" -ErrorAction SilentlyContinue
+$vmIsolationOutbound = Get-NetFirewallRule -DisplayName "AutoMutate-VM-Isolation-Block-Outbound" -ErrorAction SilentlyContinue
+if ($vmIsolationInbound -and $vmIsolationOutbound) {
+    Write-Info "VM-to-VM isolation: ENABLED (VMs cannot communicate with each other)"
+} else {
+    Write-Info "VM-to-VM isolation: DISABLED (VMs can communicate)"
+}
+
 # Section 8: Port Forwarding
 Write-Section "Port Forwarding"
 

@@ -115,15 +115,27 @@ if (-not $SkipController) {
         Write-Info "Note: Containers run in foreground mode via background processes"
         Write-Info "      (Required due to systemd compatibility with docker compose)"
 
+        # Determine Docker Compose command (same logic as 02-wsl-bootstrap.sh)
+        $composeCmd = wsl -d Ubuntu bash -c "if docker compose version >/dev/null 2>&1; then echo 'docker compose'; elif command -v docker-compose >/dev/null 2>&1; then echo 'docker-compose'; else echo 'ERROR'; fi" 2>$null
+        $composeCmd = $composeCmd.Trim()
+
+        if ($composeCmd -eq "ERROR" -or [string]::IsNullOrEmpty($composeCmd)) {
+            Write-Warning "Docker Compose not found in WSL (neither 'docker compose' nor 'docker-compose')"
+            Write-Info "Please run 02-wsl-bootstrap.sh first to install Docker"
+            exit 1
+        }
+
+        Write-Info "Using Docker Compose command: $composeCmd"
+
         if (-not $esRunning) {
             Write-Info "Starting Elasticsearch container..."
-            $null = Start-Process -FilePath "wsl" -ArgumentList "-d Ubuntu bash -c `"cd '$WslProjectRoot/automation' && nohup docker compose up elasticsearch > /tmp/elasticsearch.log 2>&1 &`"" -WindowStyle Hidden
+            $null = Start-Process -FilePath "wsl" -ArgumentList "-d Ubuntu bash -c `"cd '$WslProjectRoot/automation' && nohup $composeCmd up elasticsearch > /tmp/elasticsearch.log 2>&1 &`"" -WindowStyle Hidden
             Start-Sleep -Seconds 3
         }
 
         if (-not $kibanaRunning) {
             Write-Info "Starting Kibana container..."
-            $null = Start-Process -FilePath "wsl" -ArgumentList "-d Ubuntu bash -c `"cd '$WslProjectRoot/automation' && nohup docker compose up kibana > /tmp/kibana.log 2>&1 &`"" -WindowStyle Hidden
+            $null = Start-Process -FilePath "wsl" -ArgumentList "-d Ubuntu bash -c `"cd '$WslProjectRoot/automation' && nohup $composeCmd up kibana > /tmp/kibana.log 2>&1 &`"" -WindowStyle Hidden
             Start-Sleep -Seconds 3
         }
 
