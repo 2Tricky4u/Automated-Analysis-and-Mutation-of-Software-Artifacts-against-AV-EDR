@@ -35,7 +35,9 @@ $config = @{}
 $section = $null
 Get-Content $ConfigPath | ForEach-Object {
     if ($_ -match '^(\w+):$') { $section = $matches[1]; $config[$section] = @{} }
-    elseif ($_ -match '^\s+(\w+):\s*"?(.+?)"?$' -and $section) { $config[$section][$matches[1]] = $matches[2].Trim('"') }
+    elseif ($_ -match '^\s+(\w+):\s*"?([^#]+?)"?\s*(?:#.*)?$' -and $section) {
+        $config[$section][$matches[1]] = $matches[2].Trim().Trim('"')
+    }
 }
 
 $SwitchName = $config.network.switch_name
@@ -258,5 +260,89 @@ if ($EnableVmNat -eq $false) {
 Write-Info "WSL remains isolated (services bound to 127.0.0.1). Exposure is via host port-proxy on $HostIP only."
 Write-Info "VMs get internet only when NAT is enabled and subnet is non-overlapping (e.g., 10.200.200.0/24)."
 
-Write-Success "Host setup complete"
+# 10) VM-to-VM Isolation (optional, based on config)
+$EnableVmIsolation = $false
+if ($config.security.ContainsKey('enable_vm_isolation')) {
+    try {
+        $EnableVmIsolation = [bool]::Parse($config.security.enable_vm_isolation)
+    } catch {
+        Write-Warn "Invalid value for enable_vm_isolation: $($config.security.enable_vm_isolation), defaulting to false"
+    }
+}
+
+if ($EnableVmIsolation) {
+    Write-Info "`nConfiguring VM-to-VM isolation (security.enable_vm_isolation=true)..."
+
+    # Get adapter
+    $adapter = Get-NetAdapter | Where-Object { $_.Name -like "*$SwitchName*" }
+    if (-not $adapter) {
+        Write-Warn "Could not find IsolationSwitch adapter for VM isolation"
+    } else {
+        $adapterAlias = $adapter.Name
+        $subnetRange = "$($config.network.subnet.Split('/')[0].Split('.')[0..2] -join '.').0-$($config.network.subnet.Split('/')[0].Split('.')[0..2] -join '.').255"
+
+        # Remove old rules if exist
+        Remove-NetFirewallRule -DisplayName "AutoMutate-VM-Isolation-Block-Inbound" -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName "AutoMutate-VM-Isolation-Block-Outbound" -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName "AutoMutate-VM-Allow-Host" -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName "AutoMutate-VM-Allow-Host-Outbound" -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName "AutoMutate-VM-Allow-Host-Inbound" -ErrorAction SilentlyContinue
+
+        # Create isolation rules
+        # NOTE: Windows Firewall evaluates Allow rules before Block rules when they have the same specificity
+        # So we create Allow for host first, then Block for subnet (which will not match host)
+
+        # 1. CRITICAL: Allow traffic TO/FROM host (must be created first)
+        New-NetFirewallRule -DisplayName "AutoMutate-VM-Allow-Host-Outbound" -Direction Outbound -Action Allow `
+            -Protocol Any -InterfaceAlias $adapterAlias -RemoteAddress $HostIP -Profile Any -Enabled True | Out-Null
+
+        New-NetFirewallRule -DisplayName "AutoMutate-VM-Allow-Host-Inbound" -Direction Inbound -Action Allow `
+            -Protocol Any -InterfaceAlias $adapterAlias -RemoteAddress $HostIP -Profile Any -Enabled True | Out-Null
+        Write-Success "VM-to-Host traffic explicitly allowed ($HostIP)"
+
+        # 2. Block inbound FROM other VMs (but not from host due to rule above)
+        New-NetFirewallRule -DisplayName "AutoMutate-VM-Isolation-Block-Inbound" -Direction Inbound -Action Block `
+            -Protocol Any -InterfaceAlias $adapterAlias -RemoteAddress $subnetRange -Profile Any -Enabled True | Out-Null
+        Write-Success "VM-to-VM inbound traffic blocked"
+
+        # 3. Block outbound TO other VMs (but not to host due to rule above)
+        New-NetFirewallRule -DisplayName "AutoMutate-VM-Isolation-Block-Outbound" -Direction Outbound -Action Block `
+            -Protocol Any -InterfaceAlias $adapterAlias -RemoteAddress $subnetRange -Profile Any -Enabled True | Out-Null
+        Write-Success "VM-to-VM outbound traffic blocked"
+
+        Write-Info "VM-to-VM isolation ENABLED: VMs can only communicate with host ($HostIP)"
+    }
+} else {
+    Write-Info "`nVM-to-VM isolation: DISABLED (default)"
+    Write-Info "VMs can communicate with each other (useful for lateral movement testing)"
+    Write-Info "To enable isolation: Set security.enable_vm_isolation=true in config.yaml"
+    Write-Info "Or use: .\scripts\toggle-vm-isolation.ps1 -Action Enable"
+}
+
+# 11) Security notes
+Write-Info "`n+================================================================+"
+Write-Info "Security Enhancements Available:"
+Write-Info "+================================================================+"
+Write-Info ""
+Write-Info "1. Egress Filtering (whitelist-based traffic control):"
+Write-Info "   .\scripts\manage-egress-filter.ps1 -Action Enable"
+Write-Info "   Default whitelist: DNS (53), HTTP (80), HTTPS (443), NTP (123)"
+Write-Info ""
+Write-Info "2. Internet Kill Switch (air-gap VMs):"
+Write-Info "   .\scripts\toggle-vm-internet.ps1 -Action Disable"
+Write-Info "   Add -KillConnections to terminate existing sessions"
+Write-Info ""
+Write-Info "3. VM-to-VM Isolation (prevent lateral movement):"
+Write-Info "   .\scripts\toggle-vm-isolation.ps1 -Action Enable"
+Write-Info "   Current: $(if ($EnableVmIsolation) { 'ENABLED' } else { 'DISABLED' })"
+Write-Info ""
+Write-Info "Recommended for malware testing:"
+Write-Info "   1. .\scripts\toggle-vm-isolation.ps1 -Action Enable"
+Write-Info "   2. .\scripts\toggle-vm-internet.ps1 -Action Disable -KillConnections"
+
+Write-Success "`nHost setup complete"
+Write-Success "`nNext steps:"
+Write-Success "  1. Run: wsl -- bash ./scripts/02-wsl-bootstrap.sh"
+Write-Success "  2. Validate: .\scripts\validate-environment.ps1"
+Write-Success "  3. Check security: .\scripts\toggle-vm-internet.ps1 -Action Status"
 exit 0

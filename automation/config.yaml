@@ -88,6 +88,7 @@ rededr:
 security:
   disable_enhanced_session: true
   disable_guest_services: true
+  enable_vm_isolation: false  # Set to true to prevent VM-to-VM communication by default
   enable_mtls: false  # Set to true for production/VPN
   mtls_ca_path: "./certs/ca.crt"
   mtls_cert_path: "./certs/client.crt"
