@@ -17,7 +17,6 @@ param(
     [Parameter()]
     [switch]$SkipReboot,
 
-# New: control ETW-TI/PPL/ELAM installation (on by default)
     [Parameter()]
     [switch]$DisableEtwTi
 )
@@ -36,7 +35,7 @@ Write-Host "+================================================================+`n
 # ===================== SECTION 1: System Configuration =====================
 Write-Info "[1/10] System-level configuration..."
 
-# 1a) Computer name (unchanged)
+# 1a. Computer name
 $currentName = $env:COMPUTERNAME
 if ($currentName -ne $WorkerName) {
     Write-Info "Renaming computer: $currentName -> $WorkerName"
@@ -44,44 +43,42 @@ if ($currentName -ne $WorkerName) {
     Write-Success "Computer renamed (requires reboot)"
 } else { Write-Success "Computer name already set: $WorkerName" }
 
-# 1b) Timezone to UTC (unchanged)
+# 1b. Timezone to UTC
 $currentTZ = (Get-TimeZone).Id
 if ($currentTZ -ne "UTC") { Set-TimeZone -Id "UTC" -ErrorAction SilentlyContinue; Write-Success "Timezone set to UTC" }
 else { Write-Success "Timezone already UTC" }
 
-# 1c) Execution policy (unchanged)
+# 1c. Execution policy
 $execPolicy = Get-ExecutionPolicy
 if ($execPolicy -eq "Restricted" -or $execPolicy -eq "Undefined") {
     Set-ExecutionPolicy RemoteSigned -Scope LocalMachine -Force
     Write-Success "Execution policy set to RemoteSigned"
 } else { Write-Success "Execution policy already configured: $execPolicy" }
 
-# 1d) Disable UAC for lab (unchanged)
+# 1d. Disable UAC for lab
 $uacKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
 $currentUAC = (Get-ItemProperty -Path $uacKey -Name "EnableLUA" -ErrorAction SilentlyContinue).EnableLUA
-if ($currentUAC -ne 0) { Set-ItemProperty -Path $uacKey -Name "EnableLUA" -Value 0 -Force; Write-Success "UAC disabled (lab only)" }
+if ($currentUAC -ne 0) { Set-ItemProperty -Path $uacKey -Name "EnableLUA" -Value 0 -Force; Write-Success "UAC disabled" }
 else { Write-Success "UAC already disabled" }
 
-# 1e) Windows Update auto-restart (unchanged)
+# 1e. Windows Update auto-restart
 $auKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
 if (-not (Test-Path $auKey)) { New-Item -Path $auKey -Force | Out-Null }
 Set-ItemProperty -Path $auKey -Name "NoAutoRebootWithLoggedOnUsers" -Value 1 -Force
 Write-Success "Windows Update auto-restart disabled"
 
 # ===================== SECTION 2: Network Configuration ====================
-# (unchanged networking)
 Write-Info "[2/10] Network configuration..."
 $adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Name -notlike "*Loopback*" } | Select-Object -First 1
 if ($adapter) {
-    # Remove existing IP (if DHCP)
+    # Remove existing IP if DHCP
     Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
     Get-NetRoute -InterfaceIndex $adapter.ifIndex -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
 
     # Configure static IP
     New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $StaticIP -PrefixLength $Prefix -DefaultGateway $Gateway | Out-Null
 
-    # Configure DNS: Use public DNS directly (8.8.8.8 primary) for reliability
-    # Gateway DNS can be slow or unreliable depending on host configuration
+    # Configure DNS: Use public DNS directly (8.8.8.8 primary)
     Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses @("8.8.8.8", "8.8.4.4", $Gateway)
     Write-Success "Static IP configured: $StaticIP/$Prefix (gateway: $Gateway)"
     Write-Info "DNS servers: 8.8.8.8 (primary), 8.8.4.4, $Gateway (fallback)"
@@ -94,7 +91,7 @@ if ($adapter) {
     Start-Sleep -Seconds 3
     Write-Info "Testing network connectivity..."
 
-    # Test 1: Check if gateway route exists
+    # Check if gateway route exists
     $route = Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -eq $Gateway }
     if ($route) {
         Write-Success "Default route to gateway configured"
@@ -102,7 +99,7 @@ if ($adapter) {
         Write-Warn "Default route not found (may cause connectivity issues)"
     }
 
-    # Test 2: Try DNS resolution with retry (requires gateway + internet)
+    # Try DNS resolution with retry
     Write-Info "Waiting for DNS resolution to stabilize (up to 30 seconds)..."
     $dnsWorking = $false
     $maxRetries = 10
@@ -131,20 +128,19 @@ if ($adapter) {
         Write-Info "If installation fails, check NAT status on host: Get-NetNat"
     }
 
-    # Test 3: Optional ICMP ping (may fail due to firewall, but that's OK)
+    # Optional ICMP ping
     $pingTest = Test-Connection -ComputerName $Gateway -Count 1 -Quiet -ErrorAction SilentlyContinue
     if ($pingTest) {
         Write-Success "Gateway responds to ping: $Gateway"
     } else {
-        Write-Info "Gateway ping failed (normal - Windows Firewall blocks ICMP by default)"
+        Write-Info "Gateway ping failed (normal)"
         Write-Info "TCP/UDP connectivity works even if ping fails"
     }
 } else {
     Write-Warn "No active network adapter found"
 }
 
-# ===================== SECTION 3: Privacy & Telemetry (Windows) ===========
-# (unchanged Windows privacy toggles)
+# ===================== SECTION 3: Privacy & Telemetry ===========
 Write-Info "[3/10] Privacy & telemetry configuration..."
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" -Name "AllowTelemetry" -Value 0 -Force -ErrorAction SilentlyContinue
 Write-Success "Windows telemetry disabled"
@@ -161,7 +157,7 @@ Write-Info "To disable for specific experiments: Set-MpPreference -DisableRealti
 # ===================== SECTION 5: Dev Tools & Runtimes =====================
 Write-Info "[5/10] Installing development tools & runtimes..."
 
-# 5a) Chocolatey (unchanged with retry)
+# 5a. Chocolatey
 if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
     Write-Info "Installing Chocolatey..."
     Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -173,12 +169,12 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
     if ($ok) { Write-Success "Chocolatey installed" } else { Write-Warn "Chocolatey install failed; continuing" }
 } else { Write-Success "Chocolatey already installed" }
 
-# 5b) Install Rust toolchain
+# 5b. Install Rust
 if (-not (Test-Path "$env:USERPROFILE\.cargo\bin\rustc.exe")) {
-    Write-Info "Installing Rust toolchain (this may take 5-10 minutes)..."
+    Write-Info "Installing Rust toolchain..."
     $rustExe = "$env:TEMP\rustup-init.exe"
 
-    # Retry download for Rust installer
+    # Retry download
     $rustDownloaded = $false
     $maxRustRetries = 5
     $rustRetryCount = 0
@@ -210,7 +206,7 @@ if (-not (Test-Path "$env:USERPROFILE\.cargo\bin\rustc.exe")) {
     Write-Success "Rust already installed"
 }
 
-# 5c) Install protoc (Protocol Buffers compiler)
+# 5c. Install protoc
 if (-not (Test-Path "C:\protoc\bin\protoc.exe")) {
     Write-Info "Installing protoc 25.1..."
     $zip = "$env:TEMP\protoc.zip"
@@ -251,7 +247,7 @@ if (-not (Test-Path "C:\protoc\bin\protoc.exe")) {
     Write-Success "protoc already installed"
 }
 
-# 5d) VC++ Runtime (VS2015–2022)
+# 5d. VC++ Runtime
 try {
     if (-not (Get-Command choco -ErrorAction SilentlyContinue)) { Write-Warn "Skipping vcredist install (choco missing)" }
     else {
@@ -261,7 +257,7 @@ try {
     }
 } catch { Write-Warn "VC++ runtime install failed: $($_.Exception.Message)" }
 
-# 5e) Visual Studio 2022 Build Tools (unattended installation)
+# 5e. Visual Studio 2022
 $vsInstallPath = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools"
 $vsInstallerPath = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 
@@ -297,7 +293,7 @@ if (-not (Test-Path $vsInstallerPath) -and -not (Test-Path $vsInstallPath)) {
     }
 
     if ($vsDownloaded) {
-        # Install VS Build Tools with required components
+        # memo
         # --quiet: No UI, only show progress
         # --wait: Wait for installer to complete
         # --norestart: Don't restart automatically
@@ -340,7 +336,7 @@ if (-not (Test-Path $vsInstallerPath) -and -not (Test-Path $vsInstallPath)) {
             Write-Host "`r  [$spinner] Installing Visual Studio 2022 Build Tools... " -NoNewline -ForegroundColor Cyan
         }
 
-        Write-Host "" # New line after progress
+        Write-Host ""
 
         # Check exit code
         $exitCode = $vsProcess.ExitCode
@@ -397,7 +393,7 @@ if (-not (Test-Path $vsInstallerPath) -and -not (Test-Path $vsInstallPath)) {
 }
 
 
-# ===================== SECTION 6: AutoMutate Dirs (unchanged) =============
+# ===================== SECTION 6: AutoMutate Dirs =============
 Write-Info "[6/10] Creating AutoMutate project directories..."
 
 $projectDirs = @(
@@ -415,12 +411,12 @@ foreach ($dir in $projectDirs) {
 }
 
 
-# ===================== SECTION 7: RedEdr — Download & Layout ==============
+# ===================== SECTION 7: RedEdr ==============
 Write-Info "[7/10] RedEdr setup (download, extract, layout)..."
 
 $RedEdrUrl  = "https://github.com/dobin/RedEdr/releases/download/v0.3/RedEdr_0.3.zip"
 $RedEdrZip  = "$env:TEMP\RedEdr_0.3.zip"
-$RedEdrRoot = "C:\RedEdr"   # README: only this path is supported
+$RedEdrRoot = "C:\RedEdr"   # only this path is supported
 try {
     if (-not (Test-Path $RedEdrZip)) {
         Write-Info "Downloading RedEdr release..."
@@ -436,7 +432,7 @@ try {
     Write-Err "Failed to install RedEdr: $($_.Exception.Message)"
 }
 
-# Defender exclusion for RedEdr.exe (README suggests whitelisting)
+# Defender exclusion for RedEdr.exe
 $rededrExe = Join-Path $RedEdrRoot "RedEdr.exe"
 try {
     if (Test-Path $rededrExe) {
@@ -445,7 +441,7 @@ try {
     } else { Write-Warn "RedEdr.exe not found yet at $rededrExe" }
 } catch { Write-Warn "Could not add Defender exclusion: $($_.Exception.Message)" }
 
-# Open firewall for web UI (port 8080)
+# Open firewall for web UI
 try {
     if (-not (Get-NetFirewallRule -DisplayName "RedEdr Web 8080" -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName "RedEdr Web 8080" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8080 | Out-Null
@@ -464,7 +460,7 @@ try {
     Write-Info "If running on Hyper-V, disable Secure Boot on the VM (host-side setting)."
 } catch { Write-Warn "BCDEdit changes failed: $($_.Exception.Message)" }
 
-# Optional: disable HVCI/Memory Integrity (often blocks test-signed drivers)
+# Option:disable HVCI/Memory Integrity:often blocks test-signed drivers
 try {
     $dg = "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard"
     if (-not (Test-Path $dg)) { New-Item $dg -Force | Out-Null }
@@ -478,7 +474,7 @@ try {
 # ===================== SECTION 9: Telemetry: Audit Policy for ETW ==========
 Write-Info "[9/10] Enabling audit policies for Security-Auditing ETW..."
 # Some Microsoft-Windows-Security-Auditing events require audit categories enabled and SYSTEM token
-# (For SYSTEM run, use: PsExec -i -s cmd.exe)
+# ( PsExec -i -s cmd.exe)
 $cats = @(
     "Logon","Policy Change","Account Logon","Account Management","Privilege Use",
     "System","DS Access","Object Access","Detailed Tracking"
@@ -505,7 +501,7 @@ try {
 
 # Register ETW-TI PPL service if present and not disabled
 if (-not $DisableEtwTi) {
-    # Heuristics: find a service binary likely named RedEdrPplService.exe (per README)
+    # Heuristics: find a service binary likely named RedEdrPplService.exe
     $pplCandidate = Get-ChildItem -Path $RedEdrRoot -Recurse -Include RedEdrPplService.exe, *PplService*.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($pplCandidate) {
         try {
@@ -516,7 +512,7 @@ if (-not $DisableEtwTi) {
                 Write-Success "Created service $svcName"
             } else { Write-Info "Service $svcName already exists" }
 
-            # ELAM registration typically occurs via driver/INF; warn if likely missing
+            # ELAM registration typically occurs via driver/INF
             Write-Info "If ETW-TI fails, ensure the ELAM driver from the release got installed (via INF) and reboot."
         } catch { Write-Warn "Failed to create ETW-TI service: $($_.Exception.Message)" }
     } else {
@@ -591,7 +587,7 @@ try {
     Write-Warn "Could not create SYSTEM launcher: $($_.Exception.Message)"
 }
 
-# Desktop shortcut pointing to SYSTEM launcher (requires Admin but works properly)
+# Desktop shortcut pointing to SYSTEM launcher (requires Admin)
 try {
     $WScriptShell = New-Object -ComObject WScript.Shell
     $Shortcut = $WScriptShell.CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\RedEDR (SYSTEM).lnk")
@@ -604,11 +600,11 @@ try {
     Write-Info "Right-click shortcut -> Run as Administrator to start RedEDR"
 } catch { Write-Warn "Could not create desktop shortcut: $($_.Exception.Message)" }
 
-# ===================== ORIGINAL VERIFICATION & SUMMARY (extended) ==========
+# ===================== VERIFICATION & SUMMARY ==========
 Write-Info "[Verification] Summaries..."
 
 $verificationResults = @()
-# Check network (using route check instead of ping)
+# Check network
 $routeCheck = Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -eq $Gateway }
 $networkStatus = if ($routeCheck) { "OK" } else { "FAIL" }
 $networkDetails = "IP: $StaticIP, GW: $Gateway"
@@ -667,7 +663,7 @@ $verificationResults += [PSCustomObject]@{
     Details   = if ($rededrPresent) { "Installed at C:\RedEdr" } else { "Missing RedEdr.exe" }
 }
 
-# Testsigning state (reboot pending)
+# Testsigning state
 try {
     $bcd = bcdedit /enum | Out-String
     $tsOn = $bcd -match "testsigning\s+Yes"
@@ -693,7 +689,7 @@ try {
     $verificationResults += [PSCustomObject]@{ Component="Firewall"; Status="WARN"; Details="Check rule for TCP 8080" }
 }
 
-# Print verification table (unchanged renderer)
+# Print verification table
 Write-Host "`n+================================================================+" -ForegroundColor Green
 Write-Host "|          Initialization Complete - Verification                |" -ForegroundColor Green
 Write-Host "+================================================================+" -ForegroundColor Green

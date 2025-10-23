@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # --- WSL systemd and networking setup ---
-# Enable systemd in WSL2 (required for Docker to run properly)
+# Enable systemd in WSL2
 echo "[i] Configuring WSL2 systemd and networking..."
 if [ -f /etc/wsl.conf ]; then
   # Update existing file: ensure systemd and networking sections
@@ -20,10 +20,10 @@ fi
 
 echo "[i] /etc/wsl.conf configured for systemd"
 
-# Also ensure Windows .wslconfig has proper networking (for localhost forwarding)
+# Ensure Windows .wslconfig has proper networking
 echo "[i] Checking Windows .wslconfig for localhost forwarding..."
 WSLCONFIG_PATH="/mnt/c/Users/$USER/.wslconfig"
-# Try to find actual Windows username (might differ from WSL username)
+# Try to find actual Windows username
 WIN_USER=$(powershell.exe -Command '$env:USERNAME' 2>/dev/null | tr -d '\r\n' || echo "$USER")
 if [ -n "$WIN_USER" ]; then
   WSLCONFIG_PATH="/mnt/c/Users/${WIN_USER}/.wslconfig"
@@ -47,10 +47,8 @@ else
   echo "[OK] .wslconfig configured"
 fi
 
-# Check if systemd is running (if not, user needs to restart WSL)
-SYSTEMD_RUNNING=false
+# Check if systemd is running
 if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null 2>&1; then
-  SYSTEMD_RUNNING=true
   echo "[OK] systemd is running"
 else
   echo "[WARN] systemd is NOT running yet. WSL restart required."
@@ -73,28 +71,15 @@ sudo chattr -i /etc/resolv.conf 2>/dev/null || true
 # Regenerate if empty/broken
 if ! grep -q '^nameserver ' /etc/resolv.conf 2>/dev/null; then
   sudo rm -f /etc/resolv.conf
-  # WSL recreates it on launch; advise user if we cannot refresh now
+  # WSL recreates it on launch
   echo "[warn] /etc/resolv.conf was empty; run 'wsl.exe --shutdown' from Windows then re-run this script."
 fi
 
-# Quick connectivity gate: fail fast with a helpful hint
+# fail fast
 if ! ping -c1 -W1 1.1.1.1 >/dev/null 2>&1; then
   echo "[error] =========================================="
   echo "[error] No outbound connectivity from WSL2!"
   echo "[error] =========================================="
-  echo ""
-  echo "Troubleshooting steps:"
-  echo "  1. From Windows PowerShell (Admin), run:"
-  echo "     wsl --shutdown"
-  echo "     .\automation\scripts\01-host-setup.ps1 -ConfigPath .\automation\config.yaml"
-  echo ""
-  echo "  2. Verify .wslconfig exists at: %USERPROFILE%\.wslconfig"
-  echo "     Should contain: networkingMode=nat, dnsTunneling=true"
-  echo ""
-  echo "  3. Check Windows Firewall allows WSL vEthernet adapter outbound"
-  echo ""
-  echo "  4. Test from Windows: ping 1.1.1.1"
-  echo "     If Windows can't reach internet, fix host connectivity first"
   echo ""
   exit 2
 fi
@@ -110,28 +95,28 @@ cd "$WORKDIR"
 sudo apt update
 sudo apt install -y build-essential curl git unzip jq ca-certificates gnupg lsb-release
 
-# Install Docker Engine (not Docker Desktop - WSL2 native)
+# Install Docker Engine
 if ! command -v docker &>/dev/null; then
     echo "[i] Installing Docker Engine in WSL2..."
 
-    # Add Docker's official GPG key
+    # Add official GPG key
     sudo install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
     sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
-    # Add Docker repository
+    # Add Docker repo
     echo \
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
       $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-    # Install Docker Engine + Compose plugin
+    # Install Docker Engine + Compose
     sudo apt update
     sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-    # Add current user to docker group (avoid sudo docker)
+    # Add current user to docker group
     sudo usermod -aG docker $USER
 
-    # Enable and start Docker via systemd (systemd is required, verified earlier)
+    # Enable and start Docker via systemd
     sudo systemctl enable docker
     sudo systemctl start docker
     sleep 3
@@ -159,10 +144,10 @@ if ! sudo docker info &>/dev/null; then
     exit 1
 fi
 
-# Allow current user to use Docker without sudo (requires re-login or newgrp)
+# Allow current user to use Docker without sudo requires re-login or newgrp
 if ! docker info &>/dev/null 2>&1; then
     echo "[i] Docker group membership requires session refresh"
-    echo "[i] Using 'sudo docker' for initial setup (user will have access after logout/login)"
+    echo "[i] Using 'sudo docker' for initial setup"
     DOCKER_CMD="sudo docker"
 else
     DOCKER_CMD="docker"
@@ -209,7 +194,7 @@ KIBANA_PORT="${KIBANA_PORT:-5601}"
 
 echo "[i] Using Elasticsearch version: $ES_VERSION, memory: ${ES_MEMORY}g, ports: ES=$ES_PORT, Kibana=$KIBANA_PORT"
 
-# Docker Compose for Elasticsearch + Kibana (using config values)
+# Docker Compose for Elasticsearch + Kibana
 cat > "$WORKDIR/docker-compose.yml" <<EOF
 version: '3.8'
 services:
@@ -257,13 +242,13 @@ fi
 
 # Start Elasticsearch in background (foreground mode via nohup)
 echo "[i] Starting Elasticsearch..."
-nohup $COMPOSE_CMD up elasticsearch > /tmp/elasticsearch.log 2>&1 &
+nohup "$COMPOSE_CMD" up elasticsearch > /tmp/elasticsearch.log 2>&1 &
 ES_PID=$!
 echo "[i] Elasticsearch process started (PID: $ES_PID)"
 
 # Start Kibana in background (foreground mode via nohup)
 echo "[i] Starting Kibana..."
-nohup $COMPOSE_CMD up kibana > /tmp/kibana.log 2>&1 &
+nohup "$COMPOSE_CMD" up kibana > /tmp/kibana.log 2>&1 &
 KIBANA_PID=$!
 echo "[i] Kibana process started (PID: $KIBANA_PID)"
 
@@ -272,7 +257,7 @@ echo "[i] Waiting for Elasticsearch to be ready (max 60 seconds)..."
 MAX_RETRIES=30
 RETRY_COUNT=0
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if curl -s http://localhost:$ES_PORT > /dev/null 2>&1; then
+    if curl -s http://localhost:"$ES_PORT" > /dev/null 2>&1; then
         echo "[OK] Elasticsearch is ready"
         break
     fi
@@ -289,7 +274,7 @@ if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
     echo "Containers may still be starting. You can verify access later"
 else
     # Test from within WSL
-    ES_RESPONSE=$(curl -s http://localhost:$ES_PORT 2>/dev/null || echo "failed")
+    ES_RESPONSE=$(curl -s http://localhost:"$ES_PORT" 2>/dev/null || echo "failed")
     if [[ "$ES_RESPONSE" == *"cluster_name"* ]]; then
         echo "[OK] Elasticsearch accessible: http://localhost:$ES_PORT"
     fi

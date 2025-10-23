@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Enables Windows features, creates IsolationSwitch, configures firewall and port forwarding
-    - Keeps WSL2 internet working (uses WSL's own NAT)
+    - Keeps WSL2 internet working (own NAT)
     - Does NOT enable global IP routing
     - VM NAT is optional/toggleable (no conflict with WSL)
     - WSL services stay bound to 127.0.0.1; exposure via host port-proxy only
@@ -48,10 +48,7 @@ $GrpcPort   = $config.controller.grpc_port
 $EsPort     = $config.controller.elasticsearch_port
 $KibanaPort = $config.controller.kibana_port
 
-# Optional/toggleable NAT for VMs (set to "true" in config.yaml to enable)
-# Example in config.yaml:
-# network:
-#   enable_nat: "false"
+# toggleable NAT for VMs
 $EnableVmNat = $false
 if ($config.network.ContainsKey('enable_nat')) {
     $EnableVmNat = [bool]::Parse($config.network.enable_nat)
@@ -64,7 +61,7 @@ if ($config.network.subnet -like '172.*') {
     throw "config.network.subnet '$($config.network.subnet)' must not be in 172.16.0.0/12. Use e.g. 10.200.200.0/24"
 }
 
-# 1) Enable features
+# 1. Enable features
 Write-Info "Enabling Hyper-V, WSL2, VirtualMachinePlatform..."
 $rebootNeeded = $false
 
@@ -91,7 +88,7 @@ if ($rebootNeeded) {
     exit 3010
 }
 
-# 2) Install WSL2 + Ubuntu
+# 2. Install WSL2 + Ubuntu
 Write-Info "Installing WSL2 Ubuntu..."
 if (-not (wsl -l -q 2>$null | Select-String "Ubuntu")) {
     wsl --install -d Ubuntu --no-launch
@@ -103,10 +100,10 @@ if (-not (wsl -l -q 2>$null | Select-String "Ubuntu")) {
 # Set default to WSL 2
 wsl --set-default-version 2 2>$null
 
-# 3) Configure WSL2 networking
+# 3. Configure WSL2 networking
 Write-Info "Configuring WSL2 networking for internet access..."
 
-# Create .wslconfig to ensure proper networking mode (simple, no extra toggles)
+# Create .wslconfig to ensure proper networking mode
 $wslConfigPath = "$env:USERPROFILE\.wslconfig"
 $wslConfigContent = @"
 [wsl2]
@@ -124,7 +121,7 @@ if (-not (Test-Path $wslConfigPath)) {
     Write-Info "Verify it contains: networkingMode=nat"
 }
 
-# Ensure WSL's vEthernet adapter has proper firewall rules (allow host<->WSL basics)
+# Ensure WSL vEthernet adapter has proper firewall rules
 Write-Info "Configuring firewall for WSL network adapter..."
 $wslAdapter = Get-NetAdapter | Where-Object { $_.Name -like "*WSL*" } | Select-Object -First 1
 
@@ -141,7 +138,7 @@ if ($wslAdapter) {
         Write-Success "Firewall rule already exists: $wslOutboundRule"
     }
 
-    # Allow inbound for DNS and DHCP to the adapter (needed by WSL HNS plumbing)
+    # Allow inbound for DNS and DHCP to the adapter
     $wslInboundRule = "WSL-Network-Services"
     if (-not (Get-NetFirewallRule -DisplayName $wslInboundRule -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName $wslInboundRule -Direction Inbound -Action Allow `
@@ -151,7 +148,7 @@ if ($wslAdapter) {
         Write-Success "Firewall rule already exists: $wslInboundRule"
     }
 } else {
-    Write-Warn "WSL vEthernet adapter not found yet (will be created on first WSL launch)"
+    Write-Warn "WSL vEthernet adapter not found yet"
     Write-Info "After first WSL launch, firewall rules will be auto-created on next run"
 }
 
@@ -161,7 +158,7 @@ wsl --shutdown 2>$null
 Start-Sleep -Seconds 3
 Write-Success "WSL2 networking configured"
 
-# 4) Create Internal switch
+# 4. Create Internal switch
 if (-not (Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue)) {
     New-VMSwitch -Name $SwitchName -SwitchType Internal | Out-Null
     Write-Success "Created internal switch: $SwitchName"
@@ -169,7 +166,7 @@ if (-not (Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue)) {
     Write-Success "Switch $SwitchName exists"
 }
 
-# 5) Assign host IP
+# 5. Assign host IP
 $adapter = Get-NetAdapter | Where-Object { $_.Name -like "*$SwitchName*" } | Select-Object -First 1
 if (-not $adapter) {
     Write-Err "vEthernet adapter for $SwitchName not found"
@@ -184,12 +181,7 @@ if (-not $existingIp) {
     Write-Success "Host IP $HostIP already assigned"
 }
 
-# =====================================================================
-# REMOVED: Step 6 (IP forwarding + IPEnableRouter + 'forwarding' FW rules)
-# Rationale: Keep WSL's HNS NAT untouched and avoid routing conflicts.
-# =====================================================================
-
-# 7) Firewall rules (host listens only on IsolationSwitch IP for selected ports)
+# 6. Firewall rules
 $ports = @($GrpcPort, $EsPort, $KibanaPort)
 foreach ($port in $ports) {
     $ruleName = "AutoMutate-Allow-$port"
@@ -202,7 +194,7 @@ foreach ($port in $ports) {
     }
 }
 
-# 8) Port proxy (Host IP on IsolationSwitch -> WSL2 localhost:ports)
+# 7. Port proxy
 foreach ($port in $ports) {
     netsh interface portproxy delete v4tov4 listenaddress=$HostIP listenport=$port 2>$null | Out-Null
     netsh interface portproxy add v4tov4 listenaddress=$HostIP listenport=$port `
@@ -210,11 +202,11 @@ foreach ($port in $ports) {
     Write-Success "Port proxy: ${HostIP}:$port -> 127.0.0.1:$port"
 }
 
-# 9) Configure NAT for VM internet access (optional/toggleable and WSL-safe)
+# 8. Configure NAT for VM internet access
 Write-Info "Configuring NAT for VM internet access (optional)..."
 $natName = "AutoMutateVMNAT"
 
-# Detect HNS/WSL NAT (typically present if WSL is installed)
+# Detect HNS/WSL NAT
 $existingNats = Get-NetNat -ErrorAction SilentlyContinue
 $hasHnsNat   = $existingNats | Where-Object { $_.Name -match 'HNS' -or $_.Name -match 'WSL' }
 
@@ -222,7 +214,7 @@ if ($EnableVmNat -eq $false) {
     Write-Info "VM NAT creation is disabled by config (network.enable_nat=false)."
     Write-Info "You can enable internet for VMs later via your toggle script."
 } elseif ($hasHnsNat) {
-    # OK to have both if subnets don't overlap; we already guarded against 172.*
+    # OK to have both if subnets dont overlap
     $existingNat = Get-NetNat -Name $natName -ErrorAction SilentlyContinue
     if ($existingNat) {
         if ($existingNat.InternalIPInterfaceAddressPrefix -eq $config.network.subnet) {
@@ -239,7 +231,7 @@ if ($EnableVmNat -eq $false) {
         Write-Success "NAT created for $($config.network.subnet)"
     }
 } else {
-    # No HNS NAT found (unlikely on WSL hosts) — still proceed if enabled
+    # No HNS NAT found
     $existingNat = Get-NetNat -Name $natName -ErrorAction SilentlyContinue
     if ($existingNat) {
         if ($existingNat.InternalIPInterfaceAddressPrefix -eq $config.network.subnet) {
@@ -258,9 +250,9 @@ if ($EnableVmNat -eq $false) {
 }
 
 Write-Info "WSL remains isolated (services bound to 127.0.0.1). Exposure is via host port-proxy on $HostIP only."
-Write-Info "VMs get internet only when NAT is enabled and subnet is non-overlapping (e.g., 10.200.200.0/24)."
+Write-Info "VMs get internet only when NAT is enabled and subnet is non-overlapping"
 
-# 10) VM-to-VM Isolation (optional, based on config)
+# 9. VM-to-VM Isolation
 $EnableVmIsolation = $false
 if ($config.security.ContainsKey('enable_vm_isolation')) {
     try {
@@ -288,11 +280,9 @@ if ($EnableVmIsolation) {
         Remove-NetFirewallRule -DisplayName "AutoMutate-VM-Allow-Host-Outbound" -ErrorAction SilentlyContinue
         Remove-NetFirewallRule -DisplayName "AutoMutate-VM-Allow-Host-Inbound" -ErrorAction SilentlyContinue
 
-        # Create isolation rules
-        # NOTE: Windows Firewall evaluates Allow rules before Block rules when they have the same specificity
-        # So we create Allow for host first, then Block for subnet (which will not match host)
+        # isolation rules
 
-        # 1. CRITICAL: Allow traffic TO/FROM host (must be created first)
+        # 1. CRITICAL: Allow traffic TO/FROM host
         New-NetFirewallRule -DisplayName "AutoMutate-VM-Allow-Host-Outbound" -Direction Outbound -Action Allow `
             -Protocol Any -InterfaceAlias $adapterAlias -RemoteAddress $HostIP -Profile Any -Enabled True | Out-Null
 
@@ -300,12 +290,12 @@ if ($EnableVmIsolation) {
             -Protocol Any -InterfaceAlias $adapterAlias -RemoteAddress $HostIP -Profile Any -Enabled True | Out-Null
         Write-Success "VM-to-Host traffic explicitly allowed ($HostIP)"
 
-        # 2. Block inbound FROM other VMs (but not from host due to rule above)
+        # 2. Block inbound FROM other VMs
         New-NetFirewallRule -DisplayName "AutoMutate-VM-Isolation-Block-Inbound" -Direction Inbound -Action Block `
             -Protocol Any -InterfaceAlias $adapterAlias -RemoteAddress $subnetRange -Profile Any -Enabled True | Out-Null
         Write-Success "VM-to-VM inbound traffic blocked"
 
-        # 3. Block outbound TO other VMs (but not to host due to rule above)
+        # 3. Block outbound TO other VMs
         New-NetFirewallRule -DisplayName "AutoMutate-VM-Isolation-Block-Outbound" -Direction Outbound -Action Block `
             -Protocol Any -InterfaceAlias $adapterAlias -RemoteAddress $subnetRange -Profile Any -Enabled True | Out-Null
         Write-Success "VM-to-VM outbound traffic blocked"
@@ -313,13 +303,13 @@ if ($EnableVmIsolation) {
         Write-Info "VM-to-VM isolation ENABLED: VMs can only communicate with host ($HostIP)"
     }
 } else {
-    Write-Info "`nVM-to-VM isolation: DISABLED (default)"
-    Write-Info "VMs can communicate with each other (useful for lateral movement testing)"
+    Write-Info "`nVM-to-VM isolation: DISABLED"
+    Write-Info "VMs can communicate with each other"
     Write-Info "To enable isolation: Set security.enable_vm_isolation=true in config.yaml"
     Write-Info "Or use: .\scripts\toggle-vm-isolation.ps1 -Action Enable"
 }
 
-# 11) Egress Filtering (optional, based on config)
+# 10. Egress Filtering
 $EnableEgressFilter = $false
 if ($config.security.ContainsKey('enable_egress_filter')) {
     try {
@@ -351,7 +341,7 @@ if ($EnableEgressFilter) {
             -Protocol Any -InterfaceAlias $adapterAlias -Profile Any -Enabled True | Out-Null
         Write-Success "Egress blocking rule created (default-deny)"
 
-        # Create whitelist rules (evaluated before block rule)
+        # Create whitelist rules
         $whitelistRules = @(
             @{ Name = "AutoMutate-Egress-Allow-DNS"; Protocol = "UDP"; Port = 53; Desc = "DNS queries" },
             @{ Name = "AutoMutate-Egress-Allow-HTTP"; Protocol = "TCP"; Port = 80; Desc = "HTTP (Windows Update)" },
@@ -369,8 +359,8 @@ if ($EnableEgressFilter) {
         Write-Info "Egress filtering ENABLED: Only DNS, HTTP, HTTPS, NTP allowed"
     }
 } else {
-    Write-Info "`nEgress filtering: DISABLED (default)"
-    Write-Info "VMs have unrestricted outbound access (when NAT is enabled)"
+    Write-Info "`nEgress filtering: DISABLED"
+    Write-Info "VMs have unrestricted outbound access"
     Write-Info "To enable filtering: Set security.enable_egress_filter=true in config.yaml"
     Write-Info "Or use: .\scripts\manage-egress-filter.ps1 -Action Enable"
 }
@@ -380,34 +370,20 @@ Write-Info "`n+================================================================+
 Write-Info "Security Configuration Summary:"
 Write-Info "+================================================================+"
 Write-Info ""
-Write-Info "1. VM-to-VM Isolation (prevent lateral movement):"
+Write-Info "1. VM-to-VM Isolation:"
 Write-Info "   Status: $(if ($EnableVmIsolation) { 'ENABLED' } else { 'DISABLED' })"
 Write-Info "   Toggle: .\scripts\toggle-vm-isolation.ps1 -Action Enable|Disable"
 Write-Info ""
-Write-Info "2. Egress Filtering (whitelist-based traffic control):"
+Write-Info "2. Egress Filtering:"
 Write-Info "   Status: $(if ($EnableEgressFilter) { 'ENABLED' } else { 'DISABLED' })"
 Write-Info "   Manage: .\scripts\manage-egress-filter.ps1 -Action Enable|Disable"
 Write-Info "   Default whitelist: DNS (53), HTTP (80), HTTPS (443), NTP (123)"
 Write-Info ""
-Write-Info "3. Internet Access (NAT for VMs):"
+Write-Info "3. Internet Access:"
 Write-Info "   Status: $(if ($EnableVmNat) { 'ENABLED' } else { 'DISABLED' })"
 Write-Info "   Toggle: .\scripts\toggle-vm-internet.ps1 -Action Enable|Disable"
 Write-Info "   Kill connections: .\scripts\toggle-vm-internet.ps1 -Action Disable -KillConnections"
 Write-Info ""
-Write-Info "+================================================================+"
-Write-Info "Recommended Security Profiles:"
-Write-Info "+================================================================+"
-Write-Info ""
-Write-Info "For malware testing (maximum isolation):"
-Write-Info "   1. .\scripts\toggle-vm-isolation.ps1 -Action Enable"
-Write-Info "   2. .\scripts\toggle-vm-internet.ps1 -Action Disable -KillConnections"
-Write-Info "   3. .\scripts\manage-egress-filter.ps1 -Action Disable (not needed without internet)"
-Write-Info ""
-Write-Info "For controlled internet access (filtered):"
-Write-Info "   1. .\scripts\manage-egress-filter.ps1 -Action Enable"
-Write-Info "   2. .\scripts\toggle-vm-internet.ps1 -Action Enable"
-Write-Info "   3. .\scripts\toggle-vm-isolation.ps1 -Action Enable (optional)"
-
 Write-Success "`nHost setup complete"
 Write-Success "`nNext steps:"
 Write-Success "  1. Run: wsl -- bash ./scripts/02-wsl-bootstrap.sh"
