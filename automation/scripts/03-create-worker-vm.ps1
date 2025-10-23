@@ -265,12 +265,26 @@ function Get-GDriveFile {
 
 
 
-# Load config
+# Load config (supports nested sections like workers.windows10)
 $config = @{}
 $section = $null
+$subsection = $null
 Get-Content $ConfigPath | ForEach-Object {
-    if ($_ -match '^(\w+):$') { $section = $matches[1]; $config[$section] = @{} }
-    elseif ($_ -match '^\s+(\w+):\s*"?(.+?)"?$' -and $section) { $config[$section][$matches[1]] = $matches[2].Trim('"') }
+    if ($_ -match '^(\w+):$') {
+        $section = $matches[1]
+        $subsection = $null
+        $config[$section] = @{}
+    }
+    elseif ($_ -match '^\s{2}(\w+):$' -and $section) {
+        $subsection = $matches[1]
+        $config[$section][$subsection] = @{}
+    }
+    elseif ($_ -match '^\s{4}(\w+):\s*"?(.+?)"?$' -and $section -and $subsection) {
+        $config[$section][$subsection][$matches[1]] = $matches[2].Trim('"')
+    }
+    elseif ($_ -match '^\s{2}(\w+):\s*"?(.+?)"?$' -and $section -and -not $subsection) {
+        $config[$section][$matches[1]] = $matches[2].Trim('"')
+    }
 }
 
 $SwitchName = $config.network.switch_name
@@ -292,15 +306,23 @@ $DriveSources = @{
 
 
 # Worker config - read from config.yaml
+if (-not $config.workers) {
+    Write-Error "No 'workers' section found in config.yaml"
+    exit 1
+}
+
 $osTemplate = $config.workers.$Os
 if (-not $osTemplate) {
-    Write-Error "No worker template found for OS '$Os' in config.yaml"
+    $availableTemplates = ($config.workers.Keys -join ", ")
+    Write-Error "No worker template found for OS '$Os' in config.yaml. Available templates: $availableTemplates"
     exit 1
 }
 
 $CpuCount = [int]$osTemplate.cpu_count
 $MemoryGB = [int]$osTemplate.memory_gb
 $DiskGB = [int]$osTemplate.disk_gb
+
+Write-Info "VM Resources (from config): CPU=$CpuCount, Memory=$($MemoryGB)GB, Disk=$($DiskGB)GB"
 
 Write-Info "Creating VM: $WorkerName ($Os) - $StaticIP"
 

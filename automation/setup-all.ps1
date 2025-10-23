@@ -217,11 +217,9 @@ Write-Host @"
 foreach ($worker in $WorkerConfigs) {
     Write-Host @"
    VM: $($worker.Name) (IP: $($worker.IP))
-   Run via PowerShell Direct (from host):
+   Run from host:
 
-   `$cred = Get-Credential -UserName 'worker-admin' -Message 'Enter VM password'
-   Invoke-Command -VMName "$($worker.Name)" -FilePath ".\scripts\04-vm-init.ps1" ``
-     -ArgumentList "$($worker.IP)", "$($worker.Name)" -Credential `$cred
+   .\scripts\initialize-worker.ps1 -VMName "$($worker.Name)" -IPAddress "$($worker.IP)"
 
 "@ -ForegroundColor Cyan
 }
