@@ -177,38 +177,78 @@ function Get-GDriveFile {
         Move-Item -Force -LiteralPath $tmp -Destination $OutFile
     }
     else {
-        # Interstitial page: find confirm token / uuid
+        # Interstitial page (virus scan warning): find download link / token
+        Write-Host "Processing download confirmation page..." -ForegroundColor Yellow
         $html  = $initial.Content
         $token = $null
         $uuid  = $null
+        $downloadUrl = $null
 
-        $m = [regex]::Match($html, 'confirm=([^&"''<> ]+)')
-        if ($m.Success) { $token = $m.Groups[1].Value }
+        # Method 1: Look for direct download link in HTML (newer Google Drive format)
+        # Pattern: <a id="uc-download-link" ... href="/uc?export=download&amp;confirm=...&amp;id=..."
+        $linkMatch = [regex]::Match($html, 'href="(/uc\?export=download[^"]+)"')
+        if ($linkMatch.Success) {
+            $relativeUrl = $linkMatch.Groups[1].Value
+            $relativeUrl = $relativeUrl -replace '&amp;', '&'  # Unescape HTML entities
+            $downloadUrl = "https://drive.google.com" + $relativeUrl
+            Write-Host "  Found download link in HTML" -ForegroundColor Gray
+        }
 
-        if (-not $token) {
-            $m = [regex]::Match($html, 'name="confirm"\s+value="([^"]+)"')
+        # Method 2: Look for confirm token in various formats
+        if (-not $downloadUrl) {
+            $m = [regex]::Match($html, 'confirm=([^&"''<> ]+)')
             if ($m.Success) { $token = $m.Groups[1].Value }
+
+            if (-not $token) {
+                $m = [regex]::Match($html, 'name="confirm"\s+value="([^"]+)"')
+                if ($m.Success) { $token = $m.Groups[1].Value }
+            }
+
+            if (-not $token) {
+                $m = [regex]::Match($html, '"downloadUrl":"([^"]+)"')
+                if ($m.Success) {
+                    $downloadUrl = $m.Groups[1].Value -replace '\\u003d', '=' -replace '\\u0026', '&'
+                }
+            }
+
+            # Method 3: Extract uuid for newer flow
+            $m = [regex]::Match($html, 'uuid=([0-9A-Za-z\-_]+)')
+            if ($m.Success) { $uuid = $m.Groups[1].Value }
+
+            # Method 4: Fallback to cookie named download_warning*
+            if (-not $token -and -not $downloadUrl) {
+                $cookieCol = $sess.Cookies.GetCookies([Uri]'https://drive.google.com')
+                $warn = $cookieCol | Where-Object { $_.Name -like 'download_warning*' } | Select-Object -First 1
+                if ($warn) {
+                    $token = $warn.Value
+                    Write-Host "  Found token in cookie: $($warn.Name)" -ForegroundColor Gray
+                }
+            }
         }
 
-        $m = [regex]::Match($html, 'uuid=([0-9A-Za-z\-_]+)')
-        if ($m.Success) { $uuid = $m.Groups[1].Value }
-
-        # Fallback: cookie named download_warning* (must use Uri with PS 5.1)
-        if (-not $token) {
-            $cookieCol = $sess.Cookies.GetCookies([Uri]'https://drive.google.com')
-            $warn = $cookieCol | Where-Object { $_.Name -like 'download_warning*' } | Select-Object -First 1
-            if ($warn) { $token = $warn.Value }
+        # Build download URL if we have token or found direct URL
+        if (-not $downloadUrl) {
+            if ($token) {
+                # Use usercontent host (handles large files better)
+                $downloadUrl = "https://drive.usercontent.google.com/download?export=download&id=$id&confirm=$token"
+                if ($uuid) { $downloadUrl += "&uuid=$uuid" }
+                Write-Host "  Built download URL with token: $token" -ForegroundColor Gray
+            }
+            else {
+                # Last resort: try direct download without token (may fail for large files)
+                Write-Host "  Could not find confirmation token, trying direct download..." -ForegroundColor Yellow
+                $downloadUrl = "https://drive.usercontent.google.com/download?export=download&id=$id"
+            }
         }
 
-        if (-not $token) {
-            throw "Could not obtain Google Drive confirmation token (file may not be shared publicly or flow changed)."
+        if (-not $downloadUrl) {
+            Write-Host "`nDebug: Interstitial page content (first 2000 chars):" -ForegroundColor Magenta
+            Write-Host $html.Substring(0, [Math]::Min(2000, $html.Length)) -ForegroundColor Gray
+            throw "Could not obtain Google Drive download URL or confirmation token (file may not be shared publicly or Google Drive flow changed)."
         }
 
-        # Final download URL served from usercontent host
-        $dl = "https://drive.usercontent.google.com/uc?export=download&id=$id&confirm=$token"
-        if ($uuid) { $dl += "&uuid=$uuid" }
-
-        Download-WithProgress -Uri $dl -Destination $tmp -WebSession $sess -Headers $headers
+        Write-Host "  Final download URL: $downloadUrl" -ForegroundColor Gray
+        Download-WithProgress -Uri $downloadUrl -Destination $tmp -WebSession $sess -Headers $headers
         Move-Item -Force -LiteralPath $tmp -Destination $OutFile
     }
 
