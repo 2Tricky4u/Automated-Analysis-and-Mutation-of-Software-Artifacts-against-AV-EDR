@@ -16,6 +16,9 @@
 
 .PARAMETER ConfigPath
     Path to config.yaml
+
+.PARAMETER SkipHashCheck
+    Skip SHA256 hash verification (faster but less secure)
 #>
 
 [CmdletBinding()]
@@ -34,7 +37,10 @@ param(
     [string]$StaticIP,
 
     [Parameter()]
-    [string]$ConfigPath = "..\config.yaml"
+    [string]$ConfigPath = "..\config.yaml",
+
+    [Parameter()]
+    [switch]$SkipHashCheck
 )
 
 $ErrorActionPreference = "Stop"
@@ -106,8 +112,20 @@ function Get-GDriveFile {
     $isDirect = ($cd -and $cd -ne '') -or ($ct -and $ct -match 'application/octet-stream')
 
     if ($isDirect) {
-        Invoke-WebRequest -Uri $baseUri -WebSession $sess -Headers $headers -OutFile $tmp
-        Move-Item -Force -LiteralPath $tmp -Destination $OutFile
+        Write-Host "Downloading file (direct link)..." -ForegroundColor Cyan
+
+        # Use BITS transfer for progress and resume capability
+        try {
+            Import-Module BitsTransfer -ErrorAction Stop
+            Start-BitsTransfer -Source $baseUri -Destination $tmp -DisplayName "Downloading ISO" -Description "Direct download from Google Drive"
+            Move-Item -Force -LiteralPath $tmp -Destination $OutFile
+        }
+        catch {
+            # Fallback to Invoke-WebRequest if BITS fails
+            Write-Host "BITS transfer failed, using fallback download method..." -ForegroundColor Yellow
+            Invoke-WebRequest -Uri $baseUri -WebSession $sess -Headers $headers -OutFile $tmp
+            Move-Item -Force -LiteralPath $tmp -Destination $OutFile
+        }
     }
     else {
         # Interstitial page: find confirm token / uuid
@@ -141,8 +159,20 @@ function Get-GDriveFile {
         $dl = "https://drive.usercontent.google.com/uc?export=download&id=$id&confirm=$token"
         if ($uuid) { $dl += "&uuid=$uuid" }
 
-        Invoke-WebRequest -Uri $dl -WebSession $sess -Headers $headers -OutFile $tmp
-        Move-Item -Force -LiteralPath $tmp -Destination $OutFile
+        Write-Host "Downloading file (with confirmation token)..." -ForegroundColor Cyan
+
+        # Use BITS transfer for progress and resume capability
+        try {
+            Import-Module BitsTransfer -ErrorAction Stop
+            Start-BitsTransfer -Source $dl -Destination $tmp -DisplayName "Downloading ISO" -Description "Confirmed download from Google Drive"
+            Move-Item -Force -LiteralPath $tmp -Destination $OutFile
+        }
+        catch {
+            # Fallback to Invoke-WebRequest if BITS fails
+            Write-Host "BITS transfer failed, using fallback download method..." -ForegroundColor Yellow
+            Invoke-WebRequest -Uri $dl -WebSession $sess -Headers $headers -OutFile $tmp
+            Move-Item -Force -LiteralPath $tmp -Destination $OutFile
+        }
     }
 
     # Optional integrity check
@@ -202,9 +232,13 @@ if (-not (Test-Path $IsoPath)) {
 
     $src   = $DriveSources[$Os]
     $urlId = $src.IdOrUrl
-    $sha   = $src.Sha256
+    $sha   = if (-not $SkipHashCheck) { $src.Sha256 } else { $null }
 
     Write-Info "Downloading $Os ISO from Google Drive to $IsoPath ..."
+    if ($SkipHashCheck) {
+        Write-Warning "Hash verification is DISABLED (-SkipHashCheck)"
+    }
+
     try {
         Get-GDriveFile -IdOrUrl $urlId -OutFile $IsoPath -Sha256 $sha
         Write-Success "Downloaded ISO: $IsoPath"
@@ -215,6 +249,40 @@ if (-not (Test-Path $IsoPath)) {
     }
 } else {
     Write-Success "ISO found: $IsoPath"
+
+    # Verify hash of existing ISO (unless skipped)
+    if (-not $SkipHashCheck) {
+        if (-not $DriveSources.ContainsKey($Os)) {
+            Write-Warning "No hash available for OS '$Os' - skipping verification"
+        }
+        else {
+            $expectedHash = $DriveSources[$Os].Sha256
+            Write-Info "Verifying ISO integrity (SHA256)..."
+
+            $actualHash = (Get-FileHash -Path $IsoPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+            if ($actualHash -eq $expectedHash.ToLowerInvariant()) {
+                Write-Success "ISO hash verified: $actualHash"
+            }
+            else {
+                Write-Error @"
+SHA256 hash mismatch for existing ISO!
+Expected: $expectedHash
+Got:      $actualHash
+
+The ISO file may be corrupted or tampered with.
+Options:
+  1. Delete the file and re-download: Remove-Item '$IsoPath'
+  2. Skip hash check (unsafe): Add -SkipHashCheck parameter
+  3. Verify the expected hash is correct in the script
+"@
+                exit 1
+            }
+        }
+    }
+    else {
+        Write-Warning "Hash verification is DISABLED (-SkipHashCheck)"
+    }
 }
 
 # Create VHD folder
