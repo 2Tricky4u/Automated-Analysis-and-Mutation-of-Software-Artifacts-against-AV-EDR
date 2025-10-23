@@ -194,16 +194,18 @@ KIBANA_PORT="${KIBANA_PORT:-5601}"
 
 echo "[i] Using Elasticsearch version: $ES_VERSION, memory: ${ES_MEMORY}g, ports: ES=$ES_PORT, Kibana=$KIBANA_PORT"
 
-# Docker Compose for Elasticsearch + Kibana
+# Docker Compose for Elasticsearch + Kibana (modern format)
 cat > "$WORKDIR/docker-compose.yml" <<EOF
-version: '3.8'
 services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:$ES_VERSION
+    container_name: automation-elasticsearch
+    restart: unless-stopped
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - "ES_JAVA_OPTS=-Xms${ES_MEMORY}g -Xmx${ES_MEMORY}g"
+      - bootstrap.memory_lock=true
     ports:
       - "$ES_PORT:9200"
     volumes:
@@ -212,18 +214,47 @@ services:
       memlock:
         soft: -1
         hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - elastic
 
   kibana:
     image: docker.elastic.co/kibana/kibana:$ES_VERSION
+    container_name: automation-kibana
+    restart: unless-stopped
     ports:
       - "$KIBANA_PORT:5601"
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_NAME=kibana
+      - SERVER_HOST=0.0.0.0
     depends_on:
-      - elasticsearch
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - elastic
+
+networks:
+  elastic:
+    driver: bridge
 
 volumes:
   esdata:
+    driver: local
 EOF
 
 # Start Elasticsearch + Kibana
@@ -240,44 +271,72 @@ else
     exit 1
 fi
 
-# Start Elasticsearch in background (foreground mode via nohup)
-echo "[i] Starting Elasticsearch..."
-nohup "$COMPOSE_CMD" up elasticsearch > /tmp/elasticsearch.log 2>&1 &
-ES_PID=$!
-echo "[i] Elasticsearch process started (PID: $ES_PID)"
+echo "[i] Using Docker Compose command: $COMPOSE_CMD"
 
-# Start Kibana in background (foreground mode via nohup)
-echo "[i] Starting Kibana..."
-nohup "$COMPOSE_CMD" up kibana > /tmp/kibana.log 2>&1 &
-KIBANA_PID=$!
-echo "[i] Kibana process started (PID: $KIBANA_PID)"
+# Start all services in detached mode (with restart policy and healthchecks)
+echo "[i] Starting containers (detached mode with automatic restart)..."
+cd "$WORKDIR"
+$COMPOSE_CMD up -d
 
-# Wait for Elasticsearch to be ready
-echo "[i] Waiting for Elasticsearch to be ready (max 60 seconds)..."
-MAX_RETRIES=30
+if [ $? -ne 0 ]; then
+    echo "[ERROR] Failed to start Docker containers"
+    echo "[i] Check logs: $COMPOSE_CMD logs"
+    exit 1
+fi
+
+echo "[OK] Containers started successfully"
+echo "[i] Container status:"
+$COMPOSE_CMD ps
+
+# Wait for Elasticsearch to be healthy
+echo "[i] Waiting for Elasticsearch to be healthy (max 90 seconds)..."
+MAX_RETRIES=45
 RETRY_COUNT=0
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if curl -s http://localhost:"$ES_PORT" > /dev/null 2>&1; then
-        echo "[OK] Elasticsearch is ready"
-        break
+    if curl -s http://localhost:"$ES_PORT"/_cluster/health > /dev/null 2>&1; then
+        HEALTH=$(curl -s http://localhost:"$ES_PORT"/_cluster/health | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+        if [ "$HEALTH" = "green" ] || [ "$HEALTH" = "yellow" ]; then
+            echo "[OK] Elasticsearch is healthy (status: $HEALTH)"
+            break
+        fi
     fi
     sleep 2
     RETRY_COUNT=$((RETRY_COUNT + 1))
-    echo -n "."
+    if [ $((RETRY_COUNT % 5)) -eq 0 ]; then
+        echo -n " [${RETRY_COUNT}s]"
+    else
+        echo -n "."
+    fi
 done
 echo ""
 
 if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-    echo "[WARN] Elasticsearch did not respond after 60 seconds"
-    echo "[INFO] Check logs: tail -f /tmp/elasticsearch.log"
+    echo "[WARN] Elasticsearch did not become healthy after 90 seconds"
+    echo "[INFO] Check logs: $COMPOSE_CMD logs elasticsearch"
     echo ""
-    echo "Containers may still be starting. You can verify access later"
+    echo "Containers may still be starting. You can verify status with: $COMPOSE_CMD ps"
 else
     # Test from within WSL
     ES_RESPONSE=$(curl -s http://localhost:"$ES_PORT" 2>/dev/null || echo "failed")
     if [[ "$ES_RESPONSE" == *"cluster_name"* ]]; then
         echo "[OK] Elasticsearch accessible: http://localhost:$ES_PORT"
     fi
+
+    # Wait a bit for Kibana to be ready (it waits for Elasticsearch healthcheck)
+    echo "[i] Waiting for Kibana (depends on Elasticsearch health)..."
+    sleep 10
+    KIBANA_RETRIES=15
+    KIBANA_COUNT=0
+    while [ $KIBANA_COUNT -lt $KIBANA_RETRIES ]; do
+        if curl -s http://localhost:"$KIBANA_PORT"/api/status > /dev/null 2>&1; then
+            echo "[OK] Kibana is ready: http://localhost:$KIBANA_PORT"
+            break
+        fi
+        sleep 2
+        KIBANA_COUNT=$((KIBANA_COUNT + 1))
+        echo -n "."
+    done
+    echo ""
 fi
 
 echo ""
@@ -287,17 +346,16 @@ echo "  Elasticsearch: http://localhost:$ES_PORT"
 echo "  Kibana:        http://localhost:$KIBANA_PORT"
 echo "=========================================="
 echo ""
-echo "Background Processes:"
-echo "  Elasticsearch PID: $ES_PID"
-echo "  Kibana PID:        $KIBANA_PID"
+echo "Container Management:"
+echo "  Status:  $COMPOSE_CMD ps"
+echo "  Logs:    $COMPOSE_CMD logs -f [elasticsearch|kibana]"
+echo "  Stop:    $COMPOSE_CMD down"
+echo "  Restart: $COMPOSE_CMD restart"
 echo ""
-echo "Logs:"
-echo "  tail -f /tmp/elasticsearch.log"
-echo "  tail -f /tmp/kibana.log"
+echo "Containers will automatically restart on system reboot (restart: unless-stopped)"
 echo ""
 echo "To stop services:"
-echo "  kill $ES_PID $KIBANA_PID"
-echo "  OR: $COMPOSE_CMD down"
+echo "  cd $WORKDIR && $COMPOSE_CMD down"
 echo ""
 
 # Build Controller binaries
