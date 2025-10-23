@@ -111,21 +111,70 @@ function Get-GDriveFile {
     $ct = Get-Header -resp $initial -name 'Content-Type'
     $isDirect = ($cd -and $cd -ne '') -or ($ct -and $ct -match 'application/octet-stream')
 
-    if ($isDirect) {
-        Write-Host "Downloading file (direct link)..." -ForegroundColor Cyan
+    # Helper function to download with progress
+    function Download-WithProgress {
+        param([string]$Uri, [string]$Destination, $WebSession, $Headers)
 
-        # Use BITS transfer for progress and resume capability
+        Write-Host "Downloading file..." -ForegroundColor Cyan
+        Write-Host "  From: $Uri" -ForegroundColor Gray
+        Write-Host "  To:   $Destination" -ForegroundColor Gray
+
+        # Download in chunks with progress
+        $request = [System.Net.HttpWebRequest]::Create($Uri)
+        $request.UserAgent = $Headers['User-Agent']
+        $request.Method = "GET"
+
+        # Add cookies from session
+        if ($WebSession) {
+            $request.CookieContainer = New-Object System.Net.CookieContainer
+            $cookies = $WebSession.Cookies.GetCookies([Uri]$Uri)
+            foreach ($cookie in $cookies) {
+                $request.CookieContainer.Add($cookie)
+            }
+        }
+
         try {
-            Import-Module BitsTransfer -ErrorAction Stop
-            Start-BitsTransfer -Source $baseUri -Destination $tmp -DisplayName "Downloading ISO" -Description "Direct download from Google Drive"
-            Move-Item -Force -LiteralPath $tmp -Destination $OutFile
+            $response = $request.GetResponse()
+            $totalLength = $response.ContentLength
+            $responseStream = $response.GetResponseStream()
+            $fileStream = [System.IO.File]::Create($Destination)
+
+            $buffer = New-Object byte[] 8192
+            $totalRead = 0
+            $lastPercent = -1
+
+            while (($read = $responseStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                $fileStream.Write($buffer, 0, $read)
+                $totalRead += $read
+
+                if ($totalLength -gt 0) {
+                    $percent = [int](($totalRead / $totalLength) * 100)
+                    if ($percent -ne $lastPercent -and $percent % 5 -eq 0) {
+                        $mb = [math]::Round($totalRead / 1MB, 2)
+                        $totalMb = [math]::Round($totalLength / 1MB, 2)
+                        Write-Host "  Progress: $percent% ($mb MB / $totalMb MB)" -ForegroundColor Cyan
+                        $lastPercent = $percent
+                    }
+                }
+            }
+
+            $fileStream.Close()
+            $responseStream.Close()
+            $response.Close()
+
+            Write-Host "  Download complete!" -ForegroundColor Green
         }
         catch {
-            # Fallback to Invoke-WebRequest if BITS fails
-            Write-Host "BITS transfer failed, using fallback download method..." -ForegroundColor Yellow
-            Invoke-WebRequest -Uri $baseUri -WebSession $sess -Headers $headers -OutFile $tmp
-            Move-Item -Force -LiteralPath $tmp -Destination $OutFile
+            if ($fileStream) { $fileStream.Close() }
+            if ($responseStream) { $responseStream.Close() }
+            if ($response) { $response.Close() }
+            throw
         }
+    }
+
+    if ($isDirect) {
+        Download-WithProgress -Uri $baseUri -Destination $tmp -WebSession $sess -Headers $headers
+        Move-Item -Force -LiteralPath $tmp -Destination $OutFile
     }
     else {
         # Interstitial page: find confirm token / uuid
@@ -159,20 +208,8 @@ function Get-GDriveFile {
         $dl = "https://drive.usercontent.google.com/uc?export=download&id=$id&confirm=$token"
         if ($uuid) { $dl += "&uuid=$uuid" }
 
-        Write-Host "Downloading file (with confirmation token)..." -ForegroundColor Cyan
-
-        # Use BITS transfer for progress and resume capability
-        try {
-            Import-Module BitsTransfer -ErrorAction Stop
-            Start-BitsTransfer -Source $dl -Destination $tmp -DisplayName "Downloading ISO" -Description "Confirmed download from Google Drive"
-            Move-Item -Force -LiteralPath $tmp -Destination $OutFile
-        }
-        catch {
-            # Fallback to Invoke-WebRequest if BITS fails
-            Write-Host "BITS transfer failed, using fallback download method..." -ForegroundColor Yellow
-            Invoke-WebRequest -Uri $dl -WebSession $sess -Headers $headers -OutFile $tmp
-            Move-Item -Force -LiteralPath $tmp -Destination $OutFile
-        }
+        Download-WithProgress -Uri $dl -Destination $tmp -WebSession $sess -Headers $headers
+        Move-Item -Force -LiteralPath $tmp -Destination $OutFile
     }
 
     # Optional integrity check
