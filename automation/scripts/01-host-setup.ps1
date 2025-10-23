@@ -109,7 +109,8 @@ $wslConfigContent = @"
 [wsl2]
 networkingMode=nat
 autoProxy=true
-memory=8GB
+memory=10GB
+swap=16GB
 processors=4
 "@
 
