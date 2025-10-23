@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    AutoMutate++ Complete Environment Setup
+    AutoMutate Environment Setup
 
 .DESCRIPTION
     Master script that orchestrates the complete infrastructure setup:
@@ -146,7 +146,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Success "WSL2 Controller bootstrap complete"
-Write-Info "Elasticsearch: http://localhost:9200"
+Write-Info "Elasticsearch: http://localhost:9200" #TODO make the port read from config
 Write-Info "Kibana: http://localhost:5601"
 
 # Step 3: Create Worker VMs
@@ -242,13 +242,13 @@ Write-Host ""
 
 Write-Host @"
 
-5. Optional: Isolate VMs from internet (recommended for malware testing):
+5. Optional: Isolate VMs from internet:
    Use the internet kill switch to air-gap VMs during artifact testing:
 
    To disable internet access (air-gap mode):
    .\scripts\toggle-vm-internet.ps1 -Action Disable
 
-   To re-enable internet access (for updates/downloads):
+   To re-enable internet access:
    .\scripts\toggle-vm-internet.ps1 -Action Enable
 
    To check current status:
@@ -259,8 +259,6 @@ Write-Host @"
 
 7. Start environment:
    .\scripts\start-environment.ps1
-
-For detailed instructions, see: automation\README.md
 
 "@ -ForegroundColor Green
 
@@ -278,4 +276,3 @@ Write-Host ""
 Write-Info "NEXT: Install Windows on each VM, then run 04-vm-init.ps1 for configuration"
 Write-Info "THEN: Create baselines with 05-create-baseline.ps1"
 Write-Info "NOTE: Use .\scripts\toggle-vm-internet.ps1 to control VM internet access"
-Write-Host "`n" + "="*70 + "`n"

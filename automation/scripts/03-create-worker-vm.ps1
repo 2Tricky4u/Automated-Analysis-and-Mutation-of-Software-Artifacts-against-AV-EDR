@@ -49,7 +49,7 @@ function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
 function Get-GDriveFile {
     <#
     .SYNOPSIS
-        Download a public Google Drive file (handles large-file confirm + uuid).
+        Download a public Google Drive file
     .PARAMETER IdOrUrl
         File ID (e.g., 1AbC...) or a share URL like:
         https://drive.google.com/file/d/<ID>/view?usp=sharing
@@ -67,7 +67,7 @@ function Get-GDriveFile {
 
     $ErrorActionPreference = 'Stop'
 
-    # --- Extract file ID (works for share links and plain IDs) ---
+    # Extract file ID
     $id = $IdOrUrl
     if ($IdOrUrl -match 'https?://(drive|docs)\.google\.com') {
         if ($IdOrUrl -match '/file/d/([^/]+)/') {
@@ -79,23 +79,23 @@ function Get-GDriveFile {
         }
     }
 
-    # --- Prepare paths/session/headers ---
+    # Prepare paths/session/headers
     $null = New-Item -ItemType Directory -Force -Path (Split-Path -LiteralPath $OutFile) 2>$null
     $tmp  = "$OutFile.part"
 
     $headers = @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
     $baseUri = "https://drive.google.com/uc?export=download&id=$id"
 
-    # First request: capture cookies/session (PS 5.1 returns BasicHtmlWebResponseObject)
+    # First request: capture cookies/session
     $initial = Invoke-WebRequest -Uri $baseUri -SessionVariable sess -Headers $headers
 
-    # Preempt EU consent (PS 5.1 CookieContainer requires Uri + Cookie)
+    # Preempt EU consent
     try {
         $consent = New-Object System.Net.Cookie('CONSENT','YES+','/','.google.com')
         $sess.Cookies.Add([Uri]'https://google.com', $consent)
     } catch {}
 
-    # Helper: read a header from PS 5.1 response safely
+    # Helper
     function Get-Header {
         param([object]$resp, [string]$name)
         $val = $null
@@ -177,14 +177,13 @@ function Get-GDriveFile {
         Move-Item -Force -LiteralPath $tmp -Destination $OutFile
     }
     else {
-        # Interstitial page (virus scan warning): find download link / token
+        # Interstitial page like virus scan warning): find download link / token
         Write-Host "Processing download confirmation page..." -ForegroundColor Yellow
         $html  = $initial.Content
         $token = $null
         $uuid  = $null
         $downloadUrl = $null
 
-        # Method 1: Look for direct download link in HTML (newer Google Drive format)
         # Pattern: <a id="uc-download-link" ... href="/uc?export=download&amp;confirm=...&amp;id=..."
         $linkMatch = [regex]::Match($html, 'href="(/uc\?export=download[^"]+)"')
         if ($linkMatch.Success) {
@@ -194,7 +193,7 @@ function Get-GDriveFile {
             Write-Host "  Found download link in HTML" -ForegroundColor Gray
         }
 
-        # Method 2: Look for confirm token in various formats
+        # Look for confirm token in various formats
         if (-not $downloadUrl) {
             $m = [regex]::Match($html, 'confirm=([^&"''<> ]+)')
             if ($m.Success) { $token = $m.Groups[1].Value }
@@ -211,11 +210,11 @@ function Get-GDriveFile {
                 }
             }
 
-            # Method 3: Extract uuid for newer flow
+            # Extract uuid for newer flow
             $m = [regex]::Match($html, 'uuid=([0-9A-Za-z\-_]+)')
             if ($m.Success) { $uuid = $m.Groups[1].Value }
 
-            # Method 4: Fallback to cookie named download_warning*
+            # Fallback to cookie named download_warning*
             if (-not $token -and -not $downloadUrl) {
                 $cookieCol = $sess.Cookies.GetCookies([Uri]'https://drive.google.com')
                 $warn = $cookieCol | Where-Object { $_.Name -like 'download_warning*' } | Select-Object -First 1
@@ -229,13 +228,13 @@ function Get-GDriveFile {
         # Build download URL if we have token or found direct URL
         if (-not $downloadUrl) {
             if ($token) {
-                # Use usercontent host (handles large files better)
+                # Use usercontent host
                 $downloadUrl = "https://drive.usercontent.google.com/download?export=download&id=$id&confirm=$token"
                 if ($uuid) { $downloadUrl += "&uuid=$uuid" }
                 Write-Host "  Built download URL with token: $token" -ForegroundColor Gray
             }
             else {
-                # Last resort: try direct download without token (may fail for large files)
+                # try direct download without token
                 Write-Host "  Could not find confirmation token, trying direct download..." -ForegroundColor Yellow
                 $downloadUrl = "https://drive.usercontent.google.com/download?export=download&id=$id"
             }
@@ -244,7 +243,7 @@ function Get-GDriveFile {
         if (-not $downloadUrl) {
             Write-Host "`nDebug: Interstitial page content (first 2000 chars):" -ForegroundColor Magenta
             Write-Host $html.Substring(0, [Math]::Min(2000, $html.Length)) -ForegroundColor Gray
-            throw "Could not obtain Google Drive download URL or confirmation token (file may not be shared publicly or Google Drive flow changed)."
+            throw "Could not obtain Google Drive download URL or confirmation token."
         }
 
         Write-Host "  Final download URL: $downloadUrl" -ForegroundColor Gray
@@ -252,7 +251,7 @@ function Get-GDriveFile {
         Move-Item -Force -LiteralPath $tmp -Destination $OutFile
     }
 
-    # Optional integrity check
+    #integrity check
     if ($Sha256) {
         $actual = (Get-FileHash -Path $OutFile -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actual -ne $Sha256.ToLowerInvariant()) {
@@ -279,7 +278,7 @@ $VhdRoot = $config.storage.vhd_root
 $Gateway = $config.network.gateway
 $Prefix = ($config.network.subnet -split '/')[1]
 
-# --- Google Drive ISO sources (fill these) ---
+# Google Drive ISO sources
 $DriveSources = @{
     windows10 = @{
         IdOrUrl = "https://drive.google.com/file/d/15eBAxjCTP92Pu7Ru0d1fpVxznj3EtCRM/view?usp=drive_link"
@@ -292,7 +291,7 @@ $DriveSources = @{
 }
 
 
-# Worker config (find in config.yaml workers list - simplified)
+# Worker config #TODO read from config
 $CpuCount = 2
 $MemoryGB = if ($Os -eq "windows11") { 6 } else { 4 }
 $DiskGB = if ($Os -eq "windows11") { 80 } else { 64 }
@@ -327,7 +326,7 @@ if (-not (Test-Path $IsoPath)) {
 } else {
     Write-Success "ISO found: $IsoPath"
 
-    # Verify hash of existing ISO (unless skipped)
+    # Verify hash of existing ISO
     if (-not $SkipHashCheck) {
         if (-not $DriveSources.ContainsKey($Os)) {
             Write-Warning "No hash available for OS '$Os' - skipping verification"
@@ -351,7 +350,6 @@ The ISO file may be corrupted or tampered with.
 Options:
   1. Delete the file and re-download: Remove-Item '$IsoPath'
   2. Skip hash check (unsafe): Add -SkipHashCheck parameter
-  3. Verify the expected hash is correct in the script
 "@
                 exit 1
             }
@@ -417,7 +415,7 @@ if ($vmExists) {
 
     # Check VHD attachment
     $currentVhd = $vhdDrive.Path
-    # Normalize paths for comparison (resolve relative paths and fix backslashes)
+    # Normalize paths for comparison
     $normalizedCurrentVhd = if ($currentVhd) { [System.IO.Path]::GetFullPath($currentVhd) } else { "" }
     $normalizedVhdPath = [System.IO.Path]::GetFullPath($VhdPath)
 
@@ -446,11 +444,11 @@ if ($vmExists) {
     Write-Success "Created VM: $WorkerName"
 }
 
-# Configure VM settings (safe for existing VMs when stopped)
+# Configure VM settings
 Set-VMProcessor -VMName $WorkerName -Count $CpuCount -ErrorAction SilentlyContinue
 Set-VM -VMName $WorkerName -AutomaticCheckpointsEnabled $false -ErrorAction SilentlyContinue
 
-# Memory configuration (only if different)
+# Memory configuration
 $currentMem = (Get-VM -Name $WorkerName).MemoryStartup
 $targetMem = $MemoryGB * 1GB
 if ($currentMem -ne $targetMem) {
@@ -458,13 +456,13 @@ if ($currentMem -ne $targetMem) {
     Write-Success "Updated memory to $MemoryGB GB"
 }
 
-# Secure Boot configuration (careful with existing VMs)
+# Secure Boot configuration
 $firmware = Get-VMFirmware -VMName $WorkerName
 $currentSecureBoot = $firmware.SecureBoot
 
-# Only disable Secure Boot if we need to enable TPM (prevents breaking existing setups)
+# Only disable Secure Boot if we need to enable TPM
 if ($currentSecureBoot -ne 'Off') {
-    Write-Info "Disabling Secure Boot temporarily (required for TPM setup)..."
+    Write-Info "Disabling Secure Boot temporarily..."
     Set-VMFirmware -VMName $WorkerName -EnableSecureBoot Off -ErrorAction SilentlyContinue
     $firmware = Get-VMFirmware -VMName $WorkerName
     if ($firmware.SecureBoot -eq 'Off') {
@@ -476,9 +474,9 @@ if ($currentSecureBoot -ne 'Off') {
     Write-Success "Secure Boot already disabled"
 }
 
-# Attach ISO (only if Windows not installed)
+# Attach ISO
 if ($windowsInstalled) {
-    Write-Info "Windows installed - skipping ISO attachment (not needed for installed VMs)"
+    Write-Info "Windows installed - skipping ISO attachment"
 } else {
     $dvd = Get-VMDvdDrive -VMName $WorkerName -ErrorAction SilentlyContinue
     if (-not $dvd) {
@@ -496,16 +494,16 @@ if ($windowsInstalled) {
     }
 }
 
-# Enable TPM with proper key protector (idempotent)
+# Enable TPM with proper key protector
 $tpmEnabled = $false
 
-# Check if TPM is already enabled (compatible method - works on all Hyper-V versions)
+# Check if TPM is already enabled
 try {
-    # Try to get VM security settings - this will fail if TPM isn't enabled
+    # Try to get VM security settings this will fail if TPM isn't enabled
     $vmSecurity = Get-VM -Name $WorkerName | Select-Object -ExpandProperty VMId
     $tpmState = (Get-VM -Name $WorkerName).TpmEnabled 2>$null
 
-    # Alternative check: Try Enable-VMTPM with -Passthru to see current state
+    # alter:Try Enable-VMTPM with -Passthru to see current state
     $tpmCheck = Enable-VMTPM -VMName $WorkerName -Passthru -ErrorAction SilentlyContinue 2>$null
 
     if ($tpmCheck -or $tpmState) {
@@ -519,7 +517,7 @@ try {
     # TPM not enabled or check failed - try to enable it
     Write-Info "Enabling TPM 2.0..."
     try {
-        # Create a new local key protector (required for TPM)
+        # Create a new local key protector
         Set-VMKeyProtector -VMName $WorkerName -NewLocalKeyProtector -ErrorAction Stop
         Enable-VMTPM -VMName $WorkerName -ErrorAction Stop
         Write-Success "Enabled TPM 2.0"
@@ -541,11 +539,11 @@ try {
     }
 }
 
-# Configure firmware settings (boot order + Secure Boot) - only if Windows not installed
+# Configure firmware settings
 if ($windowsInstalled) {
     Write-Info "Windows installed - skipping boot order configuration (already configured)"
 
-    # Still verify Secure Boot for installed VMs (important for Windows 11)
+    # Still verify Secure Boot for installed VMs
     $currentFirmware = Get-VMFirmware -VMName $WorkerName
     $currentSecureBoot = $currentFirmware.SecureBoot
     $targetSecureBoot = if ($Os -eq "windows11") { "On" } else { "Off" }
@@ -562,7 +560,7 @@ if ($windowsInstalled) {
         Write-Success "Secure Boot: $currentSecureBoot (OK)"
     }
 } else {
-    # Windows not installed - configure boot order for installation
+    # Windows not installed: configure boot order for installation
     $dvdDrive = Get-VMDvdDrive -VMName $WorkerName | Select-Object -First 1
 
     if (-not $dvdDrive) {
@@ -605,7 +603,7 @@ if ($windowsInstalled) {
     }
 }
 
-# Disable Guest Services (security) - idempotent
+# Disable Guest Services
 $guestService = Get-VMIntegrationService -VMName $WorkerName | Where-Object { $_.Name -eq "Guest Service Interface" }
 if ($guestService.Enabled) {
     $guestService | Disable-VMIntegrationService

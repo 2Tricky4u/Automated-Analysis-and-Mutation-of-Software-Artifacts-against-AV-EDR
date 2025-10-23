@@ -144,11 +144,9 @@ if ($WebUI) {
     Write-Info "Web UI: Enabled (http://localhost:8080)"
 }
 
-# Note: --hide can cause process to exit if no console output is captured
-# Only add --hide if NOT tracing a specific target that might not exist yet
-if (-not $TraceTarget) {
-    $args += "--hide"
-}
+# IMPORTANT: Do NOT use --hide flag with scheduled tasks
+# Scheduled tasks run without a console, and --hide causes immediate exit
+# RedEDR will run in the background automatically when launched via scheduled task
 
 if ($TraceTarget) {
     Write-Info "Target: $TraceTarget (monitoring mode - stays alive)"
@@ -211,13 +209,15 @@ while (`$true) {
 # Run as SYSTEM with highest privileges
 $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 
-# Task settings
+# Task settings - configured to keep process alive indefinitely
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -DontStopOnIdleEnd `
-    -ExecutionTimeLimit (New-TimeSpan -Days 365)  # Run indefinitely
+    -ExecutionTimeLimit (New-TimeSpan -Days 0) `  # 0 = no limit (run forever)
+    -RestartInterval (New-TimeSpan -Minutes 1) `  # Restart if crashes
+    -RestartCount 999  # Unlimited restarts
 
 # Register task
 try {
@@ -232,11 +232,27 @@ try {
 Write-Info "Starting RedEDR as SYSTEM..."
 try {
     Start-ScheduledTask -TaskName $TaskName
-    Start-Sleep -Seconds 5  # Increased wait time
+    Write-Info "Task started, waiting for process to initialize..."
+
+    # Wait up to 10 seconds for process to start
+    $maxWait = 10
+    $waited = 0
+    while ($waited -lt $maxWait) {
+        Start-Sleep -Seconds 1
+        $waited++
+
+        # Check if process exists early
+        if (Get-Process -Name "RedEdr" -ErrorAction SilentlyContinue) {
+            Write-Info "Process detected after $waited second(s)"
+            break
+        }
+    }
 
     # Check task info for exit code
     $taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName
-    Write-Info "Task state: $($taskInfo.LastTaskResult)"
+    $taskState = (Get-ScheduledTask -TaskName $TaskName).State
+    Write-Info "Task state: $taskState"
+    Write-Info "Last result: $($taskInfo.LastTaskResult) (0 = success, 1 = running)"
 
     # Verify process started (check for wrapper OR RedEDR process)
     if ($usingWrapper) {

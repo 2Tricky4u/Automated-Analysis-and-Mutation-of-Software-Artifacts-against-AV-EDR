@@ -62,13 +62,13 @@ $natName = "AutoMutateVMNAT"
 $subnet = $config.network.subnet
 
 Write-Host "`n+================================================================+" -ForegroundColor Cyan
-Write-Host "|          VM Internet Access Control (NAT Toggle)               |" -ForegroundColor Cyan
+Write-Host "|          VM Internet Access Control                            |" -ForegroundColor Cyan
 Write-Host "+================================================================+`n" -ForegroundColor Cyan
 
 function Get-InternetStatus {
     $nat = Get-NetNat -Name $natName -ErrorAction SilentlyContinue
 
-    # Check egress filtering status (for informational purposes only - we don't manage it)
+    # Check egress filtering status
     $egressBlock = Get-NetFirewallRule -DisplayName "AutoMutate-Egress-Block-Internet" -ErrorAction SilentlyContinue
 
     if ($nat) {
@@ -116,7 +116,7 @@ function Kill-VMExternalConnections {
                     -RemoteAddress $conn.RemoteAddress -RemotePort $conn.RemotePort `
                     -ErrorAction SilentlyContinue | Out-Null
 
-                # Remove the rule after 2 seconds (connection will be reset)
+                # Remove the rule after 2 seconds
                 Start-Sleep -Milliseconds 100
                 Remove-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
 
@@ -147,7 +147,7 @@ switch ($Action) {
             Write-Host "`nVMs are AIR-GAPPED (no internet access)" -ForegroundColor Yellow
         }
 
-        # Show egress filtering status (informational only)
+        # Show egress filtering status
         Write-Host "`nEgress Filtering (managed separately):" -ForegroundColor Cyan
         if ($status.EgressFilteringActive) {
             Write-Host "  Status: ENABLED (whitelist active)" -ForegroundColor Yellow
@@ -175,12 +175,12 @@ switch ($Action) {
     "Disable" {
         Write-Host "Disabling internet access for VMs (removing NAT)..." -ForegroundColor Yellow
 
-        # Step 1: Kill existing connections if requested
+        # Kill existing connections if requested
         if ($KillConnections) {
             Kill-VMExternalConnections -SubnetPrefix $subnet
         }
 
-        # Step 2: Remove NAT
+        # Remove NAT
         $nat = Get-NetNat -Name $natName -ErrorAction SilentlyContinue
         if ($nat) {
             Remove-NetNat -Name $natName -Confirm:$false
