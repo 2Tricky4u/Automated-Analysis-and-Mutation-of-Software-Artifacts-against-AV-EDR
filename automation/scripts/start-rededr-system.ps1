@@ -10,7 +10,10 @@
     Tracing mode: "all", "etw", "kernel", "etwti", "dll" (default: "all")
 
 .PARAMETER WebUI
-    Enable web UI on http://localhost:8080 (default: true)
+    Enable web UI (default: true)
+
+.PARAMETER WebUIPort
+    Web UI port (default: 8080)
 
 .PARAMETER TraceTarget
     Optional: target process to trace (e.g., "notepad.exe")
@@ -43,6 +46,9 @@ param(
 
     [Parameter()]
     [bool]$WebUI = $true,
+
+    [Parameter()]
+    [int]$WebUIPort = 8080,
 
     [Parameter()]
     [string]$TraceTarget = "",
@@ -141,7 +147,9 @@ switch ($Mode) {
 
 if ($WebUI) {
     $args += "--web"
-    Write-Info "Web UI: Enabled (http://localhost:8080)"
+    $args += "--web-port"
+    $args += "$WebUIPort"
+    Write-Info "Web UI: Enabled (http://localhost:$WebUIPort)"
 }
 
 # IMPORTANT: Do NOT use --hide flag with scheduled tasks
@@ -387,7 +395,7 @@ Write-Host "+================================================================+" 
 
 if ($WebUI) {
     Write-Host ""
-    Write-Info "Access web UI: http://localhost:8080"
+    Write-Info "Access web UI: http://localhost:$WebUIPort"
 }
 
 Write-Host ""

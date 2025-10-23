@@ -291,10 +291,16 @@ $DriveSources = @{
 }
 
 
-# Worker config #TODO read from config
-$CpuCount = 2
-$MemoryGB = if ($Os -eq "windows11") { 6 } else { 4 }
-$DiskGB = if ($Os -eq "windows11") { 80 } else { 64 }
+# Worker config - read from config.yaml
+$osTemplate = $config.workers.$Os
+if (-not $osTemplate) {
+    Write-Error "No worker template found for OS '$Os' in config.yaml"
+    exit 1
+}
+
+$CpuCount = [int]$osTemplate.cpu_count
+$MemoryGB = [int]$osTemplate.memory_gb
+$DiskGB = [int]$osTemplate.disk_gb
 
 Write-Info "Creating VM: $WorkerName ($Os) - $StaticIP"
 

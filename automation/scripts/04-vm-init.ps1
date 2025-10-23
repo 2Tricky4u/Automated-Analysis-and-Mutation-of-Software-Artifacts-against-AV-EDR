@@ -15,6 +15,9 @@ param(
     [int]$Prefix = 24,
 
     [Parameter()]
+    [int]$RedEDRPort = 8080,
+
+    [Parameter()]
     [switch]$SkipReboot,
 
     [Parameter()]
@@ -443,10 +446,11 @@ try {
 
 # Open firewall for web UI
 try {
-    if (-not (Get-NetFirewallRule -DisplayName "RedEdr Web 8080" -ErrorAction SilentlyContinue)) {
-        New-NetFirewallRule -DisplayName "RedEdr Web 8080" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8080 | Out-Null
+    $firewallRuleName = "RedEdr Web $RedEDRPort"
+    if (-not (Get-NetFirewallRule -DisplayName $firewallRuleName -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $firewallRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $RedEDRPort | Out-Null
     }
-    Write-Success "Firewall rule OK for TCP 8080"
+    Write-Success "Firewall rule OK for TCP $RedEDRPort"
 } catch { Write-Warn "Firewall rule failed: $($_.Exception.Message)" }
 
 # ===================== SECTION 8: Boot Config for Test-Signed Drivers ======
@@ -561,9 +565,18 @@ if ($StopOnly) {
 
 # Create task to run as SYSTEM
 Write-Info "Starting RedEDR as SYSTEM..."
-$action = New-ScheduledTaskAction -Execute $RedEdrExe -Argument "--all --web --hide" -WorkingDirectory "C:\RedEDR"
+# IMPORTANT: Do NOT use --hide flag with scheduled tasks (causes immediate exit)
+$rededrArgs = "--all --web --web-port $RedEDRPort"
+$action = New-ScheduledTaskAction -Execute $RedEdrExe -Argument $rededrArgs -WorkingDirectory "C:\RedEDR"
 $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Days 365)
+$settings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -DontStopOnIdleEnd `
+    -ExecutionTimeLimit (New-TimeSpan -Days 0) `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -RestartCount 999
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
@@ -572,7 +585,7 @@ Start-Sleep -Seconds 3
 $proc = Get-Process -Name "RedEdr" -ErrorAction SilentlyContinue
 if ($proc) {
     Write-Success "RedEDR started as SYSTEM (PID: $($proc.Id))"
-    Write-Info "Web UI: http://localhost:8080"
+    Write-Info "Web UI: http://localhost:$RedEDRPort"
     Write-Info "Stop: .\Start-RedEDR-SYSTEM.ps1 -StopOnly"
 } else {
     Write-Warn "Process not detected - check Task Scheduler: $TaskName"
@@ -679,14 +692,15 @@ try {
 
 # Firewall port
 try {
-    $fw = Get-NetFirewallRule -DisplayName "RedEdr Web 8080" -ErrorAction SilentlyContinue
+    $firewallRuleName = "RedEdr Web $RedEDRPort"
+    $fw = Get-NetFirewallRule -DisplayName $firewallRuleName -ErrorAction SilentlyContinue
     $verificationResults += [PSCustomObject]@{
         Component = "Firewall"
         Status    = if ($fw) { "OK" } else { "WARN" }
-        Details   = "TCP 8080 inbound for web UI"
+        Details   = "TCP $RedEDRPort inbound for web UI"
     }
 } catch {
-    $verificationResults += [PSCustomObject]@{ Component="Firewall"; Status="WARN"; Details="Check rule for TCP 8080" }
+    $verificationResults += [PSCustomObject]@{ Component="Firewall"; Status="WARN"; Details="Check rule for TCP $RedEDRPort" }
 }
 
 # Print verification table
@@ -715,7 +729,7 @@ Write-Host "|                                                                |"
 Write-Host "|  After reboot, try:                                            |"
 Write-Host "|    cd C:\RedEdr                                                |"
 Write-Host "|    .\RedEdr.exe --all --web --hide --trace notepad.exe         |"
-Write-Host "|  Then open http://localhost:8080                               |"
+Write-Host "|  Then open http://localhost:$RedEDRPort".PadRight(64) "|"
 Write-Host "+================================================================+" -ForegroundColor Yellow
 
 if (-not $SkipReboot) {

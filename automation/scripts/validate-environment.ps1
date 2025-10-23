@@ -118,10 +118,11 @@ if ($adapter) {
 Write-Section "Controller Services"
 
 # Elasticsearch
+$esPort = $config.controller.elasticsearch_port
 try {
-    $response = Invoke-WebRequest -Uri "http://localhost:9200" -TimeoutSec 5 -ErrorAction Stop
+    $response = Invoke-WebRequest -Uri "http://localhost:$esPort" -TimeoutSec 5 -ErrorAction Stop
     if ($response.StatusCode -eq 200) {
-        Write-Pass "Elasticsearch responding (http://localhost:9200)"
+        Write-Pass "Elasticsearch responding (http://localhost:$esPort)"
     } else {
         Write-Fail "Elasticsearch unexpected status: $($response.StatusCode)"
         $FailCount++
@@ -132,10 +133,11 @@ try {
 }
 
 # Kibana
+$kibanaPort = $config.controller.kibana_port
 try {
-    $response = Invoke-WebRequest -Uri "http://localhost:5601" -TimeoutSec 5 -ErrorAction Stop
+    $response = Invoke-WebRequest -Uri "http://localhost:$kibanaPort" -TimeoutSec 5 -ErrorAction Stop
     if ($response.StatusCode -eq 200) {
-        Write-Pass "Kibana responding (http://localhost:5601)"
+        Write-Pass "Kibana responding (http://localhost:$kibanaPort)"
     } else {
         Write-Fail "Kibana unexpected status: $($response.StatusCode)"
         $FailCount++
@@ -302,7 +304,6 @@ if ($FailCount -eq 0) {
     Write-Info "Troubleshooting:"
     Write-Info "  1. Re-run setup: ..\setup-all.ps1"
     Write-Info "  2. Check logs: Get-Content ..\logs\setup-*.log"
-    Write-Info "  3. See automation\README.md Section 8 (Troubleshooting)"
     Write-Host ""
     exit 1
 }
