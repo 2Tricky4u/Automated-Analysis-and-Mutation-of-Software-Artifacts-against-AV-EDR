@@ -319,26 +319,94 @@ if ($EnableVmIsolation) {
     Write-Info "Or use: .\scripts\toggle-vm-isolation.ps1 -Action Enable"
 }
 
-# 11) Security notes
+# 11) Egress Filtering (optional, based on config)
+$EnableEgressFilter = $false
+if ($config.security.ContainsKey('enable_egress_filter')) {
+    try {
+        $EnableEgressFilter = [bool]::Parse($config.security.enable_egress_filter)
+    } catch {
+        Write-Warn "Invalid value for enable_egress_filter: $($config.security.enable_egress_filter), defaulting to false"
+    }
+}
+
+if ($EnableEgressFilter) {
+    Write-Info "`nConfiguring egress filtering (security.enable_egress_filter=true)..."
+
+    # Get adapter
+    $adapter = Get-NetAdapter | Where-Object { $_.Name -like "*$SwitchName*" }
+    if (-not $adapter) {
+        Write-Warn "Could not find IsolationSwitch adapter for egress filtering"
+    } else {
+        $adapterAlias = $adapter.Name
+
+        # Remove old egress rules if exist
+        Remove-NetFirewallRule -DisplayName "AutoMutate-Egress-Block-Internet" -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName "AutoMutate-Egress-Allow-DNS" -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName "AutoMutate-Egress-Allow-HTTP" -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName "AutoMutate-Egress-Allow-HTTPS" -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName "AutoMutate-Egress-Allow-NTP" -ErrorAction SilentlyContinue
+
+        # Create default-deny egress rule
+        New-NetFirewallRule -DisplayName "AutoMutate-Egress-Block-Internet" -Direction Outbound -Action Block `
+            -Protocol Any -InterfaceAlias $adapterAlias -Profile Any -Enabled True | Out-Null
+        Write-Success "Egress blocking rule created (default-deny)"
+
+        # Create whitelist rules (evaluated before block rule)
+        $whitelistRules = @(
+            @{ Name = "AutoMutate-Egress-Allow-DNS"; Protocol = "UDP"; Port = 53; Desc = "DNS queries" },
+            @{ Name = "AutoMutate-Egress-Allow-HTTP"; Protocol = "TCP"; Port = 80; Desc = "HTTP (Windows Update)" },
+            @{ Name = "AutoMutate-Egress-Allow-HTTPS"; Protocol = "TCP"; Port = 443; Desc = "HTTPS (Windows Update)" },
+            @{ Name = "AutoMutate-Egress-Allow-NTP"; Protocol = "UDP"; Port = 123; Desc = "NTP time sync" }
+        )
+
+        foreach ($rule in $whitelistRules) {
+            New-NetFirewallRule -DisplayName $rule.Name -Direction Outbound -Action Allow `
+                -Protocol $rule.Protocol -RemotePort $rule.Port -InterfaceAlias $adapterAlias `
+                -Profile Any -Enabled True | Out-Null
+            Write-Success "Whitelist: $($rule.Desc) ($($rule.Protocol)/$($rule.Port))"
+        }
+
+        Write-Info "Egress filtering ENABLED: Only DNS, HTTP, HTTPS, NTP allowed"
+    }
+} else {
+    Write-Info "`nEgress filtering: DISABLED (default)"
+    Write-Info "VMs have unrestricted outbound access (when NAT is enabled)"
+    Write-Info "To enable filtering: Set security.enable_egress_filter=true in config.yaml"
+    Write-Info "Or use: .\scripts\manage-egress-filter.ps1 -Action Enable"
+}
+
+# 12) Security notes
 Write-Info "`n+================================================================+"
-Write-Info "Security Enhancements Available:"
+Write-Info "Security Configuration Summary:"
 Write-Info "+================================================================+"
 Write-Info ""
-Write-Info "1. Egress Filtering (whitelist-based traffic control):"
-Write-Info "   .\scripts\manage-egress-filter.ps1 -Action Enable"
+Write-Info "1. VM-to-VM Isolation (prevent lateral movement):"
+Write-Info "   Status: $(if ($EnableVmIsolation) { 'ENABLED' } else { 'DISABLED' })"
+Write-Info "   Toggle: .\scripts\toggle-vm-isolation.ps1 -Action Enable|Disable"
+Write-Info ""
+Write-Info "2. Egress Filtering (whitelist-based traffic control):"
+Write-Info "   Status: $(if ($EnableEgressFilter) { 'ENABLED' } else { 'DISABLED' })"
+Write-Info "   Manage: .\scripts\manage-egress-filter.ps1 -Action Enable|Disable"
 Write-Info "   Default whitelist: DNS (53), HTTP (80), HTTPS (443), NTP (123)"
 Write-Info ""
-Write-Info "2. Internet Kill Switch (air-gap VMs):"
-Write-Info "   .\scripts\toggle-vm-internet.ps1 -Action Disable"
-Write-Info "   Add -KillConnections to terminate existing sessions"
+Write-Info "3. Internet Access (NAT for VMs):"
+Write-Info "   Status: $(if ($EnableVmNat) { 'ENABLED' } else { 'DISABLED' })"
+Write-Info "   Toggle: .\scripts\toggle-vm-internet.ps1 -Action Enable|Disable"
+Write-Info "   Kill connections: .\scripts\toggle-vm-internet.ps1 -Action Disable -KillConnections"
 Write-Info ""
-Write-Info "3. VM-to-VM Isolation (prevent lateral movement):"
-Write-Info "   .\scripts\toggle-vm-isolation.ps1 -Action Enable"
-Write-Info "   Current: $(if ($EnableVmIsolation) { 'ENABLED' } else { 'DISABLED' })"
+Write-Info "+================================================================+"
+Write-Info "Recommended Security Profiles:"
+Write-Info "+================================================================+"
 Write-Info ""
-Write-Info "Recommended for malware testing:"
+Write-Info "For malware testing (maximum isolation):"
 Write-Info "   1. .\scripts\toggle-vm-isolation.ps1 -Action Enable"
 Write-Info "   2. .\scripts\toggle-vm-internet.ps1 -Action Disable -KillConnections"
+Write-Info "   3. .\scripts\manage-egress-filter.ps1 -Action Disable (not needed without internet)"
+Write-Info ""
+Write-Info "For controlled internet access (filtered):"
+Write-Info "   1. .\scripts\manage-egress-filter.ps1 -Action Enable"
+Write-Info "   2. .\scripts\toggle-vm-internet.ps1 -Action Enable"
+Write-Info "   3. .\scripts\toggle-vm-isolation.ps1 -Action Enable (optional)"
 
 Write-Success "`nHost setup complete"
 Write-Success "`nNext steps:"
