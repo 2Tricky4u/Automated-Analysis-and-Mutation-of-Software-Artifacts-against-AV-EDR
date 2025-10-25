@@ -257,36 +257,69 @@ volumes:
     driver: local
 EOF
 
-# Start Elasticsearch + Kibana
-echo "[i] Starting Elasticsearch + Kibana..."
-
-# Determine Docker Compose command
-COMPOSE_CMD=""
-if docker compose version &>/dev/null 2>&1; then
-    COMPOSE_CMD="docker compose"
-elif command -v docker-compose &>/dev/null; then
-    COMPOSE_CMD="docker-compose"
+# Set vm.max_map_count for Elasticsearch (persistent across reboots)
+echo "[i] Configuring vm.max_map_count for Elasticsearch..."
+if ! grep -q "vm.max_map_count" /etc/sysctl.d/99-elasticsearch.conf 2>/dev/null; then
+    echo "vm.max_map_count=262144" | sudo tee /etc/sysctl.d/99-elasticsearch.conf >/dev/null
+    sudo sysctl -w vm.max_map_count=262144 >/dev/null
+    echo "[OK] vm.max_map_count=262144 configured (persistent)"
 else
-    echo "[ERROR] Docker Compose not found (neither 'docker compose' nor 'docker-compose')"
-    exit 1
+    echo "[OK] vm.max_map_count already configured"
 fi
 
-echo "[i] Using Docker Compose command: $COMPOSE_CMD"
+# Create systemd service for Elastic Stack (auto-start on WSL boot)
+echo "[i] Creating systemd service for auto-start..."
+sudo tee /etc/systemd/system/elastic-stack.service >/dev/null <<SYSTEMD_EOF
+[Unit]
+Description=Elastic Stack (Elasticsearch + Kibana) for AutoMutate++
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
 
-# Start all services in detached mode (with restart policy and healthchecks)
-echo "[i] Starting containers (detached mode with automatic restart)..."
-cd "$WORKDIR"
-$COMPOSE_CMD up -d
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=$WORKDIR
+User=$USER
+Group=docker
+
+# Clean up any stale containers from previous runs
+ExecStartPre=/usr/bin/docker compose down --remove-orphans
+
+# Start stack
+ExecStart=/usr/bin/docker compose up -d --wait
+
+# Graceful shutdown
+ExecStop=/usr/bin/docker compose down
+
+# Restart policy
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD_EOF
+
+# Enable systemd service (will auto-start containers on WSL boot)
+sudo systemctl daemon-reload
+sudo systemctl enable elastic-stack.service
+echo "[OK] Systemd service created and enabled"
+
+# Start Elasticsearch + Kibana
+echo "[i] Starting Elasticsearch + Kibana via systemd..."
+
+# Start the systemd service (which will run docker compose)
+sudo systemctl start elastic-stack.service
 
 if [ $? -ne 0 ]; then
-    echo "[ERROR] Failed to start Docker containers"
-    echo "[i] Check logs: $COMPOSE_CMD logs"
+    echo "[ERROR] Failed to start elastic-stack service"
+    echo "[i] Check logs: sudo journalctl -xeu elastic-stack.service"
     exit 1
 fi
 
-echo "[OK] Containers started successfully"
+echo "[OK] Containers started successfully via systemd"
 echo "[i] Container status:"
-$COMPOSE_CMD ps
+docker compose ps
 
 # Wait for Elasticsearch to be healthy
 echo "[i] Waiting for Elasticsearch to be healthy (max 90 seconds)..."
@@ -346,16 +379,15 @@ echo "  Elasticsearch: http://localhost:$ES_PORT"
 echo "  Kibana:        http://localhost:$KIBANA_PORT"
 echo "=========================================="
 echo ""
-echo "Container Management:"
-echo "  Status:  $COMPOSE_CMD ps"
-echo "  Logs:    $COMPOSE_CMD logs -f [elasticsearch|kibana]"
-echo "  Stop:    $COMPOSE_CMD down"
-echo "  Restart: $COMPOSE_CMD restart"
+echo "Container Management (via systemd):"
+echo "  Status:   sudo systemctl status elastic-stack"
+echo "  Logs:     docker compose -f $WORKDIR/docker-compose.yml logs -f [elasticsearch|kibana]"
+echo "  Stop:     sudo systemctl stop elastic-stack"
+echo "  Restart:  sudo systemctl restart elastic-stack"
+echo "  Disable:  sudo systemctl disable elastic-stack  # prevent auto-start"
 echo ""
-echo "Containers will automatically restart on system reboot (restart: unless-stopped)"
-echo ""
-echo "To stop services:"
-echo "  cd $WORKDIR && $COMPOSE_CMD down"
+echo "Containers will automatically start when WSL starts (systemd service enabled)"
+echo "WSL will stay alive as long as the systemd service is running"
 echo ""
 
 # Build Controller binaries

@@ -530,46 +530,130 @@ if (-not $DisableEtwTi) {
 $helperScriptContent = @'
 <#
 .SYNOPSIS
-    Start RedEDR as SYSTEM (required for ETW tracing)
+    Start RedEDR as SYSTEM (required for ETW/ETW-TI or kernel hooking) and trace a chosen process.
+
+.DESCRIPTION
+    Prompts you to choose:
+      - Mode: "hooking" (ntdll.dll hooking via KAPC DLL injection) OR "etw" (ETW + ETW-TI)
+      - Target process to observe (e.g., notepad.exe)
+      - Whether to enable the Web UI
+
+    It then creates/starts a Scheduled Task that runs RedEdr.exe as NT AUTHORITY\SYSTEM
+    with the appropriate arguments.
+
+    Notes from RedEDR docs:
+      - Hooking: `.\RedEdr.exe --kernel --inject --trace <proc>`
+        • Requires self-signed kernel modules to load.
+
+      - ETW & ETW-TI: `.\RedEdr.exe --etw --etwti --trace <proc>`
+        • ETW-TI requires an ELAM driver to start RedEdrPplService (self-signed kernel driver).
+          Make a VM snapshot first; PPL service removal is not currently possible.
+        • For Microsoft-Windows-Security-Auditing ETW, run as SYSTEM and configure advanced audit policy.
+
 .PARAMETER StopOnly
-    Stop running instance without starting new one
+    Stop running instance and remove the task without starting a new one.
 #>
 param([switch]$StopOnly)
 
 $ErrorActionPreference = "Stop"
+
 function Write-Success { param($M) Write-Host "[OK] $M" -ForegroundColor Green }
-function Write-Info { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
-function Write-Warn { param($M) Write-Host "[WARN] $M" -ForegroundColor Yellow }
+function Write-Info    { param($M) Write-Host "[INFO] $M" -ForegroundColor Cyan }
+function Write-Warn    { param($M) Write-Host "[WARN] $M" -ForegroundColor Yellow }
+function Write-Err     { param($M) Write-Host "[ERROR] $M" -ForegroundColor Red }
 
-$RedEdrExe = "C:\RedEDR\RedEdr.exe"
-$TaskName = "AutoMutate-RedEDR-SYSTEM"
-
+# --- Admin check ---
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host "[ERROR] Must run as Administrator" -ForegroundColor Red
+    Write-Err "Must run this script as Administrator."
     exit 1
 }
 
-# Stop existing
+$RedEdrExe = "C:\RedEDR\RedEdr.exe"
+$TaskName  = "AutoMutate-RedEDR-SYSTEM"
+
+Write-Info "Verifying RedEDR binary at: $RedEdrExe"
+if (-not (Test-Path $RedEdrExe)) {
+    Write-Err "RedEdr.exe not found. Install to C:\RedEDR first."
+    exit 1
+}
+
+# --- Stop/clean existing ---
 $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($existingTask) {
-    Write-Info "Stopping existing RedEDR instance..."
-    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Write-Info "Stopping existing RedEDR scheduled task..."
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
     Start-Sleep -Seconds 2
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 }
-Get-Process -Name "RedEdr" -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process -Name "RedEdr" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
 if ($StopOnly) {
-    Write-Success "RedEDR stopped"
+    Write-Success "RedEDR stopped and task removed (-StopOnly)."
     exit 0
 }
 
-# Create task to run as SYSTEM
-Write-Info "Starting RedEDR as SYSTEM..."
-# IMPORTANT: Do NOT use --hide flag with scheduled tasks (causes immediate exit)
-$rededrArgs = "--all --web --web-port $RedEDRPort"
-$action = New-ScheduledTaskAction -Execute $RedEdrExe -Argument $rededrArgs -WorkingDirectory "C:\RedEDR"
+# --- Interactive choices ---
+# Mode
+Write-Host ""
+Write-Host "Select mode:" -ForegroundColor Cyan
+Write-Host "  [1] hooking  -> --kernel --inject --trace <proc> (ntdll.dll hooking via KAPC; requires self-signed kernel modules)"
+Write-Host "  [2] etw      -> --etw --etwti --trace <proc> (ETW + ETW-TI; ELAM/PPL required; snapshot VM first)"
+$modeSel = Read-Host "Enter 1 or 2"
+
+switch ($modeSel) {
+    "1" { $Mode = "hooking" }
+    "2" { $Mode = "etw" }
+    default {
+        Write-Err "Invalid selection. Choose 1 or 2."
+        exit 1
+    }
+}
+
+# Target process
+$TraceTarget = Read-Host "Enter process to observe (e.g., notepad.exe)"
+if (-not $TraceTarget -or [string]::IsNullOrWhiteSpace($TraceTarget)) {
+    Write-Err "A target process is required."
+    exit 1
+}
+$TraceTarget = $TraceTarget.Trim()
+
+# Web UI (no port option in RedEDR CLI)
+$webAns = Read-Host "Enable Web UI? [Y/n] (default Y)"
+$EnableWeb = if ($webAns -match '^(n|no)$') { $false } else { $true }
+
+# --- Build argument string ---
+$argList = @()
+switch ($Mode) {
+    "hooking" {
+        Write-Info "Mode: hooking (kernel + APC DLL injection)"
+        Write-Warn "Requires self-signed kernel modules to load."
+        $argList += @("--kernel","--inject","--trace",$TraceTarget)
+    }
+    "etw" {
+        Write-Info "Mode: etw (ETW + ETW-TI)"
+        Write-Warn "ETW-TI requires ELAM and RedEdrPplService (snapshot VM; not easily removable)."
+        $argList += @("--etw","--etwti","--trace",$TraceTarget)
+    }
+}
+
+if ($EnableWeb) {
+    $argList += @("--web")
+    Write-Info "Web UI enabled (--web)."
+}
+
+# IMPORTANT: Do NOT add --hide; scheduled tasks run headless already.
+$rededrArgs = ($argList | ForEach-Object {
+    if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
+}) -join ' '
+
+Write-Host ""
+Write-Info "Creating SYSTEM scheduled task with command:"
+Write-Host "  $RedEdrExe $rededrArgs" -ForegroundColor Gray
+
+# --- Create task to run as SYSTEM ---
+$action    = New-ScheduledTaskAction -Execute $RedEdrExe -Argument $rededrArgs -WorkingDirectory "C:\RedEDR"
 $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet `
+$settings  = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
@@ -579,16 +663,22 @@ $settings = New-ScheduledTaskSettingsSet `
     -RestartCount 999
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+
+# --- Start it ---
+Write-Info "Starting RedEDR as SYSTEM..."
 Start-ScheduledTask -TaskName $TaskName
 Start-Sleep -Seconds 3
 
 $proc = Get-Process -Name "RedEdr" -ErrorAction SilentlyContinue
 if ($proc) {
     Write-Success "RedEDR started as SYSTEM (PID: $($proc.Id))"
-    Write-Info "Web UI: http://localhost:$RedEDRPort"
-    Write-Info "Stop: .\Start-RedEDR-SYSTEM.ps1 -StopOnly"
+    Write-Info    "Mode   : $Mode"
+    Write-Info    "Target : $TraceTarget"
+    if ($EnableWeb) { Write-Info "Web UI : enabled (--web)" }
+    Write-Info    "Stop   : .\Start-RedEDR-SYSTEM.ps1 -StopOnly"
 } else {
-    Write-Warn "Process not detected - check Task Scheduler: $TaskName"
+    Write-Warn "RedEDR process not detected."
+    Write-Info "Open Task Scheduler (taskschd.msc) → Task '$TaskName' → History for details."
 }
 '@
 

@@ -88,6 +88,16 @@ if (-not $SkipController) {
     wsl -d Ubuntu bash -c "cd '$WslProjectRoot/automation' && docker compose down 2>&1" 2>&1 | Out-Null
 
     Write-Success "Containers stopped"
+
+    # Stop WSL keepalive daemon (allows WSL to auto-shutdown)
+    Write-Info "Stopping WSL keepalive daemon..."
+    try {
+        & "$PSScriptRoot\wsl-keepalive-daemon.ps1" -Action Stop -ErrorAction Stop
+        Write-Info "WSL may auto-shutdown after idle timeout (~8 seconds)"
+    } catch {
+        Write-Warning "Could not stop WSL keepalive daemon: $_"
+    }
+
     Write-Info "Note: Background processes may still be running"
     Write-Info "      They will exit automatically once containers are stopped"
 } else {

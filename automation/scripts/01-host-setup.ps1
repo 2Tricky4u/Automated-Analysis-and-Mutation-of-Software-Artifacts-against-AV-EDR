@@ -108,10 +108,11 @@ $wslConfigPath = "$env:USERPROFILE\.wslconfig"
 $wslConfigContent = @"
 [wsl2]
 networkingMode=nat
+localhostForwarding=true
 autoProxy=true
-memory=10GB
-swap=16GB
-processors=4
+memory=12GB
+swap=24GB
+processors=6
 "@
 
 if (-not (Test-Path $wslConfigPath)) {
