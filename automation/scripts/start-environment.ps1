@@ -55,6 +55,15 @@ $config = Read-AutoMutateConfig -ConfigPath $ConfigPath
 if (-not $SkipController) {
     Write-Step "Step 1/3: Starting WSL2 Controller"
 
+    # Start WSL keepalive daemon (prevents WSL auto-shutdown)
+    Write-Info "Starting WSL keepalive daemon (pings every 3 seconds)..."
+    try {
+        & "$PSScriptRoot\wsl-keepalive-daemon.ps1" -Action Start -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to start WSL keepalive daemon: $_"
+        Write-Warning "WSL may auto-shutdown when idle (typically after ~8 seconds)"
+    }
+
     # Check if WSL is running
     $wslState = wsl --list --running 2>$null | Select-String "Ubuntu"
     if (-not $wslState) {
