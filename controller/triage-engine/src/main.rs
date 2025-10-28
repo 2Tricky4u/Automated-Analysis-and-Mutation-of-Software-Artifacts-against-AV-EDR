@@ -11,11 +11,14 @@ use tonic::{transport::Server, Request, Response, Status};
 use tracing::info;
 
 pub mod edr {
+    pub mod common {
+        tonic::include_proto!("edr.common");
+    }
     pub mod controller {
         tonic::include_proto!("edr.controller");
     }
-    pub mod common {
-        tonic::include_proto!("edr.common");
+    pub mod worker {
+        tonic::include_proto!("edr.worker");
     }
 }
 

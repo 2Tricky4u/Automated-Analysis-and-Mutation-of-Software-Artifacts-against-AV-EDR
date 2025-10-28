@@ -36,7 +36,7 @@ elasticsearch:
 workers:
   # Windows 10 template
   windows10:
-    count: 2                    # Number of Windows 10 VMs to create
+    count: 1                    # Number of Windows 10 VMs to create
     edition: "Pro"
     iso_path: "C:\\ISOs\\Win10_22H2_English_x64v1.iso"
     name_prefix: "win10-worker"
@@ -47,7 +47,7 @@ workers:
 
   # Windows 11 template
   windows11:
-    count: 2                    # Number of Windows 11 VMs to create
+    count: 0                    # Number of Windows 11 VMs to create
     edition: "Pro"
     iso_path: "C:\\ISOs\\Win11_25H2_English_x64.iso"
     name_prefix: "win11-worker"

@@ -5,14 +5,23 @@ use tonic::{transport::Server, Request, Response, Status};
 use tracing::info;
 
 pub mod edr {
-    tonic::include_proto!("edr");
+    pub mod common {
+        tonic::include_proto!("edr.common");
+    }
+    pub mod controller {
+        tonic::include_proto!("edr.controller");
+    }
+    pub mod worker {
+        tonic::include_proto!("edr.worker");
+    }
 }
 
-use edr::{
+use edr::controller::{
     controller_server::{Controller, ControllerServer},
     JobRequest, JobResponse, JobStatusRequest, JobStatusResponse, QueryRequest, QueryResponse,
     TriageRequest, TriageResponse,
 };
+use edr::common::{TelemetryAck, TelemetryData, JobId};
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -76,7 +85,9 @@ impl Controller for SchedulerService {
         info!("Scheduled job: {} ({})", job_id, req.name);
 
         Ok(Response::new(JobResponse {
-            job_id: job_id.clone(),
+            job_id: Some(JobId {
+                value: job_id.clone(),
+            }),
             accepted: true,
             message: format!("Job {} scheduled successfully", job_id),
             estimated_duration_seconds: 300,
@@ -136,6 +147,35 @@ impl Controller for SchedulerService {
         Ok(Response::new(QueryResponse {
             results: vec![],
             total_count: 0,
+        }))
+    }
+
+    async fn stream_telemetry(
+        &self,
+        request: Request<tonic::Streaming<TelemetryData>>,
+    ) -> Result<Response<TelemetryAck>, Status> {
+        let mut stream = request.into_inner();
+        let mut events_count = 0;
+
+        info!("Telemetry stream opened");
+
+        // Process incoming telemetry data
+        while let Some(telemetry) = stream.message().await? {
+            events_count += 1;
+            info!(
+                "Telemetry event #{}: job={}, type={}, ts={}",
+                events_count, telemetry.job_id, telemetry.event_type, telemetry.timestamp
+            );
+
+            // TODO: Forward to Elasticsearch, store in buffer, etc.
+            // For now, just log and count
+        }
+
+        info!("Telemetry stream closed, received {} events", events_count);
+
+        Ok(Response::new(TelemetryAck {
+            received: true,
+            events_count,
         }))
     }
 }

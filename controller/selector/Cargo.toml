@@ -16,6 +16,7 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 tonic.workspace = true
 prost.workspace = true
+tonic-prost = "0.14.2"
 
 [build-dependencies]
-tonic-build = "0.11"
+tonic-prost-build = "0.14.2"

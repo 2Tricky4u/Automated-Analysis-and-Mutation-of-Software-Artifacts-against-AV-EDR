@@ -2,10 +2,18 @@ use tonic::Request;
 use tracing::info;
 
 pub mod edr {
-    tonic::include_proto!("edr");
+    pub mod common {
+        tonic::include_proto!("edr.common");
+    }
+    pub mod controller {
+        tonic::include_proto!("edr.controller");
+    }
+    pub mod worker {
+        tonic::include_proto!("edr.worker");
+    }
 }
 
-use edr::{controller_client::ControllerClient, TriageRequest};
+use edr::controller::{controller_client::ControllerClient, TriageRequest};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
