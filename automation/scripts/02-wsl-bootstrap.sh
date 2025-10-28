@@ -51,20 +51,23 @@ fi
 if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null 2>&1; then
   echo "[OK] systemd is running"
 else
-  echo "[WARN] systemd is NOT running yet. WSL restart required."
+  echo "[WARN] systemd is NOT running."
   echo ""
-  echo "=========================================="
-  echo "ACTION REQUIRED: Restart WSL2"
-  echo "=========================================="
-  echo ""
-  echo "From Windows PowerShell, run:"
-  echo "  wsl --shutdown"
-  echo ""
-  echo "Then re-run this script to continue setup."
-  echo ""
-  echo "=========================================="
-  exit 3
+
+  # Try to start systemd manually (only works if systemd is enabled in WSL config)
+  if command -v systemctl &>/dev/null; then
+    sudo /usr/lib/systemd/systemd --system &>/dev/null & disown
+    sleep 2
+  fi
+
+  # Re-check
+  if systemctl is-system-running &>/dev/null 2>&1; then
+    echo "[OK] systemd started successfully."
+  else
+    echo "=========================================="
+  fi
 fi
+
 
 # If someone made resolv.conf immutable, undo it
 sudo chattr -i /etc/resolv.conf 2>/dev/null || true

@@ -14,9 +14,6 @@ service WorkerAgent {
 
   // Get worker health status
   rpc HealthCheck(HealthRequest) returns (HealthResponse);
-
-  // Stream telemetry data
-  rpc StreamTelemetry(stream TelemetryData) returns (TelemetryAck);
 }
 
 // Harness Service - sample execution with monitoring
@@ -75,19 +72,6 @@ message HealthResponse {
   int32 active_jobs = 5;
 }
 
-// Telemetry data streaming
-message TelemetryData {
-  string job_id = 1;
-  string event_type = 2;  // etw, procmon, network
-  int64 timestamp = 3;
-  bytes payload = 4;
-  map<string, string> metadata = 5;
-}
-
-message TelemetryAck {
-  bool received = 1;
-  int32 events_count = 2;
-}
 
 // Harness messages
 message ExecuteRequest {

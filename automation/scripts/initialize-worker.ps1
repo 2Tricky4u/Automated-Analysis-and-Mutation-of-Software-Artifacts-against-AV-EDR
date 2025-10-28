@@ -130,12 +130,139 @@ if ($waited -ge $maxWait) {
     exit 1
 }
 
-# Step 4: Get credentials
+# Step 4: Prepare build package for VM
+Write-Host ""
+Write-Info "Preparing worker agent build package..."
+
+# Detect project root (2 levels up from scripts/)
+$ProjectRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+
+if (-not (Test-Path "$ProjectRoot\Cargo.toml")) {
+    Write-Err "Cannot find project root with Cargo.toml"
+    Write-Info "Expected: $ProjectRoot\Cargo.toml"
+    exit 1
+}
+
+# Create temporary build package
+$BuildPackage = "$env:TEMP\worker-build-$VMName"
+if (Test-Path $BuildPackage) {
+    Remove-Item $BuildPackage -Recurse -Force
+}
+New-Item -ItemType Directory -Path $BuildPackage -Force | Out-Null
+
+Write-Info "Project root: $ProjectRoot"
+Write-Info "Build package: $BuildPackage"
+
+# Copy minimal files needed for worker agent build
+try {
+    # Create minimal workspace Cargo.toml (only worker/agent member)
+    # Read original to extract workspace.package and workspace.dependencies
+    $originalCargoToml = Get-Content "$ProjectRoot\Cargo.toml" -Raw
+
+    # Create minimal workspace config for VM build
+    $minimalWorkspace = @"
+[workspace]
+resolver = "2"
+members = [
+    "worker/agent",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["EDR Lab Team"]
+
+[workspace.dependencies]
+tokio = { version = "1.35", features = ["full"] }
+tonic = "0.11"
+prost = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1.0"
+thiserror = "1.0"
+"@
+
+    $minimalWorkspace | Out-File -FilePath "$BuildPackage\Cargo.toml" -Encoding UTF8 -Force
+    Write-Success "Created minimal workspace Cargo.toml"
+
+    # Copy Cargo.lock if exists (speeds up builds)
+    Copy-Item "$ProjectRoot\Cargo.lock" "$BuildPackage\" -Force -ErrorAction SilentlyContinue
+
+    # Worker agent source
+    $workerSrc = "$ProjectRoot\worker\agent"
+    $workerDest = "$BuildPackage\worker\agent"
+    if (Test-Path $workerSrc) {
+        New-Item -ItemType Directory -Path $workerDest -Force | Out-Null
+        Copy-Item "$workerSrc\*" "$workerDest\" -Recurse -Force
+        Write-Success "Copied worker agent source"
+    } else {
+        Write-Err "Worker agent source not found: $workerSrc"
+        exit 1
+    }
+
+    # Proto definitions (needed by build.rs)
+    $protoSrc = "$ProjectRoot\controller\proto"
+    $protoDest = "$BuildPackage\controller\proto"
+    if (Test-Path $protoSrc) {
+        New-Item -ItemType Directory -Path $protoDest -Force | Out-Null
+        Copy-Item "$protoSrc\*.proto" "$protoDest\" -Force
+        Write-Success "Copied proto definitions"
+    } else {
+        Write-Err "Proto files not found: $protoSrc"
+        exit 1
+    }
+
+    # Config crate (if exists and referenced by worker)
+    $configSrc = "$ProjectRoot\config"
+    if (Test-Path $configSrc) {
+        $configDest = "$BuildPackage\config"
+        New-Item -ItemType Directory -Path $configDest -Force | Out-Null
+        Copy-Item "$configSrc\*" "$configDest\" -Recurse -Force
+        Write-Info "Copied config crate"
+    }
+
+    Write-Success "Build package prepared: $(Get-ChildItem $BuildPackage -Recurse | Measure-Object -Property Length -Sum | Select-Object -ExpandProperty Sum) bytes"
+
+} catch {
+    Write-Err "Failed to prepare build package: $($_.Exception.Message)"
+    exit 1
+}
+
+# Step 5: Get credentials
 Write-Host ""
 Write-Info "Enter VM credentials for PowerShell Direct..."
 $cred = Get-Credential -UserName $Username -Message "Enter password for $Username"
 
-# Step 5: Run 04-vm-init.ps1 via PowerShell Direct
+# Step 6: Copy build package to VM
+Write-Host ""
+Write-Info "Copying build package to VM..."
+
+try {
+    # Create destination directory in VM
+    Invoke-Command -VMName $VMName -Credential $cred -ScriptBlock {
+        $buildDir = "C:\AutoMutate\build"
+        if (Test-Path $buildDir) {
+            Remove-Item $buildDir -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
+    }
+
+    # Copy files to VM using PowerShell Direct
+    # Note: Copy-Item with -ToSession is the most reliable method
+    $session = New-PSSession -VMName $VMName -Credential $cred
+    Copy-Item "$BuildPackage\*" -Destination "C:\AutoMutate\build\" -ToSession $session -Recurse -Force
+    Remove-PSSession $session
+
+    Write-Success "Build package copied to VM"
+
+} catch {
+    Write-Err "Failed to copy build package: $($_.Exception.Message)"
+    exit 1
+}
+
+# Step 7: Run 04-vm-init.ps1 via PowerShell Direct
 Write-Host ""
 Write-Info "Running 04-vm-init.ps1 inside VM via PowerShell Direct..."
 Write-Info "This will take several minutes (dependencies, RedEDR, configuration)..."

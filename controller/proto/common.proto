@@ -58,3 +58,17 @@ message RunResult {
   PerfMetrics perf = 9;
   string notes = 10;
 }
+
+// Telemetry data streaming (used by workers to push to controller)
+message TelemetryData {
+  string job_id = 1;
+  string event_type = 2;  // etw, procmon, network
+  int64 timestamp = 3;
+  bytes payload = 4;
+  map<string, string> metadata = 5;
+}
+
+message TelemetryAck {
+  bool received = 1;
+  int32 events_count = 2;
+}

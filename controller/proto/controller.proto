@@ -17,6 +17,9 @@ service Controller {
 
   // Query analysis results
   rpc QueryResults(QueryRequest) returns (QueryResponse);
+
+  // Workers push telemetry data here (client-streaming)
+  rpc StreamTelemetry(stream edr.common.TelemetryData) returns (edr.common.TelemetryAck);
 }
 
 // Selector Service - mutation selection with feedback
