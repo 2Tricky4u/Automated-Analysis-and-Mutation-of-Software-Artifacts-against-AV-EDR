@@ -4,15 +4,14 @@ A comprehensive hybrid EDR lab for automated analysis and mutation testing of so
 
 ## 🏗️ Architecture
 
-This lab implements a build → run → collect → visualize loop for testing malware detection:
+This lab implements a build → run → collect → visualize loop for testing EDR detection capabilities given an artifact:
 
-- **Windows Host (Hyper-V)**: Two Windows VMs (baseline and Windows Defender)
-- **WSL2 Ubuntu**: Docker containers running Elastic Stack
+- **Windows Workers (Hyper-V)**: Windows VMs (baseline and Windows Defender/Cortex)
+- **WSL2 Ubuntu**: Controller with Docker containers running Elastic Stack
 - **Rust gRPC Services**: Controller and Worker agents
 - **C++ ETW Consumer**: Real-time Windows telemetry with krabsetw
-- **Telemetry Pipeline**: ETW → Filebeat → Elasticsearch → Kibana
+- **Telemetry Pipeline**: RedEDR → Filebeat → Elasticsearch → Kibana
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture documentation.
 
 ## 📁 Project Structure
 
@@ -35,44 +34,6 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture docum
 │   └── kibana-dashboards/ # Kibana visualizations
 └── docs/                # Documentation
     └── schemas/        # JSON schemas for jobs and telemetry
-```
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Rust 1.75+ (for gRPC services)
-- Docker and Docker Compose (for Elastic Stack)
-- CMake and C++ compiler (for ETW consumer)
-- Protobuf compiler (`protoc`)
-- Windows with Hyper-V (for full lab setup)
-
-### Building
-
-```bash
-# Build all Rust services
-cargo build --release
-
-# Build ETW consumer (Windows only)
-cd telemetry/etw-consumer
-mkdir build && cd build
-cmake ..
-cmake --build . --config Release
-```
-
-### Running with Docker
-
-```bash
-# Start the entire stack
-cd build/dockerfiles
-docker-compose up -d
-
-# Check services
-docker-compose ps
-
-# View logs
-docker-compose logs -f controller
-docker-compose logs -f worker
 ```
 
 ### Service Endpoints
@@ -124,7 +85,7 @@ grpcurl -plaintext -d '{
 
 ## 🧬 Mutation Strategies
 
-Available mutation techniques:
+Mutation techniques idea:
 - **String Obfuscation**: Encrypt/encode strings at compile time
 - **API Hashing**: Replace API names with hash-based lookups
 - **Control Flow Flattening**: Obscure program control flow
@@ -133,7 +94,7 @@ Available mutation techniques:
 
 ## 📊 Telemetry Events
 
-The ETW consumer captures:
+The ETW consumer could captures:
 - Process creation/termination
 - Thread creation
 - Image (DLL) loading
@@ -180,30 +141,6 @@ cargo build -p emitter
 # Triage client
 cargo build -p triage-client
 ```
-
-## 🔒 Security Notes
-
-⚠️ **Warning**: This lab is designed for security research and testing. Only use it in isolated environments with proper authorization.
-
-- Run VMs in isolated network segments
-- Do not expose services to untrusted networks
-- Use proper sandboxing for malware execution
-- Follow responsible disclosure practices
-
-## 📚 Documentation
-
-- [Architecture Overview](docs/ARCHITECTURE.md)
-- [gRPC API Documentation](controller/proto/edr.proto)
-- [Job Schema](docs/schemas/job-schema.json)
-- [Telemetry Schema](docs/schemas/telemetry-schema.json)
-
-## 🤝 Contributing
-
-Contributions are welcome! Please ensure:
-- Code follows Rust style guidelines (`cargo fmt`)
-- All tests pass (`cargo test`)
-- New features include tests
-- Documentation is updated
 
 ## 📝 License
 
