@@ -169,19 +169,19 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
-authors = ["EDR Lab Team"]
+edition = "2024"
+authors = ["2Tricky4u"]
 
 [workspace.dependencies]
-tokio = { version = "1.35", features = ["full"] }
-tonic = "0.11"
-prost = "0.12"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tracing = "0.1"
-tracing-subscriber = "0.3"
-anyhow = "1.0"
-thiserror = "1.0"
+tokio = { version = "1.48.0", features = ["full"] }
+tonic = "0.14.2"
+prost = "0.14.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.20"
+anyhow = "1.0.100"
+thiserror = "2.0.17"
 "@
 
     $minimalWorkspace | Out-File -FilePath "$BuildPackage\Cargo.toml" -Encoding UTF8 -Force
