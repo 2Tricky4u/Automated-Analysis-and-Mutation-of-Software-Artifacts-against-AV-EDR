@@ -1,0 +1,108 @@
+# Controller Runtime Configuration
+# Generated from automation/config.yaml
+# Do not edit manually - changes will be overwritten
+
+[server]
+bind_address = "{{NETWORK_HOST_IP}}:{{CONTROLLER_GRPC_PORT}}"
+max_connections = {{CONTROLLER_MAX_CONNECTIONS}}
+request_timeout_secs = {{CONTROLLER_REQUEST_TIMEOUT_SECS}}
+tls_enabled = false
+require_client_cert = false
+
+[elasticsearch]
+url = "http://{{NETWORK_HOST_IP}}:{{CONTROLLER_ELASTICSEARCH_PORT}}"
+index_prefix = "automutate-"
+etw_index = "etw-*"
+rededr_index = "rededr-*"
+runs_index = "runs"
+bulk_size = 100
+bulk_timeout_ms = 5000
+bulk_max_retries = 3
+ilm_enabled = true
+ilm_max_age_days = 90
+ilm_max_size_gb = 50
+
+[triage]
+model_type = "{{TRIAGE_MODEL_TYPE}}"
+confidence_threshold = {{TRIAGE_CONFIDENCE_THRESHOLD}}
+min_support_count = {{TRIAGE_MIN_SUPPORT_COUNT}}
+max_hypotheses = {{TRIAGE_MAX_HYPOTHESES}}
+feature_importance_method = "{{TRIAGE_FEATURE_IMPORTANCE_METHOD}}"
+
+[mutator]
+max_mutations_per_artifact = {{MUTATOR_MAX_MUTATIONS}}
+
+[mutator.selector_weights]
+coverage = {{MUTATOR_WEIGHT_COVERAGE}}
+evasion = {{MUTATOR_WEIGHT_EVASION}}
+similarity = {{MUTATOR_WEIGHT_SIMILARITY}}
+
+[mutator.probabilities]
+ast_transform = {{MUTATOR_PROB_AST}}
+binary_transform = {{MUTATOR_PROB_BINARY}}
+behavioral_transform = {{MUTATOR_PROB_BEHAVIORAL}}
+
+[mutator.ast]
+control_flow_jitter = true
+opaque_predicates = true
+constant_encoding = true
+import_reshaping = true
+api_indirection = true
+
+[mutator.binary]
+splice_enabled = true
+shellcode_reencoding = true
+preserve_semantics = true
+
+[mutator.behavioral]
+benign_preambles = true
+staged_execution = true
+timing_randomization = true
+
+[scheduler]
+queue_capacity = {{SCHEDULER_QUEUE_CAPACITY}}
+max_concurrent_runs_per_worker = {{SCHEDULER_MAX_CONCURRENT}}
+run_timeout_secs = {{SCHEDULER_RUN_TIMEOUT_SECS}}
+max_retries = {{SCHEDULER_MAX_RETRIES}}
+retry_backoff_secs = {{SCHEDULER_RETRY_BACKOFF_SECS}}
+
+[corpus]
+storage_path = "{{CORPUS_STORAGE_PATH}}"
+max_size = {{CORPUS_MAX_SIZE}}
+prioritization = "{{CORPUS_PRIORITIZATION}}"
+novelty_threshold = {{CORPUS_NOVELTY_THRESHOLD}}
+
+[logging]
+level = "{{LOGGING_LEVEL}}"
+format = "json"
+file_enabled = true
+file_path = "/var/log/automutate/controller.log"
+file_rotation = "daily"
+file_retention_days = 30
+
+[metrics]
+metrics_enabled = true
+metrics_bind_address = "0.0.0.0:9090"
+
+[telemetry]
+collection_interval_ms = {{TELEMETRY_COLLECTION_INTERVAL_MS}}
+rededr_enabled = {{REDEDR_ENABLE_ETW}}
+rededr_data_path = "{{REDEDR_DATA_DIR}}"
+api_tracing_enabled = {{TELEMETRY_API_TRACING_ENABLED}}
+api_trace_format = "newline-json"
+bb_coverage_enabled = {{TELEMETRY_BB_COVERAGE_ENABLED}}
+bb_bitmap_size = 65536
+line_tracing_enabled = {{TELEMETRY_LINE_TRACING_ENABLED}}
+line_trace_targeted = false
+
+[differential]
+enabled = {{DIFFERENTIAL_ENABLED}}
+layers = ["event_counts", "api_sequences", "bb_coverage", "argument_patterns"]
+lift_threshold = {{DIFFERENTIAL_LIFT_THRESHOLD}}
+min_confidence = {{DIFFERENTIAL_MIN_CONFIDENCE}}
+
+[experiments]
+track_experiments = true
+experiment_metadata_required = true
+require_deterministic_seeds = true
+require_artifact_ids = true
