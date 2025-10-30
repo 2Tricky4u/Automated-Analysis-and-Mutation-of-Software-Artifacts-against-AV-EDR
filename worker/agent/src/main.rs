@@ -17,6 +17,7 @@ pub mod edr {
 use edr::worker::{
     worker_agent_server::{WorkerAgent, WorkerAgentServer},
     BuildRequest, BuildResponse, HealthRequest, HealthResponse, SampleRequest, SampleResponse,
+    PingRequest, PingResponse,
 };
 use edr::controller::controller_client::ControllerClient;
 use edr::common::{TelemetryData, ArtifactId};
@@ -34,6 +35,25 @@ impl WorkerAgentService {
 
 #[tonic::async_trait]
 impl WorkerAgent for WorkerAgentService {
+    async fn ping(
+        &self,
+        request: Request<PingRequest>,
+    ) -> Result<Response<PingResponse>, Status> {
+        let req = request.into_inner();
+        let timestamp = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        info!("Ping received: {}", req.message);
+
+        Ok(Response::new(PingResponse {
+            message: format!("pong: {}", req.message),
+            timestamp,
+            server: format!("worker-agent/{}", self.worker_id),
+        }))
+    }
+
     async fn execute_build(
         &self,
         request: Request<BuildRequest>,
@@ -170,8 +190,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // TODO: Pass _tx to agent service so it can send telemetry events
     // For now, agent just handles RPC calls
 
+    // gRPC reflection for grpcurl
+    let reflection_service = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!("edr_descriptor"))
+        .build_v1()?;
+
     Server::builder()
         .add_service(WorkerAgentServer::new(agent))
+        .add_service(reflection_service)
         .serve(addr)
         .await?;
 

@@ -6,6 +6,9 @@ import "common.proto";
 
 // Worker Agent Service - handles build and execution tasks
 service WorkerAgent {
+  // Debug: simple ping to test connectivity
+  rpc Ping(PingRequest) returns (PingResponse);
+
   // Execute a build task on the worker
   rpc ExecuteBuild(BuildRequest) returns (BuildResponse);
 
@@ -23,6 +26,17 @@ service Harness {
 
   // Monitor execution status
   rpc Monitor(MonitorRequest) returns (stream MonitorEvent);
+}
+
+// Debug messages
+message PingRequest {
+  string message = 1;
+}
+
+message PingResponse {
+  string message = 1;
+  int64 timestamp = 2;
+  string server = 3;
 }
 
 // Build task request

@@ -6,6 +6,9 @@ import "common.proto";
 
 // Controller Service - orchestrates the analysis pipeline
 service Controller {
+  // Debug: simple ping to test connectivity
+  rpc Ping(PingRequest) returns (PingResponse);
+
   // Schedule a new analysis job
   rpc ScheduleJob(JobRequest) returns (JobResponse);
 
@@ -38,6 +41,17 @@ service Triage {
 
   // Get feature-avoid list
   rpc GetAvoidList(AvoidListRequest) returns (AvoidListResponse);
+}
+
+// Debug messages
+message PingRequest {
+  string message = 1;
+}
+
+message PingResponse {
+  string message = 1;
+  int64 timestamp = 2;
+  string server = 3;
 }
 
 // Job scheduling
