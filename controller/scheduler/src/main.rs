@@ -19,7 +19,7 @@ pub mod edr {
 use edr::controller::{
     controller_server::{Controller, ControllerServer},
     JobRequest, JobResponse, JobStatusRequest, JobStatusResponse, QueryRequest, QueryResponse,
-    TriageRequest, TriageResponse,
+    TriageRequest, TriageResponse, PingRequest, PingResponse,
 };
 use edr::common::{TelemetryAck, TelemetryData, JobId};
 
@@ -61,6 +61,25 @@ impl SchedulerService {
 
 #[tonic::async_trait]
 impl Controller for SchedulerService {
+    async fn ping(
+        &self,
+        request: Request<PingRequest>,
+    ) -> Result<Response<PingResponse>, Status> {
+        let req = request.into_inner();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        info!("Ping received: {}", req.message);
+
+        Ok(Response::new(PingResponse {
+            message: format!("pong: {}", req.message),
+            timestamp,
+            server: "controller/scheduler".to_string(),
+        }))
+    }
+
     async fn schedule_job(
         &self,
         request: Request<JobRequest>,
