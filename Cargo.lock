@@ -1616,6 +1616,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "tonic-reflection",
  "tracing",
  "tracing-subscriber",
 ]
