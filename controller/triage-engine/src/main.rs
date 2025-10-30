@@ -7,7 +7,7 @@
 /// - Analyzes runs to generate explainable hypotheses
 /// - Maintains avoid-features list from surrogate classifier
 /// - Provides feedback to Selector for adaptive mutation
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status, transport::Server};
 use tracing::info;
 
 pub mod edr {
@@ -23,8 +23,8 @@ pub mod edr {
 }
 
 use edr::controller::{
-    triage_server::{Triage, TriageServer},
     AnalysisRequest, AnalysisResponse, AvoidListRequest, AvoidListResponse,
+    triage_server::{Triage, TriageServer},
 };
 
 #[derive(Debug, Default)]

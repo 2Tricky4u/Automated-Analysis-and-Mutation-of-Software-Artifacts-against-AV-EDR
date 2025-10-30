@@ -13,7 +13,7 @@ pub mod edr {
     }
 }
 
-use edr::controller::{controller_client::ControllerClient, TriageRequest};
+use edr::controller::{TriageRequest, controller_client::ControllerClient};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

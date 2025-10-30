@@ -4,9 +4,9 @@
 /// Provides HTTP REST API as alternative to gRPC CLI
 /// for job submission, status monitoring, and report viewing.
 use axum::{
+    Json, Router,
     extract::Path,
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use tracing::info;
