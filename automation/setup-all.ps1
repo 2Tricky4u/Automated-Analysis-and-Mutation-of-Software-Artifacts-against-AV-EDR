@@ -82,6 +82,27 @@ try {
     exit 1
 }
 
+# Generate runtime TOML configs from YAML
+Write-Step "Step 0/4: Generate Runtime Configs"
+Write-Info "Generating TOML configs from master config.yaml..."
+
+$GenerateConfigScript = Join-Path $PSScriptRoot "scripts\generate-configs.ps1"
+if (-not (Test-Path $GenerateConfigScript)) {
+    Write-Error "Config generator script not found: $GenerateConfigScript"
+    exit 1
+}
+
+& $GenerateConfigScript -ConfigPath $ConfigPath -Force
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to generate configs"
+    exit 1
+}
+
+Write-Success "Runtime configs generated in automation/generated/"
+Write-Info "  - controller.toml (for WSL2)"
+Write-Info "  - worker-XX.toml (for each VM)"
+
 # Setup logging
 $LogDir = Join-Path $PSScriptRoot "logs"
 if (-not (Test-Path $LogDir)) {
@@ -93,7 +114,7 @@ Start-Transcript -Path $LogFile -Append
 Write-Info "Log file: $LogFile"
 
 # Step 1: Host Setup
-Write-Step "Step 1/4: Host Configuration"
+Write-Step "Step 1/5: Host Configuration"
 Write-Info "Enabling Hyper-V, WSL2, and configuring network isolation..."
 
 $HostSetupScript = Join-Path $PSScriptRoot "scripts\01-host-setup.ps1"
@@ -114,7 +135,7 @@ if ($LASTEXITCODE -eq 3010) {
 Write-Success "Host configuration complete"
 
 # Step 2: WSL2 Bootstrap
-Write-Step "Step 2/4: WSL2 Controller Bootstrap"
+Write-Step "Step 2/5: WSL2 Controller Bootstrap"
 Write-Info "Installing Rust toolchain, Elasticsearch, and building Controller..."
 
 # Detect WSL Ubuntu home directory
@@ -150,7 +171,7 @@ Write-Info "Elasticsearch: http://localhost:9200" #TODO make the port read from 
 Write-Info "Kibana: http://localhost:5601"
 
 # Step 3: Create Worker VMs
-Write-Step "Step 3/4: Worker VM Creation"
+Write-Step "Step 3/5: Worker VM Creation"
 
 # Get workers from template config using shared module
 $WorkerConfigs = Get-AutoMutateWorkers -ConfigPath $ConfigPath
@@ -182,7 +203,7 @@ foreach ($worker in $WorkerConfigs) {
 }
 
 # Step 4: Manual Instructions
-Write-Step "Step 4/4: Manual Configuration Required"
+Write-Step "Step 4/5: Manual Configuration Required"
 
 Write-Host @"
 

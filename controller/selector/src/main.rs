@@ -7,7 +7,7 @@
 /// - Selects mutations based on triage feedback
 /// - Implements exploration/exploitation tradeoff
 /// - Tracks outcome history for adaptive selection
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status, transport::Server};
 use tracing::info;
 
 pub mod edr {
@@ -23,8 +23,8 @@ pub mod edr {
 }
 
 use edr::controller::{
-    selector_server::{Selector, SelectorServer},
     OutcomeAck, OutcomeReport, SelectionRequest, SelectionResponse,
+    selector_server::{Selector, SelectorServer},
 };
 
 #[derive(Debug, Default)]

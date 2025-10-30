@@ -1,7 +1,8 @@
+use edr_config::ControllerConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status, transport::Server};
 use tracing::info;
 
 pub mod edr {
@@ -16,12 +17,12 @@ pub mod edr {
     }
 }
 
+use edr::common::{JobId, TelemetryAck, TelemetryData};
 use edr::controller::{
+    JobRequest, JobResponse, JobStatusRequest, JobStatusResponse, PingRequest, PingResponse,
+    QueryRequest, QueryResponse, TriageRequest, TriageResponse,
     controller_server::{Controller, ControllerServer},
-    JobRequest, JobResponse, JobStatusRequest, JobStatusResponse, QueryRequest, QueryResponse,
-    TriageRequest, TriageResponse, PingRequest, PingResponse,
 };
-use edr::common::{TelemetryAck, TelemetryData, JobId};
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -61,10 +62,7 @@ impl SchedulerService {
 
 #[tonic::async_trait]
 impl Controller for SchedulerService {
-    async fn ping(
-        &self,
-        request: Request<PingRequest>,
-    ) -> Result<Response<PingResponse>, Status> {
+    async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PingResponse>, Status> {
         let req = request.into_inner();
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -203,10 +201,31 @@ impl Controller for SchedulerService {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let addr = "0.0.0.0:50051".parse()?;
+    // Load generated TOML config (auto-finds in standard locations)
+    // Search order:
+    //   1. AUTOMUTATE_CONTROLLER_CONFIG env var
+    //   2. ~/automutate/config/controller.toml (WSL2 deployment default)
+    //   3. config/controller.toml (local development)
+    //   4. automation/templates/controller.toml (template fallback)
+    let config = ControllerConfig::load().unwrap_or_else(|e| {
+        eprintln!("Failed to load controller.toml: {}", e);
+        eprintln!("Run 'automation/scripts/generate-configs.ps1' to create config files");
+        eprintln!("Or set AUTOMUTATE_CONTROLLER_CONFIG environment variable");
+        std::process::exit(1);
+    });
+
+    info!("Loaded controller config successfully");
+    info!("Bind address: {}", config.server.bind_address);
+    info!("Elasticsearch: {}", config.elasticsearch.url);
+    info!(
+        "Triage model: {} (threshold: {})",
+        config.triage.model_type, config.triage.confidence_threshold
+    );
+
+    let addr = config.server.bind_address.parse()?;
     let scheduler = SchedulerService::new();
 
-    info!("Controller/Scheduler starting on {}", addr);
+    info!("Controller/Scheduler starting...");
 
     // gRPC reflection for grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()

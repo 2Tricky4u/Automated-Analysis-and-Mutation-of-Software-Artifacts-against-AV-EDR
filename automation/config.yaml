@@ -21,10 +21,63 @@ network:
 
 # Controller configuration (runs in WSL2)
 controller:
+  # Infrastructure ports
   grpc_port: 50051
   elasticsearch_port: 9200
   kibana_port: 5601
   triage_port: 8080
+
+  # Runtime settings (used to generate controller.toml)
+  max_connections: 100
+  request_timeout_secs: 300
+
+  # Triage configuration
+  triage:
+    model_type: "forest"
+    confidence_threshold: 0.7
+    min_support_count: 10
+    max_hypotheses: 10
+    feature_importance_method: "shap"
+
+  # Mutator configuration
+  mutator:
+    max_mutations_per_artifact: 5
+    selector_weights:
+      coverage: 1.5
+      evasion: 3.0
+      similarity: 0.5
+    probabilities:
+      ast_transform: 0.7
+      binary_transform: 0.5
+      behavioral_transform: 0.6
+
+  # Scheduler configuration
+  scheduler:
+    queue_capacity: 1000
+    max_concurrent_runs_per_worker: 1
+    run_timeout_secs: 300
+    max_retries: 3
+    retry_backoff_secs: 30
+
+  # Corpus configuration
+  corpus:
+    storage_path: "/var/lib/automutate/corpus"
+    max_size: 10000
+    prioritization: "hybrid"
+    novelty_threshold: 0.1
+
+  # Telemetry configuration
+  telemetry:
+    collection_interval_ms: 100
+    api_tracing_enabled: true
+    bb_coverage_enabled: true
+    line_tracing_enabled: false
+
+  # Differential analysis
+  differential:
+    enabled: true
+    lift_threshold: 1.2
+    min_confidence: 0.5
 
 # Elasticsearch configuration
 elasticsearch:
@@ -45,6 +98,31 @@ workers:
     memory_gb: 4
     disk_gb: 64
 
+    # Runtime settings (used to generate worker.toml)
+    harness:
+      working_directory: "C:\\AutoMutate\\runs"
+      execution_timeout_secs: 120
+      cleanup_enabled: true
+      sandbox_enabled: true
+      sandbox_low_integrity: true
+      sandbox_job_object: true
+      monitor_children: true
+      max_child_depth: 3
+
+    telemetry:
+      stream_buffer_size: 10000
+      flush_interval_ms: 1000
+      etw_enabled: true
+      etw_buffer_size_kb: 1024
+      api_tracing_enabled: true
+      bb_coverage_enabled: true
+      line_tracing_enabled: false
+
+    build:
+      rust_toolchain: "stable"
+      default_trace_mode: "api+bb"
+      optimization_level: "2"
+
   # Windows 11 template
   windows11:
     count: 0                    # Number of Windows 11 VMs to create
@@ -55,6 +133,31 @@ workers:
     cpu_count: 2
     memory_gb: 6
     disk_gb: 80
+
+    # Runtime settings (same as win10 for now)
+    harness:
+      working_directory: "C:\\AutoMutate\\runs"
+      execution_timeout_secs: 120
+      cleanup_enabled: true
+      sandbox_enabled: true
+      sandbox_low_integrity: true
+      sandbox_job_object: true
+      monitor_children: true
+      max_child_depth: 3
+
+    telemetry:
+      stream_buffer_size: 10000
+      flush_interval_ms: 1000
+      etw_enabled: true
+      etw_buffer_size_kb: 1024
+      api_tracing_enabled: true
+      bb_coverage_enabled: true
+      line_tracing_enabled: false
+
+    build:
+      rust_toolchain: "stable"
+      default_trace_mode: "api+bb"
+      optimization_level: "2"
 
 # VM storage paths
 storage:
