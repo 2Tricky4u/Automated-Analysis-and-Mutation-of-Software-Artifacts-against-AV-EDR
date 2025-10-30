@@ -189,8 +189,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Controller/Scheduler starting on {}", addr);
 
+    // gRPC reflection for grpcurl
+    let reflection_service = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!("edr_descriptor"))
+        .build_v1()?;
+
     Server::builder()
         .add_service(ControllerServer::new(scheduler))
+        .add_service(reflection_service)
         .serve(addr)
         .await?;
 

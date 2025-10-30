@@ -158,15 +158,32 @@ fi
 
 echo "[OK] Docker daemon is running"
 
-# Rust
-if ! command -v rustc &>/dev/null; then
-    echo "[i] Installing Rust..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source "$HOME/.cargo/env"
+# Rust (cargo + rustc via rustup)
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "[i] Installing Rust (rustup + cargo)…"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  # make cargo available in THIS shell
+  source "$HOME/.cargo/env"
+
+  # persist for future shells
+  if ! grep -q 'source "$HOME/.cargo/env"' "$HOME/.profile" 2>/dev/null; then
+    echo 'source "$HOME/.cargo/env"' >> "$HOME/.profile"
+  fi
+  if ! grep -q 'source "$HOME/.cargo/env"' "$HOME/.bashrc" 2>/dev/null; then
+    echo 'source "$HOME/.cargo/env"' >> "$HOME/.bashrc"
+  fi
 fi
 
+# (optional but nice) ensure base build tools are present for many crates
+if command -v apt-get >/dev/null 2>&1; then
+  sudo apt-get update -y
+  sudo apt-get install -y build-essential pkg-config libssl-dev
+fi
+
+# toolchains/components
 rustup toolchain install stable nightly
 rustup default stable
+rustup component add llvm-tools-preview rust-src --toolchain nightly
 rustup component add llvm-tools-preview rust-src --toolchain nightly
 
 # protoc
