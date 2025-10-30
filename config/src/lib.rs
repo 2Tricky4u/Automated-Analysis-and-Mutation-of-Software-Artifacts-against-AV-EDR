@@ -459,10 +459,10 @@ impl ControllerConfig {
 
     fn find_config_path() -> String {
         // 1. Environment variable
-        if let Ok(path) = std::env::var("AUTOMUTATE_CONTROLLER_CONFIG") {
-            if Path::new(&path).exists() {
-                return path;
-            }
+        if let Ok(path) = std::env::var("AUTOMUTATE_CONTROLLER_CONFIG")
+            && Path::new(&path).exists()
+        {
+            return path;
         }
 
         // 2. WSL2 deployment path
@@ -508,10 +508,10 @@ impl WorkerConfig {
 
     fn find_config_path() -> String {
         // 1. Environment variable
-        if let Ok(path) = std::env::var("AUTOMUTATE_WORKER_CONFIG") {
-            if Path::new(&path).exists() {
-                return path;
-            }
+        if let Ok(path) = std::env::var("AUTOMUTATE_WORKER_CONFIG")
+            && Path::new(&path).exists()
+        {
+            return path;
         }
 
         // 2. Windows VM deployment path
