@@ -68,6 +68,11 @@ function Expand-Template {
         if ($value -is [bool]) {
             $value = $value.ToString().ToLower()
         }
+        # Escape backslashes for TOML paths (\ -> \\)
+        # In regex replacement, we need to double-escape: \ -> \\\\
+        if ($value -is [string]) {
+            $value = $value -replace '\\', '\\\\'
+        }
         $result = $result -replace [regex]::Escape("{{$key}}"), $value
     }
     return $result

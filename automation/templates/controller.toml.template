@@ -3,7 +3,7 @@
 # Do not edit manually - changes will be overwritten
 
 [server]
-bind_address = "{{NETWORK_HOST_IP}}:{{CONTROLLER_GRPC_PORT}}"
+bind_address = "0.0.0.0:{{CONTROLLER_GRPC_PORT}}"
 max_connections = {{CONTROLLER_MAX_CONNECTIONS}}
 request_timeout_secs = {{CONTROLLER_REQUEST_TIMEOUT_SECS}}
 tls_enabled = false
