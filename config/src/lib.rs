@@ -444,8 +444,9 @@ impl ControllerConfig {
     /// 1. Path from --config CLI argument
     /// 2. AUTOMUTATE_CONTROLLER_CONFIG environment variable
     /// 3. ~/automutate/config/controller.toml (WSL2 deployment default)
-    /// 4. ./config/controller.toml (local development)
-    /// 5. automation/templates/controller.toml (template fallback)
+    /// 4. automation/generated/controller.toml (generated from config.yaml)
+    /// 5. ./config/controller.toml (local development)
+    /// 6. automation/templates/controller.toml (template fallback)
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
         let path = Self::find_config_path();
         Self::from_file(&path)
@@ -472,12 +473,17 @@ impl ControllerConfig {
             return wsl_path;
         }
 
-        // 3. Local development
+        // 3. Generated config (from generate-configs.ps1)
+        if Path::new("automation/generated/controller.toml").exists() {
+            return "automation/generated/controller.toml".to_string();
+        }
+
+        // 4. Local development
         if Path::new("config/controller.toml").exists() {
             return "config/controller.toml".to_string();
         }
 
-        // 4. Template fallback
+        // 5. Template fallback
         "automation/templates/controller.toml".to_string()
     }
 

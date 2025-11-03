@@ -205,8 +205,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Search order:
     //   1. AUTOMUTATE_CONTROLLER_CONFIG env var
     //   2. ~/automutate/config/controller.toml (WSL2 deployment default)
-    //   3. config/controller.toml (local development)
-    //   4. automation/templates/controller.toml (template fallback)
+    //   3. automation/generated/controller.toml (generated from config.yaml)
+    //   4. config/controller.toml (local development)
+    //   5. automation/templates/controller.toml (template fallback)
     let config = ControllerConfig::load().unwrap_or_else(|e| {
         eprintln!("Failed to load controller.toml: {}", e);
         eprintln!("Run 'automation/scripts/generate-configs.ps1' to create config files");
