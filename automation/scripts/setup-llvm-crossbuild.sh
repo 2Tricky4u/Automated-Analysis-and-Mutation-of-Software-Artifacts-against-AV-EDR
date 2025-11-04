@@ -120,14 +120,15 @@ if [ -d "$XWIN_DIR" ]; then
 else
     echo ""
     echo -e "${YELLOW}Downloading Windows SDK (~1GB)...${NC}"
-    xwin --accept-license splat \
-         --cache-dir "$XWIN_CACHE_DIR" \
-         --output "$XWIN_DIR" \
-         --include-arch x86_64 \
-         --include-debug-libs false \
-         --include crt,ucrt,sdk
+    # Always perform work on the Linux filesystem; --copy avoids EXDEV if run from /mnt/c
+    export XWIN_CACHE_DIR="$HOME/.xwin-cache"
+    pushd "$HOME" >/dev/null
+    xwin --accept-license --arch x86_64 --variant desktop splat --copy --output "$XWIN_DIR"
+    popd >/dev/null
     echo -e "${GREEN} Windows SDK downloaded to $XWIN_DIR${NC}"
 fi
+
+
 # Verify installation
 echo ""
 echo -e "${BLUE}=========================================="
@@ -158,6 +159,10 @@ int main(void) {
     printf("Hello from Windows PE (built on WSL)!\n");
     DWORD pid = GetCurrentProcessId();
     printf("PID: %lu\n", pid);
+
+    printf("\nPress Enter to exit...");
+    fflush(stdout);
+    getchar();               // wait for Enter
     return 0;
 }
 EOF
@@ -169,10 +174,19 @@ echo "Test source: $TEST_FILE"
 # Compile test
 TEST_EXE="$TEST_DIR/test.exe"
 clang -target x86_64-pc-windows-msvc \
-      --sysroot "$XWIN_DIR" \
-      -fuse-ld=lld \
-      -o "$TEST_EXE" \
-      "$TEST_FILE"
+  -isystem "$XWIN_DIR/crt/include" \
+  -isystem "$XWIN_DIR/sdk/include/ucrt" \
+  -isystem "$XWIN_DIR/ucrt/include" \
+  -isystem "$XWIN_DIR/sdk/include/shared" \
+  -isystem "$XWIN_DIR/sdk/include/um" \
+  -isystem "$XWIN_DIR/sdk/include/winrt" \
+  -L"$XWIN_DIR/crt/lib/x86_64" \
+  -L"$XWIN_DIR/sdk/lib/ucrt/x86_64" \
+  -L"$XWIN_DIR/sdk/lib/um/x86_64" \
+  -Wl,-defaultlib:libcmt -Wl,-defaultlib:kernel32 \
+  -fuse-ld=lld \
+  -o "$TEST_EXE" \
+  "$TEST_FILE"
 
 if [ -f "$TEST_EXE" ]; then
     echo -e "${GREEN} Cross-compilation successful!${NC}"
