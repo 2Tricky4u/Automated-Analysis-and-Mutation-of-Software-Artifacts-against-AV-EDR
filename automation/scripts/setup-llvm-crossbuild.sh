@@ -86,26 +86,48 @@ else
     echo -e "${GREEN} Rust already installed${NC}"
 fi
 
-# Install xwin for Windows SDK
-echo ""
-echo -e "${YELLOW}Installing xwin (Microsoft CRT/SDK downloader)...${NC}"
-if command -v xwin &> /dev/null; then
-    echo -e "${GREEN} xwin already installed${NC}"
-else
-    cargo install xwin --locked
-fi
+ # Install xwin for Windows SDK
+ echo ""
+ echo -e "${YELLOW}Installing xwin (Microsoft CRT/SDK downloader)...${NC}"
+ if command -v xwin &> /dev/null; then
+     echo -e "${GREEN} xwin already installed${NC}"
+ else
+     cargo install xwin --locked
+ fi
+
+ # Ensure xwin cache stays on Linux filesystem (avoid /mnt/c)
+ XWIN_CACHE_DIR="${HOME}/.xwin-cache"
+ export XWIN_CACHE_DIR
+
+ # If a Windows-side cache exists from previous runs, remove it to avoid EXDEV issues
+ WIN_CACHE_CANDIDATE="/mnt/c/Users/${USER:-$LOGNAME}/.xwin-cache"
+ if [ -d "$WIN_CACHE_CANDIDATE" ]; then
+     echo -e "${YELLOW}Found Windows-side xwin cache at $WIN_CACHE_CANDIDATE — removing to prevent cross-device moves...${NC}"
+     rm -rf "$WIN_CACHE_CANDIDATE"
+ fi
+
+ # Gentle warning if running under /mnt/*
+ case "$PWD" in
+   /mnt/*)
+     echo -e "${YELLOW}Note: you're running from $PWD (Windows filesystem). We'll force xwin cache/output to Linux home to avoid EXDEV.${NC}"
+     ;;
+ esac
 
 # Download Windows SDK
 XWIN_DIR="$HOME/.xwin"
 if [ -d "$XWIN_DIR" ]; then
-    echo -e "${GREEN} Windows SDK already downloaded${NC}"
+    echo -e "${GREEN} Windows SDK already downloaded${NC}"
 else
     echo ""
-    echo -e "${YELLOW}Downloading Windows SDK (~300MB, this may take a few minutes)...${NC}"
-    xwin --accept-license splat --output "$XWIN_DIR"
-    echo -e "${GREEN} Windows SDK downloaded to $XWIN_DIR${NC}"
+    echo -e "${YELLOW}Downloading Windows SDK (~1GB)...${NC}"
+    xwin --accept-license splat \
+         --cache-dir "$XWIN_CACHE_DIR" \
+         --output "$XWIN_DIR" \
+         --include-arch x86_64 \
+         --include-debug-libs false \
+         --include crt,ucrt,sdk
+    echo -e "${GREEN} Windows SDK downloaded to $XWIN_DIR${NC}"
 fi
-
 # Verify installation
 echo ""
 echo -e "${BLUE}=========================================="
