@@ -520,22 +520,13 @@ impl WorkerConfig {
             return path;
         }
 
-        // 2. Windows VM deployment path
-        #[cfg(target_os = "windows")]
-        {
-            let win_path = r"C:\AutoMutate\worker.toml";
-            if Path::new(win_path).exists() {
-                return win_path.to_string();
-            }
-        }
-
         // 3. Local development
         if Path::new("config/worker.toml").exists() {
             return "config/worker.toml".to_string();
         }
 
         // 4. Template fallback
-        "automation/templates/worker.toml".to_string()
+        "automation/generated/worker-00.toml".to_string() //TODO CHANGE THATTTTTTT!!!!!!!!!!!
     }
 
     pub fn load_or_default() -> Self {
