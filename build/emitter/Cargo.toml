@@ -1,8 +1,28 @@
 [package]
-name = "emitter"
-version = "0.1.0"
-edition = "2021"
+name = "build-emitter"
+version.workspace = true
+edition.workspace = true
 publish = false
 
 [lib]
 path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["process", "fs"] }
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+sha2 = "0.10"
+hex = "0.4"
+chrono = "0.4"
+tempfile = "3.10"
+uuid = { version = "1.0", features = ["v4"] }
+
+# For AST parsing (Tree-sitter)
+tree-sitter = "0.22"
+tree-sitter-c = "0.21"
+
+# For home directory resolution
+dirs = "5.0"

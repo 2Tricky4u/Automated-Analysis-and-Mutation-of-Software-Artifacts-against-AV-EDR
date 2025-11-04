@@ -8,5 +8,6 @@
 pub mod cortex;
 pub mod mde;
 
-pub use cortex::CortexExporter;
-pub use mde::MdeExporter;
+// Re-exports commented out until integrated into main.rs
+// pub use cortex::CortexExporter;
+// pub use mde::MdeExporter;

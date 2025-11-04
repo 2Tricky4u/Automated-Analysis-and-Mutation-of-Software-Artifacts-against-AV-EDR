@@ -7,7 +7,7 @@
 /// - MDE API: https://learn.microsoft.com/en-us/microsoft-365/security/defender-endpoint/apis-intro
 /// - Authentication: https://learn.microsoft.com/en-us/microsoft-365/security/defender-endpoint/api-hello-world
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use edr_config::MdeConfig;
 use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
