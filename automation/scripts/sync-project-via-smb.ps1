@@ -23,12 +23,24 @@
 .PARAMETER SharePath
     Share path on VM (default: C$\AutoMutate\dev)
 
+.PARAMETER HyperVHost
+    Hyper-V host name (default: local computer)
+
 .EXAMPLE
+    # Local Hyper-V (script running on same machine as Hyper-V)
+    .\sync-project-via-smb.ps1 -VMName "win10-worker-00"
+
+.EXAMPLE
+    # Specify IP address (if VM not accessible via Hyper-V)
     .\sync-project-via-smb.ps1 -VMName "win10-worker-00" -VMIPAddress "10.200.200.100"
 
 .EXAMPLE
-    # Auto-detect IP
-    .\sync-project-via-smb.ps1 -VMName "win10-worker-00"
+    # Remote Hyper-V host
+    .\sync-project-via-smb.ps1 -VMName "win10-worker-00" -HyperVHost "HYPERV-SERVER"
+
+.EXAMPLE
+    # From different PC (no Hyper-V access, IP required)
+    .\sync-project-via-smb.ps1 -VMName "win10-worker-00" -VMIPAddress "10.200.200.100"
 #>
 
 [CmdletBinding()]
@@ -40,7 +52,9 @@ param(
 
     [PSCredential]$Credential,
 
-    [string]$SharePath = "C$\AutoMutate\dev"
+    [string]$SharePath = "C$\AutoMutate\dev",
+
+    [string]$HyperVHost = $env:COMPUTERNAME
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,30 +77,69 @@ $ProjectName = Split-Path $ProjectRoot -Leaf
 
 Write-Info "Project root: $ProjectRoot"
 
-# Get VM
-$VM = Get-VM -Name $VMName -ErrorAction SilentlyContinue
-if (-not $VM) {
-    Write-Err "VM not found: $VMName"
-    exit 1
-}
+# Get VM (supports remote Hyper-V host)
+$VM = $null
+$VMDetectionFailed = $false
 
-if ($VM.State -ne "Running") {
-    Write-Err "VM is not running"
-    exit 1
+try {
+    if ($HyperVHost -eq $env:COMPUTERNAME) {
+        Write-Info "Checking VM on local Hyper-V..."
+        $VM = Get-VM -Name $VMName -ErrorAction Stop
+    } else {
+        Write-Info "Checking VM on remote Hyper-V host: $HyperVHost..."
+        $VM = Get-VM -Name $VMName -ComputerName $HyperVHost -ErrorAction Stop
+    }
+
+    if ($VM.State -ne "Running") {
+        Write-Warn "VM is not running (state: $($VM.State))"
+        Write-Info "VM must be running for sync to work"
+    } else {
+        Write-Success "VM found and running"
+    }
+
+} catch {
+    Write-Warn "Could not access VM via Hyper-V: $($_.Exception.Message)"
+    Write-Info "Will proceed with IP address only (if provided)"
+    $VMDetectionFailed = $true
 }
 
 # Get IP address if not specified
 if (-not $VMIPAddress) {
-    Write-Info "Detecting VM IP address..."
-    $VMAdapter = Get-VMNetworkAdapter -VMName $VMName | Where-Object { $_.IPAddresses.Count -gt 0 } | Select-Object -First 1
-    if ($VMAdapter) {
-        $VMIPAddress = $VMAdapter.IPAddresses[0]
-        Write-Success "Detected IP: $VMIPAddress"
-    } else {
-        Write-Err "Could not detect VM IP address"
-        Write-Info "Ensure VM has network adapter configured and IP assigned"
+    if ($VMDetectionFailed) {
+        Write-Err "VM IP address is required when Hyper-V access fails"
+        Write-Info "Usage: .\sync-project-via-smb.ps1 -VMName '$VMName' -VMIPAddress '10.200.200.XXX'"
+        Write-Info ""
+        Write-Info "To find VM IP address:"
+        Write-Info "  1. RDP to Hyper-V host or VM"
+        Write-Info "  2. Run: ipconfig"
+        Write-Info "  3. Or run on Hyper-V host: Get-VMNetworkAdapter -VMName '$VMName' | Select-Object IPAddresses"
         exit 1
     }
+
+    Write-Info "Detecting VM IP address..."
+    try {
+        if ($HyperVHost -eq $env:COMPUTERNAME) {
+            $VMAdapter = Get-VMNetworkAdapter -VMName $VMName -ErrorAction Stop | Where-Object { $_.IPAddresses.Count -gt 0 } | Select-Object -First 1
+        } else {
+            $VMAdapter = Get-VMNetworkAdapter -VMName $VMName -ComputerName $HyperVHost -ErrorAction Stop | Where-Object { $_.IPAddresses.Count -gt 0 } | Select-Object -First 1
+        }
+
+        if ($VMAdapter) {
+            $VMIPAddress = $VMAdapter.IPAddresses[0]
+            Write-Success "Detected IP: $VMIPAddress"
+        } else {
+            Write-Err "Could not detect VM IP address"
+            Write-Info "Ensure VM has network adapter configured and IP assigned"
+            Write-Info "Or specify IP manually: -VMIPAddress '10.200.200.XXX'"
+            exit 1
+        }
+    } catch {
+        Write-Err "Failed to get VM network adapter: $($_.Exception.Message)"
+        Write-Info "Specify IP address manually: -VMIPAddress '10.200.200.XXX'"
+        exit 1
+    }
+} else {
+    Write-Info "Using provided IP address: $VMIPAddress"
 }
 
 # Get credentials if not specified
