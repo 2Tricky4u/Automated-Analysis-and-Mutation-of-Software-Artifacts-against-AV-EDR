@@ -173,6 +173,7 @@ echo "Test source: $TEST_FILE"
 
 # Compile test
 TEST_EXE="$TEST_DIR/test.exe"
+# Compile + link (Clang -> lld) and then strip
 clang -target x86_64-pc-windows-msvc \
   -isystem "$XWIN_DIR/crt/include" \
   -isystem "$XWIN_DIR/sdk/include/ucrt" \
@@ -185,8 +186,12 @@ clang -target x86_64-pc-windows-msvc \
   -L"$XWIN_DIR/sdk/lib/um/x86_64" \
   -Wl,-defaultlib:libcmt -Wl,-defaultlib:kernel32 \
   -fuse-ld=lld \
+  -Wl,/nologo -Wl,/manifest:embed -Wl,/pdb:none \
+  -O2 \
   -o "$TEST_EXE" \
   "$TEST_FILE"
+
+strip --strip-all "$TEST_EXE" || true
 
 if [ -f "$TEST_EXE" ]; then
     echo -e "${GREEN} Cross-compilation successful!${NC}"
