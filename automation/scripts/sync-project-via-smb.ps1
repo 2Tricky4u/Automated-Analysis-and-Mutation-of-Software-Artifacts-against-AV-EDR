@@ -149,14 +149,39 @@ if (-not $Credential) {
     $Credential = Get-Credential -UserName ".\Administrator" -Message "Enter VM credentials"
 }
 
-# Test connectivity
+# Test connectivity (ping may be blocked, but SMB might still work)
 Write-Info "Testing connectivity to $VMIPAddress..."
-if (-not (Test-Connection -ComputerName $VMIPAddress -Count 1 -Quiet)) {
-    Write-Err "Cannot reach VM at $VMIPAddress"
-    Write-Info "Check VM network configuration"
-    exit 1
+$PingResult = Test-Connection -ComputerName $VMIPAddress -Count 1 -Quiet -ErrorAction SilentlyContinue
+
+if ($PingResult) {
+    Write-Success "VM is reachable (ping succeeded)"
+} else {
+    Write-Warn "Ping failed (ICMP may be blocked by firewall)"
+    Write-Info "Will try SMB connection anyway (port 445)..."
+
+    # Test if SMB port is open
+    $SmbTest = Test-NetConnection -ComputerName $VMIPAddress -Port 445 -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+
+    if ($SmbTest.TcpTestSucceeded) {
+        Write-Success "SMB port 445 is open, continuing..."
+    } else {
+        Write-Err "Cannot reach VM at $VMIPAddress (both ping and SMB port 445 failed)"
+        Write-Info ""
+        Write-Info "Possible causes:"
+        Write-Info "  1. VM is not on the same network as this PC"
+        Write-Info "  2. VM firewall is blocking all connections"
+        Write-Info "  3. Incorrect IP address"
+        Write-Info "  4. VM is not running"
+        Write-Info ""
+        Write-Info "To verify from this PC:"
+        Write-Info "  Test-NetConnection -ComputerName $VMIPAddress -Port 445"
+        Write-Info ""
+        Write-Info "To verify on VM (via RDP):"
+        Write-Info "  ipconfig"
+        Write-Info "  Get-NetFirewallRule | Where-Object { `$_.DisplayName -like '*File*Print*' }"
+        exit 1
+    }
 }
-Write-Success "VM is reachable"
 
 # Construct UNC path
 $UNCPath = "\\$VMIPAddress\$SharePath"
