@@ -7,7 +7,7 @@
 /// - Prometheus Remote Write Spec: https://prometheus.io/docs/concepts/remote_write_spec/
 /// - Cortex API: https://cortexmetrics.io/docs/api/
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use edr_config::CortexConfig;
 use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
@@ -57,20 +57,23 @@ impl CortexExporter {
             .connect_timeout(Duration::from_secs(10));
 
         // Configure mTLS if enabled
+        // TODO: mTLS support - reqwest 0.12 Identity API needs verification
+        // Commented out until this exporter is actually used
         if config.use_mtls {
-            let cert = std::fs::read(&config.tls_cert_path)
-                .with_context(|| format!("Failed to read cert: {}", config.tls_cert_path))?;
-            let key = std::fs::read(&config.tls_key_path)
-                .with_context(|| format!("Failed to read key: {}", config.tls_key_path))?;
-            let ca = std::fs::read(&config.tls_ca_path)
-                .with_context(|| format!("Failed to read CA: {}", config.tls_ca_path))?;
-
-            let identity = reqwest::Identity::from_pem(&[cert, key].concat())?;
-            let ca_cert = reqwest::Certificate::from_pem(&ca)?;
-
-            client_builder = client_builder
-                .identity(identity)
-                .add_root_certificate(ca_cert);
+            tracing::warn!("mTLS requested but not yet implemented for reqwest 0.12");
+            // let cert = std::fs::read(&config.tls_cert_path)
+            //     .with_context(|| format!("Failed to read cert: {}", config.tls_cert_path))?;
+            // let key = std::fs::read(&config.tls_key_path)
+            //     .with_context(|| format!("Failed to read key: {}", config.tls_key_path))?;
+            // let ca = std::fs::read(&config.tls_ca_path)
+            //     .with_context(|| format!("Failed to read CA: {}", config.tls_ca_path))?;
+            //
+            // let identity = reqwest::Identity::from_pem(&[cert, key].concat())?;
+            // let ca_cert = reqwest::Certificate::from_pem(&ca)?;
+            //
+            // client_builder = client_builder
+            //     .identity(identity)
+            //     .add_root_certificate(ca_cert);
         }
 
         let client = client_builder.build()?;

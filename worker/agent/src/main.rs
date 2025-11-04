@@ -3,6 +3,8 @@ use std::time::SystemTime;
 use tonic::{Request, Response, Status, transport::Server};
 use tracing::{error, info};
 
+mod telemetry;
+
 pub mod edr {
     pub mod common {
         tonic::include_proto!("edr.common");
@@ -204,15 +206,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Worker Agent {} starting on {}", worker_id, addr);
 
-    // Create channel for telemetry events
-    let (_tx, rx) = tokio::sync::mpsc::channel::<TelemetryData>(1000);
+    // Create channel for telemetry events (increased buffer for RedEDR)
+    let buffer_size = config.telemetry.stream_buffer_size;
+    let (tx, rx) = tokio::sync::mpsc::channel::<TelemetryData>(buffer_size);
 
     // Spawn background task to push telemetry to controller
     let controller_addr_clone = controller_addr.clone();
     tokio::spawn(push_telemetry_to_controller(controller_addr_clone, rx));
 
-    // TODO: Pass _tx to agent service so it can send telemetry events
-    // For now, agent just handles RPC calls
+    // Spawn RedEDR collector if enabled
+    if config.telemetry.rededr.enabled {
+        info!("RedEDR collector enabled: {}", config.telemetry.rededr.base_url);
+
+        let rededr_config = telemetry::collectors::rededr::RedEdrCollectorConfig {
+            base_url: config.telemetry.rededr.base_url.clone(),
+            flush_interval_ms: config.telemetry.flush_interval_ms,
+            job_id: "global".to_string(), // TODO: Get from active job
+            run_id: "global".to_string(),  // TODO: Get from active run
+        };
+
+        let collector = telemetry::collectors::rededr::RedEdrCollector::new(rededr_config);
+        let tx_clone = tx.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = collector.start(tx_clone).await {
+                error!("RedEDR collector error: {}", e);
+            }
+        });
+    } else {
+        info!("RedEDR collector disabled in config");
+    }
 
     // gRPC reflection for grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
