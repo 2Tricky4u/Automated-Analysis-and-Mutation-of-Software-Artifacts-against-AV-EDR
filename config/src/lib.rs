@@ -536,12 +536,12 @@ impl WorkerConfig {
         }
 
         // 5. Template fallback (first worker config found)
-        "automation/generated/win10-worker-00.toml".to_string()
+        "automation/generated/win10-worker-01.toml".to_string()
     }
 
     /// Auto-detect worker config by matching machine hostname to config filename
     ///
-    /// Example: If hostname is "WIN10-WORKER-00", looks for "automation/generated/win10-worker-00.toml"
+    /// Example: If hostname is "WIN10-WORKER-01", looks for "automation/generated/win10-worker-01.toml"
     fn auto_detect_config_by_hostname() -> Option<String> {
         // Get machine hostname
         let hostname = Self::get_hostname()?;

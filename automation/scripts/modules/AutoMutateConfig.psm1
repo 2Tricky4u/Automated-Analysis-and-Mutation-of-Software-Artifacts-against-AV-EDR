@@ -116,7 +116,8 @@ function Get-AutoMutateWorkers {
         $count = $template.count
 
         for ($i = 0; $i -lt $count; $i++) {
-            $workerName = "$($template.name_prefix)-{0:D2}" -f $i
+            $workerNumber = $i + 1
+            $workerName = "$($template.name_prefix)-{0:D2}" -f $workerNumber
             $workerIP = Get-IncrementedIP -IPAddress $template.ip_start -Offset $i
 
             $null = $workers.Add(@{
@@ -138,7 +139,8 @@ function Get-AutoMutateWorkers {
         $count = $template.count
 
         for ($i = 0; $i -lt $count; $i++) {
-            $workerName = "$($template.name_prefix)-{0:D2}" -f $i
+            $workerNumber = $i + 1
+            $workerName = "$($template.name_prefix)-{0:D2}" -f $workerNumber
             $workerIP = Get-IncrementedIP -IPAddress $template.ip_start -Offset $i
 
             $null = $workers.Add(@{

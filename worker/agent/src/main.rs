@@ -174,9 +174,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Search order:
     //   1. AUTOMUTATE_WORKER_CONFIG env var (highest priority)
     //   2. C:\AutoMutate\worker.toml (VM deployment standard location)
-    //   3. Auto-detect by hostname (e.g., automation/generated/win10-worker-00.toml)
+    //   3. Auto-detect by hostname (e.g., automation/generated/win10-worker-01.toml)
     //   4. config/worker.toml (local development)
-    //   5. automation/generated/win10-worker-00.toml (fallback)
+    //   5. automation/generated/win10-worker-01.toml (fallback)
     let config = WorkerConfig::load().unwrap_or_else(|e| {
         eprintln!("Failed to load worker config: {}", e);
         eprintln!("");
@@ -187,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("  2. C:\\AutoMutate\\worker.toml");
         eprintln!("  3. automation/generated/<hostname>.toml (auto-detect)");
         eprintln!("  4. config/worker.toml");
-        eprintln!("  5. automation/generated/win10-worker-00.toml");
+        eprintln!("  5. automation/generated/win10-worker-01.toml");
         eprintln!("");
         eprintln!("Solutions:");
         eprintln!("  - Run: .\\automation\\scripts\\generate-configs.ps1");
