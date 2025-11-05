@@ -27,79 +27,20 @@ function Read-AutoMutateConfig {
         throw "Config file not found: $ConfigPath"
     }
 
-    $config = @{}
-    $section = $null
-    $subsection = $null
-
-    Get-Content $ConfigPath | ForEach-Object {
-        $line = $_
-
-        # Skip comments and empty lines
-        if ($line -match '^\s*#' -or $line -match '^\s*$') {
-            return
-        }
-
-        # Top-level section (e.g., "network:")
-        if ($line -match '^(\w+):$') {
-            $section = $matches[1]
-            $config[$section] = @{}
-            $subsection = $null
-        }
-        # Subsection (e.g., "  windows10:")
-        elseif ($line -match '^\s{2}(\w+):$' -and $section) {
-            $subsection = $matches[1]
-            if ($subsection -eq 'windows10' -or $subsection -eq 'windows11') {
-                # Worker template subsection
-                if (-not $config[$section].ContainsKey($subsection)) {
-                    $config[$section][$subsection] = @{}
-                }
-            } else {
-                # Regular subsection
-                $config[$section][$subsection] = @{}
-            }
-        }
-        # Key-value pair in subsection
-        elseif ($line -match '^\s{4}(\w+):\s*(.+)$' -and $section -and $subsection) {
-            $key = $matches[1]
-            $value = $matches[2].Trim()
-
-            # Strip inline comments
-            if ($value -match '^([^#]+?)\s*#') {
-                $value = $matches[1].Trim()
-            }
-
-            # Remove quotes
-            $value = $value.Trim('"')
-
-            # Convert numbers
-            if ($value -match '^\d+$') {
-                $value = [int]$value
-            }
-            $config[$section][$subsection][$key] = $value
-        }
-        # Key-value pair in top-level section
-        elseif ($line -match '^\s{2}(\w+):\s*(.+)$' -and $section) {
-            $key = $matches[1]
-            $value = $matches[2].Trim()
-
-            # Strip inline comments
-            if ($value -match '^([^#]+?)\s*#') {
-                $value = $matches[1].Trim()
-            }
-
-            # Remove quotes
-            $value = $value.Trim('"')
-
-            # Convert numbers
-            if ($value -match '^\d+$') {
-                $value = [int]$value
-            }
-            # Convert booleans
-            if ($value -eq 'true') { $value = $true }
-            if ($value -eq 'false') { $value = $false }
-            $config[$section][$key] = $value
+    # Import powershell-yaml module (install if missing)
+    if (-not (Get-Module -ListAvailable -Name powershell-yaml)) {
+        Write-Warning "Installing powershell-yaml module..."
+        try {
+            Install-Module -Name powershell-yaml -Scope CurrentUser -Force -ErrorAction Stop
+        } catch {
+            throw "Failed to install powershell-yaml module. Please install manually: Install-Module powershell-yaml"
         }
     }
+    Import-Module powershell-yaml -ErrorAction Stop
+
+    # Parse YAML using proper parser
+    $yamlContent = Get-Content $ConfigPath -Raw
+    $config = ConvertFrom-Yaml $yamlContent
 
     return $config
 }
@@ -162,23 +103,23 @@ function Get-AutoMutateWorkers {
 
     $config = Read-AutoMutateConfig -ConfigPath $ConfigPath
 
-    if (-not $config.ContainsKey('workers')) {
+    if (-not $config.workers) {
         throw "Config file missing 'workers' section"
     }
 
-    $workers = @()
+    # Use ArrayList for proper Count behavior
+    $workers = New-Object System.Collections.ArrayList
 
     # Generate Windows 10 workers
-    if ($config.workers.ContainsKey('windows10')) {
+    if ($config.workers.windows10 -and $config.workers.windows10.count -gt 0) {
         $template = $config.workers.windows10
         $count = $template.count
 
         for ($i = 0; $i -lt $count; $i++) {
-            $workerNumber = $i + 1
-            $workerName = "$($template.name_prefix)-$($workerNumber.ToString('D2'))"
+            $workerName = "$($template.name_prefix)-{0:D2}" -f $i
             $workerIP = Get-IncrementedIP -IPAddress $template.ip_start -Offset $i
 
-            $workers += @{
+            $null = $workers.Add(@{
                 Name = $workerName
                 Os = "windows10"
                 Edition = $template.edition
@@ -187,21 +128,20 @@ function Get-AutoMutateWorkers {
                 CpuCount = $template.cpu_count
                 MemoryGB = $template.memory_gb
                 DiskGB = $template.disk_gb
-            }
+            })
         }
     }
 
     # Generate Windows 11 workers
-    if ($config.workers.ContainsKey('windows11')) {
+    if ($config.workers.windows11 -and $config.workers.windows11.count -gt 0) {
         $template = $config.workers.windows11
         $count = $template.count
 
         for ($i = 0; $i -lt $count; $i++) {
-            $workerNumber = $i + 1
-            $workerName = "$($template.name_prefix)-$($workerNumber.ToString('D2'))"
+            $workerName = "$($template.name_prefix)-{0:D2}" -f $i
             $workerIP = Get-IncrementedIP -IPAddress $template.ip_start -Offset $i
 
-            $workers += @{
+            $null = $workers.Add(@{
                 Name = $workerName
                 Os = "windows11"
                 Edition = $template.edition
@@ -210,7 +150,7 @@ function Get-AutoMutateWorkers {
                 CpuCount = $template.cpu_count
                 MemoryGB = $template.memory_gb
                 DiskGB = $template.disk_gb
-            }
+            })
         }
     }
 
@@ -218,7 +158,9 @@ function Get-AutoMutateWorkers {
         throw "No workers defined in config. Set 'count' > 0 for windows10 or windows11 templates."
     }
 
-    return $workers
+    # Use comma operator to prevent PowerShell from unwrapping single-element arrays
+    # Without this, a single worker returns as hashtable instead of array[1]
+    return , @($workers)
 }
 
 function Get-AutoMutateWorkerByName {

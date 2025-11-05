@@ -458,7 +458,7 @@ impl ControllerConfig {
         Ok(config)
     }
 
-    fn find_config_path() -> String {
+    pub fn find_config_path() -> String {
         // 1. Environment variable
         if let Ok(path) = std::env::var("AUTOMUTATE_CONTROLLER_CONFIG")
             && Path::new(&path).exists()
@@ -512,21 +512,85 @@ impl WorkerConfig {
         Ok(config)
     }
 
-    fn find_config_path() -> String {
-        // 1. Environment variable
+    pub fn find_config_path() -> String {
+        // 1. Environment variable (highest priority)
         if let Ok(path) = std::env::var("AUTOMUTATE_WORKER_CONFIG")
             && Path::new(&path).exists()
         {
             return path;
         }
 
-        // 3. Local development
+        // 2. VM deployment path (standard location after deployment)
+        if Path::new("C:\\AutoMutate\\worker.toml").exists() {
+            return "C:\\AutoMutate\\worker.toml".to_string();
+        }
+
+        // 3. Auto-detect based on hostname (matches generated config filename)
+        if let Some(config_path) = Self::auto_detect_config_by_hostname() {
+            return config_path;
+        }
+
+        // 4. Local development
         if Path::new("config/worker.toml").exists() {
             return "config/worker.toml".to_string();
         }
 
-        // 4. Template fallback
-        "automation/generated/worker-00.toml".to_string() //TODO CHANGE THATTTTTTT!!!!!!!!!!!
+        // 5. Template fallback (first worker config found)
+        "automation/generated/win10-worker-00.toml".to_string()
+    }
+
+    /// Auto-detect worker config by matching machine hostname to config filename
+    ///
+    /// Example: If hostname is "WIN10-WORKER-00", looks for "automation/generated/win10-worker-00.toml"
+    fn auto_detect_config_by_hostname() -> Option<String> {
+        // Get machine hostname
+        let hostname = Self::get_hostname()?;
+        let hostname_lower = hostname.to_lowercase();
+
+        // Check automation/generated/ directory
+        let generated_dir = Path::new("automation/generated");
+        if !generated_dir.exists() {
+            return None;
+        }
+
+        // Try direct match: <hostname>.toml (case-insensitive)
+        let direct_path = generated_dir.join(format!("{}.toml", hostname_lower));
+        if direct_path.exists() {
+            return Some(direct_path.to_string_lossy().to_string());
+        }
+
+        // Fallback: Search for any config file that matches the hostname pattern
+        for entry in std::fs::read_dir(generated_dir).ok()? {
+            let entry = entry.ok()?;
+            let path = entry.path();
+
+            if let Some(filename) = path.file_name() {
+                let filename_str = filename.to_string_lossy().to_lowercase();
+                // Check if filename (without .toml) matches hostname
+                if let Some(stem) = filename_str.strip_suffix(".toml") {
+                    if stem == hostname_lower {
+                        return Some(path.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Get machine hostname (Windows-compatible, no external dependencies)
+    fn get_hostname() -> Option<String> {
+        // Use standard library environment variable (works on Windows)
+        if let Ok(hostname) = std::env::var("COMPUTERNAME") {
+            return Some(hostname);
+        }
+
+        // Fallback: Try HOSTNAME env var (Unix-style, also sometimes set on Windows)
+        if let Ok(hostname) = std::env::var("HOSTNAME") {
+            return Some(hostname);
+        }
+
+        None
     }
 
     pub fn load_or_default() -> Self {
@@ -539,7 +603,7 @@ impl WorkerConfig {
 impl Default for ControllerConfig {
     fn default() -> Self {
         // Load from template if available, otherwise use hardcoded defaults
-        Self::from_file("automation/templates/controller.toml")
+        Self::from_file("automation/generated/controller.toml")
             .unwrap_or_else(|_| Self::hardcoded_default())
     }
 }

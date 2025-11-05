@@ -172,15 +172,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load generated TOML config (auto-finds in standard locations)
     // Search order:
-    //   1. AUTOMUTATE_WORKER_CONFIG env var
-    //   2. C:\AutoMutate\worker.toml (Windows VM deployment default)
-    //   3. config/worker.toml (local development)
-    //   4. automation/templates/worker.toml (template fallback)
+    //   1. AUTOMUTATE_WORKER_CONFIG env var (highest priority)
+    //   2. C:\AutoMutate\worker.toml (VM deployment standard location)
+    //   3. Auto-detect by hostname (e.g., automation/generated/win10-worker-00.toml)
+    //   4. config/worker.toml (local development)
+    //   5. automation/generated/win10-worker-00.toml (fallback)
     let config = WorkerConfig::load().unwrap_or_else(|e| {
-        eprintln!("Failed to load worker.toml: {}", e);
-        eprintln!("Ensure config is deployed to C:\\AutoMutate\\worker.toml");
-        eprintln!("Or run 'automation/scripts/generate-configs.ps1' first");
-        eprintln!("Or set AUTOMUTATE_WORKER_CONFIG environment variable");
+        eprintln!("Failed to load worker config: {}", e);
+        eprintln!("");
+        eprintln!("Hostname: {}", std::env::var("COMPUTERNAME").unwrap_or_else(|_| "UNKNOWN".to_string()));
+        eprintln!("");
+        eprintln!("Config search order:");
+        eprintln!("  1. AUTOMUTATE_WORKER_CONFIG env var");
+        eprintln!("  2. C:\\AutoMutate\\worker.toml");
+        eprintln!("  3. automation/generated/<hostname>.toml (auto-detect)");
+        eprintln!("  4. config/worker.toml");
+        eprintln!("  5. automation/generated/win10-worker-00.toml");
+        eprintln!("");
+        eprintln!("Solutions:");
+        eprintln!("  - Run: .\\automation\\scripts\\generate-configs.ps1");
+        eprintln!("  - Deploy: Copy <hostname>.toml to C:\\AutoMutate\\worker.toml");
+        eprintln!("  - Or set: $env:AUTOMUTATE_WORKER_CONFIG=\"automation\\generated\\<hostname>.toml\"");
         std::process::exit(1);
     });
 
@@ -194,7 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(50052);
     let addr = format!("0.0.0.0:{}", worker_port).parse()?;
 
-    info!("Loaded worker config successfully");
+    info!("Worker configuration loaded successfully at {}", WorkerConfig::find_config_path());
     info!("Worker ID: {}", worker_id);
     info!("Worker IP: {}", config.worker.ip_address);
     info!("OS Version: {}", config.worker.os_version);
