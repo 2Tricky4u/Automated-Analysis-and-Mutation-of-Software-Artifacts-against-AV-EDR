@@ -224,7 +224,10 @@ foreach ($osType in @('windows10', 'windows11')) {
 
     for ($i = 0; $i -lt $workerConfig.count; $i++) {
         $workerIp = Get-WorkerIp -BaseIp $workerConfig.ip_start -Offset $i
-        $workerId = "worker-{0:D2}" -f $workerIndex
+
+        # Use actual VM hostname as worker ID (e.g., "win10-worker-00")
+        $vmName = "$($workerConfig.name_prefix)-{0:D2}" -f $i
+        $workerId = $vmName
 
         $workerValues = @{
             "WORKER_ID" = $workerId
@@ -257,7 +260,10 @@ foreach ($osType in @('windows10', 'windows11')) {
         }
 
         $workerToml = Expand-Template -Template $workerTemplate -Values $workerValues
-        $workerOutput = Join-Path $OutputDir "$workerId.toml"
+
+        # Use VM hostname as filename (e.g., "win10-worker-00.toml")
+        $workerOutput = Join-Path $OutputDir "$vmName.toml"
+
         Set-Content -Path $workerOutput -Value $workerToml -NoNewline
         Write-Host "    Created: $workerOutput (IP: $workerIp)" -ForegroundColor Green
 
@@ -273,10 +279,10 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Generated files in: $OutputDir" -ForegroundColor White
 Write-Host "  - controller.toml (1 file)" -ForegroundColor White
-Write-Host "  - worker-XX.toml ($workerIndex files)" -ForegroundColor White
+Write-Host "  - <hostname>.toml ($workerIndex worker files)" -ForegroundColor White
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host "  1. Review generated configs: ls $OutputDir" -ForegroundColor White
-Write-Host "  2. Deploy to WSL2: .\scripts\02-wsl-bootstrap.sh" -ForegroundColor White
-Write-Host "  3. Deploy to VMs: .\scripts\deploy-worker-config.ps1" -ForegroundColor White
+Write-Host "  2. Deploy controller to WSL2: .\scripts\02-wsl-bootstrap.sh" -ForegroundColor White
+Write-Host "  3. Deploy workers to VMs: Copy <hostname>.toml to C:\AutoMutate\worker.toml" -ForegroundColor White
 Write-Host ""

@@ -215,7 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     });
 
-    info!("Loaded controller config successfully");
+    info!("Loaded controller config successfully from {}", ControllerConfig::find_config_path());
     info!("Bind address: {}", config.server.bind_address);
     info!("Elasticsearch: {}", config.elasticsearch.url);
     info!(
