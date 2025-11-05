@@ -453,6 +453,34 @@ try {
     Write-Success "Firewall rule OK for TCP $RedEDRPort"
 } catch { Write-Warn "Firewall rule failed: $($_.Exception.Message)" }
 
+# Enable SMB/File Sharing from Controller
+Write-Info "Enabling SMB access from controller ($StaticIP)..."
+try {
+    # Enable File and Printer Sharing predefined rules
+    Enable-NetFirewallRule -DisplayGroup "File and Printer Sharing" -ErrorAction SilentlyContinue
+
+    # Create specific rule for controller IP (SMB port 445)
+    $smbRuleName = "SMB from Controller"
+    if (-not (Get-NetFirewallRule -DisplayName $smbRuleName -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $smbRuleName `
+            -Direction Inbound `
+            -Protocol TCP `
+            -LocalPort 445 `
+            -RemoteAddress $StaticIP `
+            -Action Allow `
+            -Profile Any `
+            -ErrorAction Stop | Out-Null
+    }
+
+    # Ensure SMB server is running
+    $smbService = Get-Service -Name LanmanServer -ErrorAction SilentlyContinue
+    if ($smbService.Status -ne "Running") {
+        Start-Service -Name LanmanServer -ErrorAction Stop
+    }
+
+    Write-Success "SMB enabled from controller ($StaticIP) on port 445"
+} catch { Write-Warn "SMB firewall rule failed: $($_.Exception.Message)" }
+
 # ===================== SECTION 8: Boot Config for Test-Signed Drivers ======
 Write-Info "[8/10] Kernel driver allowances (testsigning, debug)..."
 # Required for RedEdr kernel callbacks / KAPC injection / ETW-TI PPL via ELAM
@@ -878,6 +906,22 @@ try {
     }
 } catch {
     $verificationResults += [PSCustomObject]@{ Component="Firewall"; Status="WARN"; Details="Check rule for TCP $RedEDRPort" }
+}
+
+# SMB access verification
+try {
+    $smbRuleName = "SMB from Controller"
+    $smbRule = Get-NetFirewallRule -DisplayName $smbRuleName -ErrorAction SilentlyContinue
+    $smbService = Get-Service -Name LanmanServer -ErrorAction SilentlyContinue
+    $smbRunning = $smbService.Status -eq "Running"
+
+    $verificationResults += [PSCustomObject]@{
+        Component = "SMB"
+        Status    = if ($smbRule -and $smbRunning) { "OK" } else { "WARN" }
+        Details   = "Port 445 from controller, service $(if ($smbRunning) { 'running' } else { 'stopped' })"
+    }
+} catch {
+    $verificationResults += [PSCustomObject]@{ Component="SMB"; Status="WARN"; Details="Check SMB service and firewall" }
 }
 
 # Print verification table
