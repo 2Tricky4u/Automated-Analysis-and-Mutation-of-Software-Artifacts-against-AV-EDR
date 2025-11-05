@@ -225,8 +225,9 @@ foreach ($osType in @('windows10', 'windows11')) {
     for ($i = 0; $i -lt $workerConfig.count; $i++) {
         $workerIp = Get-WorkerIp -BaseIp $workerConfig.ip_start -Offset $i
 
-        # Use actual VM hostname as worker ID (e.g., "win10-worker-00")
-        $vmName = "$($workerConfig.name_prefix)-{0:D2}" -f $i
+        # Use actual VM hostname as worker ID (e.g., "win10-worker-01")
+        $workerNumber = $i + 1
+        $vmName = "$($workerConfig.name_prefix)-{0:D2}" -f $workerNumber
         $workerId = $vmName
 
         $workerValues = @{
