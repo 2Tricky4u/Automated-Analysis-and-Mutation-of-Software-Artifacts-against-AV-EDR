@@ -5,5 +5,4 @@
 /// - ETW (future)
 /// - Event Logs (future)
 /// - Defender alerts (future)
-
 pub mod rededr;

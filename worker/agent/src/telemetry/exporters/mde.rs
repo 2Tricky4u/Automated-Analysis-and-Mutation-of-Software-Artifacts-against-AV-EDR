@@ -6,7 +6,6 @@
 /// References:
 /// - MDE API: https://learn.microsoft.com/en-us/microsoft-365/security/defender-endpoint/apis-intro
 /// - Authentication: https://learn.microsoft.com/en-us/microsoft-365/security/defender-endpoint/api-hello-world
-
 use anyhow::Result;
 use edr_config::MdeConfig;
 use reqwest::{Client, ClientBuilder};
@@ -223,7 +222,9 @@ impl MdeExporter {
         // 3. Sending JWT to Azure AD token endpoint
         //
         // For now, fall back to client secret
-        anyhow::bail!("Certificate authentication not yet implemented. Please use client_secret authentication.");
+        anyhow::bail!(
+            "Certificate authentication not yet implemented. Please use client_secret authentication."
+        );
     }
 
     /// Convert ETW event to MDE custom detection event
@@ -303,12 +304,8 @@ mod tests {
             timestamp: 123456789,
         };
 
-        let mde_event = exporter.etw_to_mde_event(
-            "run-123",
-            "machine-456",
-            "WORKER-01",
-            &etw_event,
-        );
+        let mde_event =
+            exporter.etw_to_mde_event("run-123", "machine-456", "WORKER-01", &etw_event);
 
         assert_eq!(mde_event.machine_id, "machine-456");
         assert_eq!(mde_event.computer_name, "WORKER-01");
