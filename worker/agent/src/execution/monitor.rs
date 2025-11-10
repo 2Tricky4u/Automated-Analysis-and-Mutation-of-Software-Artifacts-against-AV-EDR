@@ -151,7 +151,7 @@ impl ExecutionMonitor {
         info!("Execution monitor stopped for run_id={}", self.run_id);
     }
 
-    async fn collect_status(&self) -> Result<ExecutionStatus, Box<dyn std::error::Error>> {
+    async fn collect_status(&self) -> Result<ExecutionStatus, Box<dyn std::error::Error + Send + Sync>> {
         // 1. Check if process still alive
         let process_alive = self.is_process_alive(self.pid);
 
@@ -266,7 +266,7 @@ impl ExecutionMonitor {
         }
     }
 
-    fn get_process_metrics(&self, _pid: u32) -> Result<(i32, i32), Box<dyn std::error::Error>> {
+    fn get_process_metrics(&self, _pid: u32) -> Result<(i32, i32), Box<dyn std::error::Error + Send + Sync>> {
         // TODO: Implement using sysinfo crate or WMI for accurate metrics
         // For now, return dummy values to avoid blocking
         Ok((0, 0))

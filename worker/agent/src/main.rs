@@ -1,7 +1,7 @@
 use edr_config::WorkerConfig;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 use tonic::{Request, Response, Status, transport::Server};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 mod execution;
 mod telemetry;
@@ -92,17 +92,136 @@ impl WorkerAgent for WorkerAgentService {
         request: Request<SampleRequest>,
     ) -> Result<Response<SampleResponse>, Status> {
         let req = request.into_inner();
-        info!("Running sample: {} (ETW: {})", req.job_id, req.enable_etw);
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let job_id = req.job_id.clone();
 
-        // Simulate sample execution
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        info!("Starting sample execution: job_id={}, artifact={}", job_id, req.artifact_path);
 
+        // Check if RedEDR is enabled
+        if !self.config.telemetry.rededr.enabled {
+            return Err(Status::failed_precondition("RedEDR telemetry is disabled in config"));
+        }
+
+        // 1. Create RedEDR collector
+        let rededr_collector = telemetry::collectors::rededr::RedEdrCollector::new(
+            telemetry::collectors::rededr::RedEdrCollectorConfig {
+                base_url: self.config.telemetry.rededr.base_url.clone(),
+                flush_interval_ms: 1000,
+                job_id: job_id.clone(),
+                run_id: run_id.clone(),
+            }
+        );
+
+        // 2. Extract artifact filename for tracing
+        let artifact_name = extract_filename(&req.artifact_path);
+
+        // 3. Start RedEDR tracing
+        rededr_collector.start_trace(vec![artifact_name.clone()]).await
+            .map_err(|e| Status::internal(format!("Failed to start RedEDR tracing: {}", e)))?;
+
+        info!("RedEDR tracing started for artifact: {}", artifact_name);
+
+        // 4. Start process
+        let mut child = tokio::process::Command::new(&req.artifact_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| Status::internal(format!("Failed to spawn process: {}", e)))?;
+
+        let pid = child.id().ok_or_else(|| Status::internal("Failed to get PID"))?;
+
+        info!("Artifact process spawned: pid={}", pid);
+
+        // 5. Start monitoring task
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
+
+        let monitor = execution::monitor::ExecutionMonitor::new(
+            run_id.clone(),
+            job_id.clone(),
+            self.worker_id.clone(),
+            self.config.worker.ip_address.clone(),
+            artifact_name.clone(),
+            pid,
+            self.config.telemetry.rededr.base_url.clone(),
+            self.config.controller.controller_address.clone(),
+        );
+
+        let monitor_handle = tokio::spawn(async move {
+            monitor.start(stop_rx, event_tx).await;
+        });
+
+        // Spawn task to consume monitor events (log them)
+        let event_consumer = tokio::spawn(async move {
+            while let Some(event) = event_rx.recv().await {
+                match event.event_type.as_str() {
+                    "started" => info!("Monitor: {}", event.details),
+                    "heartbeat" => info!("Monitor: {}", event.details),
+                    "stuck" => warn!("Monitor: {}", event.details),
+                    "terminated" => info!("Monitor: {}", event.details),
+                    "completed" => info!("Monitor: {}", event.details),
+                    _ => info!("Monitor: {} - {}", event.event_type, event.details),
+                }
+            }
+        });
+
+        // 6. Wait for process completion or timeout
+        let timeout_duration = Duration::from_secs(req.timeout_seconds as u64);
+        let start_time = Instant::now();
+
+        let exit_result = tokio::time::timeout(timeout_duration, child.wait()).await;
+
+        let (exit_code, timed_out) = match exit_result {
+            Ok(Ok(status)) => {
+                let code = status.code().unwrap_or(-1);
+                info!("Process exited with code: {}", code);
+                (code, false)
+            }
+            Ok(Err(e)) => {
+                error!("Failed to wait for process: {}", e);
+                (-1, false)
+            }
+            Err(_) => {
+                warn!("Process timed out after {}s, attempting to kill", req.timeout_seconds);
+                let _ = child.kill().await;
+                (-1, true)
+            }
+        };
+
+        let elapsed = start_time.elapsed();
+
+        // 7. Stop monitoring
+        stop_tx.send(true).ok();
+        monitor_handle.await.ok();
+        event_consumer.abort(); // Stop event consumer
+
+        info!("Execution completed in {:.2}s", elapsed.as_secs_f64());
+
+        // 8. Collect full telemetry batch
+        info!("Collecting telemetry events from RedEDR...");
+        let telemetry_events = rededr_collector.collect_all(&job_id).await
+            .map_err(|e| Status::internal(format!("Failed to collect telemetry: {}", e)))?;
+
+        info!("Collected {} telemetry events", telemetry_events.len());
+
+        // 9. Reset RedEDR for next run
+        rededr_collector.reset().await.ok();
+
+        // 10. Prepare output
+        let output = if timed_out {
+            format!("Execution timed out after {}s", req.timeout_seconds)
+        } else {
+            format!("Execution completed in {:.2}s", elapsed.as_secs_f64())
+        };
+
+        // 11. Return response
         Ok(Response::new(SampleResponse {
-            job_id: req.job_id,
-            success: true,
-            exit_code: 0,
-            output: "Sample executed successfully".to_string(),
-            telemetry_ids: vec!["telemetry-001".to_string()],
+            job_id,
+            success: !timed_out && exit_code == 0,
+            exit_code,
+            output,
+            telemetry_ids: vec![run_id],
         }))
     }
 
@@ -124,6 +243,15 @@ impl WorkerAgent for WorkerAgentService {
 
 // NOTE: Streaming telemetry removed - now using batch collection at execution completion
 // Telemetry is collected once after artifact execution and returned with RunResult
+
+/// Extract filename from path (cross-platform)
+fn extract_filename(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path)
+        .to_string()
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

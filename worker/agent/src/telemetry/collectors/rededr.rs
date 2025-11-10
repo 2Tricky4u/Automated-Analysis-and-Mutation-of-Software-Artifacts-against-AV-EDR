@@ -134,7 +134,7 @@ impl RedEdrCollector {
     }
 
     /// Fetch events from RedEDR HTTP API
-    async fn fetch_events(&self) -> Result<Vec<RedEdrEvent>, Box<dyn std::error::Error>> {
+    async fn fetch_events(&self) -> Result<Vec<RedEdrEvent>, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/api/logs/rededr", self.config.base_url);
 
         let response = self
@@ -157,7 +157,7 @@ impl RedEdrCollector {
     }
 
     /// Start tracing target executables (call before artifact execution)
-    pub async fn start_trace(&self, targets: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn start_trace(&self, targets: Vec<String>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/api/trace/start", self.config.base_url);
 
         self.client
@@ -171,7 +171,7 @@ impl RedEdrCollector {
     }
 
     /// Collect all events (call AFTER artifact execution completes)
-    pub async fn collect_all(&self, job_id: &str) -> Result<Vec<crate::edr::common::TelemetryData>, Box<dyn std::error::Error>> {
+    pub async fn collect_all(&self, job_id: &str) -> Result<Vec<crate::edr::common::TelemetryData>, Box<dyn std::error::Error + Send + Sync>> {
         info!("Collecting all RedEDR events for job_id={}", job_id);
 
         let events = self.fetch_events().await?;
@@ -186,7 +186,7 @@ impl RedEdrCollector {
     }
 
     /// Reset RedEDR state for next run
-    pub async fn reset(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn reset(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/api/trace/reset", self.config.base_url);
 
         self.client
