@@ -8,7 +8,6 @@
 /// 2. Tracks last_seen event index to avoid duplicates
 /// 3. Transforms RedEDR JSON events to protobuf TelemetryData
 /// 4. Sends to mpsc channel for gRPC streaming
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::Duration;
@@ -134,7 +133,9 @@ impl RedEdrCollector {
     }
 
     /// Fetch events from RedEDR HTTP API
-    async fn fetch_events(&self) -> Result<Vec<RedEdrEvent>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn fetch_events(
+        &self,
+    ) -> Result<Vec<RedEdrEvent>, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/api/logs/rededr", self.config.base_url);
 
         let response = self
@@ -157,7 +158,10 @@ impl RedEdrCollector {
     }
 
     /// Start tracing target executables (call before artifact execution)
-    pub async fn start_trace(&self, targets: Vec<String>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start_trace(
+        &self,
+        targets: Vec<String>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/api/trace/start", self.config.base_url);
 
         self.client
@@ -171,7 +175,11 @@ impl RedEdrCollector {
     }
 
     /// Collect all events (call AFTER artifact execution completes)
-    pub async fn collect_all(&self, job_id: &str) -> Result<Vec<crate::edr::common::TelemetryData>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn collect_all(
+        &self,
+        job_id: &str,
+    ) -> Result<Vec<crate::edr::common::TelemetryData>, Box<dyn std::error::Error + Send + Sync>>
+    {
         info!("Collecting all RedEDR events for job_id={}", job_id);
 
         let events = self.fetch_events().await?;
@@ -189,10 +197,7 @@ impl RedEdrCollector {
     pub async fn reset(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/api/trace/reset", self.config.base_url);
 
-        self.client
-            .post(&url)
-            .send()
-            .await?;
+        self.client.post(&url).send().await?;
 
         info!("Reset RedEDR state");
         Ok(())
@@ -204,7 +209,11 @@ impl RedEdrCollector {
     }
 
     /// Transform RedEDR event to protobuf TelemetryData with custom job_id
-    fn transform_event_with_job(&self, job_id: &str, event: &RedEdrEvent) -> crate::edr::common::TelemetryData {
+    fn transform_event_with_job(
+        &self,
+        job_id: &str,
+        event: &RedEdrEvent,
+    ) -> crate::edr::common::TelemetryData {
         // Serialize entire event as JSON payload
         let payload = serde_json::to_vec(event).unwrap_or_default();
 
@@ -230,7 +239,10 @@ impl RedEdrCollector {
 
         crate::edr::common::TelemetryData {
             job_id: job_id.to_string(),
-            event_type: event.r#type.clone().unwrap_or_else(|| "unknown".to_string()),
+            event_type: event
+                .r#type
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload,
             metadata,

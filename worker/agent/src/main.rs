@@ -95,11 +95,16 @@ impl WorkerAgent for WorkerAgentService {
         let run_id = uuid::Uuid::new_v4().to_string();
         let job_id = req.job_id.clone();
 
-        info!("Starting sample execution: job_id={}, artifact={}", job_id, req.artifact_path);
+        info!(
+            "Starting sample execution: job_id={}, artifact={}",
+            job_id, req.artifact_path
+        );
 
         // Check if RedEDR is enabled
         if !self.config.telemetry.rededr.enabled {
-            return Err(Status::failed_precondition("RedEDR telemetry is disabled in config"));
+            return Err(Status::failed_precondition(
+                "RedEDR telemetry is disabled in config",
+            ));
         }
 
         // 1. Create RedEDR collector
@@ -109,14 +114,16 @@ impl WorkerAgent for WorkerAgentService {
                 flush_interval_ms: 1000,
                 job_id: job_id.clone(),
                 run_id: run_id.clone(),
-            }
+            },
         );
 
         // 2. Extract artifact filename for tracing
         let artifact_name = extract_filename(&req.artifact_path);
 
         // 3. Start RedEDR tracing
-        rededr_collector.start_trace(vec![artifact_name.clone()]).await
+        rededr_collector
+            .start_trace(vec![artifact_name.clone()])
+            .await
             .map_err(|e| Status::internal(format!("Failed to start RedEDR tracing: {}", e)))?;
 
         info!("RedEDR tracing started for artifact: {}", artifact_name);
@@ -129,7 +136,9 @@ impl WorkerAgent for WorkerAgentService {
             .spawn()
             .map_err(|e| Status::internal(format!("Failed to spawn process: {}", e)))?;
 
-        let pid = child.id().ok_or_else(|| Status::internal("Failed to get PID"))?;
+        let pid = child
+            .id()
+            .ok_or_else(|| Status::internal("Failed to get PID"))?;
 
         info!("Artifact process spawned: pid={}", pid);
 
@@ -183,7 +192,10 @@ impl WorkerAgent for WorkerAgentService {
                 (-1, false)
             }
             Err(_) => {
-                warn!("Process timed out after {}s, attempting to kill", req.timeout_seconds);
+                warn!(
+                    "Process timed out after {}s, attempting to kill",
+                    req.timeout_seconds
+                );
                 let _ = child.kill().await;
                 (-1, true)
             }
@@ -200,7 +212,9 @@ impl WorkerAgent for WorkerAgentService {
 
         // 8. Collect full telemetry batch
         info!("Collecting telemetry events from RedEDR...");
-        let telemetry_events = rededr_collector.collect_all(&job_id).await
+        let telemetry_events = rededr_collector
+            .collect_all(&job_id)
+            .await
             .map_err(|e| Status::internal(format!("Failed to collect telemetry: {}", e)))?;
 
         info!("Collected {} telemetry events", telemetry_events.len());
@@ -267,7 +281,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = WorkerConfig::load().unwrap_or_else(|e| {
         eprintln!("Failed to load worker config: {}", e);
         eprintln!("");
-        eprintln!("Hostname: {}", std::env::var("COMPUTERNAME").unwrap_or_else(|_| "UNKNOWN".to_string()));
+        eprintln!(
+            "Hostname: {}",
+            std::env::var("COMPUTERNAME").unwrap_or_else(|_| "UNKNOWN".to_string())
+        );
         eprintln!("");
         eprintln!("Config search order:");
         eprintln!("  1. AUTOMUTATE_WORKER_CONFIG env var");
@@ -279,7 +296,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Solutions:");
         eprintln!("  - Run: .\\automation\\scripts\\generate-configs.ps1");
         eprintln!("  - Deploy: Copy <hostname>.toml to C:\\AutoMutate\\worker.toml");
-        eprintln!("  - Or set: $env:AUTOMUTATE_WORKER_CONFIG=\"automation\\generated\\<hostname>.toml\"");
+        eprintln!(
+            "  - Or set: $env:AUTOMUTATE_WORKER_CONFIG=\"automation\\generated\\<hostname>.toml\""
+        );
         std::process::exit(1);
     });
 
@@ -302,7 +321,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(50052);
     let addr = format!("0.0.0.0:{}", worker_port).parse()?;
 
-    info!("Worker configuration loaded successfully at {}", WorkerConfig::find_config_path());
+    info!(
+        "Worker configuration loaded successfully at {}",
+        WorkerConfig::find_config_path()
+    );
     info!("Worker ID: {}", worker_id);
     info!("Worker IP: {}", config.worker.ip_address);
     info!("OS Version: {}", config.worker.os_version);
@@ -316,7 +338,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Telemetry mode: Batch collection (no streaming)");
 
     if config.telemetry.rededr.enabled {
-        info!("RedEDR collector available: {}", config.telemetry.rededr.base_url);
+        info!(
+            "RedEDR collector available: {}",
+            config.telemetry.rededr.base_url
+        );
         info!("RedEDR telemetry will be collected after each execution completes");
     } else {
         info!("RedEDR collector disabled in config");

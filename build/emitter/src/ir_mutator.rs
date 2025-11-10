@@ -5,7 +5,6 @@
 ///! - CFG flattening (dispatcher-based control flow)
 ///! - API call indirection (via function pointers)
 ///! - Bogus control flow insertion
-
 use anyhow::Result;
 use std::path::Path;
 

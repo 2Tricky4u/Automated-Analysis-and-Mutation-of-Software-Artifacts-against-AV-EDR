@@ -6,7 +6,6 @@
 ///!   Source → AST mutations → LLVM IR → IR mutations → Instrumentation → PE
 ///!
 ///! See: automation/BUILD-PIPELINE.md for detailed design
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,13 +14,13 @@ use std::process::{Command, Stdio};
 use tracing::{debug, info, warn};
 
 pub mod ast_mutator;
-pub mod ir_mutator;
 pub mod instrumenter;
+pub mod ir_mutator;
 
 // Re-exports
 pub use ast_mutator::AstMutator;
-pub use ir_mutator::IrMutator;
 pub use instrumenter::Instrumenter;
+pub use ir_mutator::IrMutator;
 
 /// Trace instrumentation mode (CLAUDE.md Section 4)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -370,11 +369,7 @@ impl ArtifactBuilder {
         Ok(ArtifactMetadata {
             artifact_id,
             artifact_path: artifact.to_path_buf(),
-            source_template: source
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string(),
+            source_template: source.file_name().unwrap().to_string_lossy().to_string(),
             mutations: mutations.to_vec(),
             config: self.config.clone(),
             build_timestamp: chrono::Utc::now().to_rfc3339(),

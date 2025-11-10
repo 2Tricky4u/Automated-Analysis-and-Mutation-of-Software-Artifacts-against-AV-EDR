@@ -4,7 +4,6 @@
 /// - Cortex: Prometheus-compatible time series database
 /// - MDE: Microsoft Defender for Endpoint custom detections
 /// - Custom HTTP: Generic HTTP endpoint for custom collectors
-
 pub mod cortex;
 pub mod mde;
 

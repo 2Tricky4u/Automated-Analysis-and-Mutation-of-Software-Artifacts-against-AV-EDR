@@ -6,7 +6,6 @@
 /// References:
 /// - Prometheus Remote Write Spec: https://prometheus.io/docs/concepts/remote_write_spec/
 /// - Cortex API: https://cortexmetrics.io/docs/api/
-
 use anyhow::Result;
 use edr_config::CortexConfig;
 use reqwest::{Client, ClientBuilder};
@@ -18,8 +17,8 @@ use tokio::sync::Mutex;
 /// Prometheus-compatible time series sample
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Sample {
-    pub timestamp: i64,     // Unix timestamp in milliseconds
-    pub value: f64,         // Metric value
+    pub timestamp: i64, // Unix timestamp in milliseconds
+    pub value: f64,     // Metric value
 }
 
 /// Prometheus-compatible label

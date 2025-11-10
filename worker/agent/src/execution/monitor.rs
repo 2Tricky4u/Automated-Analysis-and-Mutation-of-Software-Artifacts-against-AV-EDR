@@ -5,8 +5,7 @@
 /// - Event count (detect stuck: no growth)
 /// - Process status (alive/dead)
 /// - Resource usage (CPU, memory)
-
-use crate::edr::controller::{controller_client::ControllerClient, StatusReport, StatusAck};
+use crate::edr::controller::{StatusAck, StatusReport, controller_client::ControllerClient};
 use crate::edr::worker::{ExecutionStatus, MonitorEvent};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
@@ -60,7 +59,10 @@ impl ExecutionMonitor {
         mut stop_rx: tokio::sync::watch::Receiver<bool>,
         event_tx: Sender<MonitorEvent>,
     ) {
-        info!("Starting execution monitor for run_id={}, pid={}", self.run_id, self.pid);
+        info!(
+            "Starting execution monitor for run_id={}, pid={}",
+            self.run_id, self.pid
+        );
 
         let mut interval = tokio::time::interval(Duration::from_secs(3));
         let mut last_event_count = 0;
@@ -151,7 +153,9 @@ impl ExecutionMonitor {
         info!("Execution monitor stopped for run_id={}", self.run_id);
     }
 
-    async fn collect_status(&self) -> Result<ExecutionStatus, Box<dyn std::error::Error + Send + Sync>> {
+    async fn collect_status(
+        &self,
+    ) -> Result<ExecutionStatus, Box<dyn std::error::Error + Send + Sync>> {
         // 1. Check if process still alive
         let process_alive = self.is_process_alive(self.pid);
 
@@ -164,13 +168,7 @@ impl ExecutionMonitor {
 
         // 3. Query RedEDR for event count (lightweight)
         let stats_url = format!("{}/api/stats", self.rededr_base_url);
-        let stats: serde_json::Value = self
-            .client
-            .get(&stats_url)
-            .send()
-            .await?
-            .json()
-            .await?;
+        let stats: serde_json::Value = self.client.get(&stats_url).send().await?.json().await?;
 
         let events_count = stats["events_count"].as_i64().unwrap_or(0) as i32;
 
@@ -233,7 +231,10 @@ impl ExecutionMonitor {
                 }
             }
             Err(e) => {
-                debug!("Failed to connect to controller at {}: {}", controller_addr, e);
+                debug!(
+                    "Failed to connect to controller at {}: {}",
+                    controller_addr, e
+                );
                 // Don't fail the entire monitoring task if controller is unreachable
             }
         }
@@ -266,7 +267,10 @@ impl ExecutionMonitor {
         }
     }
 
-    fn get_process_metrics(&self, _pid: u32) -> Result<(i32, i32), Box<dyn std::error::Error + Send + Sync>> {
+    fn get_process_metrics(
+        &self,
+        _pid: u32,
+    ) -> Result<(i32, i32), Box<dyn std::error::Error + Send + Sync>> {
         // TODO: Implement using sysinfo crate or WMI for accurate metrics
         // For now, return dummy values to avoid blocking
         Ok((0, 0))
