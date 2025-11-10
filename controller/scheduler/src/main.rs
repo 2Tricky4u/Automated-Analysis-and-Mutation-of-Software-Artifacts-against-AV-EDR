@@ -20,7 +20,7 @@ pub mod edr {
 use edr::common::{JobId, TelemetryAck, TelemetryData};
 use edr::controller::{
     JobRequest, JobResponse, JobStatusRequest, JobStatusResponse, PingRequest, PingResponse,
-    QueryRequest, QueryResponse, TriageRequest, TriageResponse,
+    QueryRequest, QueryResponse, StatusAck, StatusReport, TriageRequest, TriageResponse,
     controller_server::{Controller, ControllerServer},
 };
 
@@ -194,6 +194,35 @@ impl Controller for SchedulerService {
             received: true,
             events_count,
         }))
+    }
+
+    async fn report_status(
+        &self,
+        request: Request<StatusReport>,
+    ) -> Result<Response<StatusAck>, Status> {
+        let report = request.into_inner();
+
+        // Format status display: [WORKER: ip] [PID: pid] [JOB: job_id] [STATUS: event_type] details
+        let status_line = format!(
+            "[WORKER: {} ({})] [PID: {}] [JOB: {}] [RUN: {}] [STATUS: {}] [ARTIFACT: {}] {}",
+            report.worker_ip,
+            report.worker_id,
+            report.pid,
+            report.job_id,
+            report.run_id,
+            report.event_type.to_uppercase(),
+            report.artifact_name,
+            report.details
+        );
+
+        // Use info! for normal heartbeats, warn! for stuck processes
+        if report.event_type == "stuck" {
+            tracing::warn!("{}", status_line);
+        } else {
+            info!("{}", status_line);
+        }
+
+        Ok(Response::new(StatusAck { received: true }))
     }
 }
 

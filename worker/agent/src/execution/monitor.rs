@@ -1,0 +1,291 @@
+/// Execution Monitor - Lightweight Status Tracking
+///
+/// Monitors artifact execution without streaming full telemetry.
+/// Polls RedEDR /api/stats every 2-5 seconds to track:
+/// - Event count (detect stuck: no growth)
+/// - Process status (alive/dead)
+/// - Resource usage (CPU, memory)
+
+use crate::edr::controller::{controller_client::ControllerClient, StatusReport, StatusAck};
+use crate::edr::worker::{ExecutionStatus, MonitorEvent};
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc::Sender;
+use tonic::Request;
+use tracing::{debug, error, info, warn};
+
+pub struct ExecutionMonitor {
+    pub run_id: String,
+    pub job_id: String,
+    pub worker_id: String,
+    pub worker_ip: String,
+    pub artifact_name: String,
+    pub pid: u32,
+    pub rededr_base_url: String,
+    pub controller_address: String,
+    pub start_time: Instant,
+    client: reqwest::Client,
+}
+
+impl ExecutionMonitor {
+    pub fn new(
+        run_id: String,
+        job_id: String,
+        worker_id: String,
+        worker_ip: String,
+        artifact_name: String,
+        pid: u32,
+        rededr_base_url: String,
+        controller_address: String,
+    ) -> Self {
+        Self {
+            run_id,
+            job_id,
+            worker_id,
+            worker_ip,
+            artifact_name,
+            pid,
+            rededr_base_url,
+            controller_address,
+            start_time: Instant::now(),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(3))
+                .build()
+                .expect("Failed to create HTTP client"),
+        }
+    }
+
+    /// Start monitoring task (runs in background until stop signal)
+    pub async fn start(
+        self,
+        mut stop_rx: tokio::sync::watch::Receiver<bool>,
+        event_tx: Sender<MonitorEvent>,
+    ) {
+        info!("Starting execution monitor for run_id={}, pid={}", self.run_id, self.pid);
+
+        let mut interval = tokio::time::interval(Duration::from_secs(3));
+        let mut last_event_count = 0;
+        let mut idle_count = 0;
+
+        // Send initial "started" event
+        let _ = event_tx
+            .send(MonitorEvent {
+                event_type: "started".to_string(),
+                timestamp: chrono::Utc::now().timestamp_millis(),
+                details: format!("Process started: pid={}", self.pid),
+                status: None,
+            })
+            .await;
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    match self.collect_status().await {
+                        Ok(status) => {
+                            let event_count = status.telemetry_events_count;
+
+                            // Detect stuck state (no new events for 3+ heartbeats = 9+ seconds)
+                            if event_count == last_event_count && status.process_alive {
+                                idle_count += 1;
+                            } else {
+                                idle_count = 0;
+                            }
+                            last_event_count = event_count;
+
+                            let event_type = if idle_count >= 3 && status.elapsed_seconds > 10 {
+                                "stuck".to_string()
+                            } else if status.process_alive {
+                                "heartbeat".to_string()
+                            } else {
+                                "terminated".to_string()
+                            };
+
+                            let details = format!(
+                                "pid={}, events={}, cpu={}%, mem={}MB, elapsed={}s{}",
+                                status.pid,
+                                status.telemetry_events_count,
+                                status.cpu_percent,
+                                status.memory_mb,
+                                status.elapsed_seconds,
+                                if idle_count >= 3 { " [STUCK?]" } else { "" }
+                            );
+
+                            debug!("{}: {}", event_type, details);
+
+                            // Send status report to controller
+                            self.send_status_to_controller(&event_type, &status, &details).await;
+
+                            if event_tx.send(MonitorEvent {
+                                event_type,
+                                timestamp: chrono::Utc::now().timestamp_millis(),
+                                details,
+                                status: Some(status),
+                            }).await.is_err() {
+                                warn!("Monitor channel closed, stopping monitor");
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to collect status: {}", e);
+                            // Continue monitoring even on errors
+                        }
+                    }
+                }
+                _ = stop_rx.changed() => {
+                    if *stop_rx.borrow() {
+                        info!("Monitor received stop signal for run_id={}", self.run_id);
+
+                        // Send final "completed" event
+                        let _ = event_tx.send(MonitorEvent {
+                            event_type: "completed".to_string(),
+                            timestamp: chrono::Utc::now().timestamp_millis(),
+                            details: "Execution completed".to_string(),
+                            status: None,
+                        }).await;
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        info!("Execution monitor stopped for run_id={}", self.run_id);
+    }
+
+    async fn collect_status(&self) -> Result<ExecutionStatus, Box<dyn std::error::Error>> {
+        // 1. Check if process still alive
+        let process_alive = self.is_process_alive(self.pid);
+
+        // 2. Get CPU/memory usage (optional, can be expensive)
+        let (cpu_percent, memory_mb) = if process_alive {
+            self.get_process_metrics(self.pid).unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
+
+        // 3. Query RedEDR for event count (lightweight)
+        let stats_url = format!("{}/api/stats", self.rededr_base_url);
+        let stats: serde_json::Value = self
+            .client
+            .get(&stats_url)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        let events_count = stats["events_count"].as_i64().unwrap_or(0) as i32;
+
+        // 4. Last activity (use event count as proxy)
+        let last_activity = if events_count > 0 {
+            "active".to_string()
+        } else {
+            "idle".to_string()
+        };
+
+        Ok(ExecutionStatus {
+            pid: self.pid as i32,
+            elapsed_seconds: self.start_time.elapsed().as_secs() as i32,
+            process_alive,
+            cpu_percent,
+            memory_mb,
+            telemetry_events_count: events_count,
+            last_activity,
+        })
+    }
+
+    /// Send status report to controller
+    async fn send_status_to_controller(
+        &self,
+        event_type: &str,
+        status: &ExecutionStatus,
+        details: &str,
+    ) {
+        // Ensure controller address has http:// scheme
+        let controller_addr = if self.controller_address.starts_with("http://")
+            || self.controller_address.starts_with("https://")
+        {
+            self.controller_address.clone()
+        } else {
+            format!("http://{}", self.controller_address)
+        };
+
+        let status_report = StatusReport {
+            worker_id: self.worker_id.clone(),
+            worker_ip: self.worker_ip.clone(),
+            job_id: self.job_id.clone(),
+            run_id: self.run_id.clone(),
+            artifact_name: self.artifact_name.clone(),
+            pid: status.pid,
+            elapsed_seconds: status.elapsed_seconds,
+            process_alive: status.process_alive,
+            telemetry_events_count: status.telemetry_events_count,
+            event_type: event_type.to_string(),
+            cpu_percent: status.cpu_percent,
+            memory_mb: status.memory_mb,
+            details: details.to_string(),
+        };
+
+        // Try to connect and send status report
+        match ControllerClient::connect(controller_addr.clone()).await {
+            Ok(mut client) => {
+                if let Err(e) = client.report_status(Request::new(status_report)).await {
+                    debug!("Failed to send status to controller: {}", e);
+                    // Don't fail the entire monitoring task if controller is unreachable
+                }
+            }
+            Err(e) => {
+                debug!("Failed to connect to controller at {}: {}", controller_addr, e);
+                // Don't fail the entire monitoring task if controller is unreachable
+            }
+        }
+    }
+
+    fn is_process_alive(&self, pid: u32) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            use std::ptr;
+            use windows::Win32::Foundation::{CloseHandle, HANDLE};
+            use windows::Win32::System::Threading::{
+                OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+            };
+
+            unsafe {
+                let handle_result = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                match handle_result {
+                    Ok(handle) if !handle.is_invalid() => {
+                        let _ = CloseHandle(handle);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            // Fallback for non-Windows (use sysinfo or similar)
+            true
+        }
+    }
+
+    fn get_process_metrics(&self, _pid: u32) -> Result<(i32, i32), Box<dyn std::error::Error>> {
+        // TODO: Implement using sysinfo crate or WMI for accurate metrics
+        // For now, return dummy values to avoid blocking
+        Ok((0, 0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_monitor_creation() {
+        let monitor = ExecutionMonitor::new(
+            "run-test-001".to_string(),
+            1234,
+            "http://localhost:8081".to_string(),
+        );
+
+        assert_eq!(monitor.run_id, "run-test-001");
+        assert_eq!(monitor.pid, 1234);
+    }
+}

@@ -156,8 +156,55 @@ impl RedEdrCollector {
         Ok(events)
     }
 
+    /// Start tracing target executables (call before artifact execution)
+    pub async fn start_trace(&self, targets: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!("{}/api/trace/start", self.config.base_url);
+
+        self.client
+            .post(&url)
+            .json(&serde_json::json!({"trace": targets}))
+            .send()
+            .await?;
+
+        info!("Started RedEDR tracing for targets: {:?}", targets);
+        Ok(())
+    }
+
+    /// Collect all events (call AFTER artifact execution completes)
+    pub async fn collect_all(&self, job_id: &str) -> Result<Vec<crate::edr::common::TelemetryData>, Box<dyn std::error::Error>> {
+        info!("Collecting all RedEDR events for job_id={}", job_id);
+
+        let events = self.fetch_events().await?;
+        info!("Fetched {} events from RedEDR", events.len());
+
+        let telemetry_events: Vec<crate::edr::common::TelemetryData> = events
+            .iter()
+            .map(|e| self.transform_event_with_job(job_id, e))
+            .collect();
+
+        Ok(telemetry_events)
+    }
+
+    /// Reset RedEDR state for next run
+    pub async fn reset(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!("{}/api/trace/reset", self.config.base_url);
+
+        self.client
+            .post(&url)
+            .send()
+            .await?;
+
+        info!("Reset RedEDR state");
+        Ok(())
+    }
+
     /// Transform RedEDR event to protobuf TelemetryData
     fn transform_event(&self, event: &RedEdrEvent) -> crate::edr::common::TelemetryData {
+        self.transform_event_with_job(&self.config.job_id, event)
+    }
+
+    /// Transform RedEDR event to protobuf TelemetryData with custom job_id
+    fn transform_event_with_job(&self, job_id: &str, event: &RedEdrEvent) -> crate::edr::common::TelemetryData {
         // Serialize entire event as JSON payload
         let payload = serde_json::to_vec(event).unwrap_or_default();
 
@@ -182,7 +229,7 @@ impl RedEdrCollector {
         }
 
         crate::edr::common::TelemetryData {
-            job_id: self.config.job_id.clone(),
+            job_id: job_id.to_string(),
             event_type: event.r#type.clone().unwrap_or_else(|| "unknown".to_string()),
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload,
