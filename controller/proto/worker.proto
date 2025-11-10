@@ -97,6 +97,8 @@ message ExecuteRequest {
 
 message ExecuteResponse {
   edr.common.RunResult result = 1;
+  // Full telemetry batch attached to final response
+  repeated edr.common.TelemetryData telemetry_events = 2;
 }
 
 message MonitorRequest {
@@ -104,7 +106,20 @@ message MonitorRequest {
 }
 
 message MonitorEvent {
-  string event_type = 1;  // started, running, crashed, completed
+  string event_type = 1;  // started, running, heartbeat, stuck, crashed, completed
   int64 timestamp = 2;
   string details = 3;
+
+  // Lightweight status info (NOT full telemetry)
+  ExecutionStatus status = 4;
+}
+
+message ExecutionStatus {
+  int32 pid = 1;
+  int32 elapsed_seconds = 2;
+  bool process_alive = 3;
+  int32 cpu_percent = 4;
+  int32 memory_mb = 5;
+  int32 telemetry_events_count = 6;  // How many events RedEDR has collected so far
+  string last_activity = 7;  // Last significant API call or "idle"
 }

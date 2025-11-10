@@ -57,6 +57,9 @@ message RunResult {
   RunLabels labels = 8;
   PerfMetrics perf = 9;
   string notes = 10;
+
+  // Telemetry collected during execution (batch, not streamed)
+  repeated TelemetryData telemetry_events = 11;
 }
 
 // Telemetry data streaming (used by workers to push to controller)

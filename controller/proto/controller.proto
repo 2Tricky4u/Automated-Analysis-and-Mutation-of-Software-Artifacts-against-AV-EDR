@@ -23,6 +23,9 @@ service Controller {
 
   // Workers push telemetry data here (client-streaming)
   rpc StreamTelemetry(stream edr.common.TelemetryData) returns (edr.common.TelemetryAck);
+
+  // Workers report execution status (lightweight heartbeat)
+  rpc ReportStatus(StatusReport) returns (StatusAck);
 }
 
 // Selector Service - mutation selection with feedback
@@ -166,4 +169,25 @@ message AvoidListRequest {
 
 message AvoidListResponse {
   repeated string features = 1;
+}
+
+// Status reporting (lightweight heartbeat from workers during execution)
+message StatusReport {
+  string worker_id = 1;
+  string worker_ip = 2;
+  string job_id = 3;
+  string run_id = 4;
+  string artifact_name = 5;
+  int32 pid = 6;
+  int32 elapsed_seconds = 7;
+  bool process_alive = 8;
+  int32 telemetry_events_count = 9;
+  string event_type = 10;  // "started", "heartbeat", "stuck", "terminated", "completed"
+  int32 cpu_percent = 11;
+  int32 memory_mb = 12;
+  string details = 13;
+}
+
+message StatusAck {
+  bool received = 1;
 }
