@@ -35,6 +35,49 @@ Write-Host "|          Worker VM Initialization                              |" 
 Write-Host "|          $WorkerName -> $StaticIP".PadRight(64) "|" -ForegroundColor Cyan
 Write-Host "+================================================================+`n" -ForegroundColor Cyan
 
+# ===================== PRE-SECTION: Disable Defender for Automation ==========
+Write-Info "[0/10] Disabling Windows Defender for automation directories..."
+
+try {
+    # Add path exclusions for automation-related directories
+    $exclusionPaths = @(
+        "C:\AutoMutate",
+        "C:\RedEdr",
+        "C:\Repos",
+        "C:\Temp",
+        $env:TEMP,
+        "C:\Windows\Temp"
+    )
+
+    foreach ($path in $exclusionPaths) {
+        Add-MpPreference -ExclusionPath $path -ErrorAction SilentlyContinue
+    }
+
+    # Add process exclusions for PowerShell and build tools
+    $exclusionProcesses = @(
+        "powershell.exe",
+        "pwsh.exe",
+        "msbuild.exe",
+        "cargo.exe",
+        "rustc.exe",
+        "git.exe"
+    )
+
+    foreach ($process in $exclusionProcesses) {
+        Add-MpPreference -ExclusionProcess $process -ErrorAction SilentlyContinue
+    }
+
+    # Temporarily disable real-time monitoring during initialization
+    Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+
+    Write-Success "Windows Defender exclusions configured"
+    Write-Info "Real-time monitoring temporarily disabled for initialization"
+
+} catch {
+    Write-Warn "Could not configure Defender exclusions: $($_.Exception.Message)"
+    Write-Info "This may cause script execution to be blocked"
+}
+
 # ===================== SECTION 1: System Configuration =====================
 Write-Info "[1/10] System-level configuration..."
 
@@ -415,24 +458,106 @@ foreach ($dir in $projectDirs) {
 
 
 # ===================== SECTION 7: RedEdr ==============
-Write-Info "[7/10] RedEdr setup (download, extract, layout)..."
+Write-Info "[7/10] RedEdr setup (extract from local zip)..."
 
-$RedEdrUrl  = "https://github.com/dobin/RedEdr/releases/download/v0.3/RedEdr_0.3.zip"
-$RedEdrZip  = "$env:TEMP\RedEdr_0.3.zip"
+# RedEdr zip should be pre-staged in the project's telemetry folder
+# This script expects it to be available at C:\AutoMutate\build\telemetry\RedEdr.zip
+$RedEdrSourceZip = "C:\AutoMutate\build\telemetry\RedEdr.zip"
+$RedEdrZip = "$env:TEMP\RedEdr.zip"
 $RedEdrRoot = "C:\RedEdr"   # only this path is supported
-try {
-    if (-not (Test-Path $RedEdrZip)) {
-        Write-Info "Downloading RedEdr release..."
-        Invoke-WebRequest -Uri $RedEdrUrl -OutFile $RedEdrZip -UseBasicParsing -ErrorAction Stop
-        Write-Success "Downloaded: $RedEdrZip"
-    } else { Write-Info "Zip already present: $RedEdrZip" }
 
-    if (Test-Path $RedEdrRoot) { Write-Info "Clearing existing $RedEdrRoot"; Remove-Item $RedEdrRoot -Recurse -Force -ErrorAction SilentlyContinue }
+try {
+    # Check if source zip exists (should be copied by initialize-worker.ps1)
+    if (-not (Test-Path $RedEdrSourceZip)) {
+        throw "RedEdr.zip not found at: $RedEdrSourceZip. Ensure initialize-worker.ps1 copied the build package."
+    }
+
+    Write-Info "Found RedEdr.zip in build package"
+    $sourceSize = (Get-Item $RedEdrSourceZip).Length
+    Write-Info "Source file size: $([math]::Round($sourceSize/1MB, 2)) MB"
+
+    # Copy to temp location for extraction
+    if (Test-Path $RedEdrZip) {
+        Write-Info "Removing existing temp copy..."
+        Remove-Item $RedEdrZip -Force
+    }
+
+    Write-Info "Copying RedEdr.zip to temp location..."
+    Copy-Item $RedEdrSourceZip $RedEdrZip -Force
+
+    # Verify copied ZIP is valid
+    $fileSize = (Get-Item $RedEdrZip).Length
+    if ($fileSize -lt 100KB) {
+        throw "RedEdr.zip is too small ($fileSize bytes), file may be corrupted."
+    }
+
+    # Verify ZIP signature (PK\x03\x04)
+    $zipHeader = [System.IO.File]::ReadAllBytes($RedEdrZip)[0..3]
+    if (-not ($zipHeader[0] -eq 0x50 -and $zipHeader[1] -eq 0x4B)) {
+        throw "RedEdr.zip is not a valid ZIP archive (missing PK signature)."
+    }
+
+    Write-Success "RedEdr.zip validated ($([math]::Round($fileSize/1MB, 2)) MB)"
+
+    # Prepare installation directory
+    if (Test-Path $RedEdrRoot) {
+        Write-Info "Clearing existing $RedEdrRoot"
+        Remove-Item $RedEdrRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
     New-Item -ItemType Directory -Path $RedEdrRoot -Force | Out-Null
-    Expand-Archive -Path $RedEdrZip -DestinationPath $RedEdrRoot -Force
-    Write-Success "Extracted to $RedEdrRoot (required by RedEdr)"
+
+    # Extract RedEdr to temporary location first
+    $tempExtractPath = "$env:TEMP\RedEdr_extract"
+    if (Test-Path $tempExtractPath) {
+        Remove-Item $tempExtractPath -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $tempExtractPath -Force | Out-Null
+
+    Write-Info "Extracting RedEdr.zip..."
+    Expand-Archive -Path $RedEdrZip -DestinationPath $tempExtractPath -Force
+
+    # Check if ZIP contains a nested folder or direct files
+    $extractedItems = Get-ChildItem $tempExtractPath
+    if ($extractedItems.Count -eq 1 -and $extractedItems[0].PSIsContainer) {
+        # ZIP contains a single folder (e.g., RedEdr/), move its contents
+        $nestedFolder = $extractedItems[0].FullName
+        Write-Info "Moving contents from nested folder: $($extractedItems[0].Name)"
+        Move-Item "$nestedFolder\*" $RedEdrRoot -Force
+    } else {
+        # ZIP contains direct files, move everything
+        Write-Info "Moving extracted files to $RedEdrRoot..."
+        Move-Item "$tempExtractPath\*" $RedEdrRoot -Force
+    }
+
+    # Cleanup temp extraction folder
+    Remove-Item $tempExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Success "RedEdr extracted to $RedEdrRoot"
+
+    # Verify main executable exists
+    $rededrExe = Join-Path $RedEdrRoot "RedEdr.exe"
+    if (Test-Path $rededrExe) {
+        $exeVersion = (Get-Item $rededrExe).VersionInfo.FileVersion
+        Write-Success "RedEdr.exe found at $RedEdrRoot (version: $exeVersion)"
+    } else {
+        Write-Warn "RedEdr.exe not found at $RedEdrRoot"
+        Write-Info "Listing contents of ${RedEdrRoot}:"
+        Get-ChildItem $RedEdrRoot -Recurse | Select-Object -First 10 | ForEach-Object {
+            Write-Info "  $($_.FullName)"
+        }
+    }
+
 } catch {
     Write-Err "Failed to install RedEdr: $($_.Exception.Message)"
+    Write-Info ""
+    Write-Info "Troubleshooting:"
+    Write-Info "  - Ensure RedEdr.zip exists in project root: <project>/telemetry/RedEdr.zip"
+    Write-Info "  - Verify initialize-worker.ps1 copied the full build package"
+    Write-Info "  - Check source location: $RedEdrSourceZip"
+    Write-Info ""
+    Write-Info "Manual installation:"
+    Write-Info "  1. Place RedEdr.zip at: $RedEdrSourceZip"
+    Write-Info "  2. Re-run this script"
 }
 
 # Defender exclusion for RedEdr.exe
@@ -922,6 +1047,16 @@ try {
     }
 } catch {
     $verificationResults += [PSCustomObject]@{ Component="SMB"; Status="WARN"; Details="Check SMB service and firewall" }
+}
+
+# Re-enable Defender real-time monitoring
+Write-Info "Re-enabling Windows Defender real-time monitoring..."
+try {
+    Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction SilentlyContinue
+    Write-Success "Defender real-time monitoring re-enabled"
+    Write-Info "Note: Path/process exclusions remain in place for C:\AutoMutate and C:\RedEdr"
+} catch {
+    Write-Warn "Could not re-enable Defender: $($_.Exception.Message)"
 }
 
 # Print verification table

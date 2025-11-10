@@ -223,6 +223,18 @@ thiserror = "2.0.17"
         Write-Info "Copied config crate"
     }
 
+    # Telemetry folder (contains RedEdr.zip)
+    $telemetrySrc = "$ProjectRoot\telemetry"
+    if (Test-Path $telemetrySrc) {
+        $telemetryDest = "$BuildPackage\telemetry"
+        New-Item -ItemType Directory -Path $telemetryDest -Force | Out-Null
+        Copy-Item "$telemetrySrc\*" "$telemetryDest\" -Recurse -Force
+        Write-Success "Copied telemetry folder (includes RedEdr.zip)"
+    } else {
+        Write-Warn "Telemetry folder not found: $telemetrySrc"
+        Write-Info "RedEdr installation may fail without telemetry/RedEdr.zip"
+    }
+
     Write-Success "Build package prepared: $(Get-ChildItem $BuildPackage -Recurse | Measure-Object -Property Length -Sum | Select-Object -ExpandProperty Sum) bytes"
 
 } catch {

@@ -180,7 +180,7 @@ protobuf:
 # RedEDR configuration (deployed to workers)
 rededr:
   version: "latest"
-  api_port: 8080
+  api_port: 8081
   data_dir: "C:\\RedEDR\\Data"
   enable_etw: true
   enable_etwti: true

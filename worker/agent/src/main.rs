@@ -197,7 +197,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let worker_id = config.worker.worker_id.clone();
-    let controller_addr = config.controller.controller_address.clone();
+
+    // Ensure controller address has http:// scheme for tonic
+    let controller_addr = {
+        let addr = config.controller.controller_address.clone();
+        if addr.starts_with("http://") || addr.starts_with("https://") {
+            addr
+        } else {
+            format!("http://{}", addr)
+        }
+    };
 
     // Worker listen port can be overridden via env var
     let worker_port = std::env::var("WORKER_PORT")
