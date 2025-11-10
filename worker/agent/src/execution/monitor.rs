@@ -285,11 +285,22 @@ mod tests {
     fn test_monitor_creation() {
         let monitor = ExecutionMonitor::new(
             "run-test-001".to_string(),
+            "job-test-001".to_string(),
+            "worker-01".to_string(),
+            "10.200.200.11".to_string(),
+            "test-artifact.exe".to_string(),
             1234,
             "http://localhost:8081".to_string(),
+            "http://10.200.200.1:50051".to_string(),
         );
 
         assert_eq!(monitor.run_id, "run-test-001");
+        assert_eq!(monitor.job_id, "job-test-001");
+        assert_eq!(monitor.worker_id, "worker-01");
+        assert_eq!(monitor.worker_ip, "10.200.200.11");
+        assert_eq!(monitor.artifact_name, "test-artifact.exe");
         assert_eq!(monitor.pid, 1234);
+        assert_eq!(monitor.rededr_base_url, "http://localhost:8081");
+        assert_eq!(monitor.controller_address, "http://10.200.200.1:50051");
     }
 }
