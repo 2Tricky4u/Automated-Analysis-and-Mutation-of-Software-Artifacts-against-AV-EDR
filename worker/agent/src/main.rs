@@ -376,7 +376,7 @@ impl WorkerAgent for WorkerAgentService {
         });
 
         // Create monitor guard (cleanup on any error)
-        let monitor_guard = MonitorGuard::new(stop_tx, monitor_handle, event_consumer);
+        let mut monitor_guard = Some(MonitorGuard::new(stop_tx, monitor_handle, event_consumer));
 
         // ====================================================================
         // Phase 4: Wait for process completion or timeout
@@ -396,6 +396,12 @@ impl WorkerAgent for WorkerAgentService {
             }
             Ok(Err(e)) => {
                 error!("Failed to wait for process: {}", e);
+
+                // Stop monitor immediately - process likely crashed/killed
+                if let Some(guard) = monitor_guard.take() {
+                    guard.stop().await;
+                }
+
                 (-1, false)
             }
             Err(_) => {
@@ -403,8 +409,15 @@ impl WorkerAgent for WorkerAgentService {
                     "Process timed out after {}s, attempting to kill",
                     req.timeout_seconds
                 );
-                // Process will be killed by guard on drop, but do it explicitly here
+                // Kill process explicitly
                 let _ = process_guard.child_mut().kill().await;
+
+                // Stop monitor immediately to prevent spam of "terminated" messages
+                // Monitor keeps running while we collect output, causing duplicate events
+                if let Some(guard) = monitor_guard.take() {
+                    guard.stop().await;
+                }
+
                 (-1, true)
             }
         };
@@ -441,8 +454,10 @@ impl WorkerAgent for WorkerAgentService {
             warn!("Process stderr: {}", truncated);
         }
 
-        // Stop monitoring gracefully
-        monitor_guard.stop().await;
+        // Stop monitoring gracefully (if not already stopped in timeout case)
+        if let Some(guard) = monitor_guard.take() {
+            guard.stop().await;
+        }
 
         // ====================================================================
         // Phase 6: Collect telemetry and reset RedEDR (BEFORE final status)
