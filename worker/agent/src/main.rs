@@ -105,14 +105,19 @@ impl MonitorGuard {
 
     /// Stop monitoring gracefully
     async fn stop(mut self) {
+        // Send stop signal
         if let Some(tx) = self.stop_tx.take() {
             let _ = tx.send(true);
         }
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.await;
-        }
+
+        // Abort event consumer FIRST to prevent monitor from blocking on channel send
         if let Some(consumer) = self.event_consumer.take() {
             consumer.abort();
+        }
+
+        // Now wait for monitor to finish (won't block on channel)
+        if let Some(handle) = self.handle.take() {
+            let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
         }
     }
 }
@@ -406,16 +411,42 @@ impl WorkerAgent for WorkerAgentService {
             }
             Err(_) => {
                 // Timeout - kill process forcefully
-                if let Err(e) = process_guard.child_mut().kill().await {
-                    error!("Failed to kill timed-out process: {}", e);
-                    // Try force kill on Windows
-                    #[cfg(target_os = "windows")]
-                    {
-                        let pid = process_guard.child_mut().id();
-                        if let Some(pid) = pid {
-                            let _ = std::process::Command::new("taskkill")
-                                .args(&["/F", "/PID", &pid.to_string()])
-                                .output();
+                let pid = process_guard.child_mut().id();
+
+                // On Windows, use taskkill /F /T to kill process tree forcefully
+                #[cfg(target_os = "windows")]
+                if let Some(pid) = pid {
+                    info!("Timeout: Forcefully killing process tree for PID {}", pid);
+                    let kill_result = std::process::Command::new("taskkill")
+                        .args(&["/F", "/T", "/PID", &pid.to_string()])
+                        .output();
+
+                    if let Err(e) = kill_result {
+                        error!("Failed to run taskkill: {}", e);
+                    }
+                }
+
+                // Also try Tokio's kill as backup
+                let _ = process_guard.child_mut().kill().await;
+
+                // Wait a moment for process to die
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
+                // Verify process is dead
+                #[cfg(target_os = "windows")]
+                if let Some(pid) = pid {
+                    use windows::Win32::Foundation::CloseHandle;
+                    use windows::Win32::System::Threading::OpenProcess;
+                    unsafe {
+                        if let Ok(handle) = OpenProcess(
+                            windows::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
+                            false,
+                            pid,
+                        ) {
+                            if !handle.is_invalid() {
+                                let _ = CloseHandle(handle);
+                                warn!("Process {} still alive after kill attempt!", pid);
+                            }
                         }
                     }
                 }
