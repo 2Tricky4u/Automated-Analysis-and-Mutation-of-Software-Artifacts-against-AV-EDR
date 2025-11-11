@@ -69,12 +69,27 @@ impl ExecutionMonitor {
         let mut idle_count = 0;
 
         // Send initial "started" event
+        let started_details = format!("Process started: pid={}", self.pid);
+
+        // Send started status to controller
+        let initial_status = ExecutionStatus {
+            pid: self.pid as i32,
+            elapsed_seconds: 0,
+            process_alive: true,
+            cpu_percent: 0,
+            memory_mb: 0,
+            telemetry_events_count: 0,
+            last_activity: "started".to_string(),
+        };
+        self.send_status_to_controller("started", &initial_status, &started_details).await;
+
+        // Also send to event channel for local logging
         let _ = event_tx
             .send(MonitorEvent {
                 event_type: "started".to_string(),
                 timestamp: chrono::Utc::now().timestamp_millis(),
-                details: format!("Process started: pid={}", self.pid),
-                status: None,
+                details: started_details,
+                status: Some(initial_status),
             })
             .await;
 
@@ -136,12 +151,25 @@ impl ExecutionMonitor {
                     if *stop_rx.borrow() {
                         info!("Monitor received stop signal for run_id={}", self.run_id);
 
-                        // Send final "completed" event
+                        // Send final "completed" status to controller
+                        let completed_details = "Execution completed".to_string();
+                        let final_status = ExecutionStatus {
+                            pid: self.pid as i32,
+                            elapsed_seconds: self.start_time.elapsed().as_secs() as i32,
+                            process_alive: false,
+                            cpu_percent: 0,
+                            memory_mb: 0,
+                            telemetry_events_count: last_event_count,
+                            last_activity: "completed".to_string(),
+                        };
+                        self.send_status_to_controller("completed", &final_status, &completed_details).await;
+
+                        // Also send to event channel for local logging
                         let _ = event_tx.send(MonitorEvent {
                             event_type: "completed".to_string(),
                             timestamp: chrono::Utc::now().timestamp_millis(),
-                            details: "Execution completed".to_string(),
-                            status: None,
+                            details: completed_details,
+                            status: Some(final_status),
                         }).await;
 
                         break;

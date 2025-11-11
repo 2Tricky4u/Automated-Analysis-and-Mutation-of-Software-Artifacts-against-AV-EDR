@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn test_transform_event() {
         let config = RedEdrCollectorConfig {
-            base_url: "http://localhost:8080".to_string(),
+            base_url: "http://localhost:8081".to_string(),
             flush_interval_ms: 1000,
             job_id: "job-000001".to_string(),
             run_id: "run-uuid-123".to_string(),
