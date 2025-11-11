@@ -26,6 +26,159 @@ use edr::worker::{
     worker_agent_server::{WorkerAgent, WorkerAgentServer},
 };
 
+// ============================================================================
+// RAII Guards for Resource Cleanup
+// ============================================================================
+
+/// RAII guard that ensures RedEDR is reset on drop
+/// This guarantees cleanup on all exit paths (success, error, panic)
+struct RedEdrGuard {
+    collector: telemetry::collectors::rededr::RedEdrCollector,
+    reset_on_drop: bool,
+}
+
+impl RedEdrGuard {
+    fn new(collector: telemetry::collectors::rededr::RedEdrCollector) -> Self {
+        Self {
+            collector,
+            reset_on_drop: true,
+        }
+    }
+
+    /// Get reference to collector for operations
+    fn collector(&self) -> &telemetry::collectors::rededr::RedEdrCollector {
+        &self.collector
+    }
+
+    /// Manually reset and prevent Drop cleanup (for normal exit path)
+    async fn reset_now(mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.reset_on_drop = false; // Prevent double reset in Drop
+        self.collector.reset().await
+    }
+}
+
+impl Drop for RedEdrGuard {
+    fn drop(&mut self) {
+        if self.reset_on_drop {
+            // Best-effort cleanup on error path
+            // Spawn blocking task since Drop can't be async
+            let base_url = self.collector.config().base_url.clone();
+            std::thread::spawn(move || {
+                // Create minimal runtime for cleanup
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    let client = reqwest::Client::builder()
+                        .timeout(Duration::from_secs(10))
+                        .build()
+                        .unwrap();
+                    let url = format!("{}/api/trace/reset", base_url);
+                    if let Err(e) = client.post(&url).send().await {
+                        eprintln!("RedEDR cleanup in Drop failed: {}", e);
+                    } else {
+                        eprintln!("RedEDR cleanup in Drop succeeded (error path)");
+                    }
+                });
+            });
+        }
+    }
+}
+
+/// RAII guard that ensures monitor is stopped on drop
+struct MonitorGuard {
+    stop_tx: Option<tokio::sync::watch::Sender<bool>>,
+    handle: Option<tokio::task::JoinHandle<()>>,
+    event_consumer: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl MonitorGuard {
+    fn new(
+        stop_tx: tokio::sync::watch::Sender<bool>,
+        handle: tokio::task::JoinHandle<()>,
+        event_consumer: tokio::task::JoinHandle<()>,
+    ) -> Self {
+        Self {
+            stop_tx: Some(stop_tx),
+            handle: Some(handle),
+            event_consumer: Some(event_consumer),
+        }
+    }
+
+    /// Stop monitoring gracefully
+    async fn stop(mut self) {
+        if let Some(tx) = self.stop_tx.take() {
+            let _ = tx.send(true);
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.await;
+        }
+        if let Some(consumer) = self.event_consumer.take() {
+            consumer.abort();
+        }
+    }
+}
+
+impl Drop for MonitorGuard {
+    fn drop(&mut self) {
+        // Best-effort cleanup
+        if let Some(tx) = self.stop_tx.take() {
+            let _ = tx.send(true);
+        }
+        if let Some(consumer) = self.event_consumer.take() {
+            consumer.abort();
+        }
+    }
+}
+
+/// RAII guard that ensures child process is killed on drop
+struct ProcessGuard {
+    child: Option<tokio::process::Child>,
+    should_kill: bool,
+}
+
+impl ProcessGuard {
+    fn new(child: tokio::process::Child) -> Self {
+        Self {
+            child: Some(child),
+            should_kill: true,
+        }
+    }
+
+    /// Get mutable reference to child for waiting
+    fn child_mut(&mut self) -> &mut tokio::process::Child {
+        self.child.as_mut().expect("Child already taken")
+    }
+
+    /// Take child ownership and prevent kill on drop (for normal completion)
+    fn disarm(mut self) -> tokio::process::Child {
+        self.should_kill = false;
+        self.child.take().expect("Child already taken")
+    }
+}
+
+impl Drop for ProcessGuard {
+    fn drop(&mut self) {
+        if self.should_kill {
+            if let Some(mut child) = self.child.take() {
+                // Spawn blocking task to kill process
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                        if let Err(e) = child.kill().await {
+                            eprintln!("Failed to kill process in Drop: {}", e);
+                        } else {
+                            eprintln!("Process killed in Drop (error path)");
+                        }
+                    });
+                });
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Worker Agent Service
+// ============================================================================
+
 #[derive(Clone)]
 pub struct WorkerAgentService {
     worker_id: String,
@@ -103,8 +256,12 @@ impl WorkerAgent for WorkerAgentService {
             ));
         }
 
-        // 1. Create RedEDR collector
-        let rededr_collector = telemetry::collectors::rededr::RedEdrCollector::new(
+        // ====================================================================
+        // Phase 1: Setup with RAII guards for automatic cleanup
+        // ====================================================================
+
+        // 1. Create RedEDR collector with guard (cleanup on any error/panic)
+        let collector = telemetry::collectors::rededr::RedEdrCollector::new(
             telemetry::collectors::rededr::RedEdrCollectorConfig {
                 base_url: self.config.telemetry.rededr.base_url.clone(),
                 flush_interval_ms: 1000,
@@ -112,35 +269,50 @@ impl WorkerAgent for WorkerAgentService {
                 run_id: run_id.clone(),
             },
         );
+        let rededr_guard = RedEdrGuard::new(collector);
 
         // 2. Extract artifact filename for tracing
         let artifact_name = extract_filename(&req.artifact_path);
 
-        // 3. Start RedEDR tracing
-        rededr_collector
+        // 3. Start RedEDR tracing (guard ensures cleanup if this fails)
+        rededr_guard
+            .collector()
             .start_trace(vec![artifact_name.clone()])
             .await
-            .map_err(|e| Status::internal(format!("Failed to start RedEDR tracing: {}", e)))?;
+            .map_err(|e| {
+                error!("Failed to start RedEDR tracing: {}", e);
+                Status::internal(format!("Failed to start RedEDR tracing: {}", e))
+            })?;
 
         info!("RedEDR tracing started for artifact: {}", artifact_name);
 
-        // 4. Start process
-        let mut child = tokio::process::Command::new(&req.artifact_path)
+        // 4. Spawn process with guard (guard ensures kill if error occurs)
+        let child = tokio::process::Command::new(&req.artifact_path)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| Status::internal(format!("Failed to spawn process: {}", e)))?;
+            .map_err(|e| {
+                error!("Failed to spawn process: {}", e);
+                Status::internal(format!("Failed to spawn process: {}", e))
+            })?;
 
-        let pid = child
-            .id()
-            .ok_or_else(|| Status::internal("Failed to get PID"))?;
+        let mut process_guard = ProcessGuard::new(child);
+
+        let pid = process_guard.child_mut().id().ok_or_else(|| {
+            error!("Failed to get PID from spawned process");
+            Status::internal("Failed to get PID")
+        })?;
 
         info!("Artifact process spawned: pid={}", pid);
 
+        // ====================================================================
+        // Phase 2: Capture output streams
+        // ====================================================================
+
         // Capture stdout and stderr for error reporting
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
+        let stdout = process_guard.child_mut().stdout.take();
+        let stderr = process_guard.child_mut().stderr.take();
 
         // Spawn tasks to capture output streams
         let stdout_handle = tokio::spawn(async move {
@@ -167,7 +339,10 @@ impl WorkerAgent for WorkerAgentService {
             }
         });
 
-        // 5. Start monitoring task
+        // ====================================================================
+        // Phase 3: Start monitoring with guard
+        // ====================================================================
+
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
 
@@ -200,11 +375,18 @@ impl WorkerAgent for WorkerAgentService {
             }
         });
 
-        // 6. Wait for process completion or timeout
+        // Create monitor guard (cleanup on any error)
+        let monitor_guard = MonitorGuard::new(stop_tx, monitor_handle, event_consumer);
+
+        // ====================================================================
+        // Phase 4: Wait for process completion or timeout
+        // ====================================================================
+
         let timeout_duration = Duration::from_secs(req.timeout_seconds as u64);
         let start_time = Instant::now();
 
-        let exit_result = tokio::time::timeout(timeout_duration, child.wait()).await;
+        let exit_result =
+            tokio::time::timeout(timeout_duration, process_guard.child_mut().wait()).await;
 
         let (exit_code, timed_out) = match exit_result {
             Ok(Ok(status)) => {
@@ -221,14 +403,22 @@ impl WorkerAgent for WorkerAgentService {
                     "Process timed out after {}s, attempting to kill",
                     req.timeout_seconds
                 );
-                let _ = child.kill().await;
+                // Process will be killed by guard on drop, but do it explicitly here
+                let _ = process_guard.child_mut().kill().await;
                 (-1, true)
             }
         };
 
+        // Disarm process guard since we've handled completion/timeout
+        let _ = process_guard.disarm();
+
         let elapsed = start_time.elapsed();
 
-        // 7. Collect stdout and stderr
+        // ====================================================================
+        // Phase 5: Collect output and cleanup monitoring
+        // ====================================================================
+
+        // Collect stdout and stderr
         let stdout_output = stdout_handle.await.unwrap_or_default();
         let stderr_output = stderr_handle.await.unwrap_or_default();
 
@@ -251,10 +441,8 @@ impl WorkerAgent for WorkerAgentService {
             warn!("Process stderr: {}", truncated);
         }
 
-        // 8. Stop monitoring
-        stop_tx.send(true).ok();
-        monitor_handle.await.ok();
-        event_consumer.abort(); // Stop event consumer
+        // Stop monitoring gracefully
+        monitor_guard.stop().await;
 
         // 8. Send final status report to controller with exit code
         let final_status_type = if timed_out {
@@ -343,27 +531,33 @@ impl WorkerAgent for WorkerAgentService {
         )
         .await;
 
-        // 8. Collect full telemetry batch
+        // ====================================================================
+        // Phase 6: Collect telemetry and reset RedEDR
+        // ====================================================================
+
+        // Collect full telemetry batch
         info!("Collecting telemetry events from RedEDR...");
-        let telemetry_events = rededr_collector
+        let telemetry_events = rededr_guard
+            .collector()
             .collect_all(&job_id)
             .await
             .map_err(|e| Status::internal(format!("Failed to collect telemetry: {}", e)))?;
 
         info!("Collected {} telemetry events", telemetry_events.len());
 
-        // 9. Send telemetry to controller (where Elasticsearch lives)
+        // Send telemetry to controller (where Elasticsearch lives)
         if !telemetry_events.is_empty() {
             self.send_telemetry_batch_to_controller(telemetry_events)
                 .await?;
         }
 
-        // 10. Reset RedEDR for next run
-        if let Err(e) = rededr_collector.reset().await {
+        // Reset RedEDR for next run (guard ensures cleanup on error, but we do it explicitly here)
+        if let Err(e) = rededr_guard.reset_now().await {
             error!(
                 "Failed to reset RedEDR: {} - Next execution may have contaminated events!",
                 e
             );
+            // Error is logged but we don't fail the RPC - telemetry was already collected
         }
 
         // 10. Prepare output (include stderr if error occurred)
@@ -525,7 +719,7 @@ impl WorkerAgentService {
         artifact_name: &str,
         pid: u32,
         status_type: &str,
-        exit_code: i32,
+        _exit_code: i32,
         details: &str,
         elapsed_seconds: i32,
     ) {
