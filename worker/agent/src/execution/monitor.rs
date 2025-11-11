@@ -163,26 +163,9 @@ impl ExecutionMonitor {
                     if *stop_rx.borrow() {
                         info!("Monitor received stop signal for run_id={}", self.run_id);
 
-                        // Send final "completed" status to controller
-                        let completed_details = "Execution completed".to_string();
-                        let final_status = ExecutionStatus {
-                            pid: self.pid as i32,
-                            elapsed_seconds: self.start_time.elapsed().as_secs() as i32,
-                            process_alive: false,
-                            cpu_percent: 0,
-                            memory_mb: 0,
-                            telemetry_events_count: last_event_count,
-                            last_activity: "completed".to_string(),
-                        };
-                        self.send_status_to_controller("completed", &final_status, &completed_details).await;
-
-                        // Also send to event channel for local logging
-                        let _ = event_tx.send(MonitorEvent {
-                            event_type: "completed".to_string(),
-                            timestamp: chrono::Utc::now().timestamp_millis(),
-                            details: completed_details,
-                            status: Some(final_status),
-                        }).await;
+                        // Don't send status here - the main code will send the correct
+                        // final status (timeout/error/success) after stopping the monitor.
+                        // Sending "completed" here causes confusion when stopped due to timeout.
 
                         break;
                     }
