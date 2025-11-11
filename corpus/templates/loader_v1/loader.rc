@@ -1,0 +1,39 @@
+/**
+ * Resource file for loader.exe
+ * Provides version info and manifest for Windows compatibility
+ */
+
+#include <windows.h>
+
+// Version Information
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0x0L
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"  // US English, Unicode
+        BEGIN
+            VALUE "CompanyName",      "Test Research Lab"
+            VALUE "FileDescription",  "Simple Loader Test Template"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "loader"
+            VALUE "LegalCopyright",   "Copyright (C) 2025"
+            VALUE "OriginalFilename", "loader.exe"
+            VALUE "ProductName",      "AutoMutate Test Artifact"
+            VALUE "ProductVersion",   "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200  // US English, Unicode
+    END
+END
+
+// Application Manifest (optional: requires MSVC or windres)
+// 1 RT_MANIFEST "loader.manifest"
