@@ -81,7 +81,7 @@ scan_timeout_secs = 60
 # RedEDR integration
 [telemetry.rededr]
 enabled = true
-base_url = "http://localhost:8080"
+base_url = "http://localhost:8081"
 data_path = "C:\\RedEDR\\Data"
 file_watch_enabled = true
 

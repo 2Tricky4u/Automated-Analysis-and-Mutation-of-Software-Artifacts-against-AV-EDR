@@ -197,9 +197,23 @@ impl RedEdrCollector {
     pub async fn reset(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/api/trace/reset", self.config.base_url);
 
-        self.client.post(&url).send().await?;
+        let response = self
+            .client
+            .post(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send reset request to {}: {}", url, e))?;
 
-        info!("Reset RedEDR state");
+        if !response.status().is_success() {
+            return Err(format!(
+                "RedEDR reset returned error status {}: {}",
+                response.status(),
+                response.text().await.unwrap_or_default()
+            )
+            .into());
+        }
+
+        info!("Reset RedEDR state successfully");
         Ok(())
     }
 
