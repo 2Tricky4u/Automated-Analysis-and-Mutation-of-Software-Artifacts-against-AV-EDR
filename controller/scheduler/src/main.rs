@@ -271,6 +271,8 @@ impl SchedulerService {
                 "indexed_at": chrono::Utc::now().to_rfc3339(),
             });
 
+            let doc_str = serde_json::to_string(&doc).unwrap_or_default();
+
             let response = self
                 .es_client
                 .index(IndexParts::Index(&index_name))
@@ -283,7 +285,14 @@ impl SchedulerService {
                     indexed += 1;
                 }
                 Ok(resp) => {
-                    warn!("Failed to index event: status {}", resp.status_code());
+                    let status = resp.status_code();
+                    let body = resp.text().await.unwrap_or_default();
+                    warn!("Failed to index event: status {} - {}", status, body);
+
+                    // Log the problematic document for debugging (first occurrence only)
+                    if indexed == 0 {
+                        warn!("Problematic document: {}", doc_str);
+                    }
                 }
                 Err(e) => {
                     warn!("Failed to index event: {}", e);
