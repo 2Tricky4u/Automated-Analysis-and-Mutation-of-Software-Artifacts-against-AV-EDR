@@ -4,13 +4,10 @@ package edr.worker;
 
 import "common.proto";
 
-// Worker Agent Service - handles build and execution tasks
+// Worker Agent Service - handles execution tasks
 service WorkerAgent {
   // Debug: simple ping to test connectivity
   rpc Ping(PingRequest) returns (PingResponse);
-
-  // Execute a build task on the worker
-  rpc ExecuteBuild(BuildRequest) returns (BuildResponse);
 
   // Run a sample for analysis
   rpc RunSample(SampleRequest) returns (SampleResponse);
@@ -37,24 +34,6 @@ message PingResponse {
   string message = 1;
   int64 timestamp = 2;
   string server = 3;
-}
-
-// Build task request
-message BuildRequest {
-  string job_id = 1;
-  string source_code = 2;
-  string language = 3;  // rust, cpp, csharp
-  map<string, string> build_options = 4;
-  repeated edr.common.Mutation mutations = 5;
-}
-
-message BuildResponse {
-  string job_id = 1;
-  bool success = 2;
-  string artifact_path = 3;
-  edr.common.ArtifactId artifact_id = 4;
-  string error_message = 5;
-  int64 build_time_ms = 6;
 }
 
 // Sample execution request

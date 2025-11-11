@@ -1,5 +1,8 @@
 use edr_config::WorkerConfig;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
+use sysinfo::{System, RefreshKind, CpuRefreshKind, MemoryRefreshKind};
+use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, transport::Server};
 use tracing::{error, info, warn};
 
@@ -18,22 +21,42 @@ pub mod edr {
     }
 }
 
-use edr::common::ArtifactId;
 use edr::worker::{
-    BuildRequest, BuildResponse, HealthRequest, HealthResponse, PingRequest, PingResponse,
+    HealthRequest, HealthResponse, PingRequest, PingResponse,
     SampleRequest, SampleResponse,
     worker_agent_server::{WorkerAgent, WorkerAgentServer},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WorkerAgentService {
     worker_id: String,
     config: WorkerConfig,
+    system_info: Arc<Mutex<System>>,
+    active_jobs: Arc<Mutex<u32>>,
 }
 
 impl WorkerAgentService {
     pub fn new(worker_id: String, config: WorkerConfig) -> Self {
-        Self { worker_id, config }
+        Self {
+            worker_id,
+            config,
+            system_info: Arc::new(Mutex::new(System::new_all())),
+            active_jobs: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    /// Increment active job counter
+    async fn increment_active_jobs(&self) {
+        let mut jobs = self.active_jobs.lock().await;
+        *jobs += 1;
+    }
+
+    /// Decrement active job counter
+    async fn decrement_active_jobs(&self) {
+        let mut jobs = self.active_jobs.lock().await;
+        if *jobs > 0 {
+            *jobs -= 1;
+        }
     }
 }
 
@@ -55,42 +78,16 @@ impl WorkerAgent for WorkerAgentService {
         }))
     }
 
-    async fn execute_build(
-        &self,
-        request: Request<BuildRequest>,
-    ) -> Result<Response<BuildResponse>, Status> {
-        let req = request.into_inner();
-        info!("Building job: {} (language: {})", req.job_id, req.language);
-
-        let start_time = SystemTime::now();
-
-        // Simulate build process
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-        let build_time = SystemTime::now()
-            .duration_since(start_time)
-            .unwrap()
-            .as_millis() as i64;
-
-        let artifact_path = format!("/artifacts/{}.exe", req.job_id);
-        let artifact_hash = format!("sha256:{:064x}", 0u128); // Placeholder hash
-
-        Ok(Response::new(BuildResponse {
-            job_id: req.job_id,
-            success: true,
-            artifact_path,
-            artifact_id: Some(ArtifactId {
-                sha256: artifact_hash,
-            }),
-            error_message: String::new(),
-            build_time_ms: build_time,
-        }))
-    }
-
     async fn run_sample(
         &self,
         request: Request<SampleRequest>,
     ) -> Result<Response<SampleResponse>, Status> {
+        // Track active job
+        self.increment_active_jobs().await;
+
+        // Ensure we decrement on exit (even if error occurs)
+        let _guard = JobGuard::new(self.clone());
+
         let req = request.into_inner();
         let run_id = uuid::Uuid::new_v4().to_string();
         let job_id = req.job_id.clone();
@@ -210,6 +207,33 @@ impl WorkerAgent for WorkerAgentService {
 
         info!("Execution completed in {:.2}s", elapsed.as_secs_f64());
 
+        // 8. Send final status report to controller with exit code
+        let final_status_type = if timed_out {
+            "timeout"
+        } else if exit_code == 0 {
+            "success"
+        } else {
+            "error"
+        };
+
+        let final_details = if timed_out {
+            format!("Process timed out after {}s", req.timeout_seconds)
+        } else {
+            format!("Process exited with code: {}, elapsed: {:.2}s", exit_code, elapsed.as_secs_f64())
+        };
+
+        // Send final status to controller
+        self.send_final_status_to_controller(
+            &job_id,
+            &run_id,
+            &artifact_name,
+            pid,
+            final_status_type,
+            exit_code,
+            &final_details,
+            elapsed.as_secs() as i32,
+        ).await;
+
         // 8. Collect full telemetry batch
         info!("Collecting telemetry events from RedEDR...");
         let telemetry_events = rededr_collector
@@ -245,18 +269,129 @@ impl WorkerAgent for WorkerAgentService {
     ) -> Result<Response<HealthResponse>, Status> {
         let _req = request.into_inner();
 
+        // Refresh system information
+        let mut sys = self.system_info.lock().await;
+        sys.refresh_specifics(
+            RefreshKind::new()
+                .with_cpu(CpuRefreshKind::everything())
+                .with_memory(MemoryRefreshKind::everything()),
+        );
+
+        // Calculate average CPU usage across all cores
+        let cpu_percent = sys.global_cpu_info().cpu_usage() as i32;
+
+        // Calculate memory usage percentage
+        let total_memory = sys.total_memory();
+        let used_memory = sys.used_memory();
+        let memory_percent = if total_memory > 0 {
+            ((used_memory as f64 / total_memory as f64) * 100.0) as i32
+        } else {
+            0
+        };
+
+        // Get active jobs count
+        let active_jobs = *self.active_jobs.lock().await;
+
+        // Determine health status
+        // Unhealthy if: CPU > 95% OR memory > 95% OR can't connect to RedEDR
+        let healthy = cpu_percent < 95 && memory_percent < 95;
+
+        // Log health check if unhealthy
+        if !healthy {
+            warn!(
+                "Health check UNHEALTHY: cpu={}%, mem={}%, active_jobs={}",
+                cpu_percent, memory_percent, active_jobs
+            );
+        }
+
         Ok(Response::new(HealthResponse {
             worker_id: self.worker_id.clone(),
-            healthy: true,
-            cpu_percent: 25,
-            memory_percent: 40,
-            active_jobs: 0,
+            healthy,
+            cpu_percent,
+            memory_percent,
+            active_jobs: active_jobs as i32,
         }))
+    }
+}
+
+// Helper methods for WorkerAgentService
+impl WorkerAgentService {
+    /// Send final status report to controller with exit code information
+    async fn send_final_status_to_controller(
+        &self,
+        job_id: &str,
+        run_id: &str,
+        artifact_name: &str,
+        pid: u32,
+        status_type: &str,
+        exit_code: i32,
+        details: &str,
+        elapsed_seconds: i32,
+    ) {
+        use edr::controller::{controller_client::ControllerClient, StatusReport};
+
+        // Ensure controller address has http:// scheme
+        let controller_addr = if self.config.controller.controller_address.starts_with("http://")
+            || self.config.controller.controller_address.starts_with("https://")
+        {
+            self.config.controller.controller_address.clone()
+        } else {
+            format!("http://{}", self.config.controller.controller_address)
+        };
+
+        let status_report = StatusReport {
+            worker_id: self.worker_id.clone(),
+            worker_ip: self.config.worker.ip_address.clone(),
+            job_id: job_id.to_string(),
+            run_id: run_id.to_string(),
+            artifact_name: artifact_name.to_string(),
+            pid: pid as i32,
+            elapsed_seconds,
+            process_alive: false,
+            telemetry_events_count: 0, // Not relevant for final status
+            event_type: status_type.to_string(),
+            cpu_percent: 0,
+            memory_mb: 0,
+            details: details.to_string(),
+        };
+
+        // Try to connect and send final status report
+        match ControllerClient::connect(controller_addr.clone()).await {
+            Ok(mut client) => {
+                if let Err(e) = client.report_status(Request::new(status_report)).await {
+                    warn!("Failed to send final status to controller: {}", e);
+                }
+            }
+            Err(e) => {
+                warn!("Failed to connect to controller at {}: {}", controller_addr, e);
+            }
+        }
     }
 }
 
 // NOTE: Streaming telemetry removed - now using batch collection at execution completion
 // Telemetry is collected once after artifact execution and returned with RunResult
+
+/// RAII guard to automatically decrement active jobs count
+struct JobGuard {
+    service: WorkerAgentService,
+}
+
+impl JobGuard {
+    fn new(service: WorkerAgentService) -> Self {
+        Self { service }
+    }
+}
+
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        // Spawn a task to decrement (can't use async in Drop)
+        let service = self.service.clone();
+        tokio::spawn(async move {
+            service.decrement_active_jobs().await;
+        });
+    }
+}
 
 /// Extract filename from path (cross-platform)
 fn extract_filename(path: &str) -> String {
