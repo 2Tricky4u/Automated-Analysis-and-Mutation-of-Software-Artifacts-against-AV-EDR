@@ -278,8 +278,59 @@ impl SchedulerService {
             // Merge payload fields into top level (makes them searchable)
             if let Some(obj) = doc.as_object_mut() {
                 for (key, value) in payload_fields {
-                    // Prefix payload fields to avoid conflicts
-                    obj.insert(format!("payload_{}", key), value);
+                    // Detect pointer/address fields by name pattern
+                    let key_lower = key.to_lowercase();
+                    let is_pointer_field = key_lower.contains("address")
+                        || key_lower.contains("pointer")
+                        || key_lower.contains("stack")
+                        || key_lower.contains("base")
+                        || key_lower.contains("limit")
+                        || key_lower.contains("rva")
+                        || key_lower.contains("offset") && value.is_number();
+
+                    // Smart conversion: keep small numbers as numbers, convert problematic ones
+                    let converted_value = match value {
+                        serde_json::Value::Number(n) => {
+                            if is_pointer_field {
+                                // Pointer/address field: always convert to hex string
+                                if let Some(u) = n.as_u64() {
+                                    json!(format!("0x{:X}", u))
+                                } else if let Some(i) = n.as_i64() {
+                                    json!(format!("0x{:X}", i))
+                                } else {
+                                    json!(n.to_string())
+                                }
+                            } else {
+                                // Non-pointer field: check range
+                                if let Some(u) = n.as_u64() {
+                                    if u > i64::MAX as u64 {
+                                        // Exceeds i64 range - convert to string
+                                        json!(format!("0x{:X}", u))
+                                    } else {
+                                        // Safe range - keep as number for Kibana aggregations
+                                        json!(u)
+                                    }
+                                } else if let Some(i) = n.as_i64() {
+                                    // Signed integer in safe range
+                                    json!(i)
+                                } else if let Some(f) = n.as_f64() {
+                                    // Float - keep as-is
+                                    json!(f)
+                                } else {
+                                    // Fallback to string
+                                    json!(n.to_string())
+                                }
+                            }
+                        }
+                        serde_json::Value::String(s) => json!(s),
+                        serde_json::Value::Bool(b) => json!(b),
+                        serde_json::Value::Null => json!(null),
+                        serde_json::Value::Array(arr) => json!(arr),
+                        serde_json::Value::Object(obj) => json!(obj),
+                    };
+
+                    // Prefix payload fields to avoid conflicts with top-level fields
+                    obj.insert(format!("payload_{}", key), converted_value);
                 }
             }
 
