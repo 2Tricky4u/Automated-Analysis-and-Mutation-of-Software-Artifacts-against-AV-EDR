@@ -444,7 +444,25 @@ impl WorkerAgent for WorkerAgentService {
         // Stop monitoring gracefully
         monitor_guard.stop().await;
 
-        // 8. Send final status report to controller with exit code
+        // ====================================================================
+        // Phase 6: Collect telemetry and reset RedEDR (BEFORE final status)
+        // ====================================================================
+
+        // Collect full telemetry batch
+        info!("Collecting telemetry events from RedEDR...");
+        let telemetry_events = rededr_guard
+            .collector()
+            .collect_all(&job_id)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to collect telemetry: {}", e)))?;
+
+        let telemetry_count = telemetry_events.len() as i32;
+        info!("Collected {} telemetry events", telemetry_count);
+
+        // ====================================================================
+        // Phase 7: Send final status with telemetry count
+        // ====================================================================
+
         let final_status_type = if timed_out {
             "timeout"
         } else if exit_code == 0 {
@@ -518,7 +536,7 @@ impl WorkerAgent for WorkerAgentService {
             warn!("❌ ERROR: {} - {}", artifact_name, final_details);
         }
 
-        // Send final status to controller
+        // Send final status to controller with telemetry count
         self.send_final_status_to_controller(
             &job_id,
             &run_id,
@@ -528,22 +546,9 @@ impl WorkerAgent for WorkerAgentService {
             exit_code,
             &final_details,
             elapsed.as_secs() as i32,
+            telemetry_count,
         )
         .await;
-
-        // ====================================================================
-        // Phase 6: Collect telemetry and reset RedEDR
-        // ====================================================================
-
-        // Collect full telemetry batch
-        info!("Collecting telemetry events from RedEDR...");
-        let telemetry_events = rededr_guard
-            .collector()
-            .collect_all(&job_id)
-            .await
-            .map_err(|e| Status::internal(format!("Failed to collect telemetry: {}", e)))?;
-
-        info!("Collected {} telemetry events", telemetry_events.len());
 
         // Send telemetry to controller (where Elasticsearch lives)
         if !telemetry_events.is_empty() {
@@ -722,6 +727,7 @@ impl WorkerAgentService {
         _exit_code: i32,
         details: &str,
         elapsed_seconds: i32,
+        telemetry_events_count: i32,
     ) {
         use edr::controller::{StatusReport, controller_client::ControllerClient};
 
@@ -751,7 +757,7 @@ impl WorkerAgentService {
             pid: pid as i32,
             elapsed_seconds,
             process_alive: false,
-            telemetry_events_count: 0, // Not relevant for final status
+            telemetry_events_count,
             event_type: status_type.to_string(),
             cpu_percent: 0,
             memory_mb: 0,
