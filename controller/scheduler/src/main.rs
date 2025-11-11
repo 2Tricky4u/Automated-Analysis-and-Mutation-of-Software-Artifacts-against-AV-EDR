@@ -215,11 +215,14 @@ impl Controller for SchedulerService {
             report.details
         );
 
-        // Use info! for normal heartbeats, warn! for stuck processes
-        if report.event_type == "stuck" {
-            tracing::warn!("{}", status_line);
-        } else {
-            info!("{}", status_line);
+        // Use appropriate log level based on status type
+        match report.event_type.as_str() {
+            "error" | "timeout" | "stuck" | "crashed" => {
+                tracing::warn!("{}", status_line);
+            }
+            _ => {
+                info!("{}", status_line);
+            }
         }
 
         Ok(Response::new(StatusAck { received: true }))

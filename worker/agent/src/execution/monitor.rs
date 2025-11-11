@@ -81,7 +81,8 @@ impl ExecutionMonitor {
             telemetry_events_count: 0,
             last_activity: "started".to_string(),
         };
-        self.send_status_to_controller("started", &initial_status, &started_details).await;
+        self.send_status_to_controller("started", &initial_status, &started_details)
+            .await;
 
         // Also send to event channel for local logging
         let _ = event_tx
