@@ -257,19 +257,31 @@ impl SchedulerService {
 
         // Index events individually (simpler API usage)
         for event in batch {
-            // Parse payload as JSON (it's already JSON from RedEDR collector)
-            // This makes all fields searchable in Kibana instead of base64 blob
-            let payload_json: serde_json::Value = serde_json::from_slice(&event.payload)
-                .unwrap_or_else(|_| json!({"raw": "failed to parse"}));
+            // Parse payload to extract searchable fields, but keep original as string
+            let payload_fields = if let Ok(payload_json) =
+                serde_json::from_slice::<serde_json::Value>(&event.payload)
+            {
+                payload_json.as_object().cloned().unwrap_or_default()
+            } else {
+                Default::default()
+            };
 
-            let doc = json!({
+            // Build document with flattened payload fields at top level for searchability
+            let mut doc = json!({
                 "job_id": event.job_id,
                 "event_type": event.event_type,
                 "timestamp": event.timestamp,
-                "payload": payload_json,  // ✅ Store as JSON object, not base64
                 "metadata": event.metadata,
                 "indexed_at": chrono::Utc::now().to_rfc3339(),
             });
+
+            // Merge payload fields into top level (makes them searchable)
+            if let Some(obj) = doc.as_object_mut() {
+                for (key, value) in payload_fields {
+                    // Prefix payload fields to avoid conflicts
+                    obj.insert(format!("payload_{}", key), value);
+                }
+            }
 
             let doc_str = serde_json::to_string(&doc).unwrap_or_default();
 
