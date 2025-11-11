@@ -72,6 +72,11 @@ impl RedEdrCollector {
         }
     }
 
+    /// Get reference to config (for accessing base_url in Drop)
+    pub fn config(&self) -> &RedEdrCollectorConfig {
+        &self.config
+    }
+
     /// Start polling RedEDR HTTP API and send events to channel
     pub async fn start(
         mut self,
