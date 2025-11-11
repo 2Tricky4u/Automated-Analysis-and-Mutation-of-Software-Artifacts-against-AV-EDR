@@ -1,7 +1,7 @@
 use edr_config::WorkerConfig;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
-use sysinfo::{System, RefreshKind, CpuRefreshKind, MemoryRefreshKind};
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, transport::Server};
 use tracing::{error, info, warn};
@@ -22,8 +22,7 @@ pub mod edr {
 }
 
 use edr::worker::{
-    HealthRequest, HealthResponse, PingRequest, PingResponse,
-    SampleRequest, SampleResponse,
+    HealthRequest, HealthResponse, PingRequest, PingResponse, SampleRequest, SampleResponse,
     worker_agent_server::{WorkerAgent, WorkerAgentServer},
 };
 
@@ -139,6 +138,35 @@ impl WorkerAgent for WorkerAgentService {
 
         info!("Artifact process spawned: pid={}", pid);
 
+        // Capture stdout and stderr for error reporting
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        // Spawn tasks to capture output streams
+        let stdout_handle = tokio::spawn(async move {
+            if let Some(stdout) = stdout {
+                use tokio::io::AsyncReadExt;
+                let mut reader = tokio::io::BufReader::new(stdout);
+                let mut output = String::new();
+                let _ = reader.read_to_string(&mut output).await;
+                output
+            } else {
+                String::new()
+            }
+        });
+
+        let stderr_handle = tokio::spawn(async move {
+            if let Some(stderr) = stderr {
+                use tokio::io::AsyncReadExt;
+                let mut reader = tokio::io::BufReader::new(stderr);
+                let mut output = String::new();
+                let _ = reader.read_to_string(&mut output).await;
+                output
+            } else {
+                String::new()
+            }
+        });
+
         // 5. Start monitoring task
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
@@ -200,12 +228,33 @@ impl WorkerAgent for WorkerAgentService {
 
         let elapsed = start_time.elapsed();
 
-        // 7. Stop monitoring
+        // 7. Collect stdout and stderr
+        let stdout_output = stdout_handle.await.unwrap_or_default();
+        let stderr_output = stderr_handle.await.unwrap_or_default();
+
+        // Log captured output (truncate if too long)
+        if !stdout_output.is_empty() {
+            let truncated = if stdout_output.len() > 500 {
+                format!("{}... (truncated)", &stdout_output[..500])
+            } else {
+                stdout_output.clone()
+            };
+            info!("Process stdout: {}", truncated);
+        }
+
+        if !stderr_output.is_empty() {
+            let truncated = if stderr_output.len() > 500 {
+                format!("{}... (truncated)", &stderr_output[..500])
+            } else {
+                stderr_output.clone()
+            };
+            warn!("Process stderr: {}", truncated);
+        }
+
+        // 8. Stop monitoring
         stop_tx.send(true).ok();
         monitor_handle.await.ok();
         event_consumer.abort(); // Stop event consumer
-
-        info!("Execution completed in {:.2}s", elapsed.as_secs_f64());
 
         // 8. Send final status report to controller with exit code
         let final_status_type = if timed_out {
@@ -216,11 +265,70 @@ impl WorkerAgent for WorkerAgentService {
             "error"
         };
 
+        // Build detailed status message
         let final_details = if timed_out {
             format!("Process timed out after {}s", req.timeout_seconds)
+        } else if exit_code == 0 {
+            format!(
+                "Process completed successfully, elapsed: {:.2}s",
+                elapsed.as_secs_f64()
+            )
         } else {
-            format!("Process exited with code: {}, elapsed: {:.2}s", exit_code, elapsed.as_secs_f64())
+            // Error exit code - provide detailed information
+            // Windows NTSTATUS codes can be negative (signed) or positive (unsigned representation)
+            let error_type = match exit_code {
+                // Signed NTSTATUS codes (negative)
+                -1073741510 => "Access Violation (0xC0000005)",
+                -1073741819 => "Access Denied (0xC0000022)",
+                -1073741502 => "Invalid Image Format (0xC000007B)",
+                -1073741515 => "DLL Not Found (0xC0000135)",
+                -1073741701 => "Ordinal Not Found (0xC0000138)",
+                -1073741571 => "Stack Overflow (0xC00000FD)",
+                -1073740791 => "Application Error (0xC0000409)",
+                // Common positive exit codes
+                1 => "Generic Error",
+                _ if exit_code < 0 => {
+                    // Negative exit codes are usually Windows NTSTATUS codes
+                    &format!("Windows Error (NTSTATUS: 0x{:08X})", exit_code as u32)
+                }
+                _ => "Unknown Error",
+            };
+
+            // Include stderr output if available
+            let error_msg = if !stderr_output.is_empty() {
+                // Truncate stderr to 200 chars for status report
+                let stderr_preview = if stderr_output.len() > 200 {
+                    format!("{}...", &stderr_output[..200])
+                } else {
+                    stderr_output.clone()
+                };
+                format!(
+                    "Process failed with exit code {} ({}), elapsed: {:.2}s | Error: {}",
+                    exit_code,
+                    error_type,
+                    elapsed.as_secs_f64(),
+                    stderr_preview
+                )
+            } else {
+                format!(
+                    "Process failed with exit code {} ({}), elapsed: {:.2}s",
+                    exit_code,
+                    error_type,
+                    elapsed.as_secs_f64()
+                )
+            };
+
+            error_msg
         };
+
+        // Log with appropriate level
+        if timed_out {
+            warn!("⏱️  TIMEOUT: {} - {}", artifact_name, final_details);
+        } else if exit_code == 0 {
+            info!("✅ SUCCESS: {} - {}", artifact_name, final_details);
+        } else {
+            warn!("❌ ERROR: {} - {}", artifact_name, final_details);
+        }
 
         // Send final status to controller
         self.send_final_status_to_controller(
@@ -232,7 +340,8 @@ impl WorkerAgent for WorkerAgentService {
             exit_code,
             &final_details,
             elapsed.as_secs() as i32,
-        ).await;
+        )
+        .await;
 
         // 8. Collect full telemetry batch
         info!("Collecting telemetry events from RedEDR...");
@@ -243,14 +352,47 @@ impl WorkerAgent for WorkerAgentService {
 
         info!("Collected {} telemetry events", telemetry_events.len());
 
-        // 9. Reset RedEDR for next run
-        rededr_collector.reset().await.ok();
+        // 9. Send telemetry to controller (where Elasticsearch lives)
+        if !telemetry_events.is_empty() {
+            self.send_telemetry_batch_to_controller(telemetry_events)
+                .await?;
+        }
 
-        // 10. Prepare output
+        // 10. Reset RedEDR for next run
+        if let Err(e) = rededr_collector.reset().await {
+            error!(
+                "Failed to reset RedEDR: {} - Next execution may have contaminated events!",
+                e
+            );
+        }
+
+        // 10. Prepare output (include stderr if error occurred)
         let output = if timed_out {
             format!("Execution timed out after {}s", req.timeout_seconds)
+        } else if exit_code == 0 {
+            // Success - include stdout if available
+            if !stdout_output.is_empty() {
+                format!(
+                    "Execution completed in {:.2}s\nOutput:\n{}",
+                    elapsed.as_secs_f64(),
+                    stdout_output
+                )
+            } else {
+                format!("Execution completed in {:.2}s", elapsed.as_secs_f64())
+            }
         } else {
-            format!("Execution completed in {:.2}s", elapsed.as_secs_f64())
+            // Error - include both stdout and stderr
+            let mut error_output = format!("Execution failed with exit code {}\n", exit_code);
+
+            if !stderr_output.is_empty() {
+                error_output.push_str(&format!("\nStderr:\n{}", stderr_output));
+            }
+
+            if !stdout_output.is_empty() {
+                error_output.push_str(&format!("\nStdout:\n{}", stdout_output));
+            }
+
+            error_output
         };
 
         // 11. Return response
@@ -316,6 +458,65 @@ impl WorkerAgent for WorkerAgentService {
 
 // Helper methods for WorkerAgentService
 impl WorkerAgentService {
+    /// Send telemetry batch to controller via StreamTelemetry RPC
+    async fn send_telemetry_batch_to_controller(
+        &self,
+        telemetry_events: Vec<edr::common::TelemetryData>,
+    ) -> Result<(), Status> {
+        use edr::controller::controller_client::ControllerClient;
+        use futures::stream;
+
+        info!(
+            "Sending {} telemetry events to controller...",
+            telemetry_events.len()
+        );
+
+        // Ensure controller address has http:// scheme
+        let controller_addr = if self
+            .config
+            .controller
+            .controller_address
+            .starts_with("http://")
+            || self
+                .config
+                .controller
+                .controller_address
+                .starts_with("https://")
+        {
+            self.config.controller.controller_address.clone()
+        } else {
+            format!("http://{}", self.config.controller.controller_address)
+        };
+
+        // Connect to controller
+        let mut client = ControllerClient::connect(controller_addr.clone())
+            .await
+            .map_err(|e| {
+                error!(
+                    "Failed to connect to controller at {}: {}",
+                    controller_addr, e
+                );
+                Status::unavailable(format!("Controller unavailable: {}", e))
+            })?;
+
+        // Create stream from telemetry events
+        let stream = stream::iter(telemetry_events);
+
+        // Send batch via streaming RPC
+        let response = client.stream_telemetry(stream).await.map_err(|e| {
+            error!("Failed to stream telemetry to controller: {}", e);
+            Status::internal(format!("Telemetry streaming failed: {}", e))
+        })?;
+
+        let ack = response.into_inner();
+        info!(
+            "Telemetry sent successfully: {} events acknowledged",
+            ack.events_count
+        );
+
+        Ok(())
+    }
+
     /// Send final status report to controller with exit code information
     async fn send_final_status_to_controller(
         &self,
@@ -328,11 +529,19 @@ impl WorkerAgentService {
         details: &str,
         elapsed_seconds: i32,
     ) {
-        use edr::controller::{controller_client::ControllerClient, StatusReport};
+        use edr::controller::{StatusReport, controller_client::ControllerClient};
 
         // Ensure controller address has http:// scheme
-        let controller_addr = if self.config.controller.controller_address.starts_with("http://")
-            || self.config.controller.controller_address.starts_with("https://")
+        let controller_addr = if self
+            .config
+            .controller
+            .controller_address
+            .starts_with("http://")
+            || self
+                .config
+                .controller
+                .controller_address
+                .starts_with("https://")
         {
             self.config.controller.controller_address.clone()
         } else {
@@ -363,7 +572,10 @@ impl WorkerAgentService {
                 }
             }
             Err(e) => {
-                warn!("Failed to connect to controller at {}: {}", controller_addr, e);
+                warn!(
+                    "Failed to connect to controller at {}: {}",
+                    controller_addr, e
+                );
             }
         }
     }
