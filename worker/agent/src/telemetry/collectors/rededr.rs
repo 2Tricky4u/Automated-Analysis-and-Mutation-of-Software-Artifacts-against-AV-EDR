@@ -197,8 +197,12 @@ impl RedEdrCollector {
     pub async fn reset(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/api/trace/reset", self.config.base_url);
 
-        let response = self
-            .client
+        // Create a client with longer timeout for reset (can take time to clear state)
+        let reset_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
+
+        let response = reset_client
             .post(&url)
             .send()
             .await
