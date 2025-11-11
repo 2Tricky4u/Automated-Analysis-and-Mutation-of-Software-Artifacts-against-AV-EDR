@@ -1,9 +1,10 @@
 use edr_config::ControllerConfig;
+use elasticsearch::{Elasticsearch, IndexParts, http::transport::Transport};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, transport::Server};
-use tracing::info;
+use tracing::{error, info, warn};
 
 pub mod edr {
     pub mod common {
@@ -41,21 +42,17 @@ struct SchedulerState {
     job_counter: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SchedulerService {
     state: Arc<Mutex<SchedulerState>>,
-}
-
-impl Default for SchedulerService {
-    fn default() -> Self {
-        Self::new()
-    }
+    es_client: Elasticsearch,
 }
 
 impl SchedulerService {
-    pub fn new() -> Self {
+    pub fn new(es_client: Elasticsearch) -> Self {
         Self {
             state: Arc::new(Mutex::new(SchedulerState::default())),
+            es_client,
         }
     }
 }
@@ -174,26 +171,32 @@ impl Controller for SchedulerService {
         let mut stream = request.into_inner();
         let mut events_count = 0;
         let mut first_job_id = String::new();
+        let mut batch = Vec::new();
 
         info!("Telemetry stream opened");
 
-        // Process incoming telemetry data
+        // Collect all events from stream
         while let Some(telemetry) = stream.message().await? {
-            // Capture first job_id for logging
             if events_count == 0 {
                 first_job_id = telemetry.job_id.clone();
             }
 
             events_count += 1;
-
-            // TODO: Forward to Elasticsearch, store in buffer, etc.
-            // For now, just count (no per-event logging to avoid pollution)
+            batch.push(telemetry);
         }
 
         info!(
             "Telemetry batch received: job={}, events_count={}",
             first_job_id, events_count
         );
+
+        // Index batch to Elasticsearch
+        if !batch.is_empty() {
+            if let Err(e) = self.index_telemetry_batch(&batch).await {
+                error!("Failed to index telemetry batch: {}", e);
+                // Don't fail the RPC - telemetry is logged even if indexing fails
+            }
+        }
 
         Ok(Response::new(TelemetryAck {
             received: true,
@@ -230,7 +233,113 @@ impl Controller for SchedulerService {
             }
         }
 
+        // Store RunResult to Elasticsearch when final status received
+        if matches!(report.event_type.as_str(), "success" | "error" | "timeout") {
+            if let Err(e) = self.store_run_result(&report).await {
+                error!("Failed to store run result: {}", e);
+            }
+        }
+
         Ok(Response::new(StatusAck { received: true }))
+    }
+}
+
+impl SchedulerService {
+    /// Index telemetry batch to Elasticsearch
+    async fn index_telemetry_batch(
+        &self,
+        batch: &[TelemetryData],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use base64::Engine;
+        use serde_json::json;
+
+        let index_name = format!("telemetry-{}", chrono::Utc::now().format("%Y.%m.%d"));
+        let mut indexed = 0;
+
+        // Index events individually (simpler API usage)
+        for event in batch {
+            let doc = json!({
+                "job_id": event.job_id,
+                "event_type": event.event_type,
+                "timestamp": event.timestamp,
+                "payload": base64::engine::general_purpose::STANDARD.encode(&event.payload),
+                "metadata": event.metadata,
+                "indexed_at": chrono::Utc::now().to_rfc3339(),
+            });
+
+            let response = self
+                .es_client
+                .index(IndexParts::Index(&index_name))
+                .body(doc)
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) if resp.status_code().is_success() => {
+                    indexed += 1;
+                }
+                Ok(resp) => {
+                    warn!("Failed to index event: status {}", resp.status_code());
+                }
+                Err(e) => {
+                    warn!("Failed to index event: {}", e);
+                }
+            }
+        }
+
+        info!(
+            "Indexed {}/{} telemetry events to {}",
+            indexed,
+            batch.len(),
+            index_name
+        );
+
+        Ok(())
+    }
+
+    /// Store run result to Elasticsearch
+    async fn store_run_result(
+        &self,
+        report: &StatusReport,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use serde_json::json;
+
+        let index_name = format!("runs-{}", chrono::Utc::now().format("%Y.%m"));
+
+        let doc = json!({
+            "run_id": report.run_id,
+            "job_id": report.job_id,
+            "worker_id": report.worker_id,
+            "worker_ip": report.worker_ip,
+            "artifact_name": report.artifact_name,
+            "pid": report.pid,
+            "status": report.event_type,
+            "elapsed_seconds": report.elapsed_seconds,
+            "telemetry_events_count": report.telemetry_events_count,
+            "details": report.details,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+        });
+
+        let response = self
+            .es_client
+            .index(IndexParts::IndexId(&index_name, &report.run_id))
+            .body(doc)
+            .send()
+            .await?;
+
+        if response.status_code().is_success() {
+            info!(
+                "Stored run result: {} (status: {})",
+                report.run_id, report.event_type
+            );
+        } else {
+            warn!(
+                "Index run result returned non-success status: {}",
+                response.status_code()
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -263,8 +372,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.triage.model_type, config.triage.confidence_threshold
     );
 
+    // Create Elasticsearch client
+    let es_transport = Transport::single_node(&config.elasticsearch.url)?;
+    let es_client = Elasticsearch::new(es_transport);
+
+    info!(
+        "Elasticsearch client initialized: {}",
+        config.elasticsearch.url
+    );
+
     let addr = config.server.bind_address.parse()?;
-    let scheduler = SchedulerService::new();
+    let scheduler = SchedulerService::new(es_client);
 
     info!("Controller/Scheduler starting...");
 
