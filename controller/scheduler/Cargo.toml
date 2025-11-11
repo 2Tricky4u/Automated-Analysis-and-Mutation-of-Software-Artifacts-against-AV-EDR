@@ -18,7 +18,6 @@ anyhow.workspace = true
 thiserror.workspace = true
 elasticsearch = "8.5.0-alpha.1"
 chrono = "0.4"
-base64 = "0.22"
 
 [build-dependencies]
 tonic-prost-build = "0.14.2"

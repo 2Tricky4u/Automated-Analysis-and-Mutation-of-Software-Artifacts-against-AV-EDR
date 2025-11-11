@@ -23,6 +23,7 @@ pub struct ExecutionMonitor {
     pub controller_address: String,
     pub start_time: Instant,
     client: reqwest::Client,
+    sys: std::sync::Arc<tokio::sync::Mutex<sysinfo::System>>,
 }
 
 impl ExecutionMonitor {
@@ -36,6 +37,8 @@ impl ExecutionMonitor {
         rededr_base_url: String,
         controller_address: String,
     ) -> Self {
+        use sysinfo::System;
+
         Self {
             run_id,
             job_id,
@@ -50,6 +53,7 @@ impl ExecutionMonitor {
                 .timeout(Duration::from_secs(3))
                 .build()
                 .expect("Failed to create HTTP client"),
+            sys: std::sync::Arc::new(tokio::sync::Mutex::new(System::new())),
         }
     }
 
@@ -100,9 +104,10 @@ impl ExecutionMonitor {
                     match self.collect_status().await {
                         Ok(status) => {
                             let event_count = status.telemetry_events_count;
+                            let process_is_alive = status.process_alive;
 
                             // Detect stuck state (no new events for 3+ heartbeats = 9+ seconds)
-                            if event_count == last_event_count && status.process_alive {
+                            if event_count == last_event_count && process_is_alive {
                                 idle_count += 1;
                             } else {
                                 idle_count = 0;
@@ -111,7 +116,7 @@ impl ExecutionMonitor {
 
                             let event_type = if idle_count >= 3 && status.elapsed_seconds > 10 {
                                 "stuck".to_string()
-                            } else if status.process_alive {
+                            } else if process_is_alive {
                                 "heartbeat".to_string()
                             } else {
                                 "terminated".to_string()
@@ -133,12 +138,18 @@ impl ExecutionMonitor {
                             self.send_status_to_controller(&event_type, &status, &details).await;
 
                             if event_tx.send(MonitorEvent {
-                                event_type,
+                                event_type: event_type.clone(),
                                 timestamp: chrono::Utc::now().timestamp_millis(),
                                 details,
                                 status: Some(status),
                             }).await.is_err() {
                                 warn!("Monitor channel closed, stopping monitor");
+                                break;
+                            }
+
+                            // Stop monitoring after sending "terminated" event
+                            if !process_is_alive {
+                                info!("Process terminated (pid={}), stopping monitor", self.pid);
                                 break;
                             }
                         }
@@ -188,9 +199,9 @@ impl ExecutionMonitor {
         // 1. Check if process still alive
         let process_alive = self.is_process_alive(self.pid);
 
-        // 2. Get CPU/memory usage (optional, can be expensive)
+        // 2. Get CPU/memory usage
         let (cpu_percent, memory_mb) = if process_alive {
-            self.get_process_metrics(self.pid).unwrap_or((0, 0))
+            self.get_process_metrics(self.pid).await.unwrap_or((0, 0))
         } else {
             (0, 0)
         };
@@ -296,13 +307,32 @@ impl ExecutionMonitor {
         }
     }
 
-    fn get_process_metrics(
+    async fn get_process_metrics(
         &self,
-        _pid: u32,
+        pid: u32,
     ) -> Result<(i32, i32), Box<dyn std::error::Error + Send + Sync>> {
-        // TODO: Implement using sysinfo crate or WMI for accurate metrics
-        // For now, return dummy values to avoid blocking
-        Ok((0, 0))
+        use sysinfo::{Pid, ProcessRefreshKind};
+
+        let pid_obj = Pid::from_u32(pid);
+
+        // Lock the shared System instance and refresh only the specific process
+        let mut sys = self.sys.lock().await;
+
+        // Refresh only this specific process (efficient)
+        sys.refresh_process_specifics(pid_obj, ProcessRefreshKind::everything());
+
+        if let Some(process) = sys.process(pid_obj) {
+            // CPU usage (percentage, 0-100 per core, so can be > 100 on multi-core)
+            let cpu_percent = process.cpu_usage() as i32;
+
+            // Memory in MB (convert from bytes)
+            let memory_mb = (process.memory() / 1024 / 1024) as i32;
+
+            Ok((cpu_percent, memory_mb))
+        } else {
+            // Process not found (might have just terminated)
+            Ok((0, 0))
+        }
     }
 }
 

@@ -250,7 +250,6 @@ impl SchedulerService {
         &self,
         batch: &[TelemetryData],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        use base64::Engine;
         use serde_json::json;
 
         let index_name = format!("telemetry-{}", chrono::Utc::now().format("%Y.%m.%d"));
@@ -258,11 +257,16 @@ impl SchedulerService {
 
         // Index events individually (simpler API usage)
         for event in batch {
+            // Parse payload as JSON (it's already JSON from RedEDR collector)
+            // This makes all fields searchable in Kibana instead of base64 blob
+            let payload_json: serde_json::Value = serde_json::from_slice(&event.payload)
+                .unwrap_or_else(|_| json!({"raw": "failed to parse"}));
+
             let doc = json!({
                 "job_id": event.job_id,
                 "event_type": event.event_type,
                 "timestamp": event.timestamp,
-                "payload": base64::engine::general_purpose::STANDARD.encode(&event.payload),
+                "payload": payload_json,  // ✅ Store as JSON object, not base64
                 "metadata": event.metadata,
                 "indexed_at": chrono::Utc::now().to_rfc3339(),
             });
