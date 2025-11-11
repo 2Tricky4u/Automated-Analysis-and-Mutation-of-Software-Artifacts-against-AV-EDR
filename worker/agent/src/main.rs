@@ -405,15 +405,22 @@ impl WorkerAgent for WorkerAgentService {
                 (-1, false)
             }
             Err(_) => {
-                warn!(
-                    "Process timed out after {}s, attempting to kill",
-                    req.timeout_seconds
-                );
-                // Kill process explicitly
-                let _ = process_guard.child_mut().kill().await;
+                // Timeout - kill process forcefully
+                if let Err(e) = process_guard.child_mut().kill().await {
+                    error!("Failed to kill timed-out process: {}", e);
+                    // Try force kill on Windows
+                    #[cfg(target_os = "windows")]
+                    {
+                        let pid = process_guard.child_mut().id();
+                        if let Some(pid) = pid {
+                            let _ = std::process::Command::new("taskkill")
+                                .args(&["/F", "/PID", &pid.to_string()])
+                                .output();
+                        }
+                    }
+                }
 
-                // Stop monitor immediately to prevent spam of "terminated" messages
-                // Monitor keeps running while we collect output, causing duplicate events
+                // Stop monitor immediately
                 if let Some(guard) = monitor_guard.take() {
                     guard.stop().await;
                 }
