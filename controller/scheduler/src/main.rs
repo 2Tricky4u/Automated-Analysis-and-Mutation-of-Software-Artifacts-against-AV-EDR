@@ -173,22 +173,27 @@ impl Controller for SchedulerService {
     ) -> Result<Response<TelemetryAck>, Status> {
         let mut stream = request.into_inner();
         let mut events_count = 0;
+        let mut first_job_id = String::new();
 
         info!("Telemetry stream opened");
 
         // Process incoming telemetry data
         while let Some(telemetry) = stream.message().await? {
+            // Capture first job_id for logging
+            if events_count == 0 {
+                first_job_id = telemetry.job_id.clone();
+            }
+
             events_count += 1;
-            info!(
-                "Telemetry event #{}: job={}, type={}, ts={}",
-                events_count, telemetry.job_id, telemetry.event_type, telemetry.timestamp
-            );
 
             // TODO: Forward to Elasticsearch, store in buffer, etc.
-            // For now, just log and count
+            // For now, just count (no per-event logging to avoid pollution)
         }
 
-        info!("Telemetry stream closed, received {} events", events_count);
+        info!(
+            "Telemetry batch received: job={}, events_count={}",
+            first_job_id, events_count
+        );
 
         Ok(Response::new(TelemetryAck {
             received: true,

@@ -15,7 +15,7 @@ param(
     [int]$Prefix = 24,
 
     [Parameter()]
-    [int]$RedEDRPort = 8080,
+    [int]$RedEDRPort = 8081,
 
     [Parameter()]
     [switch]$SkipReboot,
