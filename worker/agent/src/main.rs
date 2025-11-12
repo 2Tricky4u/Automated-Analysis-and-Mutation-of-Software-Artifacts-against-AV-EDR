@@ -22,7 +22,8 @@ pub mod edr {
 }
 
 use edr::worker::{
-    HealthRequest, HealthResponse, PingRequest, PingResponse, SampleRequest, SampleResponse,
+    ArtifactChunk, HealthRequest, HealthResponse, PingRequest, PingResponse, SampleRequest,
+    SampleResponse, TransferAck,
     worker_agent_server::{WorkerAgent, WorkerAgentServer},
 };
 
@@ -250,8 +251,8 @@ impl WorkerAgent for WorkerAgentService {
         let job_id = req.job_id.clone();
 
         info!(
-            "Starting sample execution: job_id={}, artifact={}",
-            job_id, req.artifact_path
+            "Starting sample execution: job_id={}, artifact_id={}",
+            job_id, req.artifact_id
         );
 
         // Check if RedEDR is enabled
@@ -265,7 +266,20 @@ impl WorkerAgent for WorkerAgentService {
         // Phase 1: Setup with RAII guards for automatic cleanup
         // ====================================================================
 
-        // 1. Create RedEDR collector with guard (cleanup on any error/panic)
+        // 1. Resolve artifact_id to local path
+        let artifact_path =
+            std::path::Path::new("C:\\temp\\artifacts").join(format!("{}.exe", req.artifact_id));
+
+        if !artifact_path.exists() {
+            return Err(Status::not_found(format!(
+                "Artifact {} not found on worker. Transfer it first using SendArtifact RPC.",
+                req.artifact_id
+            )));
+        }
+
+        info!("Resolved artifact to path: {:?}", artifact_path);
+
+        // 2. Create RedEDR collector with guard (cleanup on any error/panic)
         let collector = telemetry::collectors::rededr::RedEdrCollector::new(
             telemetry::collectors::rededr::RedEdrCollectorConfig {
                 base_url: self.config.telemetry.rededr.base_url.clone(),
@@ -276,8 +290,8 @@ impl WorkerAgent for WorkerAgentService {
         );
         let rededr_guard = RedEdrGuard::new(collector);
 
-        // 2. Extract artifact filename for tracing
-        let artifact_name = extract_filename(&req.artifact_path);
+        // 3. Extract artifact filename for tracing
+        let artifact_name = format!("{}.exe", req.artifact_id);
 
         // 3. Start RedEDR tracing (guard ensures cleanup if this fails)
         rededr_guard
@@ -292,7 +306,7 @@ impl WorkerAgent for WorkerAgentService {
         info!("RedEDR tracing started for artifact: {}", artifact_name);
 
         // 4. Spawn process with guard (guard ensures kill if error occurs)
-        let child = tokio::process::Command::new(&req.artifact_path)
+        let child = tokio::process::Command::new(&artifact_path)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -704,6 +718,85 @@ impl WorkerAgent for WorkerAgentService {
             cpu_percent,
             memory_percent,
             active_jobs: active_jobs as i32,
+        }))
+    }
+
+    async fn send_artifact(
+        &self,
+        request: Request<tonic::Streaming<ArtifactChunk>>,
+    ) -> Result<Response<TransferAck>, Status> {
+        use sha2::{Digest, Sha256};
+
+        let mut stream = request.into_inner();
+        let mut chunks = Vec::new();
+        let mut artifact_id = String::new();
+        let mut expected_sha256 = String::new();
+
+        info!("Starting artifact transfer...");
+
+        // Receive all chunks
+        while let Some(chunk) = stream.message().await? {
+            if artifact_id.is_empty() {
+                artifact_id = chunk.artifact_id.clone();
+                expected_sha256 = chunk.sha256.clone();
+                info!(
+                    "Receiving artifact: id={}, total_chunks={}",
+                    artifact_id, chunk.total_chunks
+                );
+            }
+            chunks.push(chunk);
+        }
+
+        if chunks.is_empty() {
+            return Err(Status::invalid_argument("No chunks received"));
+        }
+
+        // Sort chunks by index
+        chunks.sort_by_key(|c| c.chunk_index);
+
+        // Reassemble binary
+        let file_data: Vec<u8> = chunks.iter().flat_map(|c| c.data.clone()).collect();
+
+        info!(
+            "Reassembled artifact: {} bytes from {} chunks",
+            file_data.len(),
+            chunks.len()
+        );
+
+        // Verify integrity
+        let mut hasher = Sha256::new();
+        hasher.update(&file_data);
+        let actual_sha256 = format!("{:x}", hasher.finalize());
+
+        if actual_sha256 != expected_sha256 {
+            return Err(Status::data_loss(format!(
+                "SHA256 mismatch: expected {}, got {}",
+                expected_sha256, actual_sha256
+            )));
+        }
+
+        // Write to disk (artifacts directory)
+        let artifacts_dir = std::path::Path::new("C:\\temp\\artifacts");
+        std::fs::create_dir_all(artifacts_dir).map_err(|e| {
+            Status::internal(format!("Failed to create artifacts directory: {}", e))
+        })?;
+
+        let artifact_path = artifacts_dir.join(format!("{}.exe", artifact_id));
+        std::fs::write(&artifact_path, &file_data)
+            .map_err(|e| Status::internal(format!("Failed to write artifact to disk: {}", e)))?;
+
+        info!(
+            "Artifact stored: {} ({} bytes) at {:?}",
+            artifact_id,
+            file_data.len(),
+            artifact_path
+        );
+
+        Ok(Response::new(TransferAck {
+            received: true,
+            chunks_received: chunks.len() as u32,
+            error: String::new(),
+            storage_path: artifact_path.to_string_lossy().to_string(),
         }))
     }
 }

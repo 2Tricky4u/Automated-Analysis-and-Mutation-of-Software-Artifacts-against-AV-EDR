@@ -20,8 +20,9 @@ pub mod edr {
 
 use edr::common::{JobId, TelemetryAck, TelemetryData};
 use edr::controller::{
-    JobRequest, JobResponse, JobStatusRequest, JobStatusResponse, PingRequest, PingResponse,
-    QueryRequest, QueryResponse, StatusAck, StatusReport, TriageRequest, TriageResponse,
+    BuildRequest, BuildResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
+    PingRequest, PingResponse, QueryRequest, QueryResponse, StatusAck, StatusReport, TriageRequest,
+    TriageResponse,
     controller_server::{Controller, ControllerServer},
 };
 
@@ -241,6 +242,51 @@ impl Controller for SchedulerService {
         }
 
         Ok(Response::new(StatusAck { received: true }))
+    }
+
+    async fn build_artifact(
+        &self,
+        request: Request<BuildRequest>,
+    ) -> Result<Response<BuildResponse>, Status> {
+        let req = request.into_inner();
+
+        info!(
+            "Build request: template={}, source={}",
+            req.template_name, req.source_file
+        );
+
+        // Create builder with default config
+        let builder_config = builder::BuilderConfig::default();
+        let artifact_builder = builder::ArtifactBuilder::new(builder_config).map_err(|e| {
+            error!("Failed to create artifact builder: {}", e);
+            Status::internal(format!("Failed to create builder: {}", e))
+        })?;
+
+        // Build the artifact
+        let built = artifact_builder
+            .build_template(&req.template_name, &req.source_file)
+            .await
+            .map_err(|e| {
+                error!("Build failed: {}", e);
+                Status::internal(format!("Build failed: {}", e))
+            })?;
+
+        info!(
+            "Build successful: artifact_id={}, size={} bytes",
+            built.artifact_id, built.size_bytes
+        );
+
+        // TODO (Phase 2): Optionally apply mutations via Selector + Mutator
+        // TODO (Phase 3): Index artifact metadata to Elasticsearch
+
+        Ok(Response::new(BuildResponse {
+            artifact_id: built.artifact_id,
+            size_bytes: built.size_bytes,
+            build_status: "success".to_string(),
+            error: String::new(),
+            storage_path: built.output_path.to_string_lossy().to_string(),
+            build_timestamp: built.build_timestamp.timestamp(),
+        }))
     }
 }
 

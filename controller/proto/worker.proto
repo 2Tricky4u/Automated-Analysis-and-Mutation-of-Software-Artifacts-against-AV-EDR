@@ -14,6 +14,9 @@ service WorkerAgent {
 
   // Get worker health status
   rpc HealthCheck(HealthRequest) returns (HealthResponse);
+
+  // Receive artifact binary from controller (streaming upload)
+  rpc SendArtifact(stream ArtifactChunk) returns (TransferAck);
 }
 
 // Harness Service - sample execution with monitoring
@@ -39,7 +42,7 @@ message PingResponse {
 // Sample execution request
 message SampleRequest {
   string job_id = 1;
-  string artifact_path = 2;
+  string artifact_id = 2;  // NEW: Reference to transferred artifact (replaces artifact_path)
   int32 timeout_seconds = 3;
   bool enable_etw = 4;
 }
@@ -69,7 +72,7 @@ message HealthResponse {
 // Harness messages
 message ExecuteRequest {
   edr.common.JobId job_id = 1;
-  string artifact_path = 2;
+  string artifact_id = 2;  // NEW: Reference to artifact (replaces artifact_path)
   int32 timeout_seconds = 3;
   repeated string telemetry_providers = 4;
 }
@@ -101,4 +104,20 @@ message ExecutionStatus {
   int32 memory_mb = 5;
   int32 telemetry_events_count = 6;  // How many events RedEDR has collected so far
   string last_activity = 7;  // Last significant API call or "idle"
+}
+
+// Artifact transfer (Phase 1: Build-Deploy-Execute Pipeline)
+message ArtifactChunk {
+  string artifact_id = 1;     // SHA256 hash
+  bytes data = 2;             // Binary chunk (4MB max per message)
+  uint32 chunk_index = 3;     // 0-based chunk sequence
+  uint32 total_chunks = 4;    // Total number of chunks
+  string sha256 = 5;          // Expected SHA256 for verification
+}
+
+message TransferAck {
+  bool received = 1;
+  uint32 chunks_received = 2;
+  string error = 3;
+  string storage_path = 4;  // Where artifact was written on worker
 }

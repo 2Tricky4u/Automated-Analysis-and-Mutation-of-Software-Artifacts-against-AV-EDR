@@ -248,6 +248,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "builder"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -284,6 +298,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link 0.2.1",
 ]
@@ -1891,6 +1906,7 @@ name = "scheduler"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "builder",
  "chrono",
  "edr-config",
  "elasticsearch",
@@ -3298,6 +3314,7 @@ dependencies = [
  "reqwest 0.12.24",
  "serde",
  "serde_json",
+ "sha2",
  "sysinfo",
  "thiserror 2.0.17",
  "tokio",
