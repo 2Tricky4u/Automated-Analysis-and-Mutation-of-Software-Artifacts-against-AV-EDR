@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     # Controller components
     "controller/scheduler",
+    "controller/builder",
     "controller/queue",
     "controller/selector",
     "controller/mutator",

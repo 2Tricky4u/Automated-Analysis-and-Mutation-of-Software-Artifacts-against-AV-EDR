@@ -1,0 +1,559 @@
+/// Artifact Builder - Clang cross-compilation wrapper
+///
+/// Implements BUILD-DEPLOY-EXECUTE-PIPELINE.md Section 1: Build on Controller (WSL)
+///
+/// Compiles C templates to Windows PE executables using Clang with xwin SDK.
+/// Uses the same flags and dependencies as corpus/templates/build_all.sh.
+use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
+use tracing::{info, warn};
+
+/// Configuration for the artifact builder
+#[derive(Debug, Clone)]
+pub struct BuilderConfig {
+    /// Path to templates directory (e.g., "corpus/templates")
+    pub templates_dir: PathBuf,
+    /// Path to output directory for artifacts (e.g., "artifacts")
+    pub output_dir: PathBuf,
+    /// Path to xwin SDK (e.g., "/root/.xwin")
+    pub xwin_dir: PathBuf,
+}
+
+impl Default for BuilderConfig {
+    fn default() -> Self {
+        Self {
+            templates_dir: PathBuf::from("corpus/templates"),
+            output_dir: PathBuf::from("artifacts"),
+            xwin_dir: PathBuf::from("/root/.xwin"),
+        }
+    }
+}
+
+/// Metadata about a built artifact
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BuiltArtifact {
+    /// SHA256 hash of the artifact (artifact_id)
+    pub artifact_id: String,
+    /// Path to source file
+    pub source_path: PathBuf,
+    /// Path to output executable
+    pub output_path: PathBuf,
+    /// Size in bytes
+    pub size_bytes: u64,
+    /// SHA256 hash (same as artifact_id)
+    pub sha256: String,
+    /// When it was built
+    pub build_timestamp: chrono::DateTime<chrono::Utc>,
+    /// Compiler version
+    pub compiler_version: String,
+    /// Compiler flags used
+    pub compiler_flags: Vec<String>,
+}
+
+/// Template-specific library dependencies
+/// Matches the extra_libs in build_all.sh
+fn get_template_libs(template_name: &str) -> &'static [&'static str] {
+    match template_name {
+        "loader_v1" => &[],
+        "rwx_direct" => &["-Wl,-defaultlib:advapi32", "-Wl,-defaultlib:wininet"],
+        "process_injection" => &["-Wl,-defaultlib:user32"],
+        "network_beacon" => &["-Wl,-defaultlib:ws2_32"],
+        "eicar_test" => &[],
+        _ => {
+            warn!("Unknown template '{}', using no extra libs", template_name);
+            &[]
+        }
+    }
+}
+
+/// Input format for artifact building
+#[derive(Debug, Clone)]
+pub enum BuildInput {
+    /// Build from C source file
+    SourceFile {
+        template_name: String,
+        source_file: String,
+    },
+    /// Build from LLVM IR (post-mutation)
+    LlvmIr {
+        ir_code: Vec<u8>,
+        artifact_name: String,
+    },
+    /// Build from in-memory C source (text mutations)
+    SourceCode {
+        source_code: Vec<u8>,
+        artifact_name: String,
+    },
+}
+
+/// Artifact builder
+pub struct ArtifactBuilder {
+    config: BuilderConfig,
+}
+
+impl ArtifactBuilder {
+    pub fn new(config: BuilderConfig) -> Result<Self> {
+        // Validate xwin SDK exists
+        if !config.xwin_dir.exists() {
+            anyhow::bail!(
+                "xwin SDK not found at {:?}. Run xwin to set it up.",
+                config.xwin_dir
+            );
+        }
+
+        // Create output directory if it doesn't exist
+        std::fs::create_dir_all(&config.output_dir).context("Failed to create output directory")?;
+
+        Ok(Self { config })
+    }
+
+    /// Build artifact from various input formats (unified API)
+    ///
+    /// # Arguments
+    /// * `input` - Source input (file, LLVM IR, or in-memory source)
+    /// * `template_name` - Optional template name for library lookup (required for SourceFile)
+    ///
+    /// # Returns
+    /// Metadata about the built artifact
+    pub async fn build(&self, input: BuildInput) -> Result<BuiltArtifact> {
+        match input {
+            BuildInput::SourceFile {
+                template_name,
+                source_file,
+            } => self.build_template(&template_name, &source_file).await,
+
+            BuildInput::LlvmIr {
+                ir_code,
+                artifact_name,
+            } => self.build_from_llvm_ir(&ir_code, &artifact_name).await,
+
+            BuildInput::SourceCode {
+                source_code,
+                artifact_name,
+            } => {
+                self.build_from_source_code(&source_code, &artifact_name)
+                    .await
+            }
+        }
+    }
+
+    /// Build a template from source file (original method, kept for backward compatibility)
+    ///
+    /// # Arguments
+    /// * `template_name` - Template directory name (e.g., "rwx_direct")
+    /// * `source_file` - Source filename (e.g., "rwx_direct.c")
+    ///
+    /// # Returns
+    /// Metadata about the built artifact
+    pub async fn build_template(
+        &self,
+        template_name: &str,
+        source_file: &str,
+    ) -> Result<BuiltArtifact> {
+        // 1. Validate source exists
+        let source_path = self
+            .config
+            .templates_dir
+            .join(template_name)
+            .join(source_file);
+
+        if !source_path.exists() {
+            anyhow::bail!("Source file not found: {:?}", source_path);
+        }
+
+        info!(
+            "Building template: {} from {:?}",
+            template_name, source_path
+        );
+
+        // 2. Invoke clang to build
+        let output_name = source_file.replace(".c", ".exe");
+        let temp_output = self
+            .config
+            .templates_dir
+            .join(template_name)
+            .join(&output_name);
+
+        self.invoke_clang(template_name, &source_path, &temp_output)
+            .await?;
+
+        // 3. Read the built artifact
+        let artifact_data = tokio::fs::read(&temp_output)
+            .await
+            .context("Failed to read built artifact")?;
+
+        // 4. Compute SHA256 artifact_id
+        let artifact_id = self.compute_sha256(&artifact_data);
+
+        // 5. Move to artifacts directory with SHA256 name
+        let final_output = self.config.output_dir.join(format!("{}.exe", artifact_id));
+        tokio::fs::rename(&temp_output, &final_output)
+            .await
+            .context("Failed to move artifact to output directory")?;
+
+        info!(
+            "Artifact built: {} ({} bytes) -> {:?}",
+            artifact_id,
+            artifact_data.len(),
+            final_output
+        );
+
+        // 6. Get compiler version
+        let compiler_version = self.get_clang_version()?;
+
+        // 7. Return metadata
+        Ok(BuiltArtifact {
+            artifact_id: artifact_id.clone(),
+            source_path,
+            output_path: final_output,
+            size_bytes: artifact_data.len() as u64,
+            sha256: artifact_id,
+            build_timestamp: chrono::Utc::now(),
+            compiler_version,
+            compiler_flags: self.get_compiler_flags(template_name),
+        })
+    }
+
+    /// Invoke Clang with xwin SDK to cross-compile C to Windows PE
+    ///
+    /// Uses the same flags as corpus/templates/build_all.sh:
+    /// - Target: x86_64-pc-windows-msvc
+    /// - SDK includes: ucrt, shared, um, winrt
+    /// - Libraries: kernel32, libcmt
+    /// - Template-specific libs (advapi32, wininet, ws2_32, etc.)
+    async fn invoke_clang(&self, template_name: &str, source: &Path, output: &Path) -> Result<()> {
+        let xwin = &self.config.xwin_dir;
+
+        // Pre-format paths to avoid lifetime issues
+        let crt_include = format!("{}/crt/include", xwin.display());
+        let sdk_ucrt_include = format!("{}/sdk/include/ucrt", xwin.display());
+        let sdk_shared_include = format!("{}/sdk/include/shared", xwin.display());
+        let sdk_um_include = format!("{}/sdk/include/um", xwin.display());
+        let sdk_winrt_include = format!("{}/sdk/include/winrt", xwin.display());
+        let crt_lib = format!("{}/crt/lib/x86_64", xwin.display());
+        let sdk_ucrt_lib = format!("{}/sdk/lib/ucrt/x86_64", xwin.display());
+        let sdk_um_lib = format!("{}/sdk/lib/um/x86_64", xwin.display());
+
+        let output_str = output.to_str().context("Invalid output path")?;
+        let source_str = source.to_str().context("Invalid source path")?;
+
+        // Base flags (from build_all.sh COMMON_FLAGS + BASE_LIBS)
+        let mut args = vec![
+            "-target",
+            "x86_64-pc-windows-msvc",
+            "-isystem",
+            crt_include.as_str(),
+            "-isystem",
+            sdk_ucrt_include.as_str(),
+            "-isystem",
+            sdk_shared_include.as_str(),
+            "-isystem",
+            sdk_um_include.as_str(),
+            "-isystem",
+            sdk_winrt_include.as_str(),
+            "-L",
+            crt_lib.as_str(),
+            "-L",
+            sdk_ucrt_lib.as_str(),
+            "-L",
+            sdk_um_lib.as_str(),
+            "-fuse-ld=lld",
+            "-Wl,/subsystem:console",
+            "-O2",
+            "-Wl,-defaultlib:libcmt",
+            "-Wl,-defaultlib:kernel32",
+        ];
+
+        // Add template-specific libraries
+        let extra_libs = get_template_libs(template_name);
+        for lib in extra_libs {
+            args.push(lib);
+        }
+
+        // Add output and source
+        args.push("-o");
+        args.push(output_str);
+        args.push(source_str);
+
+        info!("Invoking: clang {}", args.join(" "));
+
+        // Execute clang
+        let output_result = tokio::process::Command::new("clang")
+            .args(&args)
+            .output()
+            .await
+            .context("Failed to execute clang")?;
+
+        if !output_result.status.success() {
+            let stderr = String::from_utf8_lossy(&output_result.stderr);
+            let stdout = String::from_utf8_lossy(&output_result.stdout);
+            anyhow::bail!(
+                "Clang build failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
+                stdout,
+                stderr
+            );
+        }
+
+        // Verify output file was created
+        if !output.exists() {
+            anyhow::bail!("Build succeeded but output file not found: {:?}", output);
+        }
+
+        Ok(())
+    }
+
+    /// Compute SHA256 hash of bytes
+    fn compute_sha256(&self, data: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Get Clang version for metadata
+    fn get_clang_version(&self) -> Result<String> {
+        let output = std::process::Command::new("clang")
+            .arg("--version")
+            .output()
+            .context("Failed to get clang version")?;
+
+        if output.status.success() {
+            let version_output = String::from_utf8_lossy(&output.stdout);
+            // Extract first line (e.g., "clang version 17.0.6")
+            Ok(version_output
+                .lines()
+                .next()
+                .unwrap_or("unknown")
+                .to_string())
+        } else {
+            Ok("unknown".to_string())
+        }
+    }
+
+    /// Get compiler flags used for this template (for metadata)
+    fn get_compiler_flags(&self, template_name: &str) -> Vec<String> {
+        let mut flags = vec![
+            "-target x86_64-pc-windows-msvc".to_string(),
+            "-O2".to_string(),
+            "-fuse-ld=lld".to_string(),
+        ];
+
+        // Add template-specific libs
+        for lib in get_template_libs(template_name) {
+            flags.push(lib.to_string());
+        }
+
+        flags
+    }
+
+    /// Build from LLVM IR (post-mutation)
+    ///
+    /// # Arguments
+    /// * `ir_code` - LLVM IR bitcode or text IR
+    /// * `artifact_name` - Name for the artifact (used for temp files and logging)
+    ///
+    /// # Returns
+    /// Metadata about the built artifact
+    ///
+    /// # Workflow
+    /// 1. Write IR to temporary .ll file
+    /// 2. Compile IR → object file (clang -c)
+    /// 3. Link object → exe (clang with xwin libs)
+    /// 4. Compute SHA256 and move to artifacts/
+    async fn build_from_llvm_ir(
+        &self,
+        ir_code: &[u8],
+        artifact_name: &str,
+    ) -> Result<BuiltArtifact> {
+        info!("Building from LLVM IR: {}", artifact_name);
+
+        // 1. Write IR to temp file
+        let temp_ir = self.config.output_dir.join(format!("{}.ll", artifact_name));
+        tokio::fs::write(&temp_ir, ir_code)
+            .await
+            .context("Failed to write IR to temp file")?;
+
+        // 2. Compile IR to object file
+        let temp_obj = self.config.output_dir.join(format!("{}.o", artifact_name));
+        self.compile_ir_to_object(&temp_ir, &temp_obj).await?;
+
+        // 3. Link object to executable
+        let temp_exe = self
+            .config
+            .output_dir
+            .join(format!("{}_temp.exe", artifact_name));
+        self.link_object_to_exe(&temp_obj, &temp_exe, &[]).await?;
+
+        // 4. Read, hash, and finalize
+        let artifact_data = tokio::fs::read(&temp_exe)
+            .await
+            .context("Failed to read built artifact")?;
+        let artifact_id = self.compute_sha256(&artifact_data);
+        let final_output = self.config.output_dir.join(format!("{}.exe", artifact_id));
+
+        tokio::fs::rename(&temp_exe, &final_output)
+            .await
+            .context("Failed to move artifact")?;
+
+        // Cleanup temp files
+        let _ = tokio::fs::remove_file(&temp_ir).await;
+        let _ = tokio::fs::remove_file(&temp_obj).await;
+
+        info!(
+            "Artifact built from IR: {} ({} bytes)",
+            artifact_id,
+            artifact_data.len()
+        );
+
+        Ok(BuiltArtifact {
+            artifact_id: artifact_id.clone(),
+            source_path: temp_ir, // IR file path
+            output_path: final_output,
+            size_bytes: artifact_data.len() as u64,
+            sha256: artifact_id,
+            build_timestamp: chrono::Utc::now(),
+            compiler_version: self.get_clang_version()?,
+            compiler_flags: vec!["-target x86_64-pc-windows-msvc".to_string()],
+        })
+    }
+
+    /// Build from in-memory C source code
+    async fn build_from_source_code(
+        &self,
+        source_code: &[u8],
+        artifact_name: &str,
+    ) -> Result<BuiltArtifact> {
+        info!("Building from in-memory source: {}", artifact_name);
+
+        // Write source to temp file
+        let temp_source = self.config.output_dir.join(format!("{}.c", artifact_name));
+        tokio::fs::write(&temp_source, source_code)
+            .await
+            .context("Failed to write source to temp file")?;
+
+        let temp_exe = self
+            .config
+            .output_dir
+            .join(format!("{}_temp.exe", artifact_name));
+
+        // Compile (no template libs - caller must provide flags if needed)
+        self.invoke_clang("", &temp_source, &temp_exe).await?;
+
+        // Finalize
+        let artifact_data = tokio::fs::read(&temp_exe).await?;
+        let artifact_id = self.compute_sha256(&artifact_data);
+        let final_output = self.config.output_dir.join(format!("{}.exe", artifact_id));
+
+        tokio::fs::rename(&temp_exe, &final_output).await?;
+        let _ = tokio::fs::remove_file(&temp_source).await;
+
+        Ok(BuiltArtifact {
+            artifact_id: artifact_id.clone(),
+            source_path: temp_source,
+            output_path: final_output,
+            size_bytes: artifact_data.len() as u64,
+            sha256: artifact_id,
+            build_timestamp: chrono::Utc::now(),
+            compiler_version: self.get_clang_version()?,
+            compiler_flags: vec![],
+        })
+    }
+
+    /// Compile LLVM IR to object file
+    async fn compile_ir_to_object(&self, ir_path: &Path, obj_path: &Path) -> Result<()> {
+        let output = tokio::process::Command::new("clang")
+            .args(&[
+                "-target",
+                "x86_64-pc-windows-msvc",
+                "-c", // Compile only, don't link
+                "-o",
+                obj_path.to_str().context("Invalid obj path")?,
+                ir_path.to_str().context("Invalid IR path")?,
+            ])
+            .output()
+            .await
+            .context("Failed to compile IR to object")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("IR compilation failed:\n{}", stderr);
+        }
+
+        Ok(())
+    }
+
+    /// Link object file to executable
+    async fn link_object_to_exe(
+        &self,
+        obj_path: &Path,
+        exe_path: &Path,
+        extra_libs: &[&str],
+    ) -> Result<()> {
+        let xwin = &self.config.xwin_dir;
+
+        let crt_lib = format!("{}/crt/lib/x86_64", xwin.display());
+        let sdk_ucrt_lib = format!("{}/sdk/lib/ucrt/x86_64", xwin.display());
+        let sdk_um_lib = format!("{}/sdk/lib/um/x86_64", xwin.display());
+        let obj_str = obj_path.to_str().context("Invalid obj path")?;
+        let exe_str = exe_path.to_str().context("Invalid exe path")?;
+
+        let mut args = vec![
+            "-target",
+            "x86_64-pc-windows-msvc",
+            "-fuse-ld=lld",
+            "-Wl,/subsystem:console",
+            "-L",
+            crt_lib.as_str(),
+            "-L",
+            sdk_ucrt_lib.as_str(),
+            "-L",
+            sdk_um_lib.as_str(),
+            "-Wl,-defaultlib:libcmt",
+            "-Wl,-defaultlib:kernel32",
+        ];
+
+        for lib in extra_libs {
+            args.push(lib);
+        }
+
+        args.push("-o");
+        args.push(exe_str);
+        args.push(obj_str);
+
+        let output = tokio::process::Command::new("clang")
+            .args(&args)
+            .output()
+            .await
+            .context("Failed to link object to exe")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Linking failed:\n{}", stderr);
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_template_libs() {
+        assert_eq!(get_template_libs("loader_v1").len(), 0);
+        assert_eq!(get_template_libs("rwx_direct").len(), 2);
+        assert_eq!(get_template_libs("network_beacon").len(), 1);
+    }
+
+    #[test]
+    fn test_compute_sha256() {
+        let config = BuilderConfig::default();
+        let builder = ArtifactBuilder { config };
+        let hash = builder.compute_sha256(b"hello world");
+        assert_eq!(
+            hash,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+    }
+}

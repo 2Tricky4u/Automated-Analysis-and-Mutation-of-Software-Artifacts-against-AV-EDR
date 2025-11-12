@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 edr-config = { path = "../../config" }
+builder = { path = "../builder" }
 tokio.workspace = true
 tonic.workspace = true
 prost.workspace = true

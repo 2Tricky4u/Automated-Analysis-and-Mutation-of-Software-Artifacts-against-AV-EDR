@@ -26,6 +26,9 @@ service Controller {
 
   // Workers report execution status (lightweight heartbeat)
   rpc ReportStatus(StatusReport) returns (StatusAck);
+
+  // Build artifact from template (WSL-side build)
+  rpc BuildArtifact(BuildRequest) returns (BuildResponse);
 }
 
 // Selector Service - mutation selection with feedback
@@ -190,4 +193,20 @@ message StatusReport {
 
 message StatusAck {
   bool received = 1;
+}
+
+// Build artifact request (Phase 1: Build-Deploy-Execute Pipeline)
+message BuildRequest {
+  string template_name = 1;  // e.g., "rwx_direct"
+  string source_file = 2;    // e.g., "rwx_direct.c"
+  repeated string compiler_flags = 3;  // Optional custom flags
+}
+
+message BuildResponse {
+  string artifact_id = 1;    // SHA256 hash of built artifact
+  uint64 size_bytes = 2;
+  string build_status = 3;   // "success" | "failed"
+  string error = 4;
+  string storage_path = 5;   // Controller-side path for debugging
+  int64 build_timestamp = 6;
 }
