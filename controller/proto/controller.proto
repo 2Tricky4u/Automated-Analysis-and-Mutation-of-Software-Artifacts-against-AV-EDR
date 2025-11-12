@@ -29,6 +29,9 @@ service Controller {
 
   // Build artifact from template (WSL-side build)
   rpc BuildArtifact(BuildRequest) returns (BuildResponse);
+
+  // Deploy artifact to worker (orchestrates SendArtifact streaming)
+  rpc DeployArtifact(DeployRequest) returns (DeployResponse);
 }
 
 // Selector Service - mutation selection with feedback
@@ -209,4 +212,19 @@ message BuildResponse {
   string error = 4;
   string storage_path = 5;   // Controller-side path for debugging
   int64 build_timestamp = 6;
+}
+
+// Deploy artifact to worker
+message DeployRequest {
+  string artifact_id = 1;      // Artifact to deploy
+  string worker_address = 2;   // Worker gRPC address (e.g., "10.200.200.11:50052")
+}
+
+message DeployResponse {
+  bool success = 1;
+  string artifact_id = 2;
+  string worker_address = 3;
+  string worker_storage_path = 4;  // Where worker stored it (e.g., "C:\temp\artifacts\...")
+  uint32 chunks_sent = 5;
+  string error = 6;
 }

@@ -20,9 +20,9 @@ pub mod edr {
 
 use edr::common::{JobId, TelemetryAck, TelemetryData};
 use edr::controller::{
-    BuildRequest, BuildResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
-    PingRequest, PingResponse, QueryRequest, QueryResponse, StatusAck, StatusReport, TriageRequest,
-    TriageResponse,
+    BuildRequest, BuildResponse, DeployRequest, DeployResponse, JobRequest, JobResponse,
+    JobStatusRequest, JobStatusResponse, PingRequest, PingResponse, QueryRequest, QueryResponse,
+    StatusAck, StatusReport, TriageRequest, TriageResponse,
     controller_server::{Controller, ControllerServer},
 };
 
@@ -286,6 +286,120 @@ impl Controller for SchedulerService {
             error: String::new(),
             storage_path: built.output_path.to_string_lossy().to_string(),
             build_timestamp: built.build_timestamp.timestamp(),
+        }))
+    }
+
+    async fn deploy_artifact(
+        &self,
+        request: Request<DeployRequest>,
+    ) -> Result<Response<DeployResponse>, Status> {
+        use edr::worker::{ArtifactChunk, worker_agent_client::WorkerAgentClient};
+        use futures::stream;
+        use sha2::{Digest, Sha256};
+
+        let req = request.into_inner();
+
+        info!(
+            "Deploy request: artifact_id={}, worker={}",
+            req.artifact_id, req.worker_address
+        );
+
+        // 1. Read artifact from disk
+        let builder_config = builder::BuilderConfig::default();
+        let artifact_path = builder_config
+            .output_dir
+            .join(format!("{}.exe", req.artifact_id));
+
+        if !artifact_path.exists() {
+            return Err(Status::not_found(format!(
+                "Artifact {} not found. Build it first using BuildArtifact RPC.",
+                req.artifact_id
+            )));
+        }
+
+        let artifact_data = tokio::fs::read(&artifact_path)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to read artifact: {}", e)))?;
+
+        info!(
+            "Read artifact: {} bytes from {:?}",
+            artifact_data.len(),
+            artifact_path
+        );
+
+        // 2. Verify SHA256 matches artifact_id
+        let mut hasher = Sha256::new();
+        hasher.update(&artifact_data);
+        let actual_sha256 = format!("{:x}", hasher.finalize());
+
+        if actual_sha256 != req.artifact_id {
+            return Err(Status::internal(format!(
+                "Artifact SHA256 mismatch: expected {}, got {}",
+                req.artifact_id, actual_sha256
+            )));
+        }
+
+        // 3. Connect to worker
+        let worker_url = format!("http://{}", req.worker_address);
+        info!("Connecting to worker: {}", worker_url);
+
+        let mut client = WorkerAgentClient::connect(worker_url).await.map_err(|e| {
+            error!("Failed to connect to worker: {}", e);
+            Status::unavailable(format!("Failed to connect to worker: {}", e))
+        })?;
+
+        // 4. Split into chunks (4MB per chunk)
+        let chunk_size = 4 * 1024 * 1024; // 4MB
+        let total_chunks = (artifact_data.len() + chunk_size - 1) / chunk_size;
+
+        let chunks: Vec<ArtifactChunk> = artifact_data
+            .chunks(chunk_size)
+            .enumerate()
+            .map(|(i, chunk)| ArtifactChunk {
+                artifact_id: req.artifact_id.clone(),
+                data: chunk.to_vec(),
+                chunk_index: i as u32,
+                total_chunks: total_chunks as u32,
+                sha256: req.artifact_id.clone(),
+            })
+            .collect();
+
+        info!(
+            "Streaming {} chunks ({} bytes total) to worker",
+            chunks.len(),
+            artifact_data.len()
+        );
+
+        // 5. Stream chunks to worker
+        let chunk_stream = stream::iter(chunks.clone());
+        let response = client
+            .send_artifact(chunk_stream)
+            .await
+            .map_err(|e| {
+                error!("Failed to send artifact: {}", e);
+                Status::internal(format!("Failed to send artifact: {}", e))
+            })?
+            .into_inner();
+
+        if !response.received {
+            return Err(Status::internal(format!(
+                "Worker rejected artifact: {}",
+                response.error
+            )));
+        }
+
+        info!(
+            "Artifact deployed successfully: {} chunks sent to {}",
+            response.chunks_received, req.worker_address
+        );
+
+        Ok(Response::new(DeployResponse {
+            success: true,
+            artifact_id: req.artifact_id,
+            worker_address: req.worker_address,
+            worker_storage_path: response.storage_path,
+            chunks_sent: response.chunks_received,
+            error: String::new(),
         }))
     }
 }
