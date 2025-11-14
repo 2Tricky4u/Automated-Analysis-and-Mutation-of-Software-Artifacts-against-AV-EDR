@@ -339,15 +339,26 @@ impl Controller for SchedulerService {
             )));
         }
 
-        // 3. Connect to worker (same simple pattern as worker->controller)
+        // 3. Connect to worker
         let worker_url = format!("http://{}", req.worker_address);
-        info!("Connecting to worker: {}", worker_url);
+        info!("Attempting connection to worker: {}", worker_url);
 
-        let mut client = WorkerAgentClient::connect(worker_url.clone())
+        // Create endpoint with explicit configuration
+        let endpoint = match tonic::transport::Endpoint::try_from(worker_url.clone()) {
+            Ok(ep) => ep,
+            Err(e) => {
+                error!("Invalid endpoint URL '{}': {}", worker_url, e);
+                return Err(Status::invalid_argument(format!("Invalid worker address: {}", e)));
+            }
+        };
+
+        info!("Endpoint created, connecting...");
+        let mut client = WorkerAgentClient::connect(endpoint)
             .await
             .map_err(|e| {
                 error!("=== CONNECT TO WORKER FAILED ===");
                 error!("Worker URL: {}", worker_url);
+                error!("Error type: {}", std::any::type_name_of_val(&e));
                 error!("Error: {}", e);
                 error!("Debug: {:?}", e);
                 Status::unavailable(format!("Failed to connect to worker: {}", e))
