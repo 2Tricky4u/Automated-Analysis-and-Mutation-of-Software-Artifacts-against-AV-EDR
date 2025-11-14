@@ -183,6 +183,47 @@ if (-not $existingIp) {
     Write-Success "Host IP $HostIP already assigned"
 }
 
+# 5.5. Enable IP forwarding between WSL2 and IsolationSwitch
+Write-Info "Enabling IP forwarding for WSL2 <-> VM communication..."
+
+# Enable global IP forwarding on Windows (requires reboot to fully activate)
+$currentForwarding = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" -Name "IPEnableRouter" -ErrorAction SilentlyContinue
+if ($null -eq $currentForwarding -or $currentForwarding.IPEnableRouter -ne 1) {
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" -Name "IPEnableRouter" -Value 1
+    Write-Success "Global IP forwarding enabled (registry: IPEnableRouter=1)"
+    $rebootNeeded = $true
+} else {
+    Write-Success "Global IP forwarding already enabled"
+}
+
+# Enable forwarding on IsolationSwitch adapter
+$isolationAdapter = Get-NetAdapter | Where-Object { $_.Name -like "*$SwitchName*" } | Select-Object -First 1
+if ($isolationAdapter) {
+    $forwardingStatus = Get-NetIPInterface -InterfaceAlias $isolationAdapter.Name -AddressFamily IPv4 | Select-Object -ExpandProperty Forwarding
+    if ($forwardingStatus -ne "Enabled") {
+        Set-NetIPInterface -InterfaceAlias $isolationAdapter.Name -AddressFamily IPv4 -Forwarding Enabled
+        Write-Success "IP forwarding enabled on $($isolationAdapter.Name)"
+    } else {
+        Write-Success "IP forwarding already enabled on $($isolationAdapter.Name)"
+    }
+}
+
+# Enable forwarding on WSL adapter (if it exists)
+$wslAdapter = Get-NetAdapter | Where-Object { $_.Name -like "*WSL*" } | Select-Object -First 1
+if ($wslAdapter) {
+    $forwardingStatus = Get-NetIPInterface -InterfaceAlias $wslAdapter.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Forwarding
+    if ($forwardingStatus -ne "Enabled") {
+        Set-NetIPInterface -InterfaceAlias $wslAdapter.Name -AddressFamily IPv4 -Forwarding Enabled
+        Write-Success "IP forwarding enabled on $($wslAdapter.Name)"
+    } else {
+        Write-Success "IP forwarding already enabled on $($wslAdapter.Name)"
+    }
+} else {
+    Write-Info "WSL adapter not found yet (will be configured on next run after WSL is started)"
+}
+
+Write-Success "IP forwarding configured - WSL2 can now communicate with VMs"
+
 # 6. Firewall rules
 $ports = @($GrpcPort, $EsPort, $KibanaPort)
 foreach ($port in $ports) {
@@ -251,8 +292,11 @@ if ($EnableVmNat -eq $false) {
     }
 }
 
-Write-Info "WSL remains isolated (services bound to 127.0.0.1). Exposure is via host port-proxy on $HostIP only."
-Write-Info "VMs get internet only when NAT is enabled and subnet is non-overlapping"
+Write-Info "Network Configuration:"
+Write-Info "  - WSL services bound to 127.0.0.1, exposed via host port-proxy on $HostIP"
+Write-Info "  - IP forwarding enabled: WSL2 <-> Windows Host <-> VMs"
+Write-Info "  - WSL2 can directly connect to VMs (e.g., controller -> worker agent)"
+Write-Info "  - VMs get internet only when NAT is enabled and subnet is non-overlapping"
 
 # 9. VM-to-VM Isolation
 $EnableVmIsolation = $false
