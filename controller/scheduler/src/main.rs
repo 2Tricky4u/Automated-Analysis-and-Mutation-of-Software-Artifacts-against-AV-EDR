@@ -348,21 +348,22 @@ impl Controller for SchedulerService {
             Ok(ep) => ep,
             Err(e) => {
                 error!("Invalid endpoint URL '{}': {}", worker_url, e);
-                return Err(Status::invalid_argument(format!("Invalid worker address: {}", e)));
+                return Err(Status::invalid_argument(format!(
+                    "Invalid worker address: {}",
+                    e
+                )));
             }
         };
 
         info!("Endpoint created, connecting...");
-        let mut client = WorkerAgentClient::connect(endpoint)
-            .await
-            .map_err(|e| {
-                error!("=== CONNECT TO WORKER FAILED ===");
-                error!("Worker URL: {}", worker_url);
-                error!("Error type: {}", std::any::type_name_of_val(&e));
-                error!("Error: {}", e);
-                error!("Debug: {:?}", e);
-                Status::unavailable(format!("Failed to connect to worker: {}", e))
-            })?;
+        let mut client = WorkerAgentClient::connect(endpoint).await.map_err(|e| {
+            error!("=== CONNECT TO WORKER FAILED ===");
+            error!("Worker URL: {}", worker_url);
+            error!("Error type: {}", std::any::type_name_of_val(&e));
+            error!("Error: {}", e);
+            error!("Debug: {:?}", e);
+            Status::unavailable(format!("Failed to connect to worker: {}", e))
+        })?;
 
         info!("Successfully connected to worker");
 
