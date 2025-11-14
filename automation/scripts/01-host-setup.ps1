@@ -241,11 +241,14 @@ if (-not $wslRunning) {
 }
 
 # Get Windows host IP from WSL's perspective (WSL's default gateway)
-$wslGatewayRaw = wsl -- ip route show default 2>$null | Select-Object -First 1
+$wslGatewayRaw = wsl -- ip route show default 2>$null
+$wslGatewayRaw = $wslGatewayRaw | Out-String
 if ($wslGatewayRaw -match 'default via ([\d\.]+)') {
-    $wslGateway = $matches[1]
+    $wslGateway = $matches[1].Trim()
+    Write-Info "Extracted WSL gateway: $wslGateway"
 } else {
     $wslGateway = $null
+    Write-Warn "Could not parse WSL gateway from: $wslGatewayRaw"
 }
 
 if ($wslGateway) {
