@@ -231,19 +231,21 @@ Write-Info "Configuring WSL2 route to VM network..."
 $wslRunning = wsl -l --running 2>$null | Select-String "Ubuntu"
 if ($wslRunning) {
     # Get Windows host IP from WSL's perspective (WSL's default gateway)
-    $wslGateway = wsl bash -c "ip route show default | awk '{print `$3}'" 2>$null
+    $wslGateway = wsl bash -c 'ip route show default | awk ''{print $3}''' 2>$null
+    $wslGateway = $wslGateway.Trim()
 
     if ($wslGateway) {
         Write-Info "WSL gateway IP: $wslGateway"
 
         # Add route in WSL2 to reach VM network via Windows host
-        wsl bash -c "sudo ip route del $($config.network.subnet) 2>/dev/null || true" 2>$null
-        wsl bash -c "sudo ip route add $($config.network.subnet) via $wslGateway" 2>$null
+        $subnet = $config.network.subnet
+        wsl bash -c "sudo ip route del $subnet 2>/dev/null || true" 2>$null
+        wsl bash -c "sudo ip route add $subnet via $wslGateway" 2>$null
 
         # Verify route was added
-        $routeCheck = wsl bash -c "ip route show | grep $($config.network.subnet)" 2>$null
+        $routeCheck = wsl bash -c "ip route show | grep $subnet" 2>$null
         if ($routeCheck) {
-            Write-Success "WSL2 route added: $($config.network.subnet) via $wslGateway"
+            Write-Success "WSL2 route added: $subnet via $wslGateway"
         } else {
             Write-Warn "Failed to add WSL2 route (route may already exist or WSL not fully started)"
         }
@@ -252,7 +254,8 @@ if ($wslRunning) {
     }
 } else {
     Write-Info "WSL not running yet - route will be added on first WSL start"
-    Write-Info "Run this after starting WSL: wsl sudo ip route add $($config.network.subnet) via \$(ip route show default | awk '{print \$3}')"
+    Write-Info "After starting WSL, manually add route with:"
+    Write-Info '  wsl bash -c "sudo ip route add 10.200.200.0/24 via $(ip route show default | awk ''{print $3}'')"'
 }
 
 # 6. Firewall rules
