@@ -383,14 +383,27 @@ impl Controller for SchedulerService {
 
         // 5. Stream chunks to worker
         let chunk_stream = stream::iter(chunks.clone());
+
+        info!("Calling send_artifact RPC with {} chunks...", chunks.len());
         let response = client
             .send_artifact(chunk_stream)
             .await
             .map_err(|e| {
-                error!("Failed to send artifact: {}", e);
-                Status::internal(format!("Failed to send artifact: {}", e))
+                error!("=== send_artifact RPC FAILED ===");
+                error!("Error: {}", e);
+                error!("Error code: {:?}", e.code());
+                error!("Error message: {}", e.message());
+                error!("Worker URL: {}", worker_url);
+                error!("Full debug: {:?}", e);
+                Status::internal(format!(
+                    "Failed to send artifact: {} (code: {:?})",
+                    e.message(),
+                    e.code()
+                ))
             })?
             .into_inner();
+
+        info!("send_artifact RPC completed successfully");
 
         if !response.received {
             return Err(Status::internal(format!(
