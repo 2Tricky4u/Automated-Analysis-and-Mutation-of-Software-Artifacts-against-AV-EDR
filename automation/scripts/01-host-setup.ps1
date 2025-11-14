@@ -241,8 +241,12 @@ if (-not $wslRunning) {
 }
 
 # Get Windows host IP from WSL's perspective (WSL's default gateway)
-$wslGateway = wsl bash -c 'ip route show default | awk ''{print $3}''' 2>$null
-$wslGateway = $wslGateway.Trim()
+$wslGatewayRaw = wsl -- ip route show default 2>$null | Select-Object -First 1
+if ($wslGatewayRaw -match 'default via ([\d\.]+)') {
+    $wslGateway = $matches[1]
+} else {
+    $wslGateway = $null
+}
 
 if ($wslGateway) {
     Write-Info "WSL gateway IP: $wslGateway"
@@ -250,13 +254,18 @@ if ($wslGateway) {
     # Add route in WSL2 to reach VM network via Windows host
     $subnet = $config.network.subnet
 
-    # Remove existing route if present (suppress errors - route may not exist)
-    $null = wsl -u root -- ip route del $subnet 2>&1
-
-    # Add new route (use -- to prevent PowerShell from parsing the command)
-    $routeAddResult = wsl -u root -- ip route add $subnet via $wslGateway 2>&1
-    if ($LASTEXITCODE -ne 0 -and $routeAddResult -notmatch "File exists") {
-        Write-Warn "Route add returned: $routeAddResult"
+    # Check if route already exists
+    $existingRoute = wsl -- ip route show $subnet 2>$null
+    if (-not $existingRoute) {
+        # Add new route
+        $routeAddResult = wsl -u root -- ip route add $subnet via $wslGateway 2>&1
+        if ($LASTEXITCODE -eq 0 -or $routeAddResult -match "File exists") {
+            Write-Success "Route added successfully"
+        } else {
+            Write-Warn "Route add failed: $routeAddResult"
+        }
+    } else {
+        Write-Info "Route already exists: $existingRoute"
     }
 
     # Verify route was added
