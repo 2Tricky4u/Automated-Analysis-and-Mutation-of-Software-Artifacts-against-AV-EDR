@@ -250,11 +250,14 @@ if ($wslGateway) {
     # Add route in WSL2 to reach VM network via Windows host
     $subnet = $config.network.subnet
 
-    # Remove existing route if present (ignore errors)
-    wsl -u root -- ip route del $subnet 2>$null
+    # Remove existing route if present (suppress errors - route may not exist)
+    $null = wsl -u root -- ip route del $subnet 2>&1
 
     # Add new route (use -- to prevent PowerShell from parsing the command)
-    wsl -u root -- ip route add $subnet via $wslGateway
+    $routeAddResult = wsl -u root -- ip route add $subnet via $wslGateway 2>&1
+    if ($LASTEXITCODE -ne 0 -and $routeAddResult -notmatch "File exists") {
+        Write-Warn "Route add returned: $routeAddResult"
+    }
 
     # Verify route was added
     Start-Sleep -Seconds 1
