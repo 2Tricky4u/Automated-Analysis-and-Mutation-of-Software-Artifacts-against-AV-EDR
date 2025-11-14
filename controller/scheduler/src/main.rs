@@ -339,25 +339,21 @@ impl Controller for SchedulerService {
             )));
         }
 
-        // 3. Connect to worker with proper endpoint configuration
+        // 3. Connect to worker (same simple pattern as worker->controller)
         let worker_url = format!("http://{}", req.worker_address);
         info!("Connecting to worker: {}", worker_url);
 
-        // Configure endpoint with timeouts and keep-alive
-        let endpoint = tonic::transport::Endpoint::from_shared(worker_url.clone())
+        let mut client = WorkerAgentClient::connect(worker_url.clone())
+            .await
             .map_err(|e| {
-                error!("Invalid worker URL: {}", e);
-                Status::invalid_argument(format!("Invalid worker URL: {}", e))
-            })?
-            .timeout(std::time::Duration::from_secs(30))
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .http2_keep_alive_interval(std::time::Duration::from_secs(30))
-            .keep_alive_timeout(std::time::Duration::from_secs(10));
+                error!("=== CONNECT TO WORKER FAILED ===");
+                error!("Worker URL: {}", worker_url);
+                error!("Error: {}", e);
+                error!("Debug: {:?}", e);
+                Status::unavailable(format!("Failed to connect to worker: {}", e))
+            })?;
 
-        let mut client = WorkerAgentClient::connect(endpoint).await.map_err(|e| {
-            error!("Failed to connect to worker at {}: {}", worker_url, e);
-            Status::unavailable(format!("Failed to connect to worker: {}", e))
-        })?;
+        info!("Successfully connected to worker");
 
         // 4. Split into chunks (4MB per chunk)
         let chunk_size = 4 * 1024 * 1024; // 4MB
