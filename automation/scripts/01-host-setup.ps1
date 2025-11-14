@@ -251,21 +251,21 @@ if ($wslGateway) {
     $subnet = $config.network.subnet
 
     # Remove existing route if present (ignore errors)
-    wsl -u root bash -c "ip route del $subnet 2>/dev/null; exit 0" 2>$null
+    wsl -u root -- ip route del $subnet 2>$null
 
-    # Add new route
-    $addRouteCmd = "ip route add $subnet via $wslGateway"
-    wsl -u root bash -c $addRouteCmd 2>$null
+    # Add new route (use -- to prevent PowerShell from parsing the command)
+    wsl -u root -- ip route add $subnet via $wslGateway
 
     # Verify route was added
-    $routeCheck = wsl bash -c "ip route show | grep '$subnet'" 2>$null
+    Start-Sleep -Seconds 1
+    $routeCheck = wsl -- ip route show | Select-String $subnet
     if ($routeCheck) {
         Write-Success "WSL2 route added: $subnet via $wslGateway"
 
         # Test connectivity to host
         Write-Info "Testing WSL2 -> Windows host connectivity..."
-        $pingTest = wsl ping -c 1 -W 2 $HostIP 2>$null | Select-String "1 received"
-        if ($pingTest) {
+        $pingResult = wsl -- ping -c 1 -W 2 $HostIP 2>&1
+        if ($pingResult -match "1 received") {
             Write-Success "WSL2 can reach Windows host at $HostIP"
         } else {
             Write-Warn "WSL2 cannot ping host - Windows reboot required for IPEnableRouter to take effect"
@@ -273,7 +273,7 @@ if ($wslGateway) {
         }
     } else {
         Write-Warn "Failed to add WSL2 route (may already exist or require WSL restart)"
-        Write-Info "Manual command: wsl -u root ip route add $subnet via $wslGateway"
+        Write-Info "Manual command: wsl -u root -- ip route add $subnet via $wslGateway"
     }
 } else {
     Write-Warn "Could not determine WSL gateway IP"
