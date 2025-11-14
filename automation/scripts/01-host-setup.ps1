@@ -224,6 +224,37 @@ if ($wslAdapter) {
 
 Write-Success "IP forwarding configured - WSL2 can now communicate with VMs"
 
+# 5.6. Configure WSL2 routing to VM network
+Write-Info "Configuring WSL2 route to VM network..."
+
+# Check if WSL is running
+$wslRunning = wsl -l --running 2>$null | Select-String "Ubuntu"
+if ($wslRunning) {
+    # Get Windows host IP from WSL's perspective (WSL's default gateway)
+    $wslGateway = wsl bash -c "ip route show default | awk '{print `$3}'" 2>$null
+
+    if ($wslGateway) {
+        Write-Info "WSL gateway IP: $wslGateway"
+
+        # Add route in WSL2 to reach VM network via Windows host
+        wsl bash -c "sudo ip route del $($config.network.subnet) 2>/dev/null || true" 2>$null
+        wsl bash -c "sudo ip route add $($config.network.subnet) via $wslGateway" 2>$null
+
+        # Verify route was added
+        $routeCheck = wsl bash -c "ip route show | grep $($config.network.subnet)" 2>$null
+        if ($routeCheck) {
+            Write-Success "WSL2 route added: $($config.network.subnet) via $wslGateway"
+        } else {
+            Write-Warn "Failed to add WSL2 route (route may already exist or WSL not fully started)"
+        }
+    } else {
+        Write-Warn "Could not determine WSL gateway IP"
+    }
+} else {
+    Write-Info "WSL not running yet - route will be added on first WSL start"
+    Write-Info "Run this after starting WSL: wsl sudo ip route add $($config.network.subnet) via \$(ip route show default | awk '{print \$3}')"
+}
+
 # 6. Firewall rules
 $ports = @($GrpcPort, $EsPort, $KibanaPort)
 foreach ($port in $ports) {
