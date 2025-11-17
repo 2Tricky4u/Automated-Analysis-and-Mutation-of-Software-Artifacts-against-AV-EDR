@@ -251,8 +251,10 @@ impl Controller for SchedulerService {
         let req = request.into_inner();
 
         info!(
-            "Build request: template={}, source={}",
-            req.template_name, req.source_file
+            "Build request: template={}, source={}, mutations={}",
+            req.template_name,
+            req.source_file,
+            req.mutations.len()
         );
 
         // Create builder with default config
@@ -262,9 +264,30 @@ impl Controller for SchedulerService {
             Status::internal(format!("Failed to create builder: {}", e))
         })?;
 
-        // Build the artifact
+        // Convert proto mutations to builder::mutator::MutationSpec
+        let mutations: Vec<builder::mutator::MutationSpec> = req
+            .mutations
+            .into_iter()
+            .map(|m| builder::mutator::MutationSpec {
+                id: m.id,
+                params: m.params,
+            })
+            .collect();
+
+        if !mutations.is_empty() {
+            info!(
+                "Applying mutations: {:?}",
+                mutations.iter().map(|m| &m.id).collect::<Vec<_>>()
+            );
+        }
+
+        // Build the artifact with mutations
         let built = artifact_builder
-            .build_template(&req.template_name, &req.source_file)
+            .build(builder::BuildInput::SourceFile {
+                template_name: req.template_name.clone(),
+                source_file: req.source_file.clone(),
+                mutations,
+            })
             .await
             .map_err(|e| {
                 error!("Build failed: {}", e);
@@ -272,11 +295,10 @@ impl Controller for SchedulerService {
             })?;
 
         info!(
-            "Build successful: artifact_id={}, size={} bytes",
-            built.artifact_id, built.size_bytes
+            "Build successful: artifact_id={}, size={} bytes, mutations_applied={:?}",
+            built.artifact_id, built.size_bytes, built.mutations_applied
         );
 
-        // TODO (Phase 2): Optionally apply mutations via Selector + Mutator
         // TODO (Phase 3): Index artifact metadata to Elasticsearch
 
         Ok(Response::new(BuildResponse {
@@ -286,6 +308,7 @@ impl Controller for SchedulerService {
             error: String::new(),
             storage_path: built.output_path.to_string_lossy().to_string(),
             build_timestamp: built.build_timestamp.timestamp(),
+            mutations_applied: built.mutations_applied,
         }))
     }
 
