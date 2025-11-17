@@ -133,7 +133,14 @@ impl Mutator {
         let xor_key: u8 = spec
             .params
             .get("xor_key")
-            .and_then(|v| v.parse().ok())
+            .and_then(|v| {
+                // Support both "0xAA" and "170" formats
+                if v.starts_with("0x") || v.starts_with("0X") {
+                    u8::from_str_radix(&v[2..], 16).ok()
+                } else {
+                    v.parse().ok()
+                }
+            })
             .unwrap_or(0xAA);
 
         info!("String XOR key: 0x{:02X}", xor_key);
