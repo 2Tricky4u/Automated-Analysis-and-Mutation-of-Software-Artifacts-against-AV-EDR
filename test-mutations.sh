@@ -2,8 +2,6 @@
 # Test script for minimal mutation system
 # Run from WSL with controller running at localhost:50051
 
-set -e
-
 echo "=== Mutation System Test Script ==="
 echo ""
 
@@ -15,6 +13,17 @@ BASELINE_RESPONSE=$(grpcurl -plaintext localhost:50051 \
     "source_file": "loader_v1.c"
   }' \
   edr.controller.Controller/BuildArtifact 2>&1)
+
+# Check if grpcurl succeeded
+if ! echo "$BASELINE_RESPONSE" | jq -e . >/dev/null 2>&1; then
+    echo "   ✗ ERROR: grpcurl failed or returned invalid JSON"
+    echo ""
+    echo "   Response:"
+    echo "$BASELINE_RESPONSE"
+    echo ""
+    echo "   Make sure the controller is running at localhost:50051"
+    exit 1
+fi
 
 BASELINE_ID=$(echo "$BASELINE_RESPONSE" | jq -r '.artifact_id')
 BASELINE_SIZE=$(echo "$BASELINE_RESPONSE" | jq -r '.size_bytes')
