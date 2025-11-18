@@ -270,17 +270,134 @@ impl ArtifactBuilder {
             .await
             .context("Failed to read source file")?;
 
-        // 2. Apply mutations
-        let (mutated_source, mutations_applied) =
-            mutator::Mutator::apply(&original_source, mutations)?;
+        // 2. Separate AST and LLVM mutations
+        let has_llvm_mutations = mutations.iter().any(|m| m.id.starts_with("llvm."));
+        let has_ast_mutations = mutations.iter().any(|m| m.id.starts_with("ast."));
 
+        // 3. Apply AST mutations to source first (if any)
+        let mut working_source = original_source.clone();
+        let mut all_mutations_applied = Vec::new();
+
+        if has_ast_mutations {
+            let ast_mutations: Vec<_> = mutations
+                .iter()
+                .filter(|m| m.id.starts_with("ast."))
+                .cloned()
+                .collect();
+
+            let (mutated, applied) = mutator::Mutator::apply(&working_source, &ast_mutations)?;
+            working_source = mutated;
+            all_mutations_applied.extend(applied);
+        }
+
+        // 4. If we have LLVM mutations, use IR path
+        if has_llvm_mutations {
+            // 4a. Write (possibly AST-mutated) source to temp file
+            let temp_source_filename = format!("temp_mutated_{}", source_file);
+            let temp_source_path = self
+                .config
+                .templates_dir
+                .join(template_name)
+                .join(&temp_source_filename);
+
+            tokio::fs::write(&temp_source_path, &working_source)
+                .await
+                .context("Failed to write temp source")?;
+
+            // 4b. Compile source → LLVM IR
+            let ir_filename = source_file.replace(".c", ".ll");
+            let ir_path = self
+                .config
+                .templates_dir
+                .join(template_name)
+                .join(&ir_filename);
+
+            self.compile_source_to_ir(&temp_source_path, &ir_path, template_name)
+                .await?;
+
+            // Clean up temp source
+            let _ = tokio::fs::remove_file(&temp_source_path).await;
+
+            // 4c. Apply LLVM mutations to IR
+            let ir_content = tokio::fs::read(&ir_path)
+                .await
+                .context("Failed to read LLVM IR")?;
+
+            let llvm_mutations: Vec<_> = mutations
+                .iter()
+                .filter(|m| m.id.starts_with("llvm."))
+                .cloned()
+                .collect();
+
+            let (mutated_ir, llvm_applied) =
+                mutator::Mutator::apply(&ir_content, &llvm_mutations)?;
+            all_mutations_applied.extend(llvm_applied);
+
+            // 4d. Write mutated IR
+            tokio::fs::write(&ir_path, &mutated_ir)
+                .await
+                .context("Failed to write mutated IR")?;
+
+            info!(
+                "Applied {} mutations: {:?}",
+                all_mutations_applied.len(),
+                all_mutations_applied
+            );
+
+            // 4e. Compile IR → binary
+            let output_name = source_file.replace(".c", ".exe");
+            let temp_output = self
+                .config
+                .templates_dir
+                .join(template_name)
+                .join(&output_name);
+
+            self.compile_ir_to_exe(&ir_path, &temp_output, template_name)
+                .await?;
+
+            // Clean up IR file
+            let _ = tokio::fs::remove_file(&ir_path).await;
+
+            // Continue to step 5 (artifact finalization)
+            let artifact_data = tokio::fs::read(&temp_output)
+                .await
+                .context("Failed to read built artifact")?;
+
+            let artifact_id = self.compute_sha256(&artifact_data);
+            let final_output = self.config.output_dir.join(format!("{}.exe", artifact_id));
+            tokio::fs::rename(&temp_output, &final_output)
+                .await
+                .context("Failed to move artifact to output directory")?;
+
+            info!(
+                "Mutated artifact built (IR path): {} ({} bytes) -> {:?}",
+                artifact_id,
+                artifact_data.len(),
+                final_output
+            );
+
+            let compiler_version = self.get_clang_version()?;
+
+            return Ok(BuiltArtifact {
+                artifact_id: artifact_id.clone(),
+                source_path,
+                output_path: final_output,
+                size_bytes: artifact_data.len() as u64,
+                sha256: artifact_id,
+                build_timestamp: chrono::Utc::now(),
+                compiler_version,
+                compiler_flags: self.get_compiler_flags(template_name),
+                mutations_applied: all_mutations_applied,
+            });
+        }
+
+        // 5. AST-only mutations: write mutated source and compile directly
         info!(
             "Applied {} mutations: {:?}",
-            mutations_applied.len(),
-            mutations_applied
+            all_mutations_applied.len(),
+            all_mutations_applied
         );
 
-        // 3. Write mutated source to temporary file
         let mutated_filename = format!("mutated_{}", source_file);
         let mutated_path = self
             .config
@@ -288,11 +405,10 @@ impl ArtifactBuilder {
             .join(template_name)
             .join(&mutated_filename);
 
-        tokio::fs::write(&mutated_path, &mutated_source)
+        tokio::fs::write(&mutated_path, &working_source)
             .await
             .context("Failed to write mutated source")?;
 
-        // 4. Build mutated source
         let output_name = source_file.replace(".c", ".exe");
         let temp_output = self
             .config
@@ -303,30 +419,30 @@ impl ArtifactBuilder {
         self.invoke_clang(template_name, &mutated_path, &temp_output)
             .await?;
 
-        // 5. Clean up mutated source file
+        // 6. Clean up mutated source file
         let _ = tokio::fs::remove_file(&mutated_path).await;
 
-        // 6. Read artifact and compute hash
+        // 7. Read artifact and compute hash
         let artifact_data = tokio::fs::read(&temp_output)
             .await
             .context("Failed to read built artifact")?;
 
         let artifact_id = self.compute_sha256(&artifact_data);
 
-        // 7. Move to artifacts directory
+        // 8. Move to artifacts directory
         let final_output = self.config.output_dir.join(format!("{}.exe", artifact_id));
         tokio::fs::rename(&temp_output, &final_output)
             .await
             .context("Failed to move artifact to output directory")?;
 
         info!(
-            "Mutated artifact built: {} ({} bytes) -> {:?}",
+            "Mutated artifact built (AST path): {} ({} bytes) -> {:?}",
             artifact_id,
             artifact_data.len(),
             final_output
         );
 
-        // 8. Return metadata with mutations applied
+        // 9. Return metadata with mutations applied
         let compiler_version = self.get_clang_version()?;
 
         Ok(BuiltArtifact {
@@ -338,7 +454,7 @@ impl ArtifactBuilder {
             build_timestamp: chrono::Utc::now(),
             compiler_version,
             compiler_flags: self.get_compiler_flags(template_name),
-            mutations_applied,
+            mutations_applied: all_mutations_applied,
         })
     }
 
@@ -626,6 +742,111 @@ impl ArtifactBuilder {
         let mut hasher = Sha256::new();
         hasher.update(data);
         format!("{:x}", hasher.finalize())
+    }
+
+    /// Compile C source to LLVM IR
+    async fn compile_source_to_ir(
+        &self,
+        source_path: &Path,
+        ir_path: &Path,
+        template_name: &str,
+    ) -> Result<()> {
+        let xwin_root = PathBuf::from("/root/.xwin");
+        let crt_include = xwin_root.join("crt/include");
+        let sdk_ucrt_include = xwin_root.join("sdk/include/ucrt");
+        let sdk_shared_include = xwin_root.join("sdk/include/shared");
+        let sdk_um_include = xwin_root.join("sdk/include/um");
+        let sdk_winrt_include = xwin_root.join("sdk/include/winrt");
+
+        let args = vec![
+            "-target",
+            "x86_64-pc-windows-msvc",
+            "-isystem",
+            crt_include.to_str().unwrap(),
+            "-isystem",
+            sdk_ucrt_include.to_str().unwrap(),
+            "-isystem",
+            sdk_shared_include.to_str().unwrap(),
+            "-isystem",
+            sdk_um_include.to_str().unwrap(),
+            "-isystem",
+            sdk_winrt_include.to_str().unwrap(),
+            "-S",             // Emit assembly (LLVM IR in this case)
+            "-emit-llvm",     // Output LLVM IR instead of native assembly
+            "-O0",            // No optimization to preserve all instructions for mutation
+            "-o",
+            ir_path.to_str().unwrap(),
+            source_path.to_str().unwrap(),
+        ];
+
+        info!("Compiling source → IR: clang {}", args.join(" "));
+
+        let output = tokio::process::Command::new("clang")
+            .args(&args)
+            .output()
+            .await
+            .context("Failed to execute clang for IR generation")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Clang IR generation failed:\n{}", stderr);
+        }
+
+        Ok(())
+    }
+
+    /// Compile LLVM IR to executable
+    async fn compile_ir_to_exe(
+        &self,
+        ir_path: &Path,
+        exe_path: &Path,
+        template_name: &str,
+    ) -> Result<()> {
+        let xwin_root = PathBuf::from("/root/.xwin");
+        let crt_lib = xwin_root.join("crt/lib/x86_64");
+        let sdk_ucrt_lib = xwin_root.join("sdk/lib/ucrt/x86_64");
+        let sdk_um_lib = xwin_root.join("sdk/lib/um/x86_64");
+
+        let mut args = vec![
+            "-target",
+            "x86_64-pc-windows-msvc",
+            "-L",
+            crt_lib.to_str().unwrap(),
+            "-L",
+            sdk_ucrt_lib.to_str().unwrap(),
+            "-L",
+            sdk_um_lib.to_str().unwrap(),
+            "-fuse-ld=lld",
+            "-Wl,/subsystem:console",
+            "-O0",  // Keep -O0 to preserve mutated NOPs (don't optimize them out)
+            "-Wl,-defaultlib:libcmt",
+            "-Wl,-defaultlib:kernel32",
+        ];
+
+        // Add template-specific libraries
+        let extra_libs = get_template_libs(template_name);
+        for lib in extra_libs {
+            args.push(lib);
+        }
+
+        args.push("-o");
+        args.push(exe_path.to_str().unwrap());
+        args.push(ir_path.to_str().unwrap());
+
+        info!("Compiling IR → EXE: clang {}", args.join(" "));
+
+        let output = tokio::process::Command::new("clang")
+            .args(&args)
+            .output()
+            .await
+            .context("Failed to execute clang for linking")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Clang linking failed:\n{}", stderr);
+        }
+
+        Ok(())
     }
 
     /// Get Clang version for metadata
