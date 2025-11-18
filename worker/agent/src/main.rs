@@ -290,7 +290,10 @@ impl WorkerAgent for WorkerAgentService {
         );
         let rededr_guard = RedEdrGuard::new(collector);
 
-        // 3. Sanity check: RedEDR should be clean (no leftover events from previous run)
+        // 3. Extract artifact filename for tracing (do this BEFORE sanity check)
+        let artifact_name = format!("{}.exe", req.artifact_id);
+
+        // 4. Sanity check: RedEDR should be clean (no leftover events from previous run)
         info!("Performing pre-run sanity check: RedEDR should be empty");
         let pre_run_events = rededr_guard
             .collector()
@@ -298,7 +301,9 @@ impl WorkerAgent for WorkerAgentService {
             .await
             .map_err(|e| Status::internal(format!("Failed to check RedEDR state: {}", e)))?;
 
-        if !pre_run_events.is_empty() {
+        let had_contamination = !pre_run_events.is_empty();
+
+        if had_contamination {
             let leftover_count = pre_run_events.len();
             warn!(
                 "⚠️  SANITY CHECK FAILED: Found {} leftover events in RedEDR before starting new run!",
@@ -342,8 +347,26 @@ impl WorkerAgent for WorkerAgentService {
                 );
             }
 
-            // Force reset RedEDR to clear contamination
-            warn!("Force-resetting RedEDR to clear contaminated state...");
+            // CRITICAL: Start tracing the NEW artifact BEFORE resetting
+            // This ensures RedEDR switches to watching the new process instead of the old one
+            info!(
+                "Setting RedEDR to trace new artifact: {} (before reset)",
+                artifact_name
+            );
+            if let Err(e) = rededr_guard
+                .collector()
+                .start_trace(vec![artifact_name.clone()])
+                .await
+            {
+                error!("Failed to set new trace target before reset: {}", e);
+                return Err(Status::internal(format!(
+                    "Failed to configure RedEDR trace target: {}",
+                    e
+                )));
+            }
+
+            // Force reset RedEDR to clear contamination (trace target already set above)
+            warn!("Force-resetting RedEDR to clear contaminated state (trace target already set)...");
             if let Err(e) = rededr_guard.collector().reset().await {
                 error!("Failed to force-reset RedEDR: {}", e);
                 return Err(Status::internal(format!(
@@ -351,25 +374,24 @@ impl WorkerAgent for WorkerAgentService {
                     e
                 )));
             }
-            info!("RedEDR force-reset completed. Proceeding with clean state.");
+            info!("RedEDR force-reset completed. Now watching: {}", artifact_name);
         } else {
             info!("✓ Pre-run sanity check passed: RedEDR is clean");
         }
 
-        // 4. Extract artifact filename for tracing
-        let artifact_name = format!("{}.exe", req.artifact_id);
+        // 5. Start RedEDR tracing if not already started (normal path when no contamination)
+        if !had_contamination {
+            rededr_guard
+                .collector()
+                .start_trace(vec![artifact_name.clone()])
+                .await
+                .map_err(|e| {
+                    error!("Failed to start RedEDR tracing: {}", e);
+                    Status::internal(format!("Failed to start RedEDR tracing: {}", e))
+                })?;
 
-        // 5. Start RedEDR tracing (guard ensures cleanup if this fails)
-        rededr_guard
-            .collector()
-            .start_trace(vec![artifact_name.clone()])
-            .await
-            .map_err(|e| {
-                error!("Failed to start RedEDR tracing: {}", e);
-                Status::internal(format!("Failed to start RedEDR tracing: {}", e))
-            })?;
-
-        info!("RedEDR tracing started for artifact: {}", artifact_name);
+            info!("RedEDR tracing started for artifact: {}", artifact_name);
+        }
 
         // 4. Spawn process with guard (guard ensures kill if error occurs)
         let child = tokio::process::Command::new(&artifact_path)
