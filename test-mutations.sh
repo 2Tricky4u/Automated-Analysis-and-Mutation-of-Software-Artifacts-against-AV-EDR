@@ -26,21 +26,34 @@ echo "   ✓ Size: $BASELINE_SIZE bytes"
 echo "   ✓ Mutations applied: []"
 echo ""
 
-# Test 2: Build with string XOR mutation
-echo "[2/4] Building artifact with ast.string_xor mutation..."
+# Test 2: Build with NOP insertion only
+echo "[2/5] Building artifact with llvm.nop_insert mutation..."
+NOP_RESPONSE=$(grpcurl -plaintext -import-path controller/proto -proto controller.proto -d '{"template_name":"rwx_direct","source_file":"rwx_direct.c","mutations":[{"id":"llvm.nop_insert","params":{"density":"0.5"}}]}' localhost:50051 edr.controller.Controller/BuildArtifact 2>&1)
+
+NOP_ID=$(echo "$NOP_RESPONSE" | jq -r '.artifact_id')
+NOP_SIZE=$(echo "$NOP_RESPONSE" | jq -r '.size_bytes')
+NOP_MUTATIONS=$(echo "$NOP_RESPONSE" | jq -r '.mutations_applied[]')
+
+echo "   ✓ NOP-inserted artifact: $NOP_ID"
+echo "   ✓ Size: $NOP_SIZE bytes (Δ = $((NOP_SIZE - BASELINE_SIZE)) bytes)"
+echo "   ✓ Mutations applied: [$NOP_MUTATIONS]"
+echo ""
+
+# Test 3: Build with string XOR mutation
+echo "[3/5] Building artifact with ast.string_xor mutation..."
 MUTATED_RESPONSE=$(grpcurl -plaintext -import-path controller/proto -proto controller.proto -d '{"template_name":"rwx_direct","source_file":"rwx_direct.c","mutations":[{"id":"ast.string_xor","params":{"xor_key":"0xAA"}}]}' localhost:50051 edr.controller.Controller/BuildArtifact 2>&1)
 
 MUTATED_ID=$(echo "$MUTATED_RESPONSE" | jq -r '.artifact_id')
 MUTATED_SIZE=$(echo "$MUTATED_RESPONSE" | jq -r '.size_bytes')
 MUTATIONS_APPLIED=$(echo "$MUTATED_RESPONSE" | jq -r '.mutations_applied[]')
 
-echo "   ✓ Mutated artifact: $MUTATED_ID"
+echo "   ✓ XOR-mutated artifact: $MUTATED_ID"
 echo "   ✓ Size: $MUTATED_SIZE bytes (Δ = $((MUTATED_SIZE - BASELINE_SIZE)) bytes)"
 echo "   ✓ Mutations applied: [$MUTATIONS_APPLIED]"
 echo ""
 
-# Test 3: Verify artifacts are different
-echo "[3/4] Verifying artifacts are different..."
+# Test 4: Verify artifacts are different
+echo "[4/5] Verifying artifacts are different..."
 if [ "$BASELINE_ID" = "$MUTATED_ID" ]; then
     echo "   ✗ ERROR: Artifact IDs are the same! Mutation had no effect."
     exit 1
@@ -49,8 +62,8 @@ else
 fi
 echo ""
 
-# Test 4: Build with multiple mutations
-echo "[4/4] Building artifact with multiple mutations..."
+# Test 5: Build with multiple mutations
+echo "[5/5] Building artifact with multiple mutations..."
 MULTI_RESPONSE=$(grpcurl -plaintext -import-path controller/proto -proto controller.proto -d '{"template_name":"rwx_direct","source_file":"rwx_direct.c","mutations":[{"id":"ast.string_xor","params":{"xor_key":"0x42"}},{"id":"llvm.nop_insert","params":{"density":"0.5"}}]}' localhost:50051 edr.controller.Controller/BuildArtifact 2>&1)
 
 MULTI_ID=$(echo "$MULTI_RESPONSE" | jq -r '.artifact_id')
@@ -68,6 +81,7 @@ echo "✓ All tests passed!"
 echo ""
 echo "Artifact IDs generated:"
 echo "  - Baseline:       $BASELINE_ID ($BASELINE_SIZE bytes)"
+echo "  - NOP insertion:  $NOP_ID ($NOP_SIZE bytes)"
 echo "  - String XOR:     $MUTATED_ID ($MUTATED_SIZE bytes)"
 echo "  - Multi-mutation: $MULTI_ID ($MULTI_SIZE bytes)"
 echo ""

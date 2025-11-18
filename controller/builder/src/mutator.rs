@@ -153,45 +153,70 @@ impl Mutator {
         let mut string_buf = String::new();
         let mut counter = 0;
 
+        // Track last 100 chars to detect #pragma context
+        let mut recent_chars = String::new();
+
         while let Some(ch) = chars.next() {
             if ch == '"' && !in_string {
                 // Start of string literal
                 in_string = true;
                 string_buf.clear();
             } else if ch == '"' && in_string {
-                // End of string literal - transform it
+                // End of string literal - check if we should transform it
                 in_string = false;
 
-                // Generate XOR-encoded array
-                let encoded: Vec<String> = string_buf
-                    .bytes()
-                    .map(|b| format!("0x{:02X}", b ^ xor_key))
-                    .collect();
+                // Skip XOR encoding for compile-time constant contexts:
+                // - #pragma directives (require compile-time string literals)
+                // - #include directives
+                // - Other preprocessor contexts
+                let should_skip = recent_chars.contains("#pragma")
+                    || recent_chars.contains("#include")
+                    || recent_chars.contains("#error")
+                    || recent_chars.contains("#warning");
 
-                // Append null terminator
-                let var_name = format!("xor_str_{}", counter);
-                counter += 1;
+                if should_skip {
+                    // Pass through original string literal
+                    output.push('"');
+                    output.push_str(&string_buf);
+                    output.push('"');
+                } else {
+                    // Generate XOR-encoded array
+                    let encoded: Vec<String> = string_buf
+                        .bytes()
+                        .map(|b| format!("0x{:02X}", b ^ xor_key))
+                        .collect();
 
-                // Replace inline string with XOR decode logic
-                // NOTE: This is a MINIMAL proof-of-concept. Real implementation would:
-                // - Track variable scope
-                // - Generate proper C code
-                // - Handle all string literal contexts
-                output.push_str(&format!(
-                    "/*XOR*/{{char {}[]={{{}}}; for(int i=0;i<{};i++){}[i]^=0x{:02X}; /*use {}*/}}",
-                    var_name,
-                    encoded.join(","),
-                    encoded.len(),
-                    var_name,
-                    xor_key,
-                    var_name
-                ));
+                    let var_name = format!("xor_str_{}", counter);
+                    counter += 1;
+
+                    // Replace inline string with XOR decode logic using GNU C statement expression
+                    // Statement expressions ({ ... }) allow us to execute code and return a value
+                    // This works in any expression context (printf args, function calls, etc.)
+                    output.push_str(&format!(
+                        "({{static char {}[]={{{}}}; static int init_{}=0; if(!init_{}){{for(int i=0;i<{};i++){}[i]^=0x{:02X}; init_{}=1;}} {};}})",
+                        var_name,
+                        encoded.join(","),
+                        var_name,
+                        var_name,
+                        encoded.len(),
+                        var_name,
+                        xor_key,
+                        var_name,
+                        var_name
+                    ));
+                }
             } else if in_string {
                 // Inside string literal - buffer it
                 string_buf.push(ch);
             } else {
-                // Outside string literal - pass through
+                // Outside string literal - pass through and track context
                 output.push(ch);
+                recent_chars.push(ch);
+
+                // Keep only last 100 chars for context detection
+                if recent_chars.len() > 100 {
+                    recent_chars.remove(0);
+                }
             }
         }
 
@@ -249,6 +274,9 @@ entry:
         assert!(applied.contains(&"ast.string_xor".to_string()));
         assert!(output_str.contains("xor_str_0"));
         assert!(output_str.contains("^=0x42"));
+        // Should use statement expression syntax ({ ... })
+        assert!(output_str.contains("({"));
+        assert!(output_str.contains("})"));
     }
 
     #[test]
