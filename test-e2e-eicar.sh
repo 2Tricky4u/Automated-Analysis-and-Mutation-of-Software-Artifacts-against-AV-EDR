@@ -62,13 +62,12 @@ echo ""
 # ============================================================================
 echo "[2/4] Deploying artifact to worker VM..."
 
-# Generate unique job ID
-JOB_ID="${JOB_PREFIX}-$(date +%s)"
+WORKER_ADDRESS="$WORKER_IP:$WORKER_PORT"
 
 DEPLOY_RESPONSE=$(grpcurl -plaintext \
   -import-path controller/proto \
   -proto controller.proto \
-  -d "{\"artifact_id\":\"$ARTIFACT_ID\",\"worker_id\":\"worker-01\",\"job_id\":\"$JOB_ID\"}" \
+  -d "{\"artifact_id\":\"$ARTIFACT_ID\",\"worker_address\":\"$WORKER_ADDRESS\"}" \
   $CONTROLLER_IP:$CONTROLLER_PORT \
   edr.controller.Controller/DeployArtifact 2>&1)
 
@@ -81,7 +80,7 @@ if ! echo "$DEPLOY_RESPONSE" | jq -e . >/dev/null 2>&1; then
 fi
 
 DEPLOY_STATUS=$(echo "$DEPLOY_RESPONSE" | jq -r '.success')
-WORKER_PATH=$(echo "$DEPLOY_RESPONSE" | jq -r '.worker_path // "unknown"')
+WORKER_PATH=$(echo "$DEPLOY_RESPONSE" | jq -r '.workerStoragePath // .worker_storage_path // "unknown"')
 
 if [ "$DEPLOY_STATUS" != "true" ]; then
     echo "   ✗ ERROR: Deployment failed"
@@ -90,7 +89,7 @@ if [ "$DEPLOY_STATUS" != "true" ]; then
 fi
 
 echo "   ✓ Artifact deployed to worker"
-echo "      Job ID:      $JOB_ID"
+echo "      Worker:      $WORKER_ADDRESS"
 echo "      Worker path: $WORKER_PATH"
 echo ""
 
@@ -100,6 +99,9 @@ echo ""
 echo "[3/4] Executing EICAR artifact on worker VM..."
 echo "   [WARNING] This will trigger AV/EDR detection!"
 echo ""
+
+# Generate unique job ID
+JOB_ID="${JOB_PREFIX}-$(date +%s)"
 
 # Execute with timeout (EICAR should be caught quickly)
 EXECUTE_RESPONSE=$(grpcurl -plaintext \
