@@ -566,28 +566,39 @@ impl WorkerAgent for WorkerAgentService {
         let stdout_output = stdout_handle.await.unwrap_or_default();
         let stderr_output = stderr_handle.await.unwrap_or_default();
 
-        // Log captured output (truncate if too long)
+        // Log captured output (show beginning and end, truncate middle if too long)
         if !stdout_output.is_empty() {
-            let truncated = if stdout_output.len() > 500 {
-                format!("{}... (truncated)", &stdout_output[..500])
+            let formatted = if stdout_output.len() > 1000 {
+                // Show first 400 chars and last 400 chars, truncate middle
+                let first_part = &stdout_output[..400];
+                let last_part = &stdout_output[stdout_output.len() - 400..];
+                format!(
+                    "{}\n\n... ({} bytes truncated) ...\n\n{}",
+                    first_part,
+                    stdout_output.len() - 800,
+                    last_part
+                )
             } else {
                 stdout_output.clone()
             };
-            info!("Process stdout: {}", truncated);
+            info!("Process stdout:\n{}", formatted);
         }
 
         if !stderr_output.is_empty() {
-            let truncated = if stderr_output.len() > 500 {
-                format!("{}... (truncated)", &stderr_output[..500])
+            let formatted = if stderr_output.len() > 1000 {
+                // Show first 400 chars and last 400 chars, truncate middle
+                let first_part = &stderr_output[..400];
+                let last_part = &stderr_output[stderr_output.len() - 400..];
+                format!(
+                    "{}\n\n... ({} bytes truncated) ...\n\n{}",
+                    first_part,
+                    stderr_output.len() - 800,
+                    last_part
+                )
             } else {
                 stderr_output.clone()
             };
-            warn!("Process stderr: {}", truncated);
-        }
-
-        // Stop monitoring gracefully (if not already stopped in timeout case)
-        if let Some(guard) = monitor_guard.take() {
-            guard.stop().await;
+            warn!("Process stderr:\n{}", formatted);
         }
 
         // ====================================================================
@@ -595,9 +606,15 @@ impl WorkerAgent for WorkerAgentService {
         // ====================================================================
         // Continue collecting telemetry for 10 seconds after process exit
         // This captures any late-arriving events (kernel buffer flush, EDR alerts, etc.)
+        // Keep monitor running during this window for diagnostic logging
         info!("Process exited. Waiting 10 seconds for late telemetry events...");
         tokio::time::sleep(Duration::from_secs(10)).await;
         info!("Telemetry collection window closed.");
+
+        // Stop monitoring AFTER telemetry window (if not already stopped in timeout/error case)
+        if let Some(guard) = monitor_guard.take() {
+            guard.stop().await;
+        }
 
         // ====================================================================
         // Phase 7: Collect telemetry and reset RedEDR (BEFORE final status)
