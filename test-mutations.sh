@@ -7,7 +7,7 @@ echo ""
 
 # Test 1: Build without mutations (baseline)
 echo "[1/4] Building baseline artifact (no mutations)..."
-BASELINE_RESPONSE=$(grpcurl -plaintext -d '{"template_name":"loader_v1","source_file":"loader_v1.c"}' localhost:50051 edr.controller.Controller/BuildArtifact 2>&1)
+BASELINE_RESPONSE=$(grpcurl -plaintext -import-path controller/proto -proto controller.proto -d '{"template_name":"rwx_direct","source_file":"rwx_direct.c"}' localhost:50051 edr.controller.Controller/BuildArtifact 2>&1)
 
 # Check if grpcurl succeeded
 if ! echo "$BASELINE_RESPONSE" | jq -e . >/dev/null 2>&1; then
@@ -28,7 +28,7 @@ echo ""
 
 # Test 2: Build with string XOR mutation
 echo "[2/4] Building artifact with ast.string_xor mutation..."
-MUTATED_RESPONSE=$(grpcurl -plaintext -d '{"template_name":"loader_v1","source_file":"loader_v1.c","mutations":[{"id":"ast.string_xor","params":{"xor_key":"0xAA"}}]}' localhost:50051 edr.controller.Controller/BuildArtifact 2>&1)
+MUTATED_RESPONSE=$(grpcurl -plaintext -import-path controller/proto -proto controller.proto -d '{"template_name":"rwx_direct","source_file":"rwx_direct.c","mutations":[{"id":"ast.string_xor","params":{"xor_key":"0xAA"}}]}' localhost:50051 edr.controller.Controller/BuildArtifact 2>&1)
 
 MUTATED_ID=$(echo "$MUTATED_RESPONSE" | jq -r '.artifact_id')
 MUTATED_SIZE=$(echo "$MUTATED_RESPONSE" | jq -r '.size_bytes')
@@ -51,7 +51,7 @@ echo ""
 
 # Test 4: Build with multiple mutations
 echo "[4/4] Building artifact with multiple mutations..."
-MULTI_RESPONSE=$(grpcurl -plaintext -d '{"template_name":"loader_v1","source_file":"loader_v1.c","mutations":[{"id":"ast.string_xor","params":{"xor_key":"0x42"}},{"id":"llvm.nop_insert","params":{"density":"0.5"}}]}' localhost:50051 edr.controller.Controller/BuildArtifact 2>&1)
+MULTI_RESPONSE=$(grpcurl -plaintext -import-path controller/proto -proto controller.proto -d '{"template_name":"rwx_direct","source_file":"rwx_direct.c","mutations":[{"id":"ast.string_xor","params":{"xor_key":"0x42"}},{"id":"llvm.nop_insert","params":{"density":"0.5"}}]}' localhost:50051 edr.controller.Controller/BuildArtifact 2>&1)
 
 MULTI_ID=$(echo "$MULTI_RESPONSE" | jq -r '.artifact_id')
 MULTI_SIZE=$(echo "$MULTI_RESPONSE" | jq -r '.size_bytes')
