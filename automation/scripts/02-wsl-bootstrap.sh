@@ -198,6 +198,19 @@ if ! command -v protoc &>/dev/null; then
     sudo mv protoc3/include/* /usr/local/include/
     cd -
     rm -rf "$TMPDIR"
+    echo "[OK] protoc installed"
+else
+    echo "[OK] protoc already installed"
+fi
+
+# grpcurl (for testing gRPC endpoints)
+if ! command -v grpcurl &>/dev/null; then
+    echo "[i] Installing grpcurl 1.8.6..."
+    curl -sSL https://github.com/fullstorydev/grpcurl/releases/download/v1.8.6/grpcurl_1.8.6_linux_x86_64.tar.gz | sudo tar -xz -C /usr/local/bin
+    sudo chmod +x /usr/local/bin/grpcurl
+    echo "[OK] grpcurl installed"
+else
+    echo "[OK] grpcurl already installed"
 fi
 
 # Parse config.yaml to get Elasticsearch settings
