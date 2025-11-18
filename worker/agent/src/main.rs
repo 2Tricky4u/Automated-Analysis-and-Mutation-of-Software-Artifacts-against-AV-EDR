@@ -512,7 +512,16 @@ impl WorkerAgent for WorkerAgentService {
         }
 
         // ====================================================================
-        // Phase 6: Collect telemetry and reset RedEDR (BEFORE final status)
+        // Phase 6: Post-exit telemetry window (10 seconds)
+        // ====================================================================
+        // Continue collecting telemetry for 10 seconds after process exit
+        // This captures any late-arriving events (kernel buffer flush, EDR alerts, etc.)
+        info!("Process exited. Waiting 10 seconds for late telemetry events...");
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        info!("Telemetry collection window closed.");
+
+        // ====================================================================
+        // Phase 7: Collect telemetry and reset RedEDR (BEFORE final status)
         // ====================================================================
 
         // Collect full telemetry batch

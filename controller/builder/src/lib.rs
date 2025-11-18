@@ -329,8 +329,7 @@ impl ArtifactBuilder {
                 .cloned()
                 .collect();
 
-            let (mutated_ir, llvm_applied) =
-                mutator::Mutator::apply(&ir_content, &llvm_mutations)?;
+            let (mutated_ir, llvm_applied) = mutator::Mutator::apply(&ir_content, &llvm_mutations)?;
             all_mutations_applied.extend(llvm_applied);
 
             // 4d. Write mutated IR
@@ -771,9 +770,9 @@ impl ArtifactBuilder {
             sdk_um_include.to_str().unwrap(),
             "-isystem",
             sdk_winrt_include.to_str().unwrap(),
-            "-S",             // Emit assembly (LLVM IR in this case)
-            "-emit-llvm",     // Output LLVM IR instead of native assembly
-            "-O0",            // No optimization to preserve all instructions for mutation
+            "-S",         // Emit assembly (LLVM IR in this case)
+            "-emit-llvm", // Output LLVM IR instead of native assembly
+            "-O0",        // No optimization to preserve all instructions for mutation
             "-o",
             ir_path.to_str().unwrap(),
             source_path.to_str().unwrap(),
@@ -818,7 +817,7 @@ impl ArtifactBuilder {
             sdk_um_lib.to_str().unwrap(),
             "-fuse-ld=lld",
             "-Wl,/subsystem:console",
-            "-O0",  // Keep -O0 to preserve mutated NOPs (don't optimize them out)
+            "-O0", // Keep -O0 to preserve mutated NOPs (don't optimize them out)
             "-Wl,-defaultlib:libcmt",
             "-Wl,-defaultlib:kernel32",
         ];
