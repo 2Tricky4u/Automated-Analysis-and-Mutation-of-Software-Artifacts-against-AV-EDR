@@ -316,7 +316,15 @@ foreach ($port in $ports) {
 }
 
 # 7. Port proxy
+# Note: Controller (gRPC) binds to 0.0.0.0, so it doesn't need portproxy
+# Only Elasticsearch and Kibana (running in WSL on 127.0.0.1) need portproxy
 foreach ($port in $ports) {
+    # Skip gRPC port - controller binds to 0.0.0.0 directly (portproxy breaks HTTP/2 framing from WSL)
+    #if ($port -eq $GrpcPort) {
+    #    Write-Info "Skipping port proxy for gRPC port $port (controller binds to 0.0.0.0 directly)"
+    #    continue
+    #}
+#
     netsh interface portproxy delete v4tov4 listenaddress=$HostIP listenport=$port 2>$null | Out-Null
     netsh interface portproxy add v4tov4 listenaddress=$HostIP listenport=$port `
         connectaddress=127.0.0.1 connectport=$port | Out-Null
