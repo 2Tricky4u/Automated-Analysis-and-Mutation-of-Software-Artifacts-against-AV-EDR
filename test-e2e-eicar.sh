@@ -12,7 +12,7 @@ CONTROLLER_PORT="50051"
 WORKER_IP="${WORKER_IP:-10.200.200.100}"  # Default worker IP, can override with env var
 WORKER_PORT="50052"
 TEMPLATE="eicar_test"
-SOURCE_FILE="eicar_test.c"
+SOURCE_FILE="eicar_auto.c"  # Non-interactive version (no getchar())
 JOB_PREFIX="eicar-e2e"
 
 echo "[CONFIG]"
