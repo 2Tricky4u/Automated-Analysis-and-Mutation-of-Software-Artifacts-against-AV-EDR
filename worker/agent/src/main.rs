@@ -290,10 +290,76 @@ impl WorkerAgent for WorkerAgentService {
         );
         let rededr_guard = RedEdrGuard::new(collector);
 
-        // 3. Extract artifact filename for tracing
+        // 3. Sanity check: RedEDR should be clean (no leftover events from previous run)
+        info!("Performing pre-run sanity check: RedEDR should be empty");
+        let pre_run_events = rededr_guard
+            .collector()
+            .collect_all("sanity-check")
+            .await
+            .map_err(|e| Status::internal(format!("Failed to check RedEDR state: {}", e)))?;
+
+        if !pre_run_events.is_empty() {
+            let leftover_count = pre_run_events.len();
+            warn!(
+                "⚠️  SANITY CHECK FAILED: Found {} leftover events in RedEDR before starting new run!",
+                leftover_count
+            );
+            warn!("This indicates the previous run did not reset properly.");
+            warn!(
+                "Sending contaminated events to controller with metadata: job_id=contaminated, artifact_id=unknown"
+            );
+
+            // Send contaminated events with special metadata
+            let contaminated_events: Vec<crate::edr::common::TelemetryData> = pre_run_events
+                .into_iter()
+                .map(|mut event| {
+                    // Override job_id and add metadata to mark as contaminated
+                    event.job_id = "contaminated".to_string();
+                    event
+                        .metadata
+                        .insert("artifact_id".to_string(), "unknown".to_string());
+                    event.metadata.insert(
+                        "run_id".to_string(),
+                        format!("contaminated-{}", chrono::Utc::now().timestamp()),
+                    );
+                    event
+                        .metadata
+                        .insert("contamination_detected".to_string(), "true".to_string());
+                    event
+                })
+                .collect();
+
+            // Send to controller (best effort - don't fail the current run if this fails)
+            if let Err(e) = self
+                .send_telemetry_batch_to_controller(contaminated_events)
+                .await
+            {
+                error!("Failed to send contaminated events to controller: {}", e);
+            } else {
+                info!(
+                    "Sent {} contaminated events to controller for debugging",
+                    leftover_count
+                );
+            }
+
+            // Force reset RedEDR to clear contamination
+            warn!("Force-resetting RedEDR to clear contaminated state...");
+            if let Err(e) = rededr_guard.collector().reset().await {
+                error!("Failed to force-reset RedEDR: {}", e);
+                return Err(Status::internal(format!(
+                    "RedEDR is contaminated and reset failed: {}",
+                    e
+                )));
+            }
+            info!("RedEDR force-reset completed. Proceeding with clean state.");
+        } else {
+            info!("✓ Pre-run sanity check passed: RedEDR is clean");
+        }
+
+        // 4. Extract artifact filename for tracing
         let artifact_name = format!("{}.exe", req.artifact_id);
 
-        // 3. Start RedEDR tracing (guard ensures cleanup if this fails)
+        // 5. Start RedEDR tracing (guard ensures cleanup if this fails)
         rededr_guard
             .collector()
             .start_trace(vec![artifact_name.clone()])
@@ -409,9 +475,22 @@ impl WorkerAgent for WorkerAgentService {
 
         let (exit_code, timed_out) = match exit_result {
             Ok(Ok(status)) => {
-                let code = status.code().unwrap_or(-1);
-                info!("Process exited with code: {}", code);
-                (code, false)
+                // Check if process exited normally or was killed
+                match status.code() {
+                    Some(code) => {
+                        info!("Process exited with code: {}", code);
+                        (code, false)
+                    }
+                    None => {
+                        // Process was terminated by signal/external kill (e.g., Windows Defender)
+                        // On Windows, this typically means AV/EDR killed it
+                        warn!(
+                            "Process was terminated externally (likely by AV/EDR) - no exit code available"
+                        );
+                        // Use distinctive exit code to indicate external termination
+                        (-2, false) // -2 = killed by external signal/AV
+                    }
+                }
             }
             Ok(Err(e)) => {
                 error!("Failed to wait for process: {}", e);
@@ -421,7 +500,7 @@ impl WorkerAgent for WorkerAgentService {
                     guard.stop().await;
                 }
 
-                (-1, false)
+                (-1, false) // -1 = wait() failed
             }
             Err(_) => {
                 // Timeout - kill process forcefully
@@ -559,6 +638,9 @@ impl WorkerAgent for WorkerAgentService {
             // Error exit code - provide detailed information
             // Windows NTSTATUS codes can be negative (signed) or positive (unsigned representation)
             let error_type = match exit_code {
+                // Special internal exit codes
+                -2 => "Killed by AV/EDR (external termination)",
+                -1 => "Process Wait Failed",
                 // Signed NTSTATUS codes (negative)
                 -1073741510 => "Access Violation (0xC0000005)",
                 -1073741819 => "Access Denied (0xC0000022)",

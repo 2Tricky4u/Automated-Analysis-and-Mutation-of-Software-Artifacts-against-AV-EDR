@@ -63,7 +63,7 @@ fn get_template_libs(template_name: &str) -> &'static [&'static str] {
         "rwx_direct" => &["-Wl,-defaultlib:advapi32", "-Wl,-defaultlib:wininet"],
         "process_injection" => &["-Wl,-defaultlib:user32"],
         "network_beacon" => &["-Wl,-defaultlib:ws2_32"],
-        "eicar_test" => &["-Wl,-defaultlib:advapi32"],  // GetUserNameA requires advapi32.lib
+        "eicar_test" => &["-Wl,-defaultlib:advapi32"], // GetUserNameA requires advapi32.lib
         _ => {
             warn!("Unknown template '{}', using no extra libs", template_name);
             &[]
