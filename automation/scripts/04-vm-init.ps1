@@ -985,13 +985,13 @@ if ($proc) {
     Write-Info    "Stop        : .\Start-RedEDR-SYSTEM.ps1 -StopOnly"
     Write-Host ""
     Write-Info "Telemetry channels active:"
-    Write-Host "  [✓] ETW kernel providers (process, thread, network, registry, file)" -ForegroundColor Green
-    Write-Host "  [✓] ETW-TI (stack traces, image loads, thread context)" -ForegroundColor Green
-    Write-Host "  [✓] Kernel hooks (syscall interception)" -ForegroundColor Green
-    Write-Host "  [✓] Security-Auditing events (audit policy enabled)" -ForegroundColor Green
+    Write-Host "  [checkmark] ETW kernel providers - process, thread, network, registry, file" -ForegroundColor Green
+    Write-Host "  [checkmark] ETW-TI - stack traces, image loads, thread context" -ForegroundColor Green
+    Write-Host "  [checkmark] Kernel hooks - syscall interception" -ForegroundColor Green
+    Write-Host "  [checkmark] Security-Auditing events - audit policy enabled" -ForegroundColor Green
 } else {
     Write-Warn "RedEDR process not detected."
-    Write-Info "Check Task Scheduler (taskschd.msc) → Task '$TaskName' → History for details."
+    Write-Info "Check Task Scheduler (taskschd.msc) - Task '$TaskName' - History for details."
     Write-Info "Common issues:"
     Write-Info "  - ETW-TI requires ELAM driver (check driver installation)"
     Write-Info "  - Kernel hooks require testsigning on (bcdedit /set testsigning on)"
