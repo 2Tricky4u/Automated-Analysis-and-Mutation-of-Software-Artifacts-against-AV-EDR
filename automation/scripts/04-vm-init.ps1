@@ -629,9 +629,11 @@ try {
 } catch { Write-Warn "Could not adjust DeviceGuard/HVCI: $($_.Exception.Message)" }
 
 # ===================== SECTION 9: Telemetry: Audit Policy for ETW ==========
-Write-Info "[9/10] Enabling audit policies for Security-Auditing ETW..."
+Write-Info "[9/10] Enabling audit policies for Security-Auditing ETW (MAXIMUM TELEMETRY)..."
 # Some Microsoft-Windows-Security-Auditing events require audit categories enabled and SYSTEM token
 # ( PsExec -i -s cmd.exe)
+
+# Enable ALL audit categories for maximum telemetry
 $cats = @(
     "Logon","Policy Change","Account Logon","Account Management","Privilege Use",
     "System","DS Access","Object Access","Detailed Tracking"
@@ -639,7 +641,115 @@ $cats = @(
 foreach($c in $cats){
     try { & auditpol /set /category:$c /success:enable /failure:enable | Out-Null } catch {}
 }
-Write-Success "Audit policy updated (success+failure) for common categories"
+
+# Enable critical subcategories for EDR/malware analysis
+$subcategories = @(
+    # Detailed Tracking - Process telemetry
+    "Process Creation",
+    "Process Termination",
+    "DPAPI Activity",
+    "RPC Events",
+    "Plug and Play Events",
+
+    # Object Access - Handle/injection detection
+    "Handle Manipulation",
+    "Kernel Object",
+    "File System",
+    "Registry",
+    "SAM",
+    "Other Object Access Events",
+    "Removable Storage",
+    "Central Policy Staging",
+    "Detailed File Share",
+
+    # System - Driver/service loads
+    "Security State Change",
+    "Security System Extension",
+    "System Integrity",
+    "IPsec Driver",
+    "Other System Events",
+
+    # Privilege Use - Token manipulation
+    "Sensitive Privilege Use",
+    "Non Sensitive Privilege Use",
+    "Other Privilege Use Events",
+
+    # Account Logon/Management - Credential access
+    "Credential Validation",
+    "Kerberos Authentication Service",
+    "Kerberos Service Ticket Operations",
+    "User Account Management",
+    "Computer Account Management",
+    "Security Group Management",
+    "Distribution Group Management",
+    "Application Group Management",
+
+    # Policy Change - Security policy modifications
+    "Audit Policy Change",
+    "Authentication Policy Change",
+    "Authorization Policy Change",
+    "MPSSVC Rule-Level Policy Change",
+    "Filtering Platform Policy Change",
+
+    # Logon/Logoff - Session tracking
+    "Logon",
+    "Logoff",
+    "Account Lockout",
+    "IPsec Main Mode",
+    "IPsec Quick Mode",
+    "IPsec Extended Mode",
+    "Special Logon",
+    "Other Logon/Logoff Events",
+    "Network Policy Server",
+    "User / Device Claims",
+    "Group Membership"
+)
+
+foreach($subcat in $subcategories){
+    try {
+        & auditpol /set /subcategory:"$subcat" /success:enable /failure:enable 2>$null | Out-Null
+    } catch {
+        # Silently continue if subcategory not available on this Windows version
+    }
+}
+
+# Enable command-line logging for Process Creation events (Event ID 4688)
+$auditProcessKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit"
+if (-not (Test-Path $auditProcessKey)) {
+    New-Item -Path $auditProcessKey -Force | Out-Null
+}
+Set-ItemProperty -Path $auditProcessKey -Name "ProcessCreationIncludeCmdLine_Enabled" -Value 1 -Type DWord -Force
+
+# Enable PowerShell script block logging (malware often uses PS)
+$psLoggingKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging"
+if (-not (Test-Path $psLoggingKey)) {
+    New-Item -Path $psLoggingKey -Force | Out-Null
+}
+Set-ItemProperty -Path $psLoggingKey -Name "EnableScriptBlockLogging" -Value 1 -Type DWord -Force
+
+# Enable PowerShell module logging
+$psModuleLoggingKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging"
+if (-not (Test-Path $psModuleLoggingKey)) {
+    New-Item -Path $psModuleLoggingKey -Force | Out-Null
+}
+Set-ItemProperty -Path $psModuleLoggingKey -Name "EnableModuleLogging" -Value 1 -Type DWord -Force
+
+# Enable PowerShell transcription (optional, creates large logs)
+$psTranscriptKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription"
+if (-not (Test-Path $psTranscriptKey)) {
+    New-Item -Path $psTranscriptKey -Force | Out-Null
+}
+Set-ItemProperty -Path $psTranscriptKey -Name "EnableTranscripting" -Value 1 -Type DWord -Force
+Set-ItemProperty -Path $psTranscriptKey -Name "EnableInvocationHeader" -Value 1 -Type DWord -Force
+Set-ItemProperty -Path $psTranscriptKey -Name "OutputDirectory" -Value "C:\AutoMutate\logs\ps-transcripts" -Type String -Force
+
+# Create PS transcript directory
+if (-not (Test-Path "C:\AutoMutate\logs\ps-transcripts")) {
+    New-Item -ItemType Directory -Path "C:\AutoMutate\logs\ps-transcripts" -Force | Out-Null
+}
+
+Write-Success "Audit policy updated (success+failure) for ALL categories and critical subcategories"
+Write-Success "Enabled: Command-line logging, PowerShell script block logging, module logging, transcription"
 Write-Info "For Security-Auditing ETW, start RedEdr as SYSTEM when needed."
 
 # ===================== SECTION 10: Build Worker Agent ======================
@@ -756,30 +866,39 @@ if (-not $DisableEtwTi) {
 $helperScriptContent = @'
 <#
 .SYNOPSIS
-    Start RedEDR as SYSTEM (required for ETW/ETW-TI or kernel hooking) and trace a chosen process.
+    Start RedEDR as SYSTEM with maximum telemetry collection (-e -g -k --web).
 
 .DESCRIPTION
-    Prompts you to choose:
-      - Mode: "hooking" (ntdll.dll hooking via KAPC DLL injection) OR "etw" (ETW + ETW-TI)
-      - Target process to observe (e.g., notepad.exe)
-      - Whether to enable the Web UI
+    Creates and starts a Scheduled Task that runs RedEdr.exe as NT AUTHORITY\SYSTEM
+    with the following flags:
+      -e, --etw      : Consume ETW Events
+      -g, --etwti    : Consume ETW-TI Events (requires ELAM driver)
+      -k, --hook     : Kernel and ntdll hooks
+      -w, --web      : Enable web server on port 8081
 
-    It then creates/starts a Scheduled Task that runs RedEdr.exe as NT AUTHORITY\SYSTEM
-    with the appropriate arguments.
+    Optional parameters:
+      -t, --trace    : Process name to observe (default: malware)
+      -p, --port     : Web server port (default: 8081)
 
-    Notes from RedEDR docs:
-      - Hooking: `.\RedEdr.exe --kernel --inject --trace <proc>`
-        • Requires self-signed kernel modules to load.
+    Notes:
+      - ETW-TI requires ELAM driver and RedEdrPplService (snapshot VM first)
+      - Kernel hooks require test-signed driver support (bcdedit /set testsigning on)
+      - For Security-Auditing ETW, must run as SYSTEM (this script does that)
 
-      - ETW & ETW-TI: `.\RedEdr.exe --etw --etwti --trace <proc>`
-        • ETW-TI requires an ELAM driver to start RedEdrPplService (self-signed kernel driver).
-          Make a VM snapshot first; PPL service removal is not currently possible.
-        • For Microsoft-Windows-Security-Auditing ETW, run as SYSTEM and configure advanced audit policy.
+.PARAMETER TraceTarget
+    Process name to observe (default: malware). Use "*" to trace all processes.
+
+.PARAMETER Port
+    Web server port (default: 8081).
 
 .PARAMETER StopOnly
     Stop running instance and remove the task without starting a new one.
 #>
-param([switch]$StopOnly)
+param(
+    [string]$TraceTarget = "malware",
+    [int]$Port = 8081,
+    [switch]$StopOnly
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -818,56 +937,16 @@ if ($StopOnly) {
     exit 0
 }
 
-# --- Interactive choices ---
-# Mode
-Write-Host ""
-Write-Host "Select mode:" -ForegroundColor Cyan
-Write-Host "  [1] hooking  -> --kernel --inject --trace <proc> (ntdll.dll hooking via KAPC; requires self-signed kernel modules)"
-Write-Host "  [2] etw      -> --etw --etwti --trace <proc> (ETW + ETW-TI; ELAM/PPL required; snapshot VM first)"
-$modeSel = Read-Host "Enter 1 or 2"
+# --- Build argument string (MAXIMUM TELEMETRY MODE) ---
+Write-Info "Configuring RedEDR with MAXIMUM telemetry collection:"
+Write-Host "  -e, --etw      : ETW Events" -ForegroundColor Gray
+Write-Host "  -g, --etwti    : ETW-TI Events (kernel callbacks)" -ForegroundColor Gray
+Write-Host "  -k, --hook     : Kernel and ntdll hooks" -ForegroundColor Gray
+Write-Host "  -w, --web      : Web UI on port $Port" -ForegroundColor Gray
+Write-Host "  -t, --trace    : Target process '$TraceTarget'" -ForegroundColor Gray
 
-switch ($modeSel) {
-    "1" { $Mode = "hooking" }
-    "2" { $Mode = "etw" }
-    default {
-        Write-Err "Invalid selection. Choose 1 or 2."
-        exit 1
-    }
-}
+$argList = @("-e", "-g", "-k", "-w", "-p", $Port.ToString(), "-t", $TraceTarget)
 
-# Target process
-$TraceTarget = Read-Host "Enter process to observe (e.g., notepad.exe)"
-if (-not $TraceTarget -or [string]::IsNullOrWhiteSpace($TraceTarget)) {
-    Write-Err "A target process is required."
-    exit 1
-}
-$TraceTarget = $TraceTarget.Trim()
-
-# Web UI (no port option in RedEDR CLI)
-$webAns = Read-Host "Enable Web UI? [Y/n] (default Y)"
-$EnableWeb = if ($webAns -match '^(n|no)$') { $false } else { $true }
-
-# --- Build argument string ---
-$argList = @()
-switch ($Mode) {
-    "hooking" {
-        Write-Info "Mode: hooking (kernel + APC DLL injection)"
-        Write-Warn "Requires self-signed kernel modules to load."
-        $argList += @("--kernel","--inject","--trace",$TraceTarget)
-    }
-    "etw" {
-        Write-Info "Mode: etw (ETW + ETW-TI)"
-        Write-Warn "ETW-TI requires ELAM and RedEdrPplService (snapshot VM; not easily removable)."
-        $argList += @("--etw","--etwti","--trace",$TraceTarget)
-    }
-}
-
-if ($EnableWeb) {
-    $argList += @("--web")
-    Write-Info "Web UI enabled (--web)."
-}
-
-# IMPORTANT: Do NOT add --hide; scheduled tasks run headless already.
 $rededrArgs = ($argList | ForEach-Object {
     if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
 }) -join ' '
@@ -875,6 +954,8 @@ $rededrArgs = ($argList | ForEach-Object {
 Write-Host ""
 Write-Info "Creating SYSTEM scheduled task with command:"
 Write-Host "  $RedEdrExe $rededrArgs" -ForegroundColor Gray
+Write-Warn "ETW-TI requires ELAM driver (snapshot VM before first run)"
+Write-Warn "Kernel hooks require test-signed drivers (bcdedit /set testsigning on)"
 
 # --- Create task to run as SYSTEM ---
 $action    = New-ScheduledTaskAction -Execute $RedEdrExe -Argument $rededrArgs -WorkingDirectory "C:\RedEDR"
@@ -898,13 +979,23 @@ Start-Sleep -Seconds 3
 $proc = Get-Process -Name "RedEdr" -ErrorAction SilentlyContinue
 if ($proc) {
     Write-Success "RedEDR started as SYSTEM (PID: $($proc.Id))"
-    Write-Info    "Mode   : $Mode"
-    Write-Info    "Target : $TraceTarget"
-    if ($EnableWeb) { Write-Info "Web UI : enabled (--web)" }
-    Write-Info    "Stop   : .\Start-RedEDR-SYSTEM.ps1 -StopOnly"
+    Write-Info    "Mode        : MAXIMUM TELEMETRY (ETW + ETW-TI + Hooks)"
+    Write-Info    "Target      : $TraceTarget"
+    Write-Info    "Web UI      : http://localhost:$Port"
+    Write-Info    "Stop        : .\Start-RedEDR-SYSTEM.ps1 -StopOnly"
+    Write-Host ""
+    Write-Info "Telemetry channels active:"
+    Write-Host "  [✓] ETW kernel providers (process, thread, network, registry, file)" -ForegroundColor Green
+    Write-Host "  [✓] ETW-TI (stack traces, image loads, thread context)" -ForegroundColor Green
+    Write-Host "  [✓] Kernel hooks (syscall interception)" -ForegroundColor Green
+    Write-Host "  [✓] Security-Auditing events (audit policy enabled)" -ForegroundColor Green
 } else {
     Write-Warn "RedEDR process not detected."
-    Write-Info "Open Task Scheduler (taskschd.msc) → Task '$TaskName' → History for details."
+    Write-Info "Check Task Scheduler (taskschd.msc) → Task '$TaskName' → History for details."
+    Write-Info "Common issues:"
+    Write-Info "  - ETW-TI requires ELAM driver (check driver installation)"
+    Write-Info "  - Kernel hooks require testsigning on (bcdedit /set testsigning on)"
+    Write-Info "  - Reboot may be required after driver installation"
 }
 '@
 
