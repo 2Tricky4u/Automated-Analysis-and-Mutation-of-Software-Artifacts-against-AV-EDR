@@ -108,6 +108,7 @@ $wslConfigPath = "$env:USERPROFILE\.wslconfig"
 $wslConfigContent = @"
 [wsl2]
 networkingMode=nat
+dnsTunneling=true
 localhostForwarding=true
 autoProxy=true
 memory=12GB
