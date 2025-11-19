@@ -752,81 +752,8 @@ Write-Success "Audit policy updated (success+failure) for ALL categories and cri
 Write-Success "Enabled: Command-line logging, PowerShell script block logging, module logging, transcription"
 Write-Info "For Security-Auditing ETW, start RedEdr as SYSTEM when needed."
 
-# ===================== SECTION 10: Build Worker Agent ======================
-Write-Info "[10/11] Building Worker Agent..."
-
-$buildDir = "C:\AutoMutate\build"
-$workerAgentDir = Join-Path $buildDir "worker\agent"
-
-if (Test-Path $workerAgentDir) {
-    Write-Info "Build sources found at: $buildDir"
-
-    try {
-        # Update PATH to include Rust and protoc
-        $env:Path = "$env:USERPROFILE\.cargo\bin;C:\protoc\bin;$env:Path"
-
-        # Verify build tools are available
-        $rustcPath = "$env:USERPROFILE\.cargo\bin\rustc.exe"
-        $protocPath = "C:\protoc\bin\protoc.exe"
-
-        if (-not (Test-Path $rustcPath)) {
-            Write-Warn "Rust not found at $rustcPath - build will be skipped"
-            Write-Info "Reboot may be required for PATH changes to take effect"
-        } elseif (-not (Test-Path $protocPath)) {
-            Write-Warn "protoc not found at $protocPath - build will be skipped"
-        } else {
-            Write-Info "Building worker agent (this may take 5-10 minutes on first build)..."
-
-            # Change to build directory
-            Push-Location $buildDir
-
-            # Build worker agent (release mode)
-            Write-Host "  Running: cargo build --release -p worker-agent" -ForegroundColor Gray
-            $buildOutput = cargo build --release -p worker-agent 2>&1
-            $buildExitCode = $LASTEXITCODE
-
-            if ($buildExitCode -eq 0) {
-                # Find the built binary
-                $agentBinary = Join-Path $buildDir "target\release\worker-agent.exe"
-
-                if (Test-Path $agentBinary) {
-                    # Copy to main AutoMutate directory
-                    $agentDest = "C:\AutoMutate\worker-agent.exe"
-                    Copy-Item $agentBinary $agentDest -Force
-
-                    Write-Success "Worker agent built successfully: $agentDest"
-                    Write-Info "Binary size: $((Get-Item $agentDest).Length / 1MB | ForEach-Object { '{0:N2}' -f $_ }) MB"
-                } else {
-                    Write-Warn "Build succeeded but binary not found at: $agentBinary"
-                    Write-Info "Check: $buildDir\target\release\"
-                }
-            } else {
-                Write-Warn "Worker agent build failed (exit code: $buildExitCode)"
-                Write-Info "Build output (last 20 lines):"
-                $buildOutput | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
-                Write-Info "You can retry the build manually after reboot:"
-                Write-Info "  cd $buildDir"
-                Write-Info "  cargo build --release -p worker-agent"
-            }
-
-            Pop-Location
-        }
-    } catch {
-        Write-Warn "Worker agent build error: $($_.Exception.Message)"
-        Write-Info "You can build manually after reboot:"
-        Write-Info "  cd $buildDir"
-        Write-Info "  cargo build --release -p worker-agent"
-    }
-} else {
-    Write-Info "Build sources not found at: $buildDir"
-    Write-Info "This is normal if running 04-vm-init.ps1 directly without initialize-worker.ps1"
-    Write-Info "To build worker agent later, copy source files to VM and run:"
-    Write-Info "  cd C:\AutoMutate\build"
-    Write-Info "  cargo build --release -p worker-agent"
-}
-
-# ===================== SECTION 11: Drivers/Services from Release ===========
-Write-Info "[11/11] Installing RedEdr drivers & services (ETW, Kernel, ETW-TI/PPL)..."
+# ===================== SECTION 10: Drivers/Services from Release ===========
+Write-Info "[10/10] Installing RedEdr drivers & services (ETW, Kernel, ETW-TI/PPL)..."
 
 # Attempt to install any driver *.inf shipped inside the release
 try {
@@ -1083,20 +1010,6 @@ $verificationResults += [PSCustomObject]@{
     Details   = if ($rededrPresent) { "Installed at C:\RedEdr" } else { "Missing RedEdr.exe" }
 }
 
-# Worker Agent binary
-$workerAgentExe = "C:\AutoMutate\worker-agent.exe"
-$workerAgentPresent = (Test-Path $workerAgentExe)
-$workerAgentDetails = if ($workerAgentPresent) {
-    "Built at C:\AutoMutate ($((Get-Item $workerAgentExe).Length / 1MB | ForEach-Object { '{0:N2}' -f $_ }) MB)"
-} else {
-    "Not built (build manually after reboot)"
-}
-$verificationResults += [PSCustomObject]@{
-    Component = "WorkerAgent"
-    Status    = if ($workerAgentPresent) { "OK" } else { "WARN" }
-    Details   = $workerAgentDetails
-}
-
 # Testsigning state
 try {
     $bcd = bcdedit /enum | Out-String
@@ -1175,16 +1088,17 @@ Write-Host "|  IMPORTANT for Hyper-V: Disable Secure Boot on the host VM.    |"
 Write-Host "|                                                                |"
 Write-Host "|  After reboot, you can:                                        |"
 Write-Host "|                                                                |"
-Write-Host "|  1. Start RedEdr telemetry collector:                         |"
+Write-Host "|  1. Start RedEdr telemetry collector (as SYSTEM):             |"
+Write-Host "|     Right-click desktop shortcut 'RedEDR (SYSTEM).lnk'        |"
+Write-Host "|     -> Run as Administrator                                    |"
+Write-Host "|                                                                |"
+Write-Host "|     OR manually:                                               |"
 Write-Host "|     cd C:\RedEdr                                               |"
-Write-Host "|     .\RedEdr.exe --all --web --hide --trace notepad.exe        |"
+Write-Host "|     .\Start-RedEDR-SYSTEM.ps1                                  |"
+Write-Host "|                                                                |"
 Write-Host "|     Then open http://localhost:$RedEDRPort".PadRight(64) "|"
 Write-Host "|                                                                |"
-Write-Host "|  2. Start Worker Agent (connects to controller):              |"
-Write-Host "|     cd C:\AutoMutate                                           |"
-Write-Host "|     `$env:WORKER_ID='$WorkerName'                               |"
-Write-Host "|     `$env:CONTROLLER_ADDR='10.200.200.1:50051'                  |"
-Write-Host "|     .\worker-agent.exe                                         |"
+Write-Host "|  2. Worker Agent will be deployed separately by controller     |"
 Write-Host "+================================================================+" -ForegroundColor Yellow
 
 if (-not $SkipReboot) {
