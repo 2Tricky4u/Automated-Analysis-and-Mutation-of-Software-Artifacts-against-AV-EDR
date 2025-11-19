@@ -457,22 +457,22 @@ foreach ($dir in $projectDirs) {
 }
 
 
-# ===================== SECTION 7: RedEdr with PPLRunner ==============
-Write-Info "[7/10] RedEdr with PPLRunner setup (extract from local zip)..."
+# ===================== SECTION 7: RedEdr ==============
+Write-Info "[7/10] RedEdr setup (extract from local zip)..."
 
-# RedEdrDeploy.zip should be pre-staged in the project's telemetry folder
-# This script expects it to be available at C:\AutoMutate\build\telemetry\RedEdrDeploy.zip
-$RedEdrSourceZip = "C:\AutoMutate\build\telemetry\RedEdrDeploy.zip"
-$RedEdrZip = "$env:TEMP\RedEdrDeploy.zip"
+# RedEdr zip should be pre-staged in the project's telemetry folder
+# This script expects it to be available at C:\AutoMutate\build\telemetry\RedEdr.zip
+$RedEdrSourceZip = "C:\AutoMutate\build\telemetry\RedEdr.zip"
+$RedEdrZip = "$env:TEMP\RedEdr.zip"
 $RedEdrRoot = "C:\RedEdr"   # only this path is supported
 
 try {
     # Check if source zip exists (should be copied by initialize-worker.ps1)
     if (-not (Test-Path $RedEdrSourceZip)) {
-        throw "RedEdrDeploy.zip not found at: $RedEdrSourceZip. Ensure initialize-worker.ps1 copied the build package."
+        throw "RedEdr.zip not found at: $RedEdrSourceZip. Ensure initialize-worker.ps1 copied the build package."
     }
 
-    Write-Info "Found RedEdrDeploy.zip in build package"
+    Write-Info "Found RedEdr.zip in build package"
     $sourceSize = (Get-Item $RedEdrSourceZip).Length
     Write-Info "Source file size: $([math]::Round($sourceSize/1MB, 2)) MB"
 
@@ -482,22 +482,22 @@ try {
         Remove-Item $RedEdrZip -Force
     }
 
-    Write-Info "Copying RedEdrDeploy.zip to temp location..."
+    Write-Info "Copying RedEdr.zip to temp location..."
     Copy-Item $RedEdrSourceZip $RedEdrZip -Force
 
     # Verify copied ZIP is valid
     $fileSize = (Get-Item $RedEdrZip).Length
     if ($fileSize -lt 100KB) {
-        throw "RedEdrDeploy.zip is too small ($fileSize bytes), file may be corrupted."
+        throw "RedEdr.zip is too small ($fileSize bytes), file may be corrupted."
     }
 
     # Verify ZIP signature (PK\x03\x04)
     $zipHeader = [System.IO.File]::ReadAllBytes($RedEdrZip)[0..3]
     if (-not ($zipHeader[0] -eq 0x50 -and $zipHeader[1] -eq 0x4B)) {
-        throw "RedEdrDeploy.zip is not a valid ZIP archive (missing PK signature)."
+        throw "RedEdr.zip is not a valid ZIP archive (missing PK signature)."
     }
 
-    Write-Success "RedEdrDeploy.zip validated ($([math]::Round($fileSize/1MB, 2)) MB)"
+    Write-Success "RedEdr.zip validated ($([math]::Round($fileSize/1MB, 2)) MB)"
 
     # Prepare installation directory
     if (Test-Path $RedEdrRoot) {
@@ -506,20 +506,20 @@ try {
     }
     New-Item -ItemType Directory -Path $RedEdrRoot -Force | Out-Null
 
-    # Extract RedEdrDeploy to temporary location first
+    # Extract RedEdr to temporary location first
     $tempExtractPath = "$env:TEMP\RedEdr_extract"
     if (Test-Path $tempExtractPath) {
         Remove-Item $tempExtractPath -Recurse -Force
     }
     New-Item -ItemType Directory -Path $tempExtractPath -Force | Out-Null
 
-    Write-Info "Extracting RedEdrDeploy.zip..."
+    Write-Info "Extracting RedEdr.zip..."
     Expand-Archive -Path $RedEdrZip -DestinationPath $tempExtractPath -Force
 
     # Check if ZIP contains a nested folder or direct files
     $extractedItems = Get-ChildItem $tempExtractPath
     if ($extractedItems.Count -eq 1 -and $extractedItems[0].PSIsContainer) {
-        # ZIP contains a single folder (e.g., RedEdrDeploy/), move its contents
+        # ZIP contains a single folder (e.g., RedEdr/), move its contents
         $nestedFolder = $extractedItems[0].FullName
         Write-Info "Moving contents from nested folder: $($extractedItems[0].Name)"
         Move-Item "$nestedFolder\*" $RedEdrRoot -Force
@@ -534,79 +534,29 @@ try {
 
     Write-Success "RedEdr extracted to $RedEdrRoot"
 
-    # Verify critical files exist
-    $criticalFiles = @{
-        "RedEdr.exe" = "Main RedEDR executable"
-        "ppl_runner.exe" = "PPLRunner service installer"
-        "elam_driver.sys" = "ELAM driver for PPL protection"
-        "RedEdrDriver.sys" = "Kernel driver"
-        "RedEdrDll.dll" = "Injection DLL"
-        "RedEdrPplService.exe" = "PPL service for ETW-TI"
-    }
-
-    $missingFiles = @()
-    foreach ($file in $criticalFiles.Keys) {
-        $filePath = Join-Path $RedEdrRoot $file
-        if (Test-Path $filePath) {
-            Write-Success "$file found: $($criticalFiles[$file])"
-        } else {
-            $missingFiles += $file
-            Write-Warn "$file MISSING: $($criticalFiles[$file])"
-        }
-    }
-
-    if ($missingFiles.Count -gt 0) {
-        Write-Warn "Some critical files are missing. Listing extracted contents:"
-        Get-ChildItem $RedEdrRoot | ForEach-Object { Write-Info "  $($_.Name)" }
-    }
-
-    # Install PPLRunner service
-    $pplRunnerExe = Join-Path $RedEdrRoot "ppl_runner.exe"
-    if (Test-Path $pplRunnerExe) {
-        Write-Info "Installing PPLRunner service..."
-        Push-Location $RedEdrRoot
-        try {
-            & .\ppl_runner.exe install 2>&1 | Out-Host
-            if ($LASTEXITCODE -eq 0) {
-                Write-Success "PPLRunner service installed successfully"
-
-                # Configure registry for maximum telemetry
-                Write-Info "Configuring PPLRunner registry for maximum telemetry..."
-                $commandLine = "C:\RedEdr\RedEdr.exe - e -g -k --web"
-                REG.exe ADD "HKLM\SOFTWARE\PPL_RUNNER" /ve /t REG_SZ /d $commandLine /f | Out-Null
-                Write-Success "Registry configured: $commandLine"
-
-                # Verify service exists
-                $svcCheck = sc.exe query ppl_runner 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Success "PPLRunner service verified (currently stopped)"
-                } else {
-                    Write-Warn "PPLRunner service not found after installation"
-                }
-            } else {
-                Write-Warn "PPLRunner installation may have failed (exit code: $LASTEXITCODE)"
-                Write-Info "Check if test signing is enabled (will be done in Section 8)"
-            }
-        } catch {
-            Write-Warn "PPLRunner installation error: $($_.Exception.Message)"
-            Write-Info "This is normal if test signing is not yet enabled"
-        } finally {
-            Pop-Location
-        }
+    # Verify main executable exists
+    $rededrExe = Join-Path $RedEdrRoot "RedEdr.exe"
+    if (Test-Path $rededrExe) {
+        $exeVersion = (Get-Item $rededrExe).VersionInfo.FileVersion
+        Write-Success "RedEdr.exe found at $RedEdrRoot (version: $exeVersion)"
     } else {
-        Write-Warn "ppl_runner.exe not found, cannot install service"
+        Write-Warn "RedEdr.exe not found at $RedEdrRoot"
+        Write-Info "Listing contents of ${RedEdrRoot}:"
+        Get-ChildItem $RedEdrRoot -Recurse | Select-Object -First 10 | ForEach-Object {
+            Write-Info "  $($_.FullName)"
+        }
     }
 
 } catch {
     Write-Err "Failed to install RedEdr: $($_.Exception.Message)"
     Write-Info ""
     Write-Info "Troubleshooting:"
-    Write-Info "  - Ensure RedEdrDeploy.zip exists in project root: <project>/telemetry/RedEdrDeploy.zip"
+    Write-Info "  - Ensure RedEdr.zip exists in project root: <project>/telemetry/RedEdr.zip"
     Write-Info "  - Verify initialize-worker.ps1 copied the full build package"
     Write-Info "  - Check source location: $RedEdrSourceZip"
     Write-Info ""
     Write-Info "Manual installation:"
-    Write-Info "  1. Place RedEdrDeploy.zip at: $RedEdrSourceZip"
+    Write-Info "  1. Place RedEdr.zip at: $RedEdrSourceZip"
     Write-Info "  2. Re-run this script"
 }
 
@@ -765,92 +715,71 @@ if (Test-Path $workerAgentDir) {
     Write-Info "  cargo build --release -p worker-agent"
 }
 
-# ===================== SECTION 11: PPLRunner Service Configuration =========
-Write-Info "[11/11] PPLRunner service configuration summary..."
+# ===================== SECTION 11: Drivers/Services from Release ===========
+Write-Info "[11/11] Installing RedEdr drivers & services (ETW, Kernel, ETW-TI/PPL)..."
 
-# Note: PPLRunner service was already installed in Section 7
-# The service is configured to run: C:\RedEdr\RedEdr.exe - e -g -k --web
-
+# Attempt to install any driver *.inf shipped inside the release
 try {
-    $svcCheck = sc.exe query ppl_runner 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Success "PPLRunner service configured and ready"
-        Write-Info "  Service name: ppl_runner"
-        Write-Info "  Command: C:\RedEdr\RedEdr.exe - e -g -k --web"
-        Write-Info "  Registry: HKLM\SOFTWARE\PPL_RUNNER"
-        Write-Info ""
-        Write-Info "Service will run RedEDR as PPL-protected SYSTEM process with:"
-        Write-Info "  - ETW events (Microsoft-Windows-Security-Auditing, etc.)"
-        Write-Info "  - ETW-TI events (Microsoft-Windows-Threat-Intelligence)"
-        Write-Info "  - Kernel callbacks (process, thread, image load)"
-        Write-Info "  - DLL injection (ntdll hooking via KAPC)"
-        Write-Info "  - Web UI on port $RedEDRPort"
-    } else {
-        Write-Warn "PPLRunner service not found"
-        Write-Info "This is expected if test signing is not yet enabled"
-        Write-Info "After reboot with test signing enabled, run:"
-        Write-Info "  cd C:\RedEdr"
-        Write-Info "  .\ppl_runner.exe install"
+    $infFiles = Get-ChildItem -Path $RedEdrRoot -Recurse -Include *.inf -ErrorAction SilentlyContinue
+    foreach($inf in $infFiles){
+        Write-Info "Installing driver from: $($inf.FullName)"
+        pnputil /add-driver "$($inf.FullName)" /install | Out-Null
     }
-} catch {
-    Write-Warn "Could not verify PPLRunner service: $($_.Exception.Message)"
-}
+    if ($infFiles.Count -gt 0) { Write-Success "Driver(s) installed via pnputil" }
+    else { Write-Info "No INF drivers found in release package" }
+} catch { Write-Warn "Driver install via pnputil failed: $($_.Exception.Message)" }
 
+# Register ETW-TI PPL service if present and not disabled
 if (-not $DisableEtwTi) {
-    Write-Info "ETW-TI will be available after reboot via PPLRunner/RedEdrPplService.exe"
+    # Heuristics: find a service binary likely named RedEdrPplService.exe
+    $pplCandidate = Get-ChildItem -Path $RedEdrRoot -Recurse -Include RedEdrPplService.exe, *PplService*.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($pplCandidate) {
+        try {
+            $svcName="RedEdrPplService"
+            if (-not (Get-Service -Name $svcName -ErrorAction SilentlyContinue)) {
+                sc.exe create $svcName binPath= "`"$($pplCandidate.FullName)`"" start= demand | Out-Null
+                sc.exe description $svcName "RedEdr ETW-TI PPL Service" | Out-Null
+                Write-Success "Created service $svcName"
+            } else { Write-Info "Service $svcName already exists" }
+
+            # ELAM registration typically occurs via driver/INF
+            Write-Info "If ETW-TI fails, ensure the ELAM driver from the release got installed (via INF) and reboot."
+        } catch { Write-Warn "Failed to create ETW-TI service: $($_.Exception.Message)" }
+    } else {
+        Write-Info "No PPL service binary found in release; ETW-TI may be unavailable until compiled."
+    }
 } else {
     Write-Info "ETW-TI setup skipped by request (-DisableEtwTi)."
 }
 
-# Copy PPLRunner launcher helper script to RedEDR directory
+# Copy SYSTEM launcher helper script to RedEDR directory
 $helperScriptContent = @'
 <#
 .SYNOPSIS
-    Start/Stop RedEDR as PPL-protected SYSTEM process using PPLRunner.
+    Start RedEDR as SYSTEM (required for ETW/ETW-TI or kernel hooking) and trace a chosen process.
 
 .DESCRIPTION
-    This script manages RedEDR execution through PPLRunner, which provides:
-      - SYSTEM privileges (access to all ETW providers)
-      - PPL (Protected Process Light) anti-tampering protection
-      - Maximum telemetry collection capability
+    Prompts you to choose:
+      - Mode: "hooking" (ntdll.dll hooking via KAPC DLL injection) OR "etw" (ETW + ETW-TI)
+      - Target process to observe (e.g., notepad.exe)
+      - Whether to enable the Web UI
 
-    RedEDR is pre-configured to run with: - e -g -k --web
-      - e -g -k  : Enable all telemetry (ETW, ETW-TI, Kernel callbacks, DLL injection)
-      --web  : Start web UI on http://localhost:8081
+    It then creates/starts a Scheduled Task that runs RedEdr.exe as NT AUTHORITY\SYSTEM
+    with the appropriate arguments.
 
-.PARAMETER Stop
-    Stop RedEDR (requires reboot or PPLRunner removal command).
+    Notes from RedEDR docs:
+      - Hooking: `.\RedEdr.exe --kernel --inject --trace <proc>`
+        • Requires self-signed kernel modules to load.
 
-.PARAMETER ConfigureOnly
-    Only update the registry configuration without starting the service.
+      - ETW & ETW-TI: `.\RedEdr.exe --etw --etwti --trace <proc>`
+        • ETW-TI requires an ELAM driver to start RedEdrPplService (self-signed kernel driver).
+          Make a VM snapshot first; PPL service removal is not currently possible.
+        • For Microsoft-Windows-Security-Auditing ETW, run as SYSTEM and configure advanced audit policy.
 
-.PARAMETER Command
-    Custom command line to execute (default: "C:\RedEdr\RedEdr.exe - e -g -k --web").
-
-.EXAMPLE
-    .\Start-RedEDR-PPL.ps1
-    Starts RedEDR with default configuration (all telemetry + web UI).
-
-.EXAMPLE
-    .\Start-RedEDR-PPL.ps1 -Command "C:\RedEdr\RedEdr.exe --etw --etwti --web"
-    Starts RedEDR with only ETW and ETW-TI (no kernel hooks or DLL injection).
-
-.EXAMPLE
-    .\Start-RedEDR-PPL.ps1 -Stop
-    Shows instructions to stop PPL-protected RedEDR.
-
-.NOTES
-    PPL Protection: RedEDR runs as a Protected Process Light and cannot be killed
-    by normal tools (Task Manager, Stop-Process, etc.). To stop it, you must either:
-      1. Reboot the system
-      2. Use PPLRunner removal command (see -Stop for instructions)
+.PARAMETER StopOnly
+    Stop running instance and remove the task without starting a new one.
 #>
-[CmdletBinding()]
-param(
-    [switch]$Stop,
-    [switch]$ConfigureOnly,
-    [string]$Command = "C:\RedEdr\RedEdr.exe - e -g -k --web"
-)
+param([switch]$StopOnly)
 
 $ErrorActionPreference = "Stop"
 
@@ -865,172 +794,138 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     exit 1
 }
 
-$RedEdrRoot = "C:\RedEdr"
-$RedEdrExe = "$RedEdrRoot\RedEdr.exe"
-$PPLRunnerExe = "$RedEdrRoot\ppl_runner.exe"
+$RedEdrExe = "C:\RedEDR\RedEdr.exe"
+$TaskName  = "AutoMutate-RedEDR-SYSTEM"
 
-# Verify installation
-Write-Info "Verifying RedEDR installation at: $RedEdrRoot"
+Write-Info "Verifying RedEDR binary at: $RedEdrExe"
 if (-not (Test-Path $RedEdrExe)) {
-    Write-Err "RedEdr.exe not found at $RedEdrExe"
-    Write-Info "Run 04-vm-init.ps1 to install RedEDR first"
+    Write-Err "RedEdr.exe not found. Install to C:\RedEDR first."
     exit 1
 }
 
-if (-not (Test-Path $PPLRunnerExe)) {
-    Write-Err "ppl_runner.exe not found at $PPLRunnerExe"
-    Write-Info "Ensure RedEdrDeploy.zip was properly extracted"
-    exit 1
+# --- Stop/clean existing ---
+$existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($existingTask) {
+    Write-Info "Stopping existing RedEDR scheduled task..."
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
+    Start-Sleep -Seconds 2
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 }
+Get-Process -Name "RedEdr" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-# --- Stop Mode ---
-if ($Stop) {
-    Write-Host ""
-    Write-Host "=== Stopping PPL-Protected RedEDR ===" -ForegroundColor Yellow
-    Write-Host ""
-
-    $rededrProc = Get-Process -Name "RedEdr" -ErrorAction SilentlyContinue
-    if (-not $rededrProc) {
-        Write-Info "RedEDR is not currently running"
-        exit 0
-    }
-
-    Write-Info "RedEDR is running as PPL-protected process (PID: $($rededrProc.Id))"
-    Write-Warn "Normal termination methods (Task Manager, Stop-Process) will fail"
-    Write-Host ""
-    Write-Host "Option 1: Reboot (recommended)" -ForegroundColor Cyan
-    Write-Host "  shutdown /r /t 0" -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "Option 2: Use PPLRunner removal command" -ForegroundColor Cyan
-    Write-Host "  REG.exe ADD `"HKLM\SOFTWARE\PPL_RUNNER`" /ve /t REG_SZ /d `"$PPLRunnerExe remove`" /f" -ForegroundColor Gray
-    Write-Host "  net start ppl_runner" -ForegroundColor Gray
-    Write-Host ""
-    Write-Info "This will use PPLRunner to remove itself and terminate RedEDR"
+if ($StopOnly) {
+    Write-Success "RedEDR stopped and task removed (-StopOnly)."
     exit 0
 }
 
-# --- Verify PPLRunner service exists ---
-Write-Info "Checking PPLRunner service status..."
-$svcCheck = sc.exe query ppl_runner 2>&1
-if ($LASTEXITCODE -ne 0 -and $svcCheck -match "does not exist") {
-    Write-Warn "PPLRunner service not installed"
-    Write-Info "Installing PPLRunner service..."
-
-    Push-Location $RedEdrRoot
-    try {
-        & .\ppl_runner.exe install 2>&1 | Out-Host
-        if ($LASTEXITCODE -eq 0) {
-            Write-Success "PPLRunner service installed"
-        } else {
-            Write-Err "PPLRunner installation failed (exit code: $LASTEXITCODE)"
-            Write-Info "Ensure test signing is enabled: bcdedit /set testsigning on"
-            Write-Info "Then reboot and run this script again"
-            exit 1
-        }
-    } finally {
-        Pop-Location
-    }
-} else {
-    Write-Success "PPLRunner service found"
-}
-
-# --- Configure Registry ---
-Write-Info "Configuring PPLRunner registry..."
-Write-Host "  Command: $Command" -ForegroundColor Gray
-
-REG.exe ADD "HKLM\SOFTWARE\PPL_RUNNER" /ve /t REG_SZ /d $Command /f | Out-Null
-if ($LASTEXITCODE -eq 0) {
-    Write-Success "Registry configured"
-} else {
-    Write-Err "Failed to configure registry"
-    exit 1
-}
-
-# Verify registry
-$regValue = (Get-ItemProperty -Path "HKLM:\SOFTWARE\PPL_RUNNER" -Name "(Default)" -ErrorAction SilentlyContinue).'(Default)'
-if ($regValue -eq $Command) {
-    Write-Success "Registry verification passed"
-} else {
-    Write-Warn "Registry value mismatch: Expected '$Command', Got '$regValue'"
-}
-
-if ($ConfigureOnly) {
-    Write-Info "Configuration complete (-ConfigureOnly specified)"
-    Write-Info "Run without -ConfigureOnly to start the service"
-    exit 0
-}
-
-# --- Start PPLRunner Service ---
+# --- Interactive choices ---
+# Mode
 Write-Host ""
-Write-Host "=== Starting RedEDR as PPL ===(" -ForegroundColor Cyan
-Write-Info "Starting PPLRunner service..."
-Write-Info "PPLRunner will spawn RedEdr.exe as PPL-protected SYSTEM process"
+Write-Host "Select mode:" -ForegroundColor Cyan
+Write-Host "  [1] hooking  -> --kernel --inject --trace <proc> (ntdll.dll hooking via KAPC; requires self-signed kernel modules)"
+Write-Host "  [2] etw      -> --etw --etwti --trace <proc> (ETW + ETW-TI; ELAM/PPL required; snapshot VM first)"
+$modeSel = Read-Host "Enter 1 or 2"
 
-net start ppl_runner 2>&1 | Out-Host
+switch ($modeSel) {
+    "1" { $Mode = "hooking" }
+    "2" { $Mode = "etw" }
+    default {
+        Write-Err "Invalid selection. Choose 1 or 2."
+        exit 1
+    }
+}
 
-# Give it time to spawn RedEdr.exe
+# Target process
+$TraceTarget = Read-Host "Enter process to observe (e.g., notepad.exe)"
+if (-not $TraceTarget -or [string]::IsNullOrWhiteSpace($TraceTarget)) {
+    Write-Err "A target process is required."
+    exit 1
+}
+$TraceTarget = $TraceTarget.Trim()
+
+# Web UI (no port option in RedEDR CLI)
+$webAns = Read-Host "Enable Web UI? [Y/n] (default Y)"
+$EnableWeb = if ($webAns -match '^(n|no)$') { $false } else { $true }
+
+# --- Build argument string ---
+$argList = @()
+switch ($Mode) {
+    "hooking" {
+        Write-Info "Mode: hooking (kernel + APC DLL injection)"
+        Write-Warn "Requires self-signed kernel modules to load."
+        $argList += @("--kernel","--inject","--trace",$TraceTarget)
+    }
+    "etw" {
+        Write-Info "Mode: etw (ETW + ETW-TI)"
+        Write-Warn "ETW-TI requires ELAM and RedEdrPplService (snapshot VM; not easily removable)."
+        $argList += @("--etw","--etwti","--trace",$TraceTarget)
+    }
+}
+
+if ($EnableWeb) {
+    $argList += @("--web")
+    Write-Info "Web UI enabled (--web)."
+}
+
+# IMPORTANT: Do NOT add --hide; scheduled tasks run headless already.
+$rededrArgs = ($argList | ForEach-Object {
+    if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
+}) -join ' '
+
+Write-Host ""
+Write-Info "Creating SYSTEM scheduled task with command:"
+Write-Host "  $RedEdrExe $rededrArgs" -ForegroundColor Gray
+
+# --- Create task to run as SYSTEM ---
+$action    = New-ScheduledTaskAction -Execute $RedEdrExe -Argument $rededrArgs -WorkingDirectory "C:\RedEDR"
+$principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$settings  = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -DontStopOnIdleEnd `
+    -ExecutionTimeLimit (New-TimeSpan -Days 0) `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -RestartCount 999
+
+Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+
+# --- Start it ---
+Write-Info "Starting RedEDR as SYSTEM..."
+Start-ScheduledTask -TaskName $TaskName
 Start-Sleep -Seconds 3
 
-# --- Verify RedEDR is Running ---
-$rededrProc = Get-Process -Name "RedEdr" -ErrorAction SilentlyContinue
-$pplServiceProc = Get-Process -Name "RedEdrPplService" -ErrorAction SilentlyContinue
-
-Write-Host ""
-if ($rededrProc) {
-    Write-Success "RedEDR started successfully"
-    Write-Info "  Process: RedEdr.exe"
-    Write-Info "  PID: $($rededrProc.Id)"
-    Write-Info "  User: NT AUTHORITY\SYSTEM"
-    Write-Info "  Protection: PPL (Protected Process Light)"
-    Write-Info "  Command: $Command"
-
-    if ($pplServiceProc) {
-        Write-Info "  PPL Service: RedEdrPplService.exe (PID: $($pplServiceProc.Id))"
-    }
-
-    Write-Host ""
-    Write-Success "Web UI should be available at: http://localhost:8081" -ForegroundColor Green
-    Write-Host ""
-    Write-Info "Telemetry sources enabled: ETW, ETW-TI, Kernel Callbacks, DLL Injection"
-    Write-Host ""
-    Write-Warn "RedEDR is PPL-protected and cannot be terminated normally"
-    Write-Info "To stop: Run this script with -Stop flag"
-
+$proc = Get-Process -Name "RedEdr" -ErrorAction SilentlyContinue
+if ($proc) {
+    Write-Success "RedEDR started as SYSTEM (PID: $($proc.Id))"
+    Write-Info    "Mode   : $Mode"
+    Write-Info    "Target : $TraceTarget"
+    if ($EnableWeb) { Write-Info "Web UI : enabled (--web)" }
+    Write-Info    "Stop   : .\Start-RedEDR-SYSTEM.ps1 -StopOnly"
 } else {
-    Write-Warn "RedEDR process not detected after service start"
-    Write-Host ""
-    Write-Info "Troubleshooting steps:"
-    Write-Info "  1. Check PPLRunner service: sc query ppl_runner"
-    Write-Info "  2. Check Event Viewer: eventvwr.msc → Windows Logs → System"
-    Write-Info "  3. Use DebugView to see PPLRunner output: DbgView.exe (Sysinternals)"
-    Write-Info "  4. Verify test signing is enabled: bcdedit /enum | findstr testsigning"
-    Write-Host ""
-    Write-Info "Registry configuration:"
-    Write-Info "  Key: HKLM\SOFTWARE\PPL_RUNNER"
-    Write-Info "  Value: $Command"
+    Write-Warn "RedEDR process not detected."
+    Write-Info "Open Task Scheduler (taskschd.msc) → Task '$TaskName' → History for details."
 }
-
-Write-Host ""
 '@
 
 try {
-    $helperScript = Join-Path $RedEdrRoot "Start-RedEDR-PPL.ps1"
+    $helperScript = Join-Path $RedEdrRoot "Start-RedEDR-SYSTEM.ps1"
     $helperScriptContent | Out-File -FilePath $helperScript -Encoding UTF8 -Force
-    Write-Success "Created PPL launcher: $helperScript"
+    Write-Success "Created SYSTEM launcher: $helperScript"
 } catch {
-    Write-Warn "Could not create PPL launcher: $($_.Exception.Message)"
+    Write-Warn "Could not create SYSTEM launcher: $($_.Exception.Message)"
 }
 
-# Desktop shortcut pointing to PPL launcher (requires Admin)
+# Desktop shortcut pointing to SYSTEM launcher (requires Admin)
 try {
     $WScriptShell = New-Object -ComObject WScript.Shell
-    $Shortcut = $WScriptShell.CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Start RedEDR (PPL).lnk")
+    $Shortcut = $WScriptShell.CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\RedEDR (SYSTEM).lnk")
     $Shortcut.TargetPath = "powershell.exe"
     $Shortcut.Arguments = "-ExecutionPolicy Bypass -NoProfile -File `"$helperScript`""
     $Shortcut.WorkingDirectory = $RedEdrRoot
     $Shortcut.IconLocation = "$rededrExe,0"
     $Shortcut.Save()
-    Write-Success "Desktop shortcut created: Start RedEDR (PPL).lnk"
+    Write-Success "Desktop shortcut created: RedEDR (SYSTEM).lnk"
     Write-Info "Right-click shortcut -> Run as Administrator to start RedEDR"
 } catch { Write-Warn "Could not create desktop shortcut: $($_.Exception.Message)" }
 
@@ -1091,24 +986,10 @@ $verificationResults += [PSCustomObject]@{
 
 # RedEdr presence
 $rededrPresent = (Test-Path $rededrExe)
-$pplRunnerPresent = (Test-Path (Join-Path $RedEdrRoot "ppl_runner.exe"))
 $verificationResults += [PSCustomObject]@{
     Component = "RedEdr"
-    Status    = if ($rededrPresent -and $pplRunnerPresent) { "OK" } else { "FAIL" }
-    Details   = if ($rededrPresent -and $pplRunnerPresent) { "Deployed with PPLRunner" } elseif ($rededrPresent) { "Missing PPLRunner" } else { "Missing RedEdr.exe" }
-}
-
-# PPLRunner service
-try {
-    $pplSvcCheck = sc.exe query ppl_runner 2>&1
-    $pplSvcInstalled = ($LASTEXITCODE -eq 0)
-    $verificationResults += [PSCustomObject]@{
-        Component = "PPLRunner"
-        Status    = if ($pplSvcInstalled) { "OK" } else { "WARN" }
-        Details   = if ($pplSvcInstalled) { "Service installed (stopped)" } else { "Service not installed (needs test signing + reboot)" }
-    }
-} catch {
-    $verificationResults += [PSCustomObject]@{ Component="PPLRunner"; Status="WARN"; Details="Could not verify service" }
+    Status    = if ($rededrPresent) { "OK" } else { "FAIL" }
+    Details   = if ($rededrPresent) { "Installed at C:\RedEdr" } else { "Missing RedEdr.exe" }
 }
 
 # Worker Agent binary
@@ -1203,18 +1084,10 @@ Write-Host "|  IMPORTANT for Hyper-V: Disable Secure Boot on the host VM.    |"
 Write-Host "|                                                                |"
 Write-Host "|  After reboot, you can:                                        |"
 Write-Host "|                                                                |"
-Write-Host "|  1. Start RedEDR via PPLRunner (maximum telemetry):           |"
-Write-Host "|     Method A: Use desktop shortcut (right-click -> Run as Admin)|"
-Write-Host "|       'Start RedEDR (PPL).lnk' on Desktop                     |"
-Write-Host "|                                                                |"
-Write-Host "|     Method B: Use PowerShell script                           |"
-Write-Host "|       cd C:\RedEdr                                             |"
-Write-Host "|       .\Start-RedEDR-PPL.ps1                                   |"
-Write-Host "|                                                                |"
-Write-Host "|     Method C: Start manually via PPLRunner service            |"
-Write-Host "|       net start ppl_runner                                     |"
-Write-Host "|                                                                |"
-Write-Host "|     Web UI: http://localhost:$RedEDRPort".PadRight(64) "|"
+Write-Host "|  1. Start RedEdr telemetry collector:                         |"
+Write-Host "|     cd C:\RedEdr                                               |"
+Write-Host "|     .\RedEdr.exe --all --web --hide --trace notepad.exe        |"
+Write-Host "|     Then open http://localhost:$RedEDRPort".PadRight(64) "|"
 Write-Host "|                                                                |"
 Write-Host "|  2. Start Worker Agent (connects to controller):              |"
 Write-Host "|     cd C:\AutoMutate                                           |"
