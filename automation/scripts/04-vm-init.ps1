@@ -572,7 +572,7 @@ try {
 
                 # Configure registry for maximum telemetry
                 Write-Info "Configuring PPLRunner registry for maximum telemetry..."
-                $commandLine = "C:\RedEdr\RedEdr.exe --all --web"
+                $commandLine = "C:\RedEdr\RedEdr.exe - e -g -k --web"
                 REG.exe ADD "HKLM\SOFTWARE\PPL_RUNNER" /ve /t REG_SZ /d $commandLine /f | Out-Null
                 Write-Success "Registry configured: $commandLine"
 
@@ -769,14 +769,14 @@ if (Test-Path $workerAgentDir) {
 Write-Info "[11/11] PPLRunner service configuration summary..."
 
 # Note: PPLRunner service was already installed in Section 7
-# The service is configured to run: C:\RedEdr\RedEdr.exe --all --web
+# The service is configured to run: C:\RedEdr\RedEdr.exe - e -g -k --web
 
 try {
     $svcCheck = sc.exe query ppl_runner 2>&1
     if ($LASTEXITCODE -eq 0) {
         Write-Success "PPLRunner service configured and ready"
         Write-Info "  Service name: ppl_runner"
-        Write-Info "  Command: C:\RedEdr\RedEdr.exe --all --web"
+        Write-Info "  Command: C:\RedEdr\RedEdr.exe - e -g -k --web"
         Write-Info "  Registry: HKLM\SOFTWARE\PPL_RUNNER"
         Write-Info ""
         Write-Info "Service will run RedEDR as PPL-protected SYSTEM process with:"
@@ -814,8 +814,8 @@ $helperScriptContent = @'
       - PPL (Protected Process Light) anti-tampering protection
       - Maximum telemetry collection capability
 
-    RedEDR is pre-configured to run with: --all --web
-      --all  : Enable all telemetry (ETW, ETW-TI, Kernel callbacks, DLL injection)
+    RedEDR is pre-configured to run with: - e -g -k --web
+      - e -g -k  : Enable all telemetry (ETW, ETW-TI, Kernel callbacks, DLL injection)
       --web  : Start web UI on http://localhost:8081
 
 .PARAMETER Stop
@@ -825,7 +825,7 @@ $helperScriptContent = @'
     Only update the registry configuration without starting the service.
 
 .PARAMETER Command
-    Custom command line to execute (default: "C:\RedEdr\RedEdr.exe --all --web").
+    Custom command line to execute (default: "C:\RedEdr\RedEdr.exe - e -g -k --web").
 
 .EXAMPLE
     .\Start-RedEDR-PPL.ps1
@@ -849,7 +849,7 @@ $helperScriptContent = @'
 param(
     [switch]$Stop,
     [switch]$ConfigureOnly,
-    [string]$Command = "C:\RedEdr\RedEdr.exe --all --web"
+    [string]$Command = "C:\RedEdr\RedEdr.exe - e -g -k --web"
 )
 
 $ErrorActionPreference = "Stop"
