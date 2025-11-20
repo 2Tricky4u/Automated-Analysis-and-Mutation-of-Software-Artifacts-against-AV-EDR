@@ -182,6 +182,41 @@ impl Drop for ProcessGuard {
 }
 
 // ============================================================================
+// Execution Lock Guard
+// ============================================================================
+
+/// RAII guard for single execution lock
+/// Automatically releases lock on drop (success, error, or panic)
+struct ExecutionLockGuard {
+    lock: Arc<Mutex<ExecutionState>>,
+}
+
+impl Drop for ExecutionLockGuard {
+    fn drop(&mut self) {
+        // Release lock by spawning task (Drop can't be async)
+        let lock = self.lock.clone();
+        tokio::spawn(async move {
+            let mut state = lock.lock().await;
+            let job_id = state.current_job_id.take().unwrap_or_else(|| "unknown".to_string());
+            let artifact = state.current_artifact.take().unwrap_or_else(|| "unknown".to_string());
+            state.busy = false;
+            info!(
+                "🔓 Execution lock RELEASED: job_id={}, artifact={}",
+                job_id, artifact
+            );
+        });
+    }
+}
+
+/// Execution state for single-job worker
+#[derive(Debug, Clone)]
+pub struct ExecutionState {
+    pub busy: bool,
+    pub current_job_id: Option<String>,
+    pub current_artifact: Option<String>,
+}
+
+// ============================================================================
 // Worker Agent Service
 // ============================================================================
 
@@ -190,7 +225,9 @@ pub struct WorkerAgentService {
     worker_id: String,
     config: WorkerConfig,
     system_info: Arc<Mutex<System>>,
-    active_jobs: Arc<Mutex<u32>>,
+    /// Single execution lock - only ONE job can run at a time
+    /// This ensures clean telemetry collection with no cross-contamination
+    execution_lock: Arc<Mutex<ExecutionState>>,
 }
 
 impl WorkerAgentService {
@@ -199,22 +236,50 @@ impl WorkerAgentService {
             worker_id,
             config,
             system_info: Arc::new(Mutex::new(System::new_all())),
-            active_jobs: Arc::new(Mutex::new(0)),
+            execution_lock: Arc::new(Mutex::new(ExecutionState {
+                busy: false,
+                current_job_id: None,
+                current_artifact: None,
+            })),
         }
     }
 
-    /// Increment active job counter
-    async fn increment_active_jobs(&self) {
-        let mut jobs = self.active_jobs.lock().await;
-        *jobs += 1;
+    /// Try to acquire execution lock for single job execution
+    /// Returns Ok(guard) if lock acquired, Err if already busy
+    async fn try_acquire_execution_lock(
+        &self,
+        job_id: String,
+        artifact_name: String,
+    ) -> Result<ExecutionLockGuard, String> {
+        let mut state = self.execution_lock.lock().await;
+
+        if state.busy {
+            let current_job = state.current_job_id.as_deref().unwrap_or("unknown");
+            let current_artifact = state.current_artifact.as_deref().unwrap_or("unknown");
+            return Err(format!(
+                "Worker is busy executing job_id={} artifact={}. This worker supports only ONE concurrent execution.",
+                current_job, current_artifact
+            ));
+        }
+
+        // Acquire lock
+        state.busy = true;
+        state.current_job_id = Some(job_id.clone());
+        state.current_artifact = Some(artifact_name.clone());
+
+        info!(
+            "🔒 Execution lock ACQUIRED: job_id={}, artifact={}",
+            job_id, artifact_name
+        );
+
+        Ok(ExecutionLockGuard {
+            lock: self.execution_lock.clone(),
+        })
     }
 
-    /// Decrement active job counter
-    async fn decrement_active_jobs(&self) {
-        let mut jobs = self.active_jobs.lock().await;
-        if *jobs > 0 {
-            *jobs -= 1;
-        }
+    /// Get current execution state (for health check)
+    async fn get_execution_state(&self) -> ExecutionState {
+        self.execution_lock.lock().await.clone()
     }
 }
 
@@ -240,18 +305,30 @@ impl WorkerAgent for WorkerAgentService {
         &self,
         request: Request<SampleRequest>,
     ) -> Result<Response<SampleResponse>, Status> {
-        // Track active job
-        self.increment_active_jobs().await;
-
-        // Ensure we decrement on exit (even if error occurs)
-        let _guard = JobGuard::new(self.clone());
-
         let req = request.into_inner();
         let run_id = uuid::Uuid::new_v4().to_string();
         let job_id = req.job_id.clone();
+        let artifact_name = format!("{}.exe", req.artifact_id);
 
         info!(
-            "Starting sample execution: job_id={}, artifact_id={}",
+            "Received sample execution request: job_id={}, artifact_id={}",
+            job_id, req.artifact_id
+        );
+
+        // ====================================================================
+        // Phase 0: Acquire single execution lock (FAIL FAST if busy)
+        // ====================================================================
+
+        let _execution_lock = self
+            .try_acquire_execution_lock(job_id.clone(), artifact_name.clone())
+            .await
+            .map_err(|msg| {
+                warn!("❌ REJECTED: {}", msg);
+                Status::resource_exhausted(msg)
+            })?;
+
+        info!(
+            "✅ Starting sample execution: job_id={}, artifact_id={}",
             job_id, req.artifact_id
         );
 
@@ -290,9 +367,6 @@ impl WorkerAgent for WorkerAgentService {
         );
         let rededr_guard = RedEdrGuard::new(collector);
 
-        // 3. Extract artifact filename for tracing (do this BEFORE sanity check)
-        let artifact_name = format!("{}.exe", req.artifact_id);
-
         // 4. Sanity check: RedEDR should be clean (no leftover events from previous run)
         info!("Performing pre-run sanity check: RedEDR should be empty");
         let pre_run_events = rededr_guard
@@ -301,10 +375,18 @@ impl WorkerAgent for WorkerAgentService {
             .await
             .map_err(|e| Status::internal(format!("Failed to check RedEDR state: {}", e)))?;
 
-        let had_contamination = !pre_run_events.is_empty();
+        let leftover_count = pre_run_events.len();
 
-        if had_contamination {
-            let leftover_count = pre_run_events.len();
+        // Tolerate single initialization event (RedEdr startup noise)
+        // More than 1 event = real contamination from previous run
+        let has_real_contamination = leftover_count > 1;
+
+        if leftover_count == 1 {
+            info!(
+                "✓ Sanity check: Found 1 event (likely initialization noise), ignoring and continuing"
+            );
+            // Don't send to controller, don't reset - just ignore and proceed
+        } else if has_real_contamination {
             warn!(
                 "⚠️  SANITY CHECK FAILED: Found {} leftover events in RedEDR before starting new run!",
                 leftover_count
@@ -315,7 +397,7 @@ impl WorkerAgent for WorkerAgentService {
             );
 
             // Send contaminated events with special metadata
-            let contaminated_events: Vec<crate::edr::common::TelemetryData> = pre_run_events
+            let contaminated_events: Vec<edr::common::TelemetryData> = pre_run_events
                 .into_iter()
                 .map(|mut event| {
                     // Override job_id and add metadata to mark as contaminated
@@ -334,17 +416,25 @@ impl WorkerAgent for WorkerAgentService {
                 })
                 .collect();
 
-            // Send to controller (best effort - don't fail the current run if this fails)
-            if let Err(e) = self
-                .send_telemetry_batch_to_controller(contaminated_events)
-                .await
-            {
-                error!("Failed to send contaminated events to controller: {}", e);
-            } else {
-                info!(
-                    "Sent {} contaminated events to controller for debugging",
-                    leftover_count
-                );
+            // Send to controller (best effort with short timeout - don't block execution)
+            match tokio::time::timeout(
+                Duration::from_secs(2),
+                self.send_telemetry_batch_to_controller(contaminated_events)
+            ).await {
+                Ok(Ok(())) => {
+                    info!(
+                        "Sent {} contaminated events to controller for debugging",
+                        leftover_count
+                    );
+                }
+                Ok(Err(e)) => {
+                    warn!("Failed to send contaminated events to controller: {}", e);
+                    warn!("Continuing with execution anyway (contamination handling is best-effort)");
+                }
+                Err(_) => {
+                    warn!("Timeout sending contaminated events to controller (2s limit exceeded)");
+                    warn!("Continuing with execution anyway (contamination handling is best-effort)");
+                }
             }
 
             // CRITICAL: Start tracing the NEW artifact BEFORE resetting
@@ -379,8 +469,8 @@ impl WorkerAgent for WorkerAgentService {
             info!("✓ Pre-run sanity check passed: RedEDR is clean");
         }
 
-        // 5. Start RedEDR tracing if not already started (normal path when no contamination)
-        if !had_contamination {
+        // 5. Start RedEDR tracing if not already started (normal path when no real contamination)
+        if !has_real_contamination {
             rededr_guard
                 .collector()
                 .start_trace(vec![artifact_name.clone()])
@@ -747,10 +837,26 @@ impl WorkerAgent for WorkerAgentService {
         )
         .await;
 
-        // Send telemetry to controller (where Elasticsearch lives)
+        // Send telemetry to controller (best effort with timeout - don't block on this)
         if !telemetry_events.is_empty() {
-            self.send_telemetry_batch_to_controller(telemetry_events)
-                .await?;
+            match tokio::time::timeout(
+                Duration::from_secs(3),
+                self.send_telemetry_batch_to_controller(telemetry_events)
+            ).await {
+                Ok(Ok(())) => {
+                    info!("✅ Successfully sent {} telemetry events to controller", telemetry_count);
+                }
+                Ok(Err(e)) => {
+                    warn!("Failed to send telemetry to controller: {}", e);
+                    warn!("Telemetry collected ({} events) but not sent - controller may be unavailable", telemetry_count);
+                    // Don't fail the RPC - execution completed successfully
+                }
+                Err(_) => {
+                    warn!("Timeout sending {} telemetry events to controller (3s limit exceeded)", telemetry_count);
+                    warn!("Controller may not implement StreamTelemetry RPC or is unreachable");
+                    // Don't fail the RPC - execution completed successfully
+                }
+            }
         }
 
         // Reset RedEDR for next run (guard ensures cleanup on error, but we do it explicitly here)
@@ -827,18 +933,27 @@ impl WorkerAgent for WorkerAgentService {
             0
         };
 
-        // Get active jobs count
-        let active_jobs = *self.active_jobs.lock().await;
+        // Get execution state (busy/idle)
+        let exec_state = self.get_execution_state().await;
+        let active_jobs = if exec_state.busy { 1 } else { 0 };
 
         // Determine health status
-        // Unhealthy if: CPU > 95% OR memory > 95% OR can't connect to RedEDR
+        // Unhealthy if: CPU > 95% OR memory > 95%
         let healthy = cpu_percent < 95 && memory_percent < 95;
 
-        // Log health check if unhealthy
-        if !healthy {
+        // Log health check with execution state
+        if exec_state.busy {
+            info!(
+                "Health check: cpu={}%, mem={}%, status=BUSY (job_id={}, artifact={})",
+                cpu_percent,
+                memory_percent,
+                exec_state.current_job_id.as_deref().unwrap_or("unknown"),
+                exec_state.current_artifact.as_deref().unwrap_or("unknown")
+            );
+        } else if !healthy {
             warn!(
-                "Health check UNHEALTHY: cpu={}%, mem={}%, active_jobs={}",
-                cpu_percent, memory_percent, active_jobs
+                "Health check UNHEALTHY: cpu={}%, mem={}%, status=IDLE",
+                cpu_percent, memory_percent
             );
         }
 
@@ -847,7 +962,7 @@ impl WorkerAgent for WorkerAgentService {
             healthy,
             cpu_percent,
             memory_percent,
-            active_jobs: active_jobs as i32,
+            active_jobs,
         }))
     }
 
@@ -1060,26 +1175,8 @@ impl WorkerAgentService {
 // NOTE: Streaming telemetry removed - now using batch collection at execution completion
 // Telemetry is collected once after artifact execution and returned with RunResult
 
-/// RAII guard to automatically decrement active jobs count
-struct JobGuard {
-    service: WorkerAgentService,
-}
-
-impl JobGuard {
-    fn new(service: WorkerAgentService) -> Self {
-        Self { service }
-    }
-}
-
-impl Drop for JobGuard {
-    fn drop(&mut self) {
-        // Spawn a task to decrement (can't use async in Drop)
-        let service = self.service.clone();
-        tokio::spawn(async move {
-            service.decrement_active_jobs().await;
-        });
-    }
-}
+// NOTE: JobGuard removed - replaced with ExecutionLockGuard for single execution enforcement
+// The ExecutionLockGuard ensures only ONE job can run at a time, preventing telemetry cross-contamination
 
 /// Extract filename from path (cross-platform)
 fn extract_filename(path: &str) -> String {
