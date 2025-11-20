@@ -552,6 +552,7 @@ impl WorkerAgent for WorkerAgentService {
             pid,
             self.config.telemetry.rededr.base_url.clone(),
             self.config.controller.controller_address.clone(),
+            req.timeout_seconds,
         );
 
         let monitor_handle = tokio::spawn(async move {
@@ -714,31 +715,38 @@ impl WorkerAgent for WorkerAgentService {
         }
 
         // ====================================================================
-        // Phase 6: Post-exit telemetry window (10 seconds)
+        // Phase 6: Stop monitor and post-exit telemetry window (10 seconds)
         // ====================================================================
-        // Continue collecting telemetry for 10 seconds after process exit
-        // This captures any late-arriving events (kernel buffer flush, EDR alerts, etc.)
-        // Keep monitor running during this window for diagnostic logging
-        info!("Process exited. Waiting 10 seconds for late telemetry events...");
-        tokio::time::sleep(Duration::from_secs(10)).await;
-        info!("Telemetry collection window closed.");
-
-        // Stop monitoring AFTER telemetry window (if not already stopped in timeout/error case)
+        // Stop monitor BEFORE telemetry window to prevent duplicate status reports
+        // (Monitor would send "terminated" event while main execution sends final status)
         if let Some(guard) = monitor_guard.take() {
             guard.stop().await;
         }
+
+        // Continue collecting telemetry for 10 seconds after process exit
+        // This captures any late-arriving events (kernel buffer flush, EDR alerts, etc.)
+        info!("Process exited. Waiting 10 seconds for late telemetry events...");
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        info!("Telemetry collection window closed.");
 
         // ====================================================================
         // Phase 7: Collect telemetry and reset RedEDR (BEFORE final status)
         // ====================================================================
 
-        // Collect full telemetry batch
+        // Collect full telemetry batch (best effort - don't fail job if collection fails)
         info!("Collecting telemetry events from RedEDR...");
-        let telemetry_events = rededr_guard
+        let telemetry_events = match rededr_guard
             .collector()
             .collect_all(&job_id)
             .await
-            .map_err(|e| Status::internal(format!("Failed to collect telemetry: {}", e)))?;
+        {
+            Ok(events) => events,
+            Err(e) => {
+                error!("Failed to collect telemetry: {}", e);
+                error!("Continuing with empty telemetry - execution status will still be reported");
+                Vec::new() // Continue with empty telemetry instead of failing entire job
+            }
+        };
 
         let telemetry_count = telemetry_events.len() as i32;
         info!("Collected {} telemetry events", telemetry_count);

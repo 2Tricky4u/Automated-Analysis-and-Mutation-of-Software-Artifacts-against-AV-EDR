@@ -22,6 +22,7 @@ pub struct ExecutionMonitor {
     pub rededr_base_url: String,
     pub controller_address: String,
     pub start_time: Instant,
+    pub timeout_seconds: i32,
     client: reqwest::Client,
     sys: std::sync::Arc<tokio::sync::Mutex<sysinfo::System>>,
 }
@@ -36,6 +37,7 @@ impl ExecutionMonitor {
         pid: u32,
         rededr_base_url: String,
         controller_address: String,
+        timeout_seconds: i32,
     ) -> Self {
         use sysinfo::System;
 
@@ -49,6 +51,7 @@ impl ExecutionMonitor {
             rededr_base_url,
             controller_address,
             start_time: Instant::now(),
+            timeout_seconds,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(3))
                 .build()
@@ -114,7 +117,12 @@ impl ExecutionMonitor {
                             }
                             last_event_count = event_count;
 
-                            let event_type = if idle_count >= 3 && status.elapsed_seconds > 10 {
+                            // Detect approaching timeout (within 5 seconds of timeout threshold)
+                            let approaching_timeout = status.elapsed_seconds >= (self.timeout_seconds - 5);
+
+                            let event_type = if approaching_timeout && process_is_alive {
+                                "approaching_timeout".to_string()
+                            } else if idle_count >= 3 && status.elapsed_seconds > 10 {
                                 "stuck".to_string()
                             } else if process_is_alive {
                                 "heartbeat".to_string()
@@ -123,12 +131,13 @@ impl ExecutionMonitor {
                             };
 
                             let details = format!(
-                                "pid={}, events={}, cpu={}%, mem={}MB, elapsed={}s{}",
+                                "pid={}, events={}, cpu={}%, mem={}MB, elapsed={}s{}{}",
                                 status.pid,
                                 status.telemetry_events_count,
                                 status.cpu_percent,
                                 status.memory_mb,
                                 status.elapsed_seconds,
+                                if approaching_timeout { " [TIMEOUT APPROACHING]" } else { "" },
                                 if idle_count >= 3 { " [STUCK?]" } else { "" }
                             );
 
@@ -213,7 +222,7 @@ impl ExecutionMonitor {
         })
     }
 
-    /// Send status report to controller
+    /// Send status report to controller (with timeout to prevent blocking)
     async fn send_status_to_controller(
         &self,
         event_type: &str,
@@ -245,21 +254,23 @@ impl ExecutionMonitor {
             details: details.to_string(),
         };
 
-        // Try to connect and send status report
-        match ControllerClient::connect(controller_addr.clone()).await {
-            Ok(mut client) => {
-                if let Err(e) = client.report_status(Request::new(status_report)).await {
-                    debug!("Failed to send status to controller: {}", e);
-                    // Don't fail the entire monitoring task if controller is unreachable
+        // Wrap in timeout to prevent monitor from blocking indefinitely
+        let send_future = async {
+            match ControllerClient::connect(controller_addr.clone()).await {
+                Ok(mut client) => {
+                    if let Err(e) = client.report_status(Request::new(status_report)).await {
+                        warn!("Monitor: Failed to send status to controller: {}", e);
+                    }
+                }
+                Err(e) => {
+                    warn!("Monitor: Failed to connect to controller at {}: {}", controller_addr, e);
                 }
             }
-            Err(e) => {
-                debug!(
-                    "Failed to connect to controller at {}: {}",
-                    controller_addr, e
-                );
-                // Don't fail the entire monitoring task if controller is unreachable
-            }
+        };
+
+        // 1-second timeout for monitor heartbeats (shouldn't block monitoring loop)
+        if let Err(_) = tokio::time::timeout(Duration::from_secs(1), send_future).await {
+            warn!("Monitor: Timeout sending status to controller (1s limit) - controller may be slow");
         }
     }
 
@@ -334,6 +345,7 @@ mod tests {
             1234,
             "http://localhost:8081".to_string(),
             "http://10.200.200.1:50051".to_string(),
+            30, // timeout_seconds
         );
 
         assert_eq!(monitor.run_id, "run-test-001");
@@ -344,5 +356,6 @@ mod tests {
         assert_eq!(monitor.pid, 1234);
         assert_eq!(monitor.rededr_base_url, "http://localhost:8081");
         assert_eq!(monitor.controller_address, "http://10.200.200.1:50051");
+        assert_eq!(monitor.timeout_seconds, 30);
     }
 }
