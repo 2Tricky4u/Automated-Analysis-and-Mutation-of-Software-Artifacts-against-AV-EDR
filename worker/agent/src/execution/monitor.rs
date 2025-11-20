@@ -198,11 +198,38 @@ impl ExecutionMonitor {
             (0, 0)
         };
 
-        // 3. Query RedEDR for event count (lightweight)
+        // 3. Query RedEDR for event count (lightweight, best effort)
         let stats_url = format!("{}/api/stats", self.rededr_base_url);
-        let stats: serde_json::Value = self.client.get(&stats_url).send().await?.json().await?;
-
-        let events_count = stats["events_count"].as_i64().unwrap_or(0) as i32;
+        let events_count = match self.client.get(&stats_url).send().await {
+            Ok(response) => {
+                match response.text().await {
+                    Ok(body_text) => {
+                        if body_text.is_empty() {
+                            debug!("RedEDR /api/stats returned empty response");
+                            0
+                        } else {
+                            match serde_json::from_str::<serde_json::Value>(&body_text) {
+                                Ok(stats) => stats["events_count"].as_i64().unwrap_or(0) as i32,
+                                Err(e) => {
+                                    warn!("Failed to parse RedEDR /api/stats JSON: {} | Body: {}",
+                                          e,
+                                          &body_text.chars().take(200).collect::<String>());
+                                    0
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to read RedEDR /api/stats response body: {}", e);
+                        0
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to fetch RedEDR /api/stats: {}", e);
+                0
+            }
+        };
 
         // 4. Last activity (use event count as proxy)
         let last_activity = if events_count > 0 {

@@ -201,7 +201,7 @@ impl Drop for ExecutionLockGuard {
             let artifact = state.current_artifact.take().unwrap_or_else(|| "unknown".to_string());
             state.busy = false;
             info!(
-                "🔓 Execution lock RELEASED: job_id={}, artifact={}",
+                "Execution lock RELEASED: job_id={}, artifact={}",
                 job_id, artifact
             );
         });
@@ -268,7 +268,7 @@ impl WorkerAgentService {
         state.current_artifact = Some(artifact_name.clone());
 
         info!(
-            "🔒 Execution lock ACQUIRED: job_id={}, artifact={}",
+            "Execution lock ACQUIRED: job_id={}, artifact={}",
             job_id, artifact_name
         );
 
@@ -824,11 +824,11 @@ impl WorkerAgent for WorkerAgentService {
 
         // Log with appropriate level
         if timed_out {
-            warn!("⏱️  TIMEOUT: {} - {}", artifact_name, final_details);
+            warn!("TIMEOUT: {} - {}", artifact_name, final_details);
         } else if exit_code == 0 {
-            info!("✅ SUCCESS: {} - {}", artifact_name, final_details);
+            info!("SUCCESS: {} - {}", artifact_name, final_details);
         } else {
-            warn!("❌ ERROR: {} - {}", artifact_name, final_details);
+            warn!("ERROR: {} - {}", artifact_name, final_details);
         }
 
         // Send final status to controller with telemetry count (with timeout)
