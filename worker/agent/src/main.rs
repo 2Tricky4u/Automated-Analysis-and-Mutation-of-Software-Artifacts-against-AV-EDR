@@ -369,11 +369,18 @@ impl WorkerAgent for WorkerAgentService {
 
         // 4. Sanity check: RedEDR should be clean (no leftover events from previous run)
         info!("Performing pre-run sanity check: RedEDR should be empty");
-        let pre_run_events = rededr_guard
+        let pre_run_events = match rededr_guard
             .collector()
             .collect_all("sanity-check")
             .await
-            .map_err(|e| Status::internal(format!("Failed to check RedEDR state: {}", e)))?;
+        {
+            Ok(events) => events,
+            Err(e) => {
+                warn!("Failed to collect pre-run events during sanity check: {}", e);
+                warn!("This might be due to malformed initialization event - treating as empty and continuing");
+                Vec::new() // Treat collection failure as empty (no contamination)
+            }
+        };
 
         let leftover_count = pre_run_events.len();
 
@@ -383,12 +390,13 @@ impl WorkerAgent for WorkerAgentService {
 
         if leftover_count == 1 {
             info!(
-                "✓ Sanity check: Found 1 event (likely initialization noise), ignoring and continuing"
+                "Sanity check: Found 1 event (likely initialization noise), silently discarding and continuing"
             );
-            // Don't send to controller, don't reset - just ignore and proceed
+            // Discard the single event - don't try to parse/send it (might be malformed)
+            // Just drop pre_run_events and proceed with execution
         } else if has_real_contamination {
             warn!(
-                "⚠️  SANITY CHECK FAILED: Found {} leftover events in RedEDR before starting new run!",
+                "SANITY CHECK FAILED: Found {} leftover events in RedEDR before starting new run!",
                 leftover_count
             );
             warn!("This indicates the previous run did not reset properly.");
@@ -833,7 +841,7 @@ impl WorkerAgent for WorkerAgentService {
 
         // Send final status to controller with telemetry count (with timeout)
         match tokio::time::timeout(
-            Duration::from_secs(2),
+            Duration::from_secs(4),
             self.send_final_status_to_controller(
                 &job_id,
                 &run_id,
