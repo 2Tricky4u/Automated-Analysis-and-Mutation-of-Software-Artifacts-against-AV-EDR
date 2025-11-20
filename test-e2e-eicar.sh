@@ -9,10 +9,10 @@ echo ""
 # Configuration
 CONTROLLER_IP="localhost"
 CONTROLLER_PORT="50051"
-WORKER_IP="${WORKER_IP:-10.200.200.110}"  # Default worker IP, can override with env var
+WORKER_IP="${WORKER_IP:-10.200.200.100}"  # Default worker IP, can override with env var
 WORKER_PORT="50052"
-TEMPLATE="loader_v1"
-SOURCE_FILE="loader.c"
+TEMPLATE="rwx_direct"
+SOURCE_FILE="rwx_direct.c"
 JOB_PREFIX="loader-e2e"
 
 echo "[CONFIG]"

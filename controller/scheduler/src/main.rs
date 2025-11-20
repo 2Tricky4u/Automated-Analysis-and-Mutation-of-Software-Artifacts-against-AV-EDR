@@ -169,34 +169,91 @@ impl Controller for SchedulerService {
         &self,
         request: Request<tonic::Streaming<TelemetryData>>,
     ) -> Result<Response<TelemetryAck>, Status> {
+        use tokio::time::{timeout, Duration};
+
         let mut stream = request.into_inner();
         let mut events_count = 0;
         let mut first_job_id = String::new();
         let mut batch = Vec::new();
+        const MAX_BATCH_SIZE: usize = 10000; // Prevent memory exhaustion
 
         info!("Telemetry stream opened");
 
-        // Collect all events from stream
-        while let Some(telemetry) = stream.message().await? {
-            if events_count == 0 {
-                first_job_id = telemetry.job_id.clone();
-            }
+        // Collect all events from stream with timeout
+        let collection_result = timeout(Duration::from_secs(30), async {
+            while let Some(telemetry) = stream.message().await? {
+                if events_count == 0 {
+                    first_job_id = telemetry.job_id.clone();
+                }
 
-            events_count += 1;
-            batch.push(telemetry);
+                events_count += 1;
+                batch.push(telemetry);
+
+                // Prevent unbounded memory growth
+                if batch.len() >= MAX_BATCH_SIZE {
+                    warn!(
+                        "Telemetry batch size limit reached ({} events), stopping collection",
+                        MAX_BATCH_SIZE
+                    );
+                    break;
+                }
+            }
+            Ok::<(), tonic::Status>(())
+        })
+        .await;
+
+        match collection_result {
+            Ok(Ok(())) => {
+                info!(
+                    "Telemetry batch collected: job={}, events_count={}",
+                    first_job_id, events_count
+                );
+            }
+            Ok(Err(e)) => {
+                error!("Error collecting telemetry stream: {}", e);
+                return Err(e);
+            }
+            Err(_) => {
+                error!(
+                    "Timeout collecting telemetry stream after 30s (collected {} events so far)",
+                    events_count
+                );
+                // Continue with partial batch rather than failing
+            }
         }
 
-        info!(
-            "Telemetry batch received: job={}, events_count={}",
-            first_job_id, events_count
-        );
-
-        // Index batch to Elasticsearch
+        // Index batch to Elasticsearch with timeout
         if !batch.is_empty() {
-            if let Err(e) = self.index_telemetry_batch(&batch).await {
-                error!("Failed to index telemetry batch: {}", e);
-                // Don't fail the RPC - telemetry is logged even if indexing fails
+            match timeout(
+                Duration::from_secs(10),
+                self.index_telemetry_batch(&batch)
+            )
+            .await
+            {
+                Ok(Ok(())) => {
+                    info!(
+                        "✅ Successfully indexed {} telemetry events to Elasticsearch",
+                        events_count
+                    );
+                }
+                Ok(Err(e)) => {
+                    error!("Failed to index telemetry batch to Elasticsearch: {}", e);
+                    error!("Telemetry received but not indexed (Elasticsearch may be down)");
+                    // Don't fail the RPC - telemetry was received, just not indexed
+                }
+                Err(_) => {
+                    error!(
+                        "Timeout indexing telemetry batch to Elasticsearch (10s limit exceeded)"
+                    );
+                    error!(
+                        "Telemetry received ({} events) but not indexed (Elasticsearch is slow/unavailable)",
+                        events_count
+                    );
+                    // Don't fail the RPC - telemetry was received, just not indexed
+                }
             }
+        } else {
+            warn!("Telemetry stream closed with no events");
         }
 
         Ok(Response::new(TelemetryAck {

@@ -633,7 +633,27 @@ Write-Info "[9/10] Enabling audit policies for Security-Auditing ETW (MAXIMUM TE
 # Some Microsoft-Windows-Security-Auditing events require audit categories enabled and SYSTEM token
 # ( PsExec -i -s cmd.exe)
 
-# Enable ALL audit categories for maximum telemetry
+# IMPORTANT: We need to configure BOTH local audit policy AND Group Policy settings
+# Group Policy overrides local settings, so we must write to the registry locations
+# that Group Policy uses for Advanced Audit Policy Configuration
+
+# Step 1: Force use of Advanced Audit Policy (disable legacy audit policy)
+$auditPolicyKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa"
+if (-not (Test-Path $auditPolicyKey)) {
+    New-Item -Path $auditPolicyKey -Force | Out-Null
+}
+# SCENoApplyLegacyAuditPolicy = 1 means "use Advanced Audit Policy, ignore legacy"
+Set-ItemProperty -Path $auditPolicyKey -Name "SCENoApplyLegacyAuditPolicy" -Value 1 -Type DWord -Force
+Write-Success "Enabled Advanced Audit Policy mode (disabled legacy audit policy)"
+
+# Step 2: Configure Advanced Audit Policy via registry
+# The Group Policy settings for Advanced Audit Policy are stored in:
+# HKLM:\SECURITY\Policy\PolAdtEv (binary format, requires special handling)
+#
+# Since direct registry modification of SECURITY hive is complex, we'll use
+# a combination approach: auditpol + Local Group Policy refresh
+
+# Enable ALL audit categories for maximum telemetry using auditpol
 $cats = @(
     "Logon","Policy Change","Account Logon","Account Management","Privilege Use",
     "System","DS Access","Object Access","Detailed Tracking"
@@ -711,6 +731,30 @@ foreach($subcat in $subcategories){
     } catch {
         # Silently continue if subcategory not available on this Windows version
     }
+}
+
+# Step 3: Backup current audit policy to a file and force it into Local Group Policy
+Write-Info "Backing up audit policy configuration to Local Group Policy..."
+$auditBackupPath = "$env:TEMP\audit-policy-backup.csv"
+try {
+    & auditpol /backup /file:$auditBackupPath | Out-Null
+    if (Test-Path $auditBackupPath) {
+        # Restore from backup to force it into the policy database
+        & auditpol /restore /file:$auditBackupPath | Out-Null
+        Remove-Item $auditBackupPath -Force -ErrorAction SilentlyContinue
+        Write-Success "Audit policy synchronized with Local Group Policy database"
+    }
+} catch {
+    Write-Warn "Could not backup/restore audit policy: $($_.Exception.Message)"
+}
+
+# Step 4: Force Group Policy refresh to apply changes
+Write-Info "Forcing Group Policy update to apply audit settings..."
+try {
+    & gpupdate /force | Out-Null
+    Write-Success "Group Policy updated"
+} catch {
+    Write-Warn "gpupdate failed: $($_.Exception.Message)"
 }
 
 # Enable command-line logging for Process Creation events (Event ID 4688)
