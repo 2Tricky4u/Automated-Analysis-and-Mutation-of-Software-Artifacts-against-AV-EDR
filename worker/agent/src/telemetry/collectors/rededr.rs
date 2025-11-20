@@ -154,10 +154,39 @@ impl RedEdrCollector {
             return Err(format!("HTTP error: {}", response.status()).into());
         }
 
-        let events: Vec<RedEdrEvent> = response
-            .json()
+        // Get response body as text first for better error diagnostics
+        let body_text = response
+            .text()
             .await
-            .map_err(|e| format!("JSON parse error: {}", e))?;
+            .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+        // Handle empty response (RedEDR might return empty string instead of [])
+        if body_text.is_empty() {
+            debug!("RedEDR returned empty response, treating as empty event list");
+            return Ok(Vec::new());
+        }
+
+        // Try to parse JSON with detailed error reporting
+        let events: Vec<RedEdrEvent> = serde_json::from_str(&body_text).map_err(|e| {
+            // Log first 500 chars of response for debugging
+            let preview = if body_text.len() > 500 {
+                format!("{}... ({} bytes total)", &body_text[..500], body_text.len())
+            } else {
+                body_text.clone()
+            };
+
+            error!("JSON parse error: {}", e);
+            error!("Response body preview: {}", preview);
+            error!("Parse error at line {} column {}", e.line(), e.column());
+
+            format!(
+                "JSON parse error at line {} column {}: {} | Body preview: {}",
+                e.line(),
+                e.column(),
+                e,
+                preview
+            )
+        })?;
 
         Ok(events)
     }
