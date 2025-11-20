@@ -823,19 +823,27 @@ impl WorkerAgent for WorkerAgentService {
             warn!("❌ ERROR: {} - {}", artifact_name, final_details);
         }
 
-        // Send final status to controller with telemetry count
-        self.send_final_status_to_controller(
-            &job_id,
-            &run_id,
-            &artifact_name,
-            pid,
-            final_status_type,
-            exit_code,
-            &final_details,
-            elapsed.as_secs() as i32,
-            telemetry_count,
-        )
-        .await;
+        // Send final status to controller with telemetry count (with timeout)
+        match tokio::time::timeout(
+            Duration::from_secs(2),
+            self.send_final_status_to_controller(
+                &job_id,
+                &run_id,
+                &artifact_name,
+                pid,
+                final_status_type,
+                exit_code,
+                &final_details,
+                elapsed.as_secs() as i32,
+                telemetry_count,
+            )
+        ).await {
+            Ok(()) => { /* status sent successfully or logged error */ }
+            Err(_) => {
+                warn!("Timeout sending final status to controller (2s limit exceeded)");
+                warn!("Controller may be slow or unreachable");
+            }
+        }
 
         // Send telemetry to controller (best effort with timeout - don't block on this)
         if !telemetry_events.is_empty() {
