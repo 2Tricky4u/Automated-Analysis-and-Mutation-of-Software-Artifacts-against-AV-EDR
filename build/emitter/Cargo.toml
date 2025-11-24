@@ -26,3 +26,6 @@ tree-sitter-c = "0.21"
 
 # For home directory resolution
 dirs = "5.0"
+
+# For Base64 encoding in instrumentation
+base64 = "0.22"

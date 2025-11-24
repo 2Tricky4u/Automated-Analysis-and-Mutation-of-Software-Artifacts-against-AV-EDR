@@ -160,8 +160,15 @@ impl ArtifactBuilder {
         let obj_path = temp_path.join("artifact.obj");
         self.compile_to_obj(&instrumented_ir, &obj_path).await?;
 
+        // Step 5.5: Compile runtime library if instrumentation is enabled
+        let mut obj_files = vec![obj_path];
+        if self.config.trace_mode != TraceMode::Off {
+            let runtime_obj = self.compile_runtime_library(temp_path).await?;
+            obj_files.push(runtime_obj);
+        }
+
         // Step 6: Link to PE executable
-        self.link_to_pe(&[obj_path], output_path).await?;
+        self.link_to_pe(&obj_files, output_path).await?;
 
         // Step 7: Generate metadata
         let metadata = self.generate_metadata(source_path, mutations, output_path)?;
@@ -264,15 +271,12 @@ impl ArtifactBuilder {
                 // No instrumentation
                 tokio::fs::copy(ir, output).await?;
             }
-            TraceMode::Api | TraceMode::BB | TraceMode::ApiPlusBB => {
-                // TODO: Implement instrumentation injection
-                warn!("Instrumentation not yet implemented, copying IR");
-                tokio::fs::copy(ir, output).await?;
-            }
-            TraceMode::Lines | TraceMode::LinesAroundBB(_) | TraceMode::All => {
-                // TODO: Implement line tracing
-                warn!("Line tracing not yet implemented, copying IR");
-                tokio::fs::copy(ir, output).await?;
+            _ => {
+                // Use instrumenter for all instrumentation modes
+                let mut instrumenter = Instrumenter::new();
+                instrumenter
+                    .instrument(ir, self.config.trace_mode, output)
+                    .await?;
             }
         }
 
@@ -303,6 +307,44 @@ impl ArtifactBuilder {
 
         debug!("Object file generated: {:?}", output);
         Ok(())
+    }
+
+    /// Compile instrumentation runtime library to object file
+    async fn compile_runtime_library(&self, temp_dir: &Path) -> Result<PathBuf> {
+        info!("Compiling instrumentation runtime library...");
+
+        // Path to runtime source (relative to project root)
+        let runtime_source = Path::new("build/emitter/runtime/instrumentation_runtime.c");
+
+        if !runtime_source.exists() {
+            anyhow::bail!("Runtime library source not found: {:?}", runtime_source);
+        }
+
+        let runtime_obj = temp_dir.join("instrumentation_runtime.obj");
+
+        // Compile runtime.c to object file
+        let mut cmd = Command::new("clang");
+        cmd.arg(format!("-target={}", self.config.target))
+            .arg(format!("--sysroot={}", self.config.xwin_path.display()))
+            .arg("-c")
+            .arg(format!("-O{}", self.config.optimization))
+            .arg("-o")
+            .arg(&runtime_obj)
+            .arg(runtime_source)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let output_result = cmd.output().context("Failed to compile runtime library")?;
+
+        if !output_result.status.success() {
+            anyhow::bail!(
+                "Runtime compilation failed: {}",
+                String::from_utf8_lossy(&output_result.stderr)
+            );
+        }
+
+        info!("Runtime library compiled: {:?}", runtime_obj);
+        Ok(runtime_obj)
     }
 
     /// Link object files to PE executable
