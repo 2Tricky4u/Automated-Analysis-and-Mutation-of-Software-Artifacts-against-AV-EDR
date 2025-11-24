@@ -14,6 +14,17 @@ use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, info, warn};
 
+/// Stack trace entry structure (from RedEDR stack_trace field)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackTraceEntry {
+    #[serde(default)]
+    pub addr: Option<u64>,
+    #[serde(default)]
+    pub addr_info: Option<String>,
+    #[serde(default)]
+    pub idx: Option<u32>,
+}
+
 /// RedEDR event structure (from HTTP API /api/logs/rededr)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedEdrEvent {
@@ -37,6 +48,11 @@ pub struct RedEdrEvent {
     pub event_id: Option<u32>,
     #[serde(default)]
     pub callstack: Option<Vec<String>>,
+    // Complex fields that need explicit typing
+    #[serde(default)]
+    pub stack_trace: Option<Vec<StackTraceEntry>>,
+    #[serde(default)]
+    pub targets: Option<Vec<String>>,
     // Flexible metadata for other fields
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
@@ -328,6 +344,8 @@ mod tests {
             provider: Some("Microsoft-Windows-Kernel-Process".to_string()),
             event_id: Some(10),
             callstack: None,
+            stack_trace: None,
+            targets: None,
             extra: serde_json::Map::new(),
         };
 
