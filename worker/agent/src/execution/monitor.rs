@@ -5,7 +5,7 @@
 /// - Event count (detect stuck: no growth)
 /// - Process status (alive/dead)
 /// - Resource usage (CPU, memory)
-use crate::edr::controller::{StatusAck, StatusReport, controller_client::ControllerClient};
+use crate::edr::controller::{StatusReport, controller_client::ControllerClient};
 use crate::edr::worker::{ExecutionStatus, MonitorEvent};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
@@ -304,8 +304,7 @@ impl ExecutionMonitor {
     fn is_process_alive(&self, pid: u32) -> bool {
         #[cfg(target_os = "windows")]
         {
-            use std::ptr;
-            use windows::Win32::Foundation::{CloseHandle, HANDLE};
+            use windows::Win32::Foundation::{CloseHandle};
             use windows::Win32::System::Threading::{
                 OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
             };
