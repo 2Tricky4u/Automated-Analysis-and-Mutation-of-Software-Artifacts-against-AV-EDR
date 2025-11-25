@@ -62,13 +62,28 @@ message RunResult {
   repeated TelemetryData telemetry_events = 11;
 }
 
+// Line-level trace event (Lepori 2023 inspired)
+message TraceEvent {
+  uint32 seq = 1;         // Sequence number
+  string file = 2;        // Source file path
+  uint32 line = 3;        // Line number
+  string func = 4;        // Function name
+  uint64 ts_us = 5;       // Timestamp (microseconds)
+}
+
 // Telemetry data streaming (used by workers to push to controller)
 message TelemetryData {
   string job_id = 1;
-  string event_type = 2;  // etw, procmon, network
+  string event_type = 2;  // etw, procmon, network, trace, coverage, checkpoint
   int64 timestamp = 3;
   bytes payload = 4;
   map<string, string> metadata = 5;
+
+  // Typed payloads for specific event types (one of)
+  oneof typed_event {
+    TraceEvent trace = 6;
+    // Future: CoverageEvent, CheckpointEvent, etc.
+  }
 }
 
 message TelemetryAck {

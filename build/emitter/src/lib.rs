@@ -130,12 +130,17 @@ impl ArtifactBuilder {
         mutations: &[Mutation],
         output_path: &Path,
     ) -> Result<ArtifactMetadata> {
-        info!("Building artifact from: {:?}", source_path);
+        let abs_source = std::fs::canonicalize(source_path).unwrap_or_else(|_| source_path.to_path_buf());
+        let abs_output = output_path.canonicalize().unwrap_or_else(|_| output_path.to_path_buf());
+        eprintln!("[BUILD] Source: {:?}", abs_source);
+        eprintln!("[BUILD] Output: {:?}", abs_output);
+        info!("Building artifact from: {:?}", abs_source);
         info!("Applying {} mutations", mutations.len());
 
         // Create temp directory for intermediate files
         let temp_dir = tempfile::tempdir()?;
         let temp_path = temp_dir.path();
+        eprintln!("[BUILD] Temp directory: {:?}", temp_path);
 
         // Step 1: Apply AST-level mutations
         let mutated_source = temp_path.join("mutated.c");
@@ -156,19 +161,36 @@ impl ArtifactBuilder {
         self.inject_instrumentation(&mutated_ir, &instrumented_ir)
             .await?;
 
+        // DEBUG: Save instrumented IR to inspect
+        if self.config.trace_mode != TraceMode::Off {
+            let debug_ir = Path::new("debug_instrumented.ll");
+            let _ = tokio::fs::copy(&instrumented_ir, debug_ir).await;
+            let abs_debug_ir = std::fs::canonicalize(debug_ir).unwrap_or_else(|_| debug_ir.to_path_buf());
+            eprintln!("[DEBUG] Saved instrumented IR to: {:?}", abs_debug_ir);
+        }
+
         // Step 5: Compile IR → Object file
         let obj_path = temp_path.join("artifact.obj");
+        eprintln!("[BUILD] Compiling IR to object: {:?}", obj_path);
         self.compile_to_obj(&instrumented_ir, &obj_path).await?;
+        eprintln!("[BUILD] Object file created: {:?}", obj_path);
 
         // Step 5.5: Compile runtime library if instrumentation is enabled
         let mut obj_files = vec![obj_path];
         if self.config.trace_mode != TraceMode::Off {
+            eprintln!("[BUILD] Compiling runtime library...");
             let runtime_obj = self.compile_runtime_library(temp_path).await?;
+            eprintln!("[BUILD] Runtime object: {:?}", runtime_obj);
             obj_files.push(runtime_obj);
         }
 
         // Step 6: Link to PE executable
+        eprintln!("[BUILD] Linking {} object files to PE...", obj_files.len());
+        for (i, obj) in obj_files.iter().enumerate() {
+            eprintln!("[BUILD]   Object {}: {:?}", i + 1, obj);
+        }
         self.link_to_pe(&obj_files, output_path).await?;
+        eprintln!("[BUILD] Final executable: {:?}", abs_output);
 
         // Step 7: Generate metadata
         let metadata = self.generate_metadata(source_path, mutations, output_path)?;
@@ -192,16 +214,38 @@ impl ArtifactBuilder {
             .filter(|m| m.id.starts_with("ast."))
             .collect();
 
-        if ast_mutations.is_empty() {
-            // No AST mutations, just copy source
+        // Check if we need line-level tracing (preprocessor-based)
+        let needs_line_tracing = matches!(
+            self.config.trace_mode,
+            TraceMode::Lines | TraceMode::LinesAroundBB(_) | TraceMode::All
+        );
+
+        if ast_mutations.is_empty() && !needs_line_tracing {
+            // No AST mutations or line tracing, just copy source
             tokio::fs::copy(source, output).await?;
             return Ok(());
         }
 
-        // TODO: Implement full AST mutation pipeline
-        // For now, just copy source
-        warn!("AST mutations not yet implemented, copying source");
-        tokio::fs::copy(source, output).await?;
+        // Read source code
+        let source_code = tokio::fs::read_to_string(source).await?;
+
+        // Apply line tracing if needed (preprocessor-based, no debug info)
+        let processed_code = if needs_line_tracing {
+            debug!("Injecting line-level tracing at source level");
+            let mutator = AstMutator::new();
+            mutator.inject_line_tracing(&source_code)?
+        } else {
+            source_code
+        };
+
+        // Apply other AST mutations if any
+        if !ast_mutations.is_empty() {
+            // TODO: Implement full AST mutation pipeline
+            warn!("AST mutations not yet implemented");
+        }
+
+        // Write processed source
+        tokio::fs::write(output, processed_code).await?;
 
         Ok(())
     }
@@ -210,9 +254,15 @@ impl ArtifactBuilder {
     async fn compile_to_ir(&self, source: &Path, output: &Path) -> Result<()> {
         info!("Compiling to LLVM IR...");
 
+        let xwin = &self.config.xwin_path;
+
         let mut cmd = Command::new("clang");
-        cmd.arg(format!("-target={}", self.config.target))
-            .arg(format!("--sysroot={}", self.config.xwin_path.display()))
+        cmd.arg(format!("--target={}", self.config.target))
+            .arg(format!("-isystem{}/crt/include", xwin.display()))
+            .arg(format!("-isystem{}/sdk/include/ucrt", xwin.display()))
+            .arg(format!("-isystem{}/sdk/include/shared", xwin.display()))
+            .arg(format!("-isystem{}/sdk/include/um", xwin.display()))
+            .arg(format!("-isystem{}/sdk/include/winrt", xwin.display()))
             .arg("-emit-llvm")
             .arg("-S")
             .arg(format!("-O{}", self.config.optimization))
@@ -313,19 +363,37 @@ impl ArtifactBuilder {
     async fn compile_runtime_library(&self, temp_dir: &Path) -> Result<PathBuf> {
         info!("Compiling instrumentation runtime library...");
 
-        // Path to runtime source (relative to project root)
-        let runtime_source = Path::new("build/emitter/runtime/instrumentation_runtime.c");
+        // Path to runtime source - try multiple possible locations
+        let possible_paths = vec![
+            PathBuf::from("build/emitter/runtime/instrumentation_runtime.c"),
+            PathBuf::from("../build/emitter/runtime/instrumentation_runtime.c"),
+            PathBuf::from("../../build/emitter/runtime/instrumentation_runtime.c"),
+            std::env::current_dir()?.join("build/emitter/runtime/instrumentation_runtime.c"),
+        ];
 
-        if !runtime_source.exists() {
-            anyhow::bail!("Runtime library source not found: {:?}", runtime_source);
-        }
+        let runtime_source = possible_paths.iter()
+            .find(|p| p.exists())
+            .ok_or_else(|| anyhow::anyhow!(
+                "Runtime library source not found. Tried: {:?}",
+                possible_paths
+            ))?;
+
+        let abs_runtime_source = std::fs::canonicalize(runtime_source).unwrap_or_else(|_| runtime_source.clone());
+        eprintln!("[BUILD] Runtime source: {:?}", abs_runtime_source);
+        info!("Found runtime library at: {:?}", abs_runtime_source);
 
         let runtime_obj = temp_dir.join("instrumentation_runtime.obj");
+        eprintln!("[BUILD] Runtime object path: {:?}", runtime_obj);
+        let xwin = &self.config.xwin_path;
 
         // Compile runtime.c to object file
         let mut cmd = Command::new("clang");
-        cmd.arg(format!("-target={}", self.config.target))
-            .arg(format!("--sysroot={}", self.config.xwin_path.display()))
+        cmd.arg(format!("--target={}", self.config.target))
+            .arg(format!("-isystem{}/crt/include", xwin.display()))
+            .arg(format!("-isystem{}/sdk/include/ucrt", xwin.display()))
+            .arg(format!("-isystem{}/sdk/include/shared", xwin.display()))
+            .arg(format!("-isystem{}/sdk/include/um", xwin.display()))
+            .arg(format!("-isystem{}/sdk/include/winrt", xwin.display()))
             .arg("-c")
             .arg(format!("-O{}", self.config.optimization))
             .arg("-o")
@@ -352,7 +420,8 @@ impl ArtifactBuilder {
         info!("Linking to PE executable...");
 
         let crt_lib_path = self.config.xwin_path.join("crt/lib/x86_64");
-        let sdk_lib_path = self.config.xwin_path.join("sdk/lib/um/x86_64");
+        let sdk_um_lib_path = self.config.xwin_path.join("sdk/lib/um/x86_64");
+        let sdk_ucrt_lib_path = self.config.xwin_path.join("sdk/lib/ucrt/x86_64");
 
         let mut cmd = Command::new("ld.lld");
         cmd.arg("-flavor")
@@ -360,7 +429,8 @@ impl ArtifactBuilder {
             .arg("-subsystem:console")
             .arg("-entry:mainCRTStartup")
             .arg(format!("-libpath:{}", crt_lib_path.display()))
-            .arg(format!("-libpath:{}", sdk_lib_path.display()))
+            .arg(format!("-libpath:{}", sdk_um_lib_path.display()))
+            .arg(format!("-libpath:{}", sdk_ucrt_lib_path.display()))
             .arg(format!("-out:{}", output.display()));
 
         // Add deterministic flag if enabled
@@ -373,8 +443,10 @@ impl ArtifactBuilder {
             cmd.arg(obj);
         }
 
-        // Add default libraries
-        cmd.arg("libcmt.lib").arg("kernel32.lib");
+        // Add default libraries (order matters: libcmt before ucrt)
+        cmd.arg("libcmt.lib")
+            .arg("libucrt.lib")
+            .arg("kernel32.lib");
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
