@@ -314,6 +314,7 @@ impl RedEdrCollector {
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload,
             metadata,
+            typed_event: None,  // RedEDR events use generic payload, not typed events
         }
     }
 }
