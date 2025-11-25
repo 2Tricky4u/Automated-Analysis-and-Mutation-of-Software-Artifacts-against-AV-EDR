@@ -365,6 +365,7 @@ impl WorkerAgent for WorkerAgentService {
                 run_id: run_id.clone(),
             },
         );
+        //collector.acquire_lock().await.expect("TODO: panic message");
         let rededr_guard = RedEdrGuard::new(collector);
 
         // 4. Sanity check: RedEDR should be clean (no leftover events from previous run)
@@ -968,6 +969,8 @@ impl WorkerAgent for WorkerAgentService {
             error_output
         };
 
+        //collector.release_lock().await.expect("Error");
+
         // 11. Return response
         Ok(Response::new(SampleResponse {
             job_id,
@@ -1242,12 +1245,6 @@ impl WorkerAgentService {
         }
     }
 }
-
-// NOTE: Streaming telemetry removed - now using batch collection at execution completion
-// Telemetry is collected once after artifact execution and returned with RunResult
-
-// NOTE: JobGuard removed - replaced with ExecutionLockGuard for single execution enforcement
-// The ExecutionLockGuard ensures only ONE job can run at a time, preventing telemetry cross-contamination
 
 /// Extract filename from path (cross-platform)
 fn extract_filename(path: &str) -> String {

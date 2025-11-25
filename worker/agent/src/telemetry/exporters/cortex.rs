@@ -51,7 +51,7 @@ pub struct CortexExporter {
 impl CortexExporter {
     /// Create a new Cortex exporter
     pub fn new(config: CortexConfig) -> Result<Self> {
-        let mut client_builder = ClientBuilder::new()
+        let client_builder = ClientBuilder::new()
             .timeout(Duration::from_secs(config.timeout_secs))
             .connect_timeout(Duration::from_secs(10));
 
