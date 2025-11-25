@@ -39,7 +39,7 @@ if ! echo "$BUILD_RESPONSE" | jq -e . >/dev/null 2>&1; then
     echo "   ✗ ERROR: Build failed or invalid response"
     echo ""
     echo "   Response:"
-    echo "$BUILD_RESPONSE"
+    printf '%s\n' "$BUILD_RESPONSE" | cat -vET
     exit 1
 fi
 
@@ -122,7 +122,7 @@ if ! echo "$EXECUTE_RESPONSE" | jq -e . >/dev/null 2>&1; then
     echo "   This is EXPECTED behavior for EICAR!"
 else
     EXEC_SUCCESS=$(echo "$EXECUTE_RESPONSE" | jq -r '.success')
-    EXIT_CODE=$(echo "$EXECUTE_RESPONSE" | jq -r '.exit_code')
+    EXIT_CODE=$(echo "$EXECUTE_RESPONSE" | jq -r '.exitCode // .exit_code')
     OUTPUT=$(echo "$EXECUTE_RESPONSE" | jq -r '.output')
 
     if [ "$EXEC_SUCCESS" = "true" ]; then
