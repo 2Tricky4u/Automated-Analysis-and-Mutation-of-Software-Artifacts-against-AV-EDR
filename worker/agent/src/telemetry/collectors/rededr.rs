@@ -25,6 +25,16 @@ pub struct StackTraceEntry {
     pub idx: Option<u32>,
 }
 
+/// RedEDR statistics from /api/stats
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedEdrStats {
+    pub events_count: u64,
+    pub num_kernel: u64,
+    pub num_etw: u64,
+    pub num_etwti: u64,
+    pub num_dll: u64,
+}
+
 /// RedEDR event structure (from HTTP API /api/logs/rededr)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedEdrEvent {
@@ -269,6 +279,77 @@ impl RedEdrCollector {
 
         info!("Reset RedEDR state successfully");
         Ok(())
+    }
+
+    /// Acquire exclusive lock for RedEDR tracing (prevents concurrent runs)
+    pub async fn acquire_lock(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let url = format!("{}/api/lock/acquire", self.config.base_url);
+
+        let response = self
+            .client
+            .post(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send lock acquire request: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Failed to acquire RedEDR lock: {} - {}",
+                response.status(),
+                response.text().await.unwrap_or_default()
+            )
+            .into());
+        }
+
+        info!("Acquired RedEDR exclusive lock");
+        Ok(())
+    }
+
+    /// Release exclusive lock for RedEDR tracing
+    pub async fn release_lock(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let url = format!("{}/api/lock/release", self.config.base_url);
+
+        let response = self
+            .client
+            .post(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send lock release request: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Failed to release RedEDR lock: {} - {}",
+                response.status(),
+                response.text().await.unwrap_or_default()
+            )
+            .into());
+        }
+
+        info!("Released RedEDR exclusive lock");
+        Ok(())
+    }
+
+    /// Get RedEDR statistics (event counts by type)
+    pub async fn get_stats(&self) -> Result<RedEdrStats, Box<dyn std::error::Error + Send + Sync>> {
+        let url = format!("{}/api/stats", self.config.base_url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to get stats: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Stats request failed: {}", response.status()).into());
+        }
+
+        let stats: RedEdrStats = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse stats JSON: {}", e))?;
+
+        Ok(stats)
     }
 
     /// Transform RedEDR event to protobuf TelemetryData

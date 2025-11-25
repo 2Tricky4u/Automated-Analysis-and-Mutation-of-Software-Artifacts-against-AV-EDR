@@ -491,6 +491,19 @@ impl WorkerAgent for WorkerAgentService {
             info!("RedEDR tracing started for artifact: {}", artifact_name);
         }
 
+        // 5b. Start line-level trace collector (named pipe server for instrumented artifacts)
+        let (trace_tx, mut trace_rx) = tokio::sync::mpsc::channel(1000);
+        let trace_collector = telemetry::collectors::trace::TraceCollector::new(trace_tx);
+
+        // Spawn trace collector in blocking task (named pipe operations block)
+        let trace_handle = tokio::task::spawn_blocking(move || {
+            if let Err(e) = trace_collector.start_server() {
+                error!("Trace collector failed: {}", e);
+            }
+        });
+
+        info!("Trace collector started on named pipe: \\\\.\\pipe\\rededr_trace");
+
         // 4. Spawn process with guard (guard ensures kill if error occurs)
         let child = tokio::process::Command::new(&artifact_path)
             .stdin(std::process::Stdio::null())
@@ -743,7 +756,7 @@ impl WorkerAgent for WorkerAgentService {
 
         // Collect full telemetry batch (best effort - don't fail job if collection fails)
         info!("Collecting telemetry events from RedEDR...");
-        let telemetry_events = match rededr_guard
+        let mut telemetry_events = match rededr_guard
             .collector()
             .collect_all(&job_id)
             .await
@@ -756,8 +769,42 @@ impl WorkerAgent for WorkerAgentService {
             }
         };
 
+        info!("Collected {} RedEDR events", telemetry_events.len());
+
+        // Collect line-level trace events from named pipe
+        trace_rx.close();  // Stop accepting new events
+        let mut trace_events_count = 0;
+        while let Ok(trace_event) = trace_rx.try_recv() {
+            // Convert trace event to TelemetryData proto
+            let telemetry_data = edr::common::TelemetryData {
+                job_id: job_id.clone(),
+                event_type: "trace".to_string(),
+                timestamp: trace_event.ts_us as i64,
+                payload: vec![],  // Empty payload (data in typed_event)
+                metadata: std::collections::HashMap::new(),
+                typed_event: Some(edr::common::telemetry_data::TypedEvent::Trace(
+                    edr::common::TraceEvent {
+                        seq: trace_event.seq,
+                        file: trace_event.file,
+                        line: trace_event.line,
+                        func: trace_event.func,
+                        ts_us: trace_event.ts_us,
+                    },
+                )),
+            };
+            telemetry_events.push(telemetry_data);
+            trace_events_count += 1;
+        }
+
+        if trace_events_count > 0 {
+            info!("✅ Collected {} line-level trace events", trace_events_count);
+        }
+
+        // Abort trace collector (it's blocking in named pipe accept, so just abort)
+        trace_handle.abort();
+
         let telemetry_count = telemetry_events.len() as i32;
-        info!("Collected {} telemetry events", telemetry_count);
+        info!("Total telemetry events collected: {}", telemetry_count);
 
         // ====================================================================
         // Phase 7: Send final status with telemetry count
