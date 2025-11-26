@@ -204,6 +204,11 @@ message BuildRequest {
   string source_file = 2;    // e.g., "rwx_direct.c"
   repeated string compiler_flags = 3;  // Optional custom flags
   repeated edr.common.Mutation mutations = 4;  // Optional mutations to apply
+
+  // Instrumentation control (maps to build/emitter --trace flag)
+  // Values: "off" | "lines" | "api" | "bb" | "api+bb" | "all" | "lines-around-bb=<id>"
+  // Default: "api+bb" (if not specified)
+  string trace_mode = 5;
 }
 
 message BuildResponse {
@@ -214,6 +219,9 @@ message BuildResponse {
   string storage_path = 5;   // Controller-side path for debugging
   int64 build_timestamp = 6;
   repeated string mutations_applied = 7;  // List of mutation IDs that were applied
+
+  // What instrumentation was actually applied (echoes request.trace_mode or default)
+  string trace_mode = 8;
 }
 
 // Deploy artifact to worker

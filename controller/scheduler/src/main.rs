@@ -307,11 +307,19 @@ impl Controller for SchedulerService {
     ) -> Result<Response<BuildResponse>, Status> {
         let req = request.into_inner();
 
+        // Extract trace_mode with default (backwards compatibility)
+        let trace_mode = if req.trace_mode.is_empty() {
+            "api+bb".to_string() // Default: API + BB coverage for mutation loop
+        } else {
+            req.trace_mode.clone()
+        };
+
         info!(
-            "Build request: template={}, source={}, mutations={}",
+            "Build request: template={}, source={}, mutations={}, trace_mode={}",
             req.template_name,
             req.source_file,
-            req.mutations.len()
+            req.mutations.len(),
+            trace_mode
         );
 
         // Create builder with default config
@@ -339,11 +347,13 @@ impl Controller for SchedulerService {
         }
 
         // Build the artifact with mutations
+        // NOTE: trace_mode is passed to builder; emitter support pending
         let built = artifact_builder
             .build(builder::BuildInput::SourceFile {
                 template_name: req.template_name.clone(),
                 source_file: req.source_file.clone(),
                 mutations,
+                trace_mode: trace_mode.clone(),
             })
             .await
             .map_err(|e| {
@@ -352,8 +362,8 @@ impl Controller for SchedulerService {
             })?;
 
         info!(
-            "Build successful: artifact_id={}, size={} bytes, mutations_applied={:?}",
-            built.artifact_id, built.size_bytes, built.mutations_applied
+            "Build successful: artifact_id={}, size={} bytes, mutations_applied={:?}, trace_mode={}",
+            built.artifact_id, built.size_bytes, built.mutations_applied, trace_mode
         );
 
         // TODO (Phase 3): Index artifact metadata to Elasticsearch
@@ -366,6 +376,7 @@ impl Controller for SchedulerService {
             storage_path: built.output_path.to_string_lossy().to_string(),
             build_timestamp: built.build_timestamp.timestamp(),
             mutations_applied: built.mutations_applied,
+            trace_mode,  // Echo back the trace_mode that was used
         }))
     }
 

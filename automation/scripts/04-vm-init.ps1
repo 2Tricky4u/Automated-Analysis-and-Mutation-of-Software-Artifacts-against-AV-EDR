@@ -569,6 +569,79 @@ try {
     } else { Write-Warn "RedEdr.exe not found yet at $rededrExe" }
 } catch { Write-Warn "Could not add Defender exclusion: $($_.Exception.Message)" }
 
+# Trust RedEdr driver certificate
+Write-Info "Extracting and trusting RedEdr driver certificate..."
+$elamDriver = Join-Path $RedEdrRoot "elam_driver.sys"
+$certTempDir = "C:\Temp"
+
+try {
+    # Ensure C:\Temp exists
+    if (-not (Test-Path $certTempDir)) {
+        New-Item -ItemType Directory -Path $certTempDir -Force | Out-Null
+    }
+
+    if (Test-Path $elamDriver) {
+        Write-Info "Step 1: Extracting signer certificate from elam_driver.sys"
+
+        # Get the Authenticode signature
+        $sig = Get-AuthenticodeSignature $elamDriver
+        $cert = $sig.SignerCertificate
+
+        if ($cert) {
+            Write-Info "Certificate Details:"
+            Write-Host "  Subject   : $($cert.Subject)" -ForegroundColor Gray
+            Write-Host "  Issuer    : $($cert.Issuer)" -ForegroundColor Gray
+            Write-Host "  Thumbprint: $($cert.Thumbprint)" -ForegroundColor Gray
+            Write-Host "  NotAfter  : $($cert.NotAfter)" -ForegroundColor Gray
+
+            # Export certificate
+            $certPath = Join-Path $certTempDir "elam_signer.cer"
+            Export-Certificate -Cert $cert -FilePath $certPath -Force | Out-Null
+            Write-Success "Certificate exported to: $certPath"
+
+            Write-Info "Step 2: Installing certificate as trusted"
+
+            # Install to Trusted Root CA
+            Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\LocalMachine\Root -ErrorAction Stop | Out-Null
+            Write-Success "Certificate installed to Trusted Root Certification Authorities"
+
+            # Install to Trusted Publishers
+            Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\LocalMachine\TrustedPublisher -ErrorAction Stop | Out-Null
+            Write-Success "Certificate installed to Trusted Publishers"
+
+            Write-Info "Step 3: Verifying signature status"
+
+            # Re-check signature
+            $verifySign = Get-AuthenticodeSignature $elamDriver
+            if ($verifySign.Status -eq "Valid") {
+                Write-Success "Driver signature verified: Valid"
+            } else {
+                Write-Warn "Driver signature status: $($verifySign.Status)"
+                Write-Info "If status is not Valid, the certificate chain may be incomplete"
+                Write-Info "This may require intermediate certificates or reboot to take effect"
+            }
+
+        } else {
+            Write-Warn "Could not extract certificate from driver (SignerCertificate is null)"
+            Write-Info "The driver may not be signed, or signature extraction failed"
+        }
+
+    } else {
+        Write-Warn "ELAM driver not found at: $elamDriver"
+        Write-Info "Certificate trust setup skipped (driver will be untrusted until installed)"
+    }
+
+} catch {
+    Write-Warn "Failed to trust driver certificate: $($_.Exception.Message)"
+    Write-Info "Driver may not load until certificate is manually trusted"
+    Write-Info "Manual steps:"
+    Write-Info "  1. cd C:\RedEdr"
+    Write-Info "  2. `$sig = Get-AuthenticodeSignature .\elam_driver.sys"
+    Write-Info "  3. Export-Certificate -Cert `$sig.SignerCertificate -FilePath C:\Temp\elam_signer.cer"
+    Write-Info "  4. Import-Certificate -FilePath C:\Temp\elam_signer.cer -CertStoreLocation Cert:\LocalMachine\Root"
+    Write-Info "  5. Import-Certificate -FilePath C:\Temp\elam_signer.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher"
+}
+
 # Open firewall for web UI
 try {
     $firewallRuleName = "RedEdr Web $RedEDRPort"

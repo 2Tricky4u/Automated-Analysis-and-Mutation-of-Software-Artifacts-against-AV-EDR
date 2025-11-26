@@ -79,18 +79,25 @@ pub enum BuildInput {
         template_name: String,
         source_file: String,
         mutations: Vec<mutator::MutationSpec>,
+        /// Instrumentation mode: "off" | "lines" | "api" | "bb" | "api+bb" | "all" | "lines-around-bb=<id>"
+        /// Default: "api+bb" if empty
+        trace_mode: String,
     },
     /// Build from LLVM IR (post-mutation)
     LlvmIr {
         ir_code: Vec<u8>,
         artifact_name: String,
         mutations: Vec<mutator::MutationSpec>,
+        /// Instrumentation mode
+        trace_mode: String,
     },
     /// Build from in-memory C source (text mutations)
     SourceCode {
         source_code: Vec<u8>,
         artifact_name: String,
         mutations: Vec<mutator::MutationSpec>,
+        /// Instrumentation mode
+        trace_mode: String,
     },
 }
 
@@ -129,7 +136,11 @@ impl ArtifactBuilder {
                 template_name,
                 source_file,
                 mutations,
+                trace_mode,
             } => {
+                // TODO: Pass trace_mode to build_template_with_mutations when emitter supports --trace flag
+                // For now, log it but use existing build logic
+                info!("Building {} with trace_mode: {}", source_file, trace_mode);
                 self.build_template_with_mutations(&template_name, &source_file, &mutations)
                     .await
             }
@@ -138,7 +149,9 @@ impl ArtifactBuilder {
                 ir_code,
                 artifact_name,
                 mutations,
+                trace_mode,
             } => {
+                info!("Building LLVM IR {} with trace_mode: {}", artifact_name, trace_mode);
                 self.build_from_llvm_ir_with_mutations(&ir_code, &artifact_name, &mutations)
                     .await
             }
@@ -147,7 +160,10 @@ impl ArtifactBuilder {
                 source_code,
                 artifact_name,
                 mutations,
+                trace_mode,
             } => {
+                info!("Building source code {} with trace_mode: {}", artifact_name, trace_mode);
+
                 self.build_from_source_code_with_mutations(&source_code, &artifact_name, &mutations)
                     .await
             }
