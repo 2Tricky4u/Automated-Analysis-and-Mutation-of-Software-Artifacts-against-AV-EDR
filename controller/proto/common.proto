@@ -71,6 +71,20 @@ message TraceEvent {
   uint64 ts_us = 5;       // Timestamp (microseconds)
 }
 
+// Basic-block coverage event (AFL-style)
+message CoverageEvent {
+  bytes bitmap = 1;              // 64KB AFL-style coverage bitmap
+  repeated uint32 bb_ids = 2;    // BB IDs that were executed
+  repeated uint32 hit_counts = 3; // Hit count per BB
+  uint32 total_bbs = 4;          // Total number of BBs hit
+}
+
+// API checkpoint event (WINNIE-style behavioral markers)
+message CheckpointEvent {
+  string name = 1;        // Checkpoint name (e.g., "api:VirtualAlloc")
+  uint64 ts_us = 2;       // Timestamp (microseconds since process start)
+}
+
 // Telemetry data streaming (used by workers to push to controller)
 message TelemetryData {
   string job_id = 1;
@@ -82,7 +96,8 @@ message TelemetryData {
   // Typed payloads for specific event types (one of)
   oneof typed_event {
     TraceEvent trace = 6;
-    // Future: CoverageEvent, CheckpointEvent, etc.
+    CoverageEvent coverage = 7;
+    CheckpointEvent checkpoint = 8;
   }
 }
 
