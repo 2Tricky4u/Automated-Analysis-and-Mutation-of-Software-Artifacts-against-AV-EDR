@@ -12,3 +12,4 @@ serde_json.workspace = true
 tracing.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 tokio.workspace = true
+build-emitter = { path = "../../build/emitter" }

@@ -138,11 +138,22 @@ impl ArtifactBuilder {
                 mutations,
                 trace_mode,
             } => {
-                // TODO: Pass trace_mode to build_template_with_mutations when emitter supports --trace flag
-                // For now, log it but use existing build logic
                 info!("Building {} with trace_mode: {}", source_file, trace_mode);
-                self.build_template_with_mutations(&template_name, &source_file, &mutations)
-                    .await
+
+                // Build artifact (with or without mutations)
+                let mut built = if mutations.is_empty() {
+                    self.build_template(&template_name, &source_file).await?
+                } else {
+                    self.build_template_with_mutations(&template_name, &source_file, &mutations).await?
+                };
+
+                // Apply instrumentation if trace_mode is not "off"
+                if trace_mode != "off" && !trace_mode.is_empty() {
+                    info!("Applying instrumentation: trace_mode={}", trace_mode);
+                    built = self.apply_instrumentation(built, &trace_mode).await?;
+                }
+
+                Ok(built)
             }
 
             BuildInput::LlvmIr {
@@ -1085,6 +1096,211 @@ impl ArtifactBuilder {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("Linking failed:\n{}", stderr);
+        }
+
+        Ok(())
+    }
+
+    /// Apply instrumentation to an already-built artifact
+    ///
+    /// This re-instruments the binary by:
+    /// 1. Reading the original source
+    /// 2. Compiling to LLVM IR
+    /// 3. Instrumenting the IR with the emitter
+    /// 4. Compiling instrumented IR to object file
+    /// 5. Linking with instrumentation runtime
+    async fn apply_instrumentation(
+        &self,
+        built: BuiltArtifact,
+        trace_mode_str: &str,
+    ) -> Result<BuiltArtifact> {
+        info!("Applying instrumentation: trace_mode={}", trace_mode_str);
+
+        // Parse trace_mode string to build_emitter::TraceMode enum
+        let trace_mode = match trace_mode_str {
+            "off" => build_emitter::TraceMode::Off,
+            "api" => build_emitter::TraceMode::Api,
+            "bb" => build_emitter::TraceMode::BB,
+            "api+bb" => build_emitter::TraceMode::ApiPlusBB,
+            "lines" => build_emitter::TraceMode::Lines,
+            "all" => build_emitter::TraceMode::All,
+            _ => {
+                warn!("Unknown trace_mode '{}', defaulting to 'api+bb'", trace_mode_str);
+                build_emitter::TraceMode::ApiPlusBB
+            }
+        };
+
+        if trace_mode == build_emitter::TraceMode::Off {
+            info!("Instrumentation disabled (trace_mode=off)");
+            return Ok(built);
+        }
+
+        // Step 1: Verify source exists
+        if !built.source_path.exists() {
+            anyhow::bail!("Source file not found for instrumentation: {:?}", built.source_path);
+        }
+
+        // Step 2: Compile source → LLVM IR
+        let ir_path = built.source_path.with_extension("instrumented.ll");
+
+        info!("Compiling source to LLVM IR for instrumentation...");
+        let template_name = built.source_path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        self.compile_source_to_ir(&built.source_path, &ir_path, template_name)
+            .await
+            .context("Failed to compile source to IR for instrumentation")?;
+
+        // Step 3: Instrument the IR
+        let instrumented_ir_path = built.source_path.with_extension("instrumented_final.ll");
+
+        info!("Instrumenting LLVM IR with trace_mode={:?}...", trace_mode);
+        let mut instrumenter = build_emitter::Instrumenter::new();
+        instrumenter
+            .instrument(&ir_path, trace_mode, &instrumented_ir_path)
+            .await
+            .context("Failed to instrument IR")?;
+
+        // Clean up intermediate IR
+        let _ = tokio::fs::remove_file(&ir_path).await;
+
+        // Step 4: Compile instrumented IR → object file
+        let obj_path = built.source_path.with_extension("instrumented.o");
+
+        info!("Compiling instrumented IR to object file...");
+        self.compile_ir_to_object(&instrumented_ir_path, &obj_path)
+            .await
+            .context("Failed to compile instrumented IR to object")?;
+
+        // Clean up instrumented IR
+        let _ = tokio::fs::remove_file(&instrumented_ir_path).await;
+
+        // Step 5: Compile instrumentation runtime to object file (if not already compiled)
+        let runtime_src = PathBuf::from("build/emitter/runtime/instrumentation_runtime.c");
+        let runtime_obj = self.config.output_dir.join("instrumentation_runtime.o");
+
+        if !runtime_obj.exists() {
+            info!("Compiling instrumentation runtime...");
+            self.compile_runtime(&runtime_src, &runtime_obj)
+                .await
+                .context("Failed to compile instrumentation runtime")?;
+        }
+
+        // Step 6: Link instrumented object + runtime → final executable
+        let instrumented_exe_path = built.source_path.with_extension("instrumented.exe");
+
+        info!("Linking instrumented binary with runtime...");
+        self.link_instrumented_exe(&obj_path, &runtime_obj, &instrumented_exe_path, template_name)
+            .await
+            .context("Failed to link instrumented executable")?;
+
+        // Clean up object file
+        let _ = tokio::fs::remove_file(&obj_path).await;
+
+        // Step 7: Move to output directory and update artifact metadata
+        let instrumented_data = tokio::fs::read(&instrumented_exe_path)
+            .await
+            .context("Failed to read instrumented artifact")?;
+
+        let instrumented_id = self.compute_sha256(&instrumented_data);
+        let final_output = self.config.output_dir.join(format!("{}.exe", instrumented_id));
+
+        tokio::fs::rename(&instrumented_exe_path, &final_output)
+            .await
+            .context("Failed to move instrumented artifact to output directory")?;
+
+        info!(
+            "Instrumented artifact built: {} ({} bytes) -> {:?}",
+            instrumented_id,
+            instrumented_data.len(),
+            final_output
+        );
+
+        // Return new BuiltArtifact with updated paths and ID
+        Ok(BuiltArtifact {
+            artifact_id: instrumented_id.clone(),
+            source_path: built.source_path,
+            output_path: final_output,
+            size_bytes: instrumented_data.len() as u64,
+            sha256: instrumented_id,
+            build_timestamp: chrono::Utc::now(),
+            compiler_version: built.compiler_version,
+            compiler_flags: built.compiler_flags,
+            mutations_applied: built.mutations_applied,
+        })
+    }
+
+    /// Compile instrumentation runtime C file to object file
+    async fn compile_runtime(
+        &self,
+        runtime_src: &Path,
+        runtime_obj: &Path,
+    ) -> Result<()> {
+        let output = tokio::process::Command::new("clang")
+            .arg("-c") // Compile only (don't link)
+            .arg(runtime_src)
+            .arg("-o")
+            .arg(runtime_obj)
+            .arg("-target")
+            .arg("x86_64-pc-windows-msvc")
+            .arg("-fms-compatibility")
+            .arg("-fms-extensions")
+            .arg("-D_CRT_SECURE_NO_WARNINGS")
+            .arg("-O2")
+            .arg(format!("--sysroot={}", self.config.xwin_dir.display()))
+            .output()
+            .await
+            .context("Failed to run clang for runtime compilation")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Runtime compilation failed:\n{}", stderr);
+        }
+
+        info!("Instrumentation runtime compiled: {:?}", runtime_obj);
+        Ok(())
+    }
+
+    /// Link instrumented object file with runtime to create final executable
+    async fn link_instrumented_exe(
+        &self,
+        obj_path: &Path,
+        runtime_obj: &Path,
+        output_exe: &Path,
+        template_name: &str,
+    ) -> Result<()> {
+        let template_libs = get_template_libs(template_name);
+
+        let mut cmd = tokio::process::Command::new("lld-link");
+        cmd.arg(obj_path)
+            .arg(runtime_obj) // Link with instrumentation runtime
+            .arg("/out:".to_owned() + output_exe.to_str().unwrap())
+            .arg("/subsystem:console")
+            .arg("/machine:x64")
+            .arg(format!("/libpath:{}/lib", self.config.xwin_dir.display()));
+
+        // Add template-specific libraries
+        for lib in template_libs {
+            cmd.arg(format!("{}.lib", lib));
+        }
+
+        // Add standard Windows libraries
+        cmd.arg("kernel32.lib")
+            .arg("user32.lib")
+            .arg("advapi32.lib")
+            .arg("ws2_32.lib");
+
+        let output = cmd
+            .output()
+            .await
+            .context("Failed to link instrumented executable")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Linking instrumented executable failed:\n{}", stderr);
         }
 
         Ok(())
