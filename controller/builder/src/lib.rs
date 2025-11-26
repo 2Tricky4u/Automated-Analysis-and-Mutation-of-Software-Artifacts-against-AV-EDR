@@ -1251,6 +1251,11 @@ impl ArtifactBuilder {
             .arg("-D_CRT_SECURE_NO_WARNINGS")
             .arg("-O2")
             .arg(format!("--sysroot={}", self.config.xwin_dir.display()))
+            // Add explicit include paths for xwin SDK
+            .arg(format!("-I{}/crt/include", self.config.xwin_dir.display()))
+            .arg(format!("-I{}/sdk/include/ucrt", self.config.xwin_dir.display()))
+            .arg(format!("-I{}/sdk/include/um", self.config.xwin_dir.display()))
+            .arg(format!("-I{}/sdk/include/shared", self.config.xwin_dir.display()))
             .output()
             .await
             .context("Failed to run clang for runtime compilation")?;
@@ -1274,13 +1279,23 @@ impl ArtifactBuilder {
     ) -> Result<()> {
         let template_libs = get_template_libs(template_name);
 
-        let mut cmd = tokio::process::Command::new("lld-link");
+        // Use full path to lld-link (WSL has it at /usr/lib/llvm-17/bin/lld-link)
+        let lld_link_path = if cfg!(target_os = "linux") {
+            "/usr/lib/llvm-17/bin/lld-link"
+        } else {
+            "lld-link" // Fallback to PATH lookup on other platforms
+        };
+
+        let mut cmd = tokio::process::Command::new(lld_link_path);
         cmd.arg(obj_path)
             .arg(runtime_obj) // Link with instrumentation runtime
             .arg("/out:".to_owned() + output_exe.to_str().unwrap())
             .arg("/subsystem:console")
             .arg("/machine:x64")
-            .arg(format!("/libpath:{}/lib", self.config.xwin_dir.display()));
+            // Add xwin library paths (CRT and Windows SDK)
+            .arg(format!("/libpath:{}/crt/lib/x86_64", self.config.xwin_dir.display()))
+            .arg(format!("/libpath:{}/sdk/lib/um/x86_64", self.config.xwin_dir.display()))
+            .arg(format!("/libpath:{}/sdk/lib/ucrt/x86_64", self.config.xwin_dir.display()));
 
         // Add template-specific libraries
         for lib in template_libs {
@@ -1291,16 +1306,18 @@ impl ArtifactBuilder {
         cmd.arg("kernel32.lib")
             .arg("user32.lib")
             .arg("advapi32.lib")
-            .arg("ws2_32.lib");
+            .arg("ws2_32.lib")
+            .arg("msvcrt.lib");   // C runtime (dynamic, includes UCRT)
 
         let output = cmd
             .output()
             .await
-            .context("Failed to link instrumented executable")?;
+            .context("Failed to run lld-link")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Linking instrumented executable failed:\n{}", stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            anyhow::bail!("Linking instrumented executable failed:\nSTDERR:\n{}\nSTDOUT:\n{}", stderr, stdout);
         }
 
         Ok(())
