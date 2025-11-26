@@ -4,7 +4,7 @@ use std::time::{Duration, Instant, SystemTime};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, transport::Server};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 mod execution;
 mod telemetry;
@@ -804,6 +804,57 @@ impl WorkerAgent for WorkerAgentService {
         // Abort trace collector (it's blocking in named pipe accept, so just abort)
         trace_handle.abort();
 
+        // Collect BB coverage from disk (if instrumented with --trace=bb or --trace=api+bb)
+        let coverage_paths = vec![
+            std::path::PathBuf::from("coverage.bin"),
+            std::path::PathBuf::from("coverage_bbs.txt"),
+        ];
+
+        if coverage_paths.iter().all(|p| p.exists()) {
+            info!("Found BB coverage files, collecting...");
+
+            match collect_bb_coverage(&coverage_paths[0], &coverage_paths[1], &job_id).await {
+                Ok(coverage_event) => {
+                    info!(
+                        "✅ Collected BB coverage: {} basic blocks",
+                        coverage_event
+                            .typed_event
+                            .as_ref()
+                            .and_then(|te| match te {
+                                edr::common::telemetry_data::TypedEvent::Coverage(c) => Some(c.total_bbs),
+                                _ => None,
+                            })
+                            .unwrap_or(0)
+                    );
+                    telemetry_events.push(coverage_event);
+                }
+                Err(e) => {
+                    warn!("Failed to collect BB coverage: {}", e);
+                }
+            }
+        } else {
+            debug!("No BB coverage files found (artifact not instrumented for coverage)");
+        }
+
+        // Collect API checkpoints from disk (if instrumented with --trace=api or --trace=api+bb)
+        let checkpoints_path = std::path::PathBuf::from("checkpoints.log");
+        if checkpoints_path.exists() {
+            info!("Found API checkpoints file, collecting...");
+
+            match collect_api_checkpoints(&checkpoints_path, &job_id).await {
+                Ok(checkpoint_events) => {
+                    let checkpoint_count = checkpoint_events.len();
+                    info!("✅ Collected {} API checkpoint events", checkpoint_count);
+                    telemetry_events.extend(checkpoint_events);
+                }
+                Err(e) => {
+                    warn!("Failed to collect API checkpoints: {}", e);
+                }
+            }
+        } else {
+            debug!("No API checkpoints file found (artifact not instrumented for API tracing)");
+        }
+
         let telemetry_count = telemetry_events.len() as i32;
         info!("Total telemetry events collected: {}", telemetry_count);
 
@@ -1347,4 +1398,120 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     Ok(())
+}
+
+// ============================================================================
+// Helper Functions: BB Coverage and Checkpoint Collection
+// ============================================================================
+
+/// Collect BB coverage from disk files (coverage.bin + coverage_bbs.txt)
+async fn collect_bb_coverage(
+    bitmap_path: &std::path::Path,
+    metadata_path: &std::path::Path,
+    job_id: &str,
+) -> Result<edr::common::TelemetryData, Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::fs;
+
+    // Read binary coverage bitmap (64KB)
+    let bitmap = fs::read(bitmap_path).await?;
+
+    // Read BB metadata (text file with BB IDs and hit counts)
+    let metadata_text = fs::read_to_string(metadata_path).await?;
+
+    let mut bb_ids = Vec::new();
+    let mut hit_counts = Vec::new();
+
+    for line in metadata_text.lines() {
+        let line = line.trim();
+
+        // Skip comments and headers
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+
+        // Parse "BB_ID HIT_COUNT"
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            if let (Ok(bb_id), Ok(hit_count)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+                bb_ids.push(bb_id);
+                hit_counts.push(hit_count);
+            }
+        }
+    }
+
+    let total_bbs = bb_ids.len() as u32;
+
+    info!(
+        "Parsed BB metadata: {} basic blocks, bitmap size: {} bytes",
+        total_bbs,
+        bitmap.len()
+    );
+
+    Ok(edr::common::TelemetryData {
+        job_id: job_id.to_string(),
+        event_type: "coverage".to_string(),
+        timestamp: chrono::Utc::now().timestamp_millis(),
+        payload: vec![], // Empty payload (data in typed_event)
+        metadata: std::collections::HashMap::new(),
+        typed_event: Some(edr::common::telemetry_data::TypedEvent::Coverage(
+            edr::common::CoverageEvent {
+                bitmap,
+                bb_ids,
+                hit_counts,
+                total_bbs,
+            },
+        )),
+    })
+}
+
+/// Collect API checkpoint events from disk file (checkpoints.log)
+async fn collect_api_checkpoints(
+    checkpoints_path: &std::path::Path,
+    job_id: &str,
+) -> Result<Vec<edr::common::TelemetryData>, Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::fs;
+
+    let checkpoints_text = fs::read_to_string(checkpoints_path).await?;
+    let mut events = Vec::new();
+
+    for (line_num, line) in checkpoints_text.lines().enumerate() {
+        let line = line.trim();
+
+        if line.is_empty() {
+            continue;
+        }
+
+        // Parse JSON line: {"ts_us":1234567,"checkpoint":"api:VirtualAlloc"}
+        match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(checkpoint_json) => {
+                let ts_us = checkpoint_json["ts_us"].as_u64().unwrap_or(0);
+                let name = checkpoint_json["checkpoint"]
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                events.push(edr::common::TelemetryData {
+                    job_id: job_id.to_string(),
+                    event_type: "checkpoint".to_string(),
+                    timestamp: (ts_us / 1000) as i64, // Convert to milliseconds for consistency
+                    payload: vec![],
+                    metadata: std::collections::HashMap::new(),
+                    typed_event: Some(edr::common::telemetry_data::TypedEvent::Checkpoint(
+                        edr::common::CheckpointEvent { name, ts_us },
+                    )),
+                });
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to parse checkpoint line {} in {}: {} - Line: {}",
+                    line_num + 1,
+                    checkpoints_path.display(),
+                    e,
+                    line
+                );
+            }
+        }
+    }
+
+    Ok(events)
 }

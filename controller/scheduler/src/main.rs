@@ -541,13 +541,46 @@ impl SchedulerService {
         // Index events individually (simpler API usage)
         for event in batch {
             // Parse payload to extract searchable fields, but keep original as string
-            let payload_fields = if let Ok(payload_json) =
+            let mut payload_fields = if let Ok(payload_json) =
                 serde_json::from_slice::<serde_json::Value>(&event.payload)
             {
                 payload_json.as_object().cloned().unwrap_or_default()
             } else {
                 Default::default()
             };
+
+            // Handle typed_event variants (for events using structured proto instead of JSON payload)
+            // This is critical for trace events which use typed_event.trace instead of payload
+            if let Some(ref typed_event) = event.typed_event {
+                use edr::common::telemetry_data::TypedEvent;
+                match typed_event {
+                    TypedEvent::Trace(trace) => {
+                        // Extract trace event fields into payload_fields for indexing
+                        payload_fields.insert("seq".to_string(), json!(trace.seq));
+                        payload_fields.insert("file".to_string(), json!(&trace.file));
+                        payload_fields.insert("line".to_string(), json!(trace.line));
+                        payload_fields.insert("func".to_string(), json!(&trace.func));
+                        payload_fields.insert("ts_us".to_string(), json!(trace.ts_us));
+                    }
+                    TypedEvent::Coverage(cov) => {
+                        // Extract BB coverage fields into payload_fields for indexing
+                        payload_fields.insert("total_bbs".to_string(), json!(cov.total_bbs));
+                        payload_fields.insert("bb_ids".to_string(), json!(&cov.bb_ids));
+                        payload_fields.insert("hit_counts".to_string(), json!(&cov.hit_counts));
+                        payload_fields.insert("bitmap_size".to_string(), json!(cov.bitmap.len()));
+
+                        // Store bitmap as Base64 for Elasticsearch (more efficient than raw bytes)
+                        use base64::{engine::general_purpose, Engine as _};
+                        let bitmap_b64 = general_purpose::STANDARD.encode(&cov.bitmap);
+                        payload_fields.insert("bitmap_b64".to_string(), json!(bitmap_b64));
+                    }
+                    TypedEvent::Checkpoint(cp) => {
+                        // Extract checkpoint fields into payload_fields for indexing
+                        payload_fields.insert("checkpoint_name".to_string(), json!(&cp.name));
+                        payload_fields.insert("ts_us".to_string(), json!(cp.ts_us));
+                    }
+                }
+            }
 
             // Build document with flattened payload fields at top level for searchability
             let mut doc = json!({
