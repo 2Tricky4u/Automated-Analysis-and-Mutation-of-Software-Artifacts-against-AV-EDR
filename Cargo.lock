@@ -254,6 +254,7 @@ name = "builder"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "build-emitter",
  "chrono",
  "serde",
  "serde_json",
