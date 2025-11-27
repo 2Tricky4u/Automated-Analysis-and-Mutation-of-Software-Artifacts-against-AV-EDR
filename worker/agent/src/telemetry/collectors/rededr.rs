@@ -47,7 +47,7 @@ pub struct RedEdrEvent {
     #[serde(default)]
     pub event_id: Option<u32>,
     #[serde(default)]
-    pub callstack: Option<Vec<String>>,
+    pub callstack: Option<serde_json::Value>,  // Can be Vec<String> or Vec<Object>, let it be flexible
     // Complex fields that need explicit typing
     #[serde(default)]
     pub stack_trace: Option<Vec<StackTraceEntry>>,
