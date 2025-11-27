@@ -1239,8 +1239,9 @@ impl ArtifactBuilder {
         runtime_src: &Path,
         runtime_obj: &Path,
     ) -> Result<()> {
-        let output = tokio::process::Command::new("clang")
-            .arg("-c") // Compile only (don't link)
+        // Build the command
+        let mut cmd = tokio::process::Command::new("clang");
+        cmd.arg("-c") // Compile only (don't link)
             .arg(runtime_src)
             .arg("-o")
             .arg(runtime_obj)
@@ -1255,14 +1256,31 @@ impl ArtifactBuilder {
             .arg(format!("-I{}/crt/include", self.config.xwin_dir.display()))
             .arg(format!("-I{}/sdk/include/ucrt", self.config.xwin_dir.display()))
             .arg(format!("-I{}/sdk/include/um", self.config.xwin_dir.display()))
-            .arg(format!("-I{}/sdk/include/shared", self.config.xwin_dir.display()))
+            .arg(format!("-I{}/sdk/include/shared", self.config.xwin_dir.display()));
+
+        // Log the command for debugging
+        info!(
+            "Compiling runtime: clang -c {} -o {} -target x86_64-pc-windows-msvc --sysroot={} -I.../crt/include -I.../sdk/include/{{ucrt,um,shared}}",
+            runtime_src.display(),
+            runtime_obj.display(),
+            self.config.xwin_dir.display()
+        );
+
+        let output = cmd
             .output()
             .await
             .context("Failed to run clang for runtime compilation")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Runtime compilation failed:\n{}", stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            anyhow::bail!(
+                "Runtime compilation failed:\nSTDOUT:\n{}\nSTDERR:\n{}\nRuntime source: {:?}\nXwin dir: {:?}",
+                stdout,
+                stderr,
+                runtime_src,
+                self.config.xwin_dir
+            );
         }
 
         info!("Instrumentation runtime compiled: {:?}", runtime_obj);
