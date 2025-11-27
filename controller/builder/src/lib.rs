@@ -20,6 +20,8 @@ pub struct BuilderConfig {
     pub output_dir: PathBuf,
     /// Path to xwin SDK (e.g., "/root/.xwin")
     pub xwin_dir: PathBuf,
+    /// Path to instrumentation runtime source (e.g., "build/emitter/runtime/instrumentation_runtime.c")
+    pub runtime_src: PathBuf,
 }
 
 impl Default for BuilderConfig {
@@ -28,6 +30,7 @@ impl Default for BuilderConfig {
             templates_dir: PathBuf::from("corpus/templates"),
             output_dir: PathBuf::from("artifacts"),
             xwin_dir: PathBuf::from("/root/.xwin"),
+            runtime_src: PathBuf::from("build/emitter/runtime/instrumentation_runtime.c"),
         }
     }
 }
@@ -1179,12 +1182,22 @@ impl ArtifactBuilder {
         let _ = tokio::fs::remove_file(&instrumented_ir_path).await;
 
         // Step 5: Compile instrumentation runtime to object file (if not already compiled)
-        let runtime_src = PathBuf::from("build/emitter/runtime/instrumentation_runtime.c");
+        let runtime_src = &self.config.runtime_src;
         let runtime_obj = self.config.output_dir.join("instrumentation_runtime.o");
+
+        // Check if runtime source exists
+        if !runtime_src.exists() {
+            anyhow::bail!(
+                "Instrumentation runtime source not found: {:?}\nExpected at: {:?}\nCurrent working directory: {:?}",
+                runtime_src,
+                runtime_src.canonicalize().unwrap_or_else(|_| runtime_src.clone()),
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("unknown"))
+            );
+        }
 
         if !runtime_obj.exists() {
             info!("Compiling instrumentation runtime...");
-            self.compile_runtime(&runtime_src, &runtime_obj)
+            self.compile_runtime(runtime_src, &runtime_obj)
                 .await
                 .context("Failed to compile instrumentation runtime")?;
         }
