@@ -146,19 +146,19 @@ int main(void) {
     printf("\n");
 
     printf("Press Enter to start tests...\n");
-    getchar();
+    //getchar();
     printf("\n");
 
     // Test 1: EICAR in memory
     test_eicar_in_memory();
     printf("Press Enter for next test...\n");
-    getchar();
+    //getchar();
     printf("\n");
 
     // Test 2: EICAR file write
     test_eicar_file_write();
     printf("Press Enter for next test...\n");
-    getchar();
+    //getchar();
     printf("\n");
 
     // Test 3: EICAR in executable memory
@@ -173,7 +173,9 @@ int main(void) {
     printf("========================================\n");
 
     printf("\nPress Enter to exit...\n");
-    getchar();
+    //getchar();
+
+
 
     return 0;
 }

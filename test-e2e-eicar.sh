@@ -11,8 +11,8 @@ CONTROLLER_IP="localhost"
 CONTROLLER_PORT="50051"
 WORKER_IP="${WORKER_IP:-10.200.200.100}"  # Default worker IP, can override with env var
 WORKER_PORT="50052"
-TEMPLATE="rwx_direct"
-SOURCE_FILE="rwx_direct.c"
+TEMPLATE="eicar_test"
+SOURCE_FILE="eicar_test.c"
 JOB_PREFIX="loader-e2e"
 
 echo "[CONFIG]"
@@ -30,7 +30,7 @@ echo "[1/4] Building EICAR artifact..."
 BUILD_RESPONSE=$(grpcurl -plaintext \
   -import-path controller/proto \
   -proto controller.proto \
-  -d "{\"template_name\":\"$TEMPLATE\",\"source_file\":\"$SOURCE_FILE\"}" \
+  -d "{\"template_name\":\"$TEMPLATE\",\"source_file\":\"$SOURCE_FILE\",\"trace_mode\":\"all\"}" \
   $CONTROLLER_IP:$CONTROLLER_PORT \
   edr.controller.Controller/BuildArtifact 2>&1)
 

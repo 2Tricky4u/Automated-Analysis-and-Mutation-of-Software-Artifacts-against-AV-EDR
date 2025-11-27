@@ -506,7 +506,23 @@ impl WorkerAgent for WorkerAgentService {
         info!("Trace collector started on named pipe: \\\\.\\pipe\\rededr_trace");
 
         // 4. Spawn process with guard (guard ensures kill if error occurs)
+        // Create artifact-specific telemetry directory to avoid cross-contamination
+        let artifacts_base = std::path::Path::new("C:\\temp\\artifacts");
+        let telemetry_dir = artifacts_base.join(format!("telemetry_{}", req.artifact_id));
+
+        // Create telemetry directory (clean it if it already exists to avoid stale files)
+        if telemetry_dir.exists() {
+            let _ = std::fs::remove_dir_all(&telemetry_dir);
+        }
+        std::fs::create_dir_all(&telemetry_dir).map_err(|e| {
+            error!("Failed to create telemetry directory: {}", e);
+            Status::internal(format!("Failed to create telemetry directory: {}", e))
+        })?;
+
+        info!("Created artifact-specific telemetry directory: {:?}", telemetry_dir);
+
         let child = tokio::process::Command::new(&artifact_path)
+            .current_dir(&telemetry_dir)  // Runtime will write coverage.bin, checkpoints.log here
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -733,7 +749,9 @@ impl WorkerAgent for WorkerAgentService {
             } else {
                 stderr_output.clone()
             };
-            warn!("Process stderr:\n{}", formatted);
+            info!("Process stderr:\n{}", formatted);  // Changed to INFO so we always see it
+        } else {
+            info!("Process stderr: (empty)");
         }
 
         // ====================================================================
@@ -805,18 +823,17 @@ impl WorkerAgent for WorkerAgentService {
         trace_handle.abort();
 
         // Collect BB coverage from disk (if instrumented with --trace=bb or --trace=api+bb)
-        let coverage_paths = vec![
-            std::path::PathBuf::from("coverage.bin"),
-            std::path::PathBuf::from("coverage_bbs.txt"),
-        ];
+        // Look in artifact-specific telemetry directory where process ran
+        let coverage_bin_path = telemetry_dir.join("coverage.bin");
+        let coverage_bbs_path = telemetry_dir.join("coverage_bbs.txt");
 
-        if coverage_paths.iter().all(|p| p.exists()) {
-            info!("Found BB coverage files, collecting...");
+        if coverage_bin_path.exists() && coverage_bbs_path.exists() {
+            info!("Found BB coverage files: {:?}, {:?}", coverage_bin_path, coverage_bbs_path);
 
-            match collect_bb_coverage(&coverage_paths[0], &coverage_paths[1], &job_id).await {
+            match collect_bb_coverage(&coverage_bin_path, &coverage_bbs_path, &job_id).await {
                 Ok(coverage_event) => {
                     info!(
-                        "✅ Collected BB coverage: {} basic blocks",
+                        "Collected BB coverage: {} basic blocks",
                         coverage_event
                             .typed_event
                             .as_ref()
@@ -833,18 +850,25 @@ impl WorkerAgent for WorkerAgentService {
                 }
             }
         } else {
-            debug!("No BB coverage files found (artifact not instrumented for coverage)");
+            warn!("BB coverage files NOT found in telemetry directory:");
+            if !coverage_bin_path.exists() {
+                warn!("  Missing: {:?}", coverage_bin_path);
+            }
+            if !coverage_bbs_path.exists() {
+                warn!("  Missing: {:?}", coverage_bbs_path);
+            }
+            warn!("  Artifact may not be instrumented for BB coverage, or runtime did not flush files");
         }
 
         // Collect API checkpoints from disk (if instrumented with --trace=api or --trace=api+bb)
-        let checkpoints_path = std::path::PathBuf::from("checkpoints.log");
+        let checkpoints_path = telemetry_dir.join("checkpoints.log");
         if checkpoints_path.exists() {
-            info!("Found API checkpoints file, collecting...");
+            info!("Found API checkpoints file: {:?}", checkpoints_path);
 
             match collect_api_checkpoints(&checkpoints_path, &job_id).await {
                 Ok(checkpoint_events) => {
                     let checkpoint_count = checkpoint_events.len();
-                    info!("✅ Collected {} API checkpoint events", checkpoint_count);
+                    info!("Collected {} API checkpoint events", checkpoint_count);
                     telemetry_events.extend(checkpoint_events);
                 }
                 Err(e) => {
@@ -852,7 +876,8 @@ impl WorkerAgent for WorkerAgentService {
                 }
             }
         } else {
-            debug!("No API checkpoints file found (artifact not instrumented for API tracing)");
+            warn!("API checkpoints file NOT found: {:?}", checkpoints_path);
+            warn!("  Artifact may not be instrumented for API tracing, or runtime did not flush file");
         }
 
         let telemetry_count = telemetry_events.len() as i32;

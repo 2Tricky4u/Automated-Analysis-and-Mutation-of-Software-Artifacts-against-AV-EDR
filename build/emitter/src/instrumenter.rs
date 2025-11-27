@@ -105,18 +105,23 @@ impl Instrumenter {
         let mut bb_id = 0u32;
         let mut injected_count = 0;
         let mut need_entry_marker = false;
+        let mut is_in_main = false;
+        let mut init_injected = false;
 
         for line in ir.lines() {
             // Detect function entry
             if line.trim_start().starts_with("define ") {
                 in_function = true;
+                is_in_main = line.contains(" @main(") || line.contains(" @wmain(");
                 // DON'T reset bb_id here - it should be global across all functions
 
                 // ONLY instrument non-library functions (skip linkonce_odr comdat functions)
                 let is_library_function = line.contains("linkonce_odr") || line.contains("comdat");
                 need_entry_marker = !is_library_function;
 
-                if !is_library_function {
+                if is_in_main {
+                    eprintln!("[INSTRUMENTER] Found main() function - will inject __coverage_init()");
+                } else if !is_library_function {
                     debug!("Found function definition: {}", line.trim());
                 } else {
                     debug!("Skipping library function: {}", line.trim());
@@ -154,6 +159,13 @@ impl Instrumenter {
                     if self.bb_counter == 0 {
                         eprintln!("[INSTRUMENTER] First BB injection after allocas");
                         eprintln!("  Next instruction: {}", trimmed);
+                    }
+
+                    // If this is main() and we haven't injected init yet, do it first
+                    if is_in_main && !init_injected {
+                        instrumented.push_str("  call void @__coverage_init()\n");
+                        init_injected = true;
+                        eprintln!("[INSTRUMENTER] Injected __coverage_init() call in main()");
                     }
 
                     instrumented.push_str(&format!(
