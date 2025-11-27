@@ -737,7 +737,10 @@ impl SchedulerService {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    // Initialize tracing with INFO level (visible in both debug and release builds)
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
 
     // Load generated TOML config (auto-finds in standard locations)
     // Search order:
