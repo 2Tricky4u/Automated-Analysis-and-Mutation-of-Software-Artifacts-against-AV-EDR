@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 pub mod mutator;
 
@@ -59,14 +59,15 @@ pub struct BuiltArtifact {
 }
 
 /// Template-specific library dependencies
-/// Matches the extra_libs in build_all.sh
+/// Returns base library names (without .lib extension or -Wl prefix)
+/// Caller is responsible for formatting for specific linker
 fn get_template_libs(template_name: &str) -> &'static [&'static str] {
     match template_name {
         "loader_v1" => &[],
-        "rwx_direct" => &["-Wl,-defaultlib:advapi32", "-Wl,-defaultlib:wininet"],
-        "process_injection" => &["-Wl,-defaultlib:user32"],
-        "network_beacon" => &["-Wl,-defaultlib:ws2_32"],
-        "eicar_test" => &["-Wl,-defaultlib:advapi32"], // GetUserNameA requires advapi32.lib
+        "rwx_direct" => &["advapi32", "wininet"],
+        "process_injection" => &["user32"],
+        "network_beacon" => &["ws2_32"],
+        "eicar_test" => &["advapi32"], // GetUserNameA requires advapi32.lib
         _ => {
             warn!("Unknown template '{}', using no extra libs", template_name);
             &[]
@@ -728,10 +729,14 @@ impl ArtifactBuilder {
             "-Wl,-defaultlib:kernel32",
         ];
 
-        // Add template-specific libraries
+        // Add template-specific libraries (format for clang wrapper: -Wl,-defaultlib:name)
         let extra_libs = get_template_libs(template_name);
+        let mut formatted_lib_args: Vec<String> = Vec::new();
         for lib in extra_libs {
-            args.push(lib);
+            formatted_lib_args.push(format!("-Wl,-defaultlib:{}", lib));
+        }
+        for lib_arg in &formatted_lib_args {
+            args.push(lib_arg.as_str());
         }
 
         // Add output and source
@@ -852,10 +857,14 @@ impl ArtifactBuilder {
             "-Wl,-defaultlib:kernel32",
         ];
 
-        // Add template-specific libraries
+        // Add template-specific libraries (format for clang wrapper: -Wl,-defaultlib:name)
         let extra_libs = get_template_libs(template_name);
+        let mut formatted_lib_args: Vec<String> = Vec::new();
         for lib in extra_libs {
-            args.push(lib);
+            formatted_lib_args.push(format!("-Wl,-defaultlib:{}", lib));
+        }
+        for lib_arg in &formatted_lib_args {
+            args.push(lib_arg.as_str());
         }
 
         args.push("-o");
@@ -1213,10 +1222,37 @@ impl ArtifactBuilder {
         // Clean up object file
         let _ = tokio::fs::remove_file(&obj_path).await;
 
-        // Step 7: Move to output directory and update artifact metadata
+        // Step 7: Verify instrumented executable exists and has reasonable size
+        if !instrumented_exe_path.exists() {
+            anyhow::bail!("Instrumented executable not found at {:?}", instrumented_exe_path);
+        }
+
         let instrumented_data = tokio::fs::read(&instrumented_exe_path)
             .await
             .context("Failed to read instrumented artifact")?;
+
+        // Sanity check: instrumented binary should be larger than original, not smaller
+        if instrumented_data.len() < built.size_bytes as usize {
+            error!(
+                "WARNING: Instrumented binary ({} bytes) is SMALLER than original ({} bytes)! This indicates a build error.",
+                instrumented_data.len(),
+                built.size_bytes
+            );
+            error!("Instrumented path: {:?}", instrumented_exe_path);
+            error!("Original path: {:?}", built.output_path);
+
+            // Check if object file exists (might have been left behind)
+            if obj_path.exists() {
+                let obj_size = tokio::fs::metadata(&obj_path).await?.len();
+                error!("Object file still exists: {:?} ({} bytes)", obj_path, obj_size);
+            }
+
+            anyhow::bail!(
+                "Instrumented binary is suspiciously small ({} bytes vs {} bytes original). Check linker output.",
+                instrumented_data.len(),
+                built.size_bytes
+            );
+        }
 
         let instrumented_id = self.compute_sha256(&instrumented_data);
         let final_output = self.config.output_dir.join(format!("{}.exe", instrumented_id));
@@ -1226,9 +1262,10 @@ impl ArtifactBuilder {
             .context("Failed to move instrumented artifact to output directory")?;
 
         info!(
-            "Instrumented artifact built: {} ({} bytes) -> {:?}",
+            "Instrumented artifact built: {} ({} bytes, original was {} bytes) -> {:?}",
             instrumented_id,
             instrumented_data.len(),
+            built.size_bytes,
             final_output
         );
 
@@ -1338,17 +1375,39 @@ impl ArtifactBuilder {
             .arg("user32.lib")
             .arg("advapi32.lib")
             .arg("ws2_32.lib")
-            .arg("msvcrt.lib");   // C runtime (dynamic, includes UCRT)
+            .arg("libcmt.lib")    // Static C runtime (must match clang builds that use -Wl,-defaultlib:libcmt)
+            .arg("libucrt.lib");  // Universal CRT
+
+        // Log the FULL command for debugging (including all library arguments)
+        let full_cmd = format!("{:?}", cmd);
+        info!("Full linking command: {}", full_cmd);
 
         let output = cmd
             .output()
             .await
             .context("Failed to run lld-link")?;
 
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Always log linker output (even if empty) to diagnose issues
+        info!("Linker stderr: [{}]", if stderr.is_empty() { "empty" } else { &stderr });
+        info!("Linker stdout: [{}]", if stdout.is_empty() { "empty" } else { &stdout });
+
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
             anyhow::bail!("Linking instrumented executable failed:\nSTDERR:\n{}\nSTDOUT:\n{}", stderr, stdout);
+        }
+
+        // Verify output file was created and has reasonable size
+        if !output_exe.exists() {
+            anyhow::bail!("Linker succeeded but output file not found: {:?}", output_exe);
+        }
+
+        let output_size = tokio::fs::metadata(output_exe).await?.len();
+        info!("Linked executable created: {:?} ({} bytes)", output_exe, output_size);
+
+        if output_size < 10000 {
+            warn!("WARNING: Linked executable is very small ({} bytes). This may indicate a linker issue.", output_size);
         }
 
         Ok(())
