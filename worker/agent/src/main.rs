@@ -794,7 +794,7 @@ impl WorkerAgent for WorkerAgentService {
         trace_rx.close();  // Stop accepting new events
         let mut trace_events_count = 0;
         while let Ok(trace_event) = trace_rx.try_recv() {
-            // Convert trace event to TelemetryData proto
+            // Convert trace event to TelemetryData proto (includes thread_id from binary protocol)
             let telemetry_data = edr::common::TelemetryData {
                 job_id: job_id.clone(),
                 event_type: "trace".to_string(),
@@ -808,6 +808,7 @@ impl WorkerAgent for WorkerAgentService {
                         line: trace_event.line,
                         func: trace_event.func,
                         ts_us: trace_event.ts_us,
+                        thread_id: trace_event.thread_id,  // Thread ID from binary protocol (0 for Base64)
                     },
                 )),
             };
