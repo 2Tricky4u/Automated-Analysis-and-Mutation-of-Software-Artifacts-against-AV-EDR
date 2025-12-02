@@ -496,14 +496,14 @@ impl WorkerAgent for WorkerAgentService {
         let (trace_tx, mut trace_rx) = tokio::sync::mpsc::channel(1000);
         let trace_collector = telemetry::collectors::trace::TraceCollector::new(trace_tx);
 
-        // Spawn trace collector in blocking task (named pipe operations block)
-        let trace_handle = tokio::task::spawn_blocking(move || {
-            if let Err(e) = trace_collector.start_server() {
+        // Spawn async trace collector (fully async with tokio::net::windows::named_pipe)
+        let trace_handle = tokio::spawn(async move {
+            if let Err(e) = trace_collector.start_server().await {
                 error!("Trace collector failed: {}", e);
             }
         });
 
-        info!("Trace collector started on named pipe: \\\\.\\pipe\\rededr_trace");
+        info!("Async trace collector started on named pipe: \\\\.\\pipe\\rededr_trace");
 
         // 4. Spawn process with guard (guard ensures kill if error occurs)
         // Create artifact-specific telemetry directory to avoid cross-contamination
