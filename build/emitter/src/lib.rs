@@ -13,11 +13,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tracing::{debug, info, warn};
 
+pub mod ast_line_tracer;
 pub mod ast_mutator;
 pub mod instrumenter;
 pub mod ir_mutator;
 
 // Re-exports
+pub use ast_line_tracer::{inject_line_traces, SourceLanguage};
 pub use ast_mutator::AstMutator;
 pub use instrumenter::Instrumenter;
 pub use ir_mutator::IrMutator;

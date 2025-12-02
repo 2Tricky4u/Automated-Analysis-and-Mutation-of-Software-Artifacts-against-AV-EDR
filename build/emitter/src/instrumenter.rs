@@ -66,20 +66,21 @@ impl Instrumenter {
                 self.inject_api_tracing(&with_bb)?
             }
             crate::TraceMode::Lines => {
-                // Line tracing is done at source level (preprocessor-based)
+                // Line tracing is done at AST/source level (tree-sitter-based)
                 // No IR instrumentation needed, just pass through
                 ir_content
             }
             crate::TraceMode::LinesAroundBB(bb_id) => {
-                // Line tracing is done at source level (preprocessor-based)
+                // Line tracing is done at AST/source level (tree-sitter-based)
                 // TODO: Implement targeted narrowing around specific BB
                 info!("LinesAroundBB mode not fully implemented, using full line tracing");
                 ir_content
             }
             crate::TraceMode::All => {
+                // Line tracing is done at AST/source level (tree-sitter-based)
+                // Only inject BB + API at IR level
                 let with_bb = self.inject_bb_coverage(&ir_content)?;
-                let with_api = self.inject_api_tracing(&with_bb)?;
-                self.inject_line_tracing(&with_api, None)?
+                self.inject_api_tracing(&with_bb)?
             }
         };
 
@@ -289,77 +290,8 @@ impl Instrumenter {
         result
     }
 
-    /// Inject line-level tracing with Base64 encoding to named pipe
-    fn inject_line_tracing(&mut self, ir: &str, _around_bb: Option<u32>) -> Result<String> {
-        debug!("Injecting line-level tracing instrumentation");
-
-        let mut instrumented = String::new();
-        let mut in_function = false;
-        let mut current_function = String::new();
-        let mut line_map: HashMap<u32, (String, u32, String)> = HashMap::new();
-
-        // Parse IR to extract debug info (!dbg metadata)
-        for line in ir.lines() {
-            instrumented.push_str(line);
-            instrumented.push('\n');
-
-            // Track current function
-            if line.trim_start().starts_with("define ") {
-                in_function = true;
-                // Extract function name from: define i32 @main()
-                if let Some(at_pos) = line.find('@') {
-                    if let Some(paren_pos) = line[at_pos..].find('(') {
-                        current_function = line[at_pos + 1..at_pos + paren_pos].to_string();
-                    }
-                }
-            }
-
-            if in_function && line.trim() == "}" {
-                in_function = false;
-            }
-
-            // Inject line tracing at instructions with !dbg metadata
-            if in_function && line.contains("!dbg !") {
-                // Extract debug info ID (e.g., "!dbg !42")
-                if let Some(dbg_pos) = line.rfind("!dbg !") {
-                    let dbg_id_str = &line[dbg_pos + 6..];
-                    if let Some(_dbg_id) = dbg_id_str.split_whitespace().next() {
-                        // Insert trace call BEFORE the instruction
-                        // Format: __trace_line(seq, file_b64, line, func_b64)
-                        let seq = self.line_counter;
-                        let file_b64 = base64_str("unknown.c"); // TODO: Extract from !DILocation
-                        let line_num = 0; // TODO: Extract from !DILocation
-                        let func_b64 = base64_str(&current_function);
-
-                        let trace_call = format!(
-                            "  call void @__trace_line(i32 {}, i8* getelementptr inbounds ([{}x i8], [{}x i8]* @.str.file.{}, i32 0, i32 0), i32 {}, i8* getelementptr inbounds ([{}x i8], [{}x i8]* @.str.func.{}, i32 0, i32 0))\n",
-                            seq,
-                            file_b64.len() + 1, file_b64.len() + 1, seq,
-                            line_num,
-                            func_b64.len() + 1, func_b64.len() + 1, seq
-                        );
-
-                        // Insert trace call as previous line (before the instruction)
-                        // We need to insert it into the already-built string
-                        // For simplicity, we'll rebuild the last line
-                        instrumented.pop(); // Remove \n
-                        let last_line = instrumented.lines().last().unwrap_or("").to_string();
-                        instrumented = instrumented[..instrumented.len() - last_line.len()].to_string();
-                        instrumented.push_str(&trace_call);
-                        instrumented.push_str(&last_line);
-                        instrumented.push('\n');
-
-                        line_map.insert(seq, ("unknown.c".to_string(), line_num, current_function.clone()));
-                        self.line_counter += 1;
-                    }
-                }
-            }
-        }
-
-        info!("Injected {} line trace points", line_map.len());
-
-        Ok(instrumented)
-    }
+    // REMOVED: inject_line_tracing (IR-level)
+    // Line tracing is now done at AST/source level using tree-sitter (see ast_line_tracer.rs)
 
     /// Add runtime function declarations to IR
     fn add_runtime_declarations(&self, ir: &str, trace_mode: crate::TraceMode) -> Result<String> {

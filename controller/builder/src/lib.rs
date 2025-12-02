@@ -1152,8 +1152,39 @@ impl ArtifactBuilder {
             anyhow::bail!("Source file not found for instrumentation: {:?}", built.source_path);
         }
 
+        // Step 1.5: Apply AST-level line tracing (if enabled)
+        let source_for_compilation = if trace_mode == build_emitter::TraceMode::Lines
+            || trace_mode == build_emitter::TraceMode::All
+        {
+            info!("Applying AST-level line tracing to source code...");
+
+            // Read original source
+            let original_source = tokio::fs::read_to_string(&built.source_path)
+                .await
+                .context("Failed to read source file for line tracing")?;
+
+            // Detect language from file extension
+            let language = build_emitter::SourceLanguage::from_path(&built.source_path);
+
+            // Inject line traces at AST level
+            let instrumented_source = build_emitter::inject_line_traces(&original_source, language)
+                .context("Failed to inject line traces at AST level")?;
+
+            // Write instrumented source to temporary file
+            let instrumented_source_path = built.source_path.with_extension("line_traced.c");
+            tokio::fs::write(&instrumented_source_path, &instrumented_source)
+                .await
+                .context("Failed to write line-traced source")?;
+
+            info!("AST line tracing complete, using instrumented source: {:?}", instrumented_source_path);
+            instrumented_source_path
+        } else {
+            // No line tracing, use original source
+            built.source_path.clone()
+        };
+
         // Step 2: Compile source → LLVM IR
-        let ir_path = built.source_path.with_extension("instrumented.ll");
+        let ir_path = source_for_compilation.with_extension("instrumented.ll");
 
         info!("Compiling source to LLVM IR for instrumentation...");
         let template_name = built.source_path
@@ -1162,7 +1193,7 @@ impl ArtifactBuilder {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        self.compile_source_to_ir(&built.source_path, &ir_path, template_name)
+        self.compile_source_to_ir(&source_for_compilation, &ir_path, template_name)
             .await
             .context("Failed to compile source to IR for instrumentation")?;
 
@@ -1178,6 +1209,11 @@ impl ArtifactBuilder {
 
         // Clean up intermediate IR
         let _ = tokio::fs::remove_file(&ir_path).await;
+
+        // Clean up line-traced source (if it was created)
+        if source_for_compilation != built.source_path {
+            let _ = tokio::fs::remove_file(&source_for_compilation).await;
+        }
 
         // Step 4: Compile instrumented IR → object file
         let obj_path = built.source_path.with_extension("instrumented.o");

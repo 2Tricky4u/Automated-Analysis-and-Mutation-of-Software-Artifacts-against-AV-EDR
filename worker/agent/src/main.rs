@@ -816,11 +816,44 @@ impl WorkerAgent for WorkerAgentService {
         }
 
         if trace_events_count > 0 {
-            info!("✅ Collected {} line-level trace events", trace_events_count);
+            info!("✅ Collected {} line-level trace events from pipe", trace_events_count);
         }
 
         // Abort trace collector (it's blocking in named pipe accept, so just abort)
         trace_handle.abort();
+
+        // Also collect from trace.log file (fallback if pipe wasn't available)
+        let trace_log_path = telemetry_dir.join("trace.log");
+        if trace_log_path.exists() {
+            info!("Found trace.log file, collecting AST-level line traces: {:?}", trace_log_path);
+
+            match std::fs::read_to_string(&trace_log_path) {
+                Ok(trace_content) => {
+                    let mut file_trace_count = 0;
+                    for (line_num, line) in trace_content.lines().enumerate() {
+                        // AST line traces are Base64-encoded with "YjY0" prefix
+                        // Store as raw payload for now (worker sends to controller, controller decodes)
+                        let telemetry_data = edr::common::TelemetryData {
+                            job_id: job_id.clone(),
+                            event_type: "trace_line".to_string(),
+                            timestamp: chrono::Utc::now().timestamp_millis(),
+                            payload: line.as_bytes().to_vec(),
+                            metadata: [("line_num".to_string(), line_num.to_string())]
+                                .iter()
+                                .cloned()
+                                .collect(),
+                            typed_event: None,
+                        };
+                        telemetry_events.push(telemetry_data);
+                        file_trace_count += 1;
+                    }
+                    info!("✅ Collected {} AST-level line traces from trace.log", file_trace_count);
+                }
+                Err(e) => {
+                    warn!("Failed to read trace.log: {}", e);
+                }
+            }
+        }
 
         // Collect BB coverage from disk (if instrumented with --trace=bb or --trace=api+bb)
         // Look in artifact-specific telemetry directory where process ran
