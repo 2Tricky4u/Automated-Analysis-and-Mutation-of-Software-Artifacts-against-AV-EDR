@@ -1156,7 +1156,7 @@ impl ArtifactBuilder {
         let source_for_compilation = if trace_mode == build_emitter::TraceMode::Lines
             || trace_mode == build_emitter::TraceMode::All
         {
-            info!("Applying AST-level line tracing to source code...");
+            info!("Applying AST-level line tracing to source code (Binary protocol format)...");
 
             // Read original source
             let original_source = tokio::fs::read_to_string(&built.source_path)
@@ -1170,13 +1170,20 @@ impl ArtifactBuilder {
             let instrumented_source = build_emitter::inject_line_traces(&original_source, language)
                 .context("Failed to inject line traces at AST level")?;
 
+            // Count how many trace calls were injected
+            let trace_call_count = instrumented_source.matches("__trace_line_binary(").count();
+
             // Write instrumented source to temporary file
             let instrumented_source_path = built.source_path.with_extension("line_traced.c");
             tokio::fs::write(&instrumented_source_path, &instrumented_source)
                 .await
                 .context("Failed to write line-traced source")?;
 
-            info!("AST line tracing complete, using instrumented source: {:?}", instrumented_source_path);
+            info!(
+                "AST line tracing complete: injected {} trace calls into {:?}",
+                trace_call_count,
+                instrumented_source_path
+            );
             instrumented_source_path
         } else {
             // No line tracing, use original source
@@ -1245,6 +1252,14 @@ impl ArtifactBuilder {
             self.compile_runtime(runtime_src, &runtime_obj)
                 .await
                 .context("Failed to compile instrumentation runtime")?;
+        }
+
+        // Step 5.5: Verify runtime has required symbols for line tracing (non-fatal)
+        if trace_mode == build_emitter::TraceMode::Lines || trace_mode == build_emitter::TraceMode::All {
+            if let Err(e) = self.verify_runtime_symbols(&runtime_obj, trace_mode).await {
+                warn!("Runtime symbol verification failed (non-fatal): {}", e);
+                warn!("Build will continue, but linking may fail if symbols are missing");
+            }
         }
 
         // Step 6: Link instrumented object + runtime → final executable
@@ -1446,6 +1461,60 @@ impl ArtifactBuilder {
             warn!("WARNING: Linked executable is very small ({} bytes). This may indicate a linker issue.", output_size);
         }
 
+        Ok(())
+    }
+
+    /// Verify that the runtime object file contains required symbols for the trace mode
+    async fn verify_runtime_symbols(
+        &self,
+        runtime_obj: &Path,
+        trace_mode: build_emitter::TraceMode,
+    ) -> Result<()> {
+        info!("Verifying runtime object has required symbols for trace mode: {:?}", trace_mode);
+
+        // Use llvm-nm to list symbols in the object file (full path to LLVM 17 tools)
+        let nm_path = if cfg!(target_os = "linux") {
+            "/usr/lib/llvm-17/bin/llvm-nm"
+        } else {
+            "llvm-nm"
+        };
+
+        let output = tokio::process::Command::new(nm_path)
+            .arg(runtime_obj)
+            .output()
+            .await
+            .context("Failed to run llvm-nm to check runtime symbols")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("llvm-nm failed to read runtime object:\n{}", stderr);
+        }
+
+        let symbols = String::from_utf8_lossy(&output.stdout);
+
+        // Check for required symbols based on trace mode
+        let mut missing_symbols = Vec::new();
+
+        if trace_mode == build_emitter::TraceMode::Lines || trace_mode == build_emitter::TraceMode::All {
+            // Binary protocol is the default, check for __trace_line_binary
+            if !symbols.contains("__trace_line_binary") {
+                missing_symbols.push("__trace_line_binary");
+            }
+        }
+
+        if !missing_symbols.is_empty() {
+            warn!("Runtime object file is missing required symbols: {:?}", missing_symbols);
+            warn!("Runtime path: {:?}", runtime_obj);
+            warn!("This usually means the runtime source is outdated or wasn't recompiled.");
+            warn!("Solution: Remove the cached runtime object to force recompilation:");
+            warn!("  rm -f {:?}", runtime_obj);
+            anyhow::bail!(
+                "Runtime object file missing symbols: {:?}",
+                missing_symbols
+            );
+        }
+
+        info!("Runtime symbol verification passed: all required symbols present");
         Ok(())
     }
 }
