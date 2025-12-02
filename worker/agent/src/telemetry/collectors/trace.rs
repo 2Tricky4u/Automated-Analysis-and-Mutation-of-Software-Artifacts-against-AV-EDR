@@ -1,7 +1,7 @@
 /// Line-level trace collector via named pipe (Lepori 2023-inspired)
 ///
-/// Listens on \\.\pipe\rededr_trace for Base64-encoded trace events
-/// from instrumented artifacts. Decodes and streams to controller via gRPC.
+/// Listens on \\.\pipe\rededr_trace for trace events from instrumented artifacts.
+/// Supports both Base64 text format and binary protocol (auto-detection).
 ///
 /// **Async Implementation**: Uses tokio::net::windows::named_pipe for fully async I/O
 use anyhow::{Context, Result};
@@ -10,10 +10,27 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+/// Binary protocol header (matches C runtime InstRecordHeader)
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct InstRecordHeader {
+    magic: u32,       // 0x49535452 ('ISTR')
+    version: u16,
+    event_type: u16,  // 1=line, 2=func, 3=syscall, 4=bb
+    thread_id: u32,
+    seq_no: u64,
+    ts_us: u64,
+    payload_len: u32,
+}
+
+const MAGIC_BINARY: u32 = 0x49535452; // 'ISTR'
+const HEADER_SIZE: usize = std::mem::size_of::<InstRecordHeader>();
+
 /// Parsed line trace event from artifact
 #[derive(Debug, Clone)]
 pub struct TraceEvent {
     pub seq: u32,
+    pub thread_id: u32,
     pub file: String,
     pub line: u32,
     pub func: String,
@@ -37,9 +54,10 @@ impl TraceCollector {
     }
 
     /// Start async named pipe server (fully async, no spawn_blocking needed)
+    /// Auto-detects Base64 text vs binary protocol by peeking at first 4 bytes
     #[cfg(windows)]
     pub async fn start_server(&self) -> Result<()> {
-        use tokio::io::{AsyncBufReadExt, BufReader};
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
         use tokio::net::windows::named_pipe::ServerOptions;
 
         info!("Starting async trace collector on named pipe: {}", self.pipe_name);
@@ -50,7 +68,7 @@ impl TraceCollector {
             .create(&self.pipe_name)
             .context("Failed to create named pipe")?;
 
-        info!("Named pipe created: {}", self.pipe_name);
+        info!("Named pipe created: {} (supports Base64 + binary)", self.pipe_name);
 
         loop {
             // Wait for client to connect (async!)
@@ -66,13 +84,28 @@ impl TraceCollector {
                 }
             }
 
-            // Read trace lines from connected client (async I/O)
-            let reader = BufReader::new(&mut server);
-            let mut lines = reader.lines();
+            // Peek at first 4 bytes to detect protocol
+            let mut peek_buf = [0u8; 4];
+            match server.read_exact(&mut peek_buf).await {
+                Ok(_) => {
+                    let magic = u32::from_le_bytes(peek_buf);
 
-            while let Ok(Some(line)) = lines.next_line().await {
-                if let Err(e) = self.handle_trace_line(&line) {
-                    warn!("Failed to parse trace line: {} - {}", line, e);
+                    if magic == MAGIC_BINARY {
+                        info!("Detected binary protocol (magic: 0x{:08x})", magic);
+                        // Put the 4 bytes back by re-reading from start
+                        if let Err(e) = self.read_binary_stream(&mut server, peek_buf).await {
+                            warn!("Binary stream read error: {}", e);
+                        }
+                    } else {
+                        info!("Detected Base64 text protocol (first bytes: {:?})", peek_buf);
+                        // Treat as text stream, push peek_buf into a line reader
+                        if let Err(e) = self.read_text_stream(&mut server, peek_buf).await {
+                            warn!("Text stream read error: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!("Client disconnected before sending data: {}", e);
                 }
             }
 
@@ -99,6 +132,147 @@ impl TraceCollector {
     #[cfg(not(windows))]
     pub async fn start_server(&self) -> Result<()> {
         anyhow::bail!("Named pipe trace collector only supported on Windows");
+    }
+
+    /// Read binary protocol stream
+    #[cfg(windows)]
+    async fn read_binary_stream<S>(&self, stream: &mut S, first_bytes: [u8; 4]) -> Result<()>
+    where
+        S: tokio::io::AsyncRead + Unpin,
+    {
+        use tokio::io::AsyncReadExt;
+
+        // Read rest of header (we already have first 4 bytes = magic)
+        let mut header_rest = vec![0u8; HEADER_SIZE - 4];
+        stream.read_exact(&mut header_rest).await?;
+
+        loop {
+            // Reconstruct full header
+            let mut header_bytes = Vec::with_capacity(HEADER_SIZE);
+            header_bytes.extend_from_slice(&first_bytes);
+            header_bytes.extend_from_slice(&header_rest);
+
+            // Parse header
+            let hdr: InstRecordHeader = unsafe {
+                std::ptr::read(header_bytes.as_ptr() as *const _)
+            };
+
+            // Validate magic
+            if hdr.magic != MAGIC_BINARY {
+                warn!("Invalid magic in stream: 0x{:08x}", hdr.magic);
+                break;
+            }
+
+            // Read payload
+            let mut payload = vec![0u8; hdr.payload_len as usize];
+            match stream.read_exact(&mut payload).await {
+                Ok(_) => {},
+                Err(_) => break,  // Client disconnected
+            }
+
+            // Parse based on event_type
+            match hdr.event_type {
+                1 => {
+                    // LINE_TRACE: payload is "file:line:func" UTF-8 string
+                    if let Err(e) = self.handle_binary_line_trace(&hdr, &payload) {
+                        warn!("Failed to parse binary line trace: {}", e);
+                    }
+                }
+                _ => {
+                    debug!("Unknown event_type: {}", hdr.event_type);
+                }
+            }
+
+            // Read next header for loop
+            match stream.read_exact(&mut header_rest).await {
+                Ok(_) => {},
+                Err(_) => break,  // Client disconnected
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Read text-based (Base64) protocol stream
+    #[cfg(windows)]
+    async fn read_text_stream<S>(&self, stream: &mut S, first_bytes: [u8; 4]) -> Result<()>
+    where
+        S: tokio::io::AsyncRead + Unpin,
+    {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+
+        // We need to prepend the first_bytes to the stream
+        // Strategy: read rest of first line, then continue reading lines normally
+
+        // Convert first_bytes to string (they're likely ASCII text)
+        let mut line_start = String::from_utf8_lossy(&first_bytes).to_string();
+
+        // Read until newline to complete the first line
+        let mut rest_of_line = Vec::new();
+        let mut buf = [0u8; 1];
+        loop {
+            match stream.read(&mut buf).await {
+                Ok(0) => break,  // EOF
+                Ok(_) => {
+                    if buf[0] == b'\n' {
+                        break;
+                    }
+                    rest_of_line.push(buf[0]);
+                }
+                Err(_) => break,
+            }
+        }
+
+        line_start.push_str(&String::from_utf8_lossy(&rest_of_line));
+
+        // Process first line
+        if !line_start.is_empty() {
+            if let Err(e) = self.handle_trace_line(&line_start) {
+                warn!("Failed to parse trace line: {} - {}", line_start, e);
+            }
+        }
+
+        // Now read remaining lines normally
+        let reader = BufReader::new(stream);
+        let mut lines = reader.lines();
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            if let Err(e) = self.handle_trace_line(&line) {
+                warn!("Failed to parse trace line: {} - {}", line, e);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle binary line trace (event_type=1)
+    fn handle_binary_line_trace(&self, hdr: &InstRecordHeader, payload: &[u8]) -> Result<()> {
+        // Parse payload: "file:line:func"
+        let payload_str = String::from_utf8(payload.to_vec())
+            .context("Payload is not valid UTF-8")?;
+
+        let parts: Vec<&str> = payload_str.splitn(3, ':').collect();
+        if parts.len() < 2 {
+            anyhow::bail!("Invalid binary trace payload: {}", payload_str);
+        }
+
+        let event = TraceEvent {
+            seq: hdr.seq_no as u32,
+            thread_id: hdr.thread_id,
+            file: parts[0].to_string(),
+            line: parts[1].parse().context("Invalid line number")?,
+            func: parts.get(2).unwrap_or(&"").to_string(),
+            ts_us: hdr.ts_us,
+        };
+
+        debug!("Binary trace: {}:{}:{} (thread={})", event.file, event.line, event.func, event.thread_id);
+
+        // Send to gRPC stream
+        if let Err(e) = self.event_tx.try_send(event) {
+            warn!("Failed to send trace event to gRPC stream: {}", e);
+        }
+
+        Ok(())
     }
 
     /// Handle a single trace line: "b64line:<base64>" or "YjY0<base64>" (new AST format)
@@ -135,6 +309,7 @@ impl TraceCollector {
             seq: self
                 .sequence_counter
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            thread_id: 0,  // Base64 format doesn't include thread_id
             file: parts[1].to_string(),
             line: parts[2].parse().context("Invalid line number")?,
             func: parts.get(3).unwrap_or(&"").to_string(), // Optional function name
