@@ -20,6 +20,7 @@ __attribute__((visibility("default"))) void __coverage_bb(uint32_t bb_id);
 __attribute__((visibility("default"))) void __coverage_flush(void);
 __attribute__((visibility("default"))) void __trace_init(const char* pipe_name);
 __attribute__((visibility("default"))) void __trace_line(uint32_t seq, const char* file, uint32_t line, const char* func);
+__attribute__((visibility("default"))) void __trace_line_b64(const char* base64_marker);
 __attribute__((visibility("default"))) void __trace_flush(void);
 __attribute__((visibility("default"))) void __checkpoint(const char* name);
 __attribute__((visibility("default"))) void __checkpoint_flush(void);
@@ -264,6 +265,32 @@ void __trace_line(uint32_t seq, const char* file, uint32_t line, const char* fun
         sizeof(__trace_buffer) - __trace_buffer_pos,
         "{\"seq\":%u,\"file\":\"%s\",\"line\":%u,\"func\":\"%s\"}\n",
         seq, file, line, func
+    );
+
+    __trace_buffer_pos += len;
+
+    // Flush if buffer > 3KB
+    if (__trace_buffer_pos > 3072) {
+        __trace_flush();
+    }
+}
+
+/**
+ * Record AST-level line trace with Base64 marker (Lepori format)
+ * Format: "YjY0<base64_encoded_metadata>\n"
+ * Where metadata = "line:<filepath>:<line_number>:<extra>"
+ */
+void __trace_line_b64(const char* base64_marker) {
+    if (__trace_pipe == INVALID_HANDLE_VALUE) {
+        __trace_init(NULL);
+    }
+
+    // Write Base64 marker directly to buffer
+    int len = snprintf(
+        __trace_buffer + __trace_buffer_pos,
+        sizeof(__trace_buffer) - __trace_buffer_pos,
+        "%s\n",
+        base64_marker
     );
 
     __trace_buffer_pos += len;

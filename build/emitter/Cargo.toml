@@ -24,6 +24,7 @@ uuid = { version = "1.0", features = ["v4"] }
 # For AST parsing (Tree-sitter)
 tree-sitter = "0.22"
 tree-sitter-c = "0.21"
+tree-sitter-cpp = "0.22"  # C++ parser (also handles C)
 
 # For home directory resolution
 dirs = "5.0"
