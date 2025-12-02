@@ -62,13 +62,36 @@ impl TraceCollector {
 
         info!("Starting async trace collector on named pipe: {}", self.pipe_name);
 
-        // Create the first pipe instance
-        let mut server = ServerOptions::new()
-            .first_pipe_instance(true)
-            .create(&self.pipe_name)
-            .context("Failed to create named pipe")?;
+        // Create the first pipe instance with retry logic (pipe may already exist from previous run)
+        let mut server = None;
+        let max_retries = 5;
 
-        info!("Named pipe created: {} (supports Base64 + binary)", self.pipe_name);
+        for attempt in 1..=max_retries {
+            match ServerOptions::new()
+                .first_pipe_instance(true)
+                .create(&self.pipe_name)
+            {
+                Ok(s) => {
+                    server = Some(s);
+                    info!("Named pipe created: {} (supports Base64 + binary) on attempt {}", self.pipe_name, attempt);
+                    break;
+                }
+                Err(e) if attempt < max_retries => {
+                    warn!(
+                        "Failed to create named pipe (attempt {}/{}): {} - retrying in 200ms...",
+                        attempt, max_retries, e
+                    );
+                    // Pipe may already exist from previous run, wait for it to be released
+                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                }
+                Err(e) => {
+                    error!("Failed to create named pipe after {} attempts: {}", max_retries, e);
+                    return Err(e).context("Failed to create named pipe after retries");
+                }
+            }
+        }
+
+        let mut server = server.context("Failed to create named pipe")?;
 
         loop {
             // Wait for client to connect (async!)

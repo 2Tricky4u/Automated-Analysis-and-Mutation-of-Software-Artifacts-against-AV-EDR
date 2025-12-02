@@ -27,6 +27,8 @@ use edr::worker::{
     worker_agent_server::{WorkerAgent, WorkerAgentServer},
 };
 
+const DELAY: u64 = 5;
+
 // ============================================================================
 // RAII Guards for Resource Cleanup
 // ============================================================================
@@ -427,7 +429,7 @@ impl WorkerAgent for WorkerAgentService {
 
             // Send to controller (best effort with short timeout - don't block execution)
             match tokio::time::timeout(
-                Duration::from_secs(2),
+                Duration::from_secs(DELAY),
                 self.send_telemetry_batch_to_controller(contaminated_events)
             ).await {
                 Ok(Ok(())) => {
@@ -441,7 +443,7 @@ impl WorkerAgent for WorkerAgentService {
                     warn!("Continuing with execution anyway (contamination handling is best-effort)");
                 }
                 Err(_) => {
-                    warn!("Timeout sending contaminated events to controller (2s limit exceeded)");
+                    warn!("Timeout sending contaminated events to controller ({}s limit exceeded)", DELAY);
                     warn!("Continuing with execution anyway (contamination handling is best-effort)");
                 }
             }
@@ -999,7 +1001,7 @@ impl WorkerAgent for WorkerAgentService {
 
         // Send final status to controller with telemetry count (with timeout)
         match tokio::time::timeout(
-            Duration::from_secs(4),
+            Duration::from_secs(DELAY),
             self.send_final_status_to_controller(
                 &job_id,
                 &run_id,
@@ -1014,7 +1016,7 @@ impl WorkerAgent for WorkerAgentService {
         ).await {
             Ok(()) => { /* status sent successfully or logged error */ }
             Err(_) => {
-                warn!("Timeout sending final status to controller (2s limit exceeded)");
+                warn!("Timeout sending final status to controller ({}s limit exceeded)", DELAY);
                 warn!("Controller may be slow or unreachable");
             }
         }
@@ -1022,7 +1024,7 @@ impl WorkerAgent for WorkerAgentService {
         // Send telemetry to controller (best effort with timeout - don't block on this)
         if !telemetry_events.is_empty() {
             match tokio::time::timeout(
-                Duration::from_secs(3),
+                Duration::from_secs(DELAY),
                 self.send_telemetry_batch_to_controller(telemetry_events)
             ).await {
                 Ok(Ok(())) => {
@@ -1034,7 +1036,7 @@ impl WorkerAgent for WorkerAgentService {
                     // Don't fail the RPC - execution completed successfully
                 }
                 Err(_) => {
-                    warn!("Timeout sending {} telemetry events to controller (3s limit exceeded)", telemetry_count);
+                    warn!("Timeout sending {} telemetry events to controller ({}s limit exceeded)", telemetry_count, DELAY);
                     warn!("Controller may not implement StreamTelemetry RPC or is unreachable");
                     // Don't fail the RPC - execution completed successfully
                 }

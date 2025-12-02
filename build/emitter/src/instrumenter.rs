@@ -92,7 +92,10 @@ impl Instrumenter {
             .await
             .context("Failed to write instrumented IR")?;
 
-        info!("Instrumentation complete: {} BBs, {} lines", self.bb_counter, self.line_counter);
+        info!(
+            "IR-level instrumentation complete: {} BBs, {} lines (AST-level line traces not counted here)",
+            self.bb_counter, self.line_counter
+        );
 
         Ok(())
     }
