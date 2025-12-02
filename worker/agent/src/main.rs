@@ -1464,17 +1464,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 // ============================================================================
 
 /// Collect BB coverage from disk files (coverage.bin + coverage_bbs.txt)
+/// Sends only the parsed BB data from .txt file (not the 64KB bitmap)
 async fn collect_bb_coverage(
-    bitmap_path: &std::path::Path,
+    _bitmap_path: &std::path::Path,
     metadata_path: &std::path::Path,
     job_id: &str,
 ) -> Result<edr::common::TelemetryData, Box<dyn std::error::Error + Send + Sync>> {
     use tokio::fs;
 
-    // Read binary coverage bitmap (64KB)
-    let bitmap = fs::read(bitmap_path).await?;
-
     // Read BB metadata (text file with BB IDs and hit counts)
+    // This is all we need - the bitmap is just for AFL-style fuzzing
     let metadata_text = fs::read_to_string(metadata_path).await?;
 
     let mut bb_ids = Vec::new();
@@ -1501,9 +1500,8 @@ async fn collect_bb_coverage(
     let total_bbs = bb_ids.len() as u32;
 
     info!(
-        "Parsed BB metadata: {} basic blocks, bitmap size: {} bytes",
-        total_bbs,
-        bitmap.len()
+        "Parsed BB metadata from coverage_bbs.txt: {} basic blocks",
+        total_bbs
     );
 
     Ok(edr::common::TelemetryData {
@@ -1514,7 +1512,7 @@ async fn collect_bb_coverage(
         metadata: std::collections::HashMap::new(),
         typed_event: Some(edr::common::telemetry_data::TypedEvent::Coverage(
             edr::common::CoverageEvent {
-                bitmap,
+                bitmap: vec![], // Empty - we only send bb_ids and hit_counts from .txt
                 bb_ids,
                 hit_counts,
                 total_bbs,
