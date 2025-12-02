@@ -62,13 +62,14 @@ message RunResult {
   repeated TelemetryData telemetry_events = 11;
 }
 
-// Line-level trace event (Lepori 2023 inspired)
+// Line-level trace event (Lepori 2023 inspired + binary protocol enhancements)
 message TraceEvent {
   uint32 seq = 1;         // Sequence number
   string file = 2;        // Source file path
   uint32 line = 3;        // Line number
   string func = 4;        // Function name
   uint64 ts_us = 5;       // Timestamp (microseconds)
+  uint32 thread_id = 6;   // Thread ID (0 for Base64 format, real TID for binary protocol)
 }
 
 // Basic-block coverage event (AFL-style)
