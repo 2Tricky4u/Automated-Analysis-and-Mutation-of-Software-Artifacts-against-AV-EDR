@@ -21,6 +21,7 @@ __attribute__((visibility("default"))) void __coverage_flush(void);
 __attribute__((visibility("default"))) void __trace_init(const char* pipe_name);
 __attribute__((visibility("default"))) void __trace_line(uint32_t seq, const char* file, uint32_t line, const char* func);
 __attribute__((visibility("default"))) void __trace_line_b64(const char* base64_marker);
+__attribute__((visibility("default"))) void __trace_line_binary(const char* file, uint32_t line, const char* func);
 __attribute__((visibility("default"))) void __trace_flush(void);
 __attribute__((visibility("default"))) void __checkpoint(const char* name);
 __attribute__((visibility("default"))) void __checkpoint_flush(void);
@@ -294,6 +295,97 @@ void __trace_line_b64(const char* base64_marker) {
     );
 
     __trace_buffer_pos += len;
+
+    // Flush if buffer > 3KB
+    if (__trace_buffer_pos > 3072) {
+        __trace_flush();
+    }
+}
+
+// ============================================================================
+// Binary Protocol for Line Tracing (Phase 1: coexist with Base64)
+// ============================================================================
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t magic;       // 0x49535452 ('ISTR')
+    uint16_t version;     // 1
+    uint16_t event_type;  // 1=line, 2=func_enter, 3=syscall, 4=bb
+    uint32_t thread_id;   // GetCurrentThreadId()
+    uint64_t seq_no;      // Monotonic sequence counter
+    uint64_t ts_us;       // Microseconds since process start
+    uint32_t payload_len; // Size of following payload
+} InstRecordHeader;
+#pragma pack(pop)
+
+// Global sequence counter (thread-safe increment via InterlockedIncrement64)
+static volatile LONG64 __binary_seq_counter = 0;
+
+// Timestamp tracking (initialized on first use)
+static LARGE_INTEGER __perf_freq = {0};
+static LARGE_INTEGER __perf_start = {0};
+static int __timestamp_initialized = 0;
+
+static void __init_timestamp(void) {
+    if (!__timestamp_initialized) {
+        QueryPerformanceFrequency(&__perf_freq);
+        QueryPerformanceCounter(&__perf_start);
+        __timestamp_initialized = 1;
+    }
+}
+
+static uint64_t __get_timestamp_us(void) {
+    if (!__timestamp_initialized) {
+        __init_timestamp();
+    }
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    uint64_t elapsed = now.QuadPart - __perf_start.QuadPart;
+    return (elapsed * 1000000ULL) / __perf_freq.QuadPart;
+}
+
+/**
+ * Binary protocol line trace (Phase 1: inline strings in payload)
+ * Format: InstRecordHeader + "file:line:func" as UTF-8 string
+ *
+ * This is the new default for AST instrumentation.
+ * Coexists with Base64 format for backward compatibility.
+ */
+void __trace_line_binary(const char* file, uint32_t line, const char* func) {
+    if (__trace_pipe == INVALID_HANDLE_VALUE) {
+        __trace_init(NULL);
+    }
+
+    // Build payload: "file:line:func"
+    char payload[512];
+    int payload_len = snprintf(payload, sizeof(payload), "%s:%u:%s", file, line, func);
+    if (payload_len < 0 || payload_len >= (int)sizeof(payload)) {
+        payload_len = sizeof(payload) - 1;  // Truncate if too long
+    }
+
+    // Build header
+    InstRecordHeader hdr;
+    hdr.magic = 0x49535452;  // 'ISTR'
+    hdr.version = 1;
+    hdr.event_type = 1;      // LINE_TRACE
+    hdr.thread_id = GetCurrentThreadId();
+    hdr.seq_no = (uint64_t)InterlockedIncrement64(&__binary_seq_counter);
+    hdr.ts_us = __get_timestamp_us();
+    hdr.payload_len = (uint32_t)payload_len;
+
+    // Check if buffer has space for header + payload
+    size_t total_size = sizeof(InstRecordHeader) + payload_len;
+    if (__trace_buffer_pos + total_size > sizeof(__trace_buffer)) {
+        __trace_flush();
+    }
+
+    // Write header to buffer
+    memcpy(__trace_buffer + __trace_buffer_pos, &hdr, sizeof(hdr));
+    __trace_buffer_pos += sizeof(hdr);
+
+    // Write payload to buffer
+    memcpy(__trace_buffer + __trace_buffer_pos, payload, payload_len);
+    __trace_buffer_pos += payload_len;
 
     // Flush if buffer > 3KB
     if (__trace_buffer_pos > 3072) {

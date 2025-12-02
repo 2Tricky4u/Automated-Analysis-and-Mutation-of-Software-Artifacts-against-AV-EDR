@@ -19,7 +19,7 @@ pub mod instrumenter;
 pub mod ir_mutator;
 
 // Re-exports
-pub use ast_line_tracer::{inject_line_traces, SourceLanguage};
+pub use ast_line_tracer::{inject_line_traces, inject_line_traces_with_opts, SourceLanguage, TraceFormat};
 pub use ast_mutator::AstMutator;
 pub use instrumenter::Instrumenter;
 pub use ir_mutator::IrMutator;

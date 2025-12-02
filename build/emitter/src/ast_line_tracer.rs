@@ -25,10 +25,26 @@ impl SourceLanguage {
     }
 }
 
+/// Trace output format
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceFormat {
+    /// Base64-encoded text format (Lepori thesis format)
+    Base64,
+    /// Binary protocol with structured headers
+    Binary,
+}
+
+impl Default for TraceFormat {
+    fn default() -> Self {
+        TraceFormat::Binary  // Phase 1: binary is the new default
+    }
+}
+
 /// Inject line tracing statements into C/C++ source code
 /// file_path: Optional path to embed in trace metadata (defaults to "source")
+/// format: Trace output format (default: Binary)
 pub fn inject_line_traces(source: &str, language: SourceLanguage) -> Result<String> {
-    inject_line_traces_with_path(source, language, "source")
+    inject_line_traces_with_opts(source, language, "source", TraceFormat::default())
 }
 
 /// Inject line tracing statements with custom file path
@@ -36,6 +52,16 @@ pub fn inject_line_traces_with_path(
     source: &str,
     language: SourceLanguage,
     file_path: &str,
+) -> Result<String> {
+    inject_line_traces_with_opts(source, language, file_path, TraceFormat::default())
+}
+
+/// Inject line tracing statements with all options
+pub fn inject_line_traces_with_opts(
+    source: &str,
+    language: SourceLanguage,
+    file_path: &str,
+    format: TraceFormat,
 ) -> Result<String> {
     let mut parser = Parser::new();
 
@@ -52,15 +78,22 @@ pub fn inject_line_traces_with_path(
     let root = tree.root_node();
 
     // Collect all statement locations where we want to inject traces
-    let mut injections = collect_injection_points(&root, source, language, file_path)?;
+    let mut injections = collect_injection_points(&root, source, language, file_path, format)?;
 
     // Sort by offset (descending) so we can inject without shifting offsets
     injections.sort_by_key(|(offset, _)| std::cmp::Reverse(*offset));
 
     // Add runtime function declaration at the top of the file
     let mut result = String::new();
-    result.push_str("// AST-level line tracing runtime function (from instrumentation_runtime.c)\n");
-    result.push_str("void __trace_line_b64(const char* base64_marker);\n\n");
+    result.push_str("// AST-level line tracing runtime functions (from instrumentation_runtime.c)\n");
+    match format {
+        TraceFormat::Base64 => {
+            result.push_str("void __trace_line_b64(const char* base64_marker);\n\n");
+        }
+        TraceFormat::Binary => {
+            result.push_str("void __trace_line_binary(const char* file, unsigned int line, const char* func);\n\n");
+        }
+    }
     result.push_str(source);
 
     // Apply injections (offsets are now shifted by declaration length)
@@ -78,11 +111,12 @@ fn collect_injection_points(
     source: &str,
     language: SourceLanguage,
     file_path: &str,
+    format: TraceFormat,
 ) -> Result<Vec<(usize, String)>> {
     let mut injections = Vec::new();
 
     // Recursively walk the AST looking for statements in compound blocks
-    visit_node(root, source, language, file_path, &mut injections);
+    visit_node(root, source, language, file_path, format, &mut injections);
 
     Ok(injections)
 }
@@ -93,6 +127,7 @@ fn visit_node(
     source: &str,
     language: SourceLanguage,
     file_path: &str,
+    format: TraceFormat,
     injections: &mut Vec<(usize, String)>,
 ) {
     // Check if this is a compound statement (block)
@@ -107,7 +142,7 @@ fn visit_node(
                 let indent = calculate_indentation(source, start_offset);
 
                 // Generate trace statement with file path and line number
-                let trace_stmt = generate_trace_statement(start_line, &indent, language, file_path);
+                let trace_stmt = generate_trace_statement(start_line, &indent, language, file_path, format);
 
                 injections.push((start_offset, trace_stmt));
             }
@@ -116,7 +151,7 @@ fn visit_node(
 
     // Recursively visit children
     for child in node.children(&mut node.walk()) {
-        visit_node(&child, source, language, file_path, injections);
+        visit_node(&child, source, language, file_path, format, injections);
     }
 }
 
@@ -156,30 +191,46 @@ fn calculate_indentation(source: &str, offset: usize) -> String {
         .collect()
 }
 
-/// Generate trace statement with Base64-encoded metadata (Lepori thesis format)
-/// Format: "line:<filepath>:<line_number>:<metadata>" encoded in Base64
-/// Writes to trace pipe via __trace_line_b64() runtime function
+/// Generate trace statement (Base64 or binary format)
 fn generate_trace_statement(
     line: usize,
     indent: &str,
     _language: SourceLanguage,
     file_path: &str,
+    format: TraceFormat,
 ) -> String {
-    // Format matches Lepori (2023) Section 6.4.2, Figure 6.3:
-    // "line:<filepath>:<line_number>:<metadata>"
-    // For now, metadata is empty (could add function name, AST node type, etc.)
-    let line_marker = format!("line:{}:{}:", file_path, line);
-    let encoded =
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, line_marker.as_bytes());
+    let delay = format!(
+        "{}volatile long __inst_wait{} = 1; for (; __inst_wait{} < 10000; __inst_wait{} += 2) {{}}\n",
+        indent, line, line, line
+    );
 
-    // Call __trace_line_b64() with Base64 magic signature prefix "YjY0" (matches thesis Figure 6.3)
-    // This writes to trace pipe/file, which worker will collect after execution
-    // Also add delay mechanism (volatile loop to prevent optimization)
-    // Delay allows EDR to kill process before next line executes, making truncation point clear
-    format!(
-        "{}__trace_line_b64(\"YjY0{}\");\n{}volatile long __inst_wait{} = 1; for (; __inst_wait{} < 10000; __inst_wait{} += 2) {{}}\n",
-        indent, encoded, indent, line, line, line
-    )
+    match format {
+        TraceFormat::Base64 => {
+            // Base64-encoded format (Lepori thesis format)
+            // Format matches Lepori (2023) Section 6.4.2, Figure 6.3:
+            // "line:<filepath>:<line_number>:<metadata>" encoded in Base64
+            let line_marker = format!("line:{}:{}:", file_path, line);
+            let encoded = base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                line_marker.as_bytes(),
+            );
+
+            // Call __trace_line_b64() with Base64 magic signature prefix "YjY0"
+            format!(
+                "{}__trace_line_b64(\"YjY0{}\");\n{}",
+                indent, encoded, delay
+            )
+        }
+        TraceFormat::Binary => {
+            // Binary protocol format: direct call with structured arguments
+            // No Base64 encoding, no string formatting - just pass pointers
+            // Runtime will build binary header + payload
+            format!(
+                "{}__trace_line_binary(\"{}\", {}, \"\");\n{}",
+                indent, file_path, line, delay
+            )
+        }
+    }
 }
 
 #[cfg(test)]
