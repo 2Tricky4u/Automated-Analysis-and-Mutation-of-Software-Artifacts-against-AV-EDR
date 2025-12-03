@@ -10,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-/// Binary protocol header (matches C runtime InstRecordHeader)
-#[repr(C)]
+/// Binary protocol header (matches C runtime InstRecordHeader with #pragma pack(1))
+#[repr(C, packed)]
 #[derive(Debug, Copy, Clone)]
 struct InstRecordHeader {
     magic: u32,       // 0x49535452 ('ISTR')
@@ -107,28 +107,36 @@ impl TraceCollector {
                 }
             }
 
-            // Peek at first 4 bytes to detect protocol
+            // Peek at first 4 bytes to detect protocol (with timeout to avoid hanging)
             let mut peek_buf = [0u8; 4];
-            match server.read_exact(&mut peek_buf).await {
-                Ok(_) => {
+            let read_result = tokio::time::timeout(
+                tokio::time::Duration::from_secs(2),
+                server.read_exact(&mut peek_buf)
+            ).await;
+
+            match read_result {
+                Ok(Ok(_)) => {
                     let magic = u32::from_le_bytes(peek_buf);
 
                     if magic == MAGIC_BINARY {
                         info!("Detected binary protocol (magic: 0x{:08x})", magic);
-                        // Put the 4 bytes back by re-reading from start
+                        // Process binary stream
                         if let Err(e) = self.read_binary_stream(&mut server, peek_buf).await {
                             warn!("Binary stream read error: {}", e);
                         }
                     } else {
                         info!("Detected Base64 text protocol (first bytes: {:?})", peek_buf);
-                        // Treat as text stream, push peek_buf into a line reader
+                        // Process text stream
                         if let Err(e) = self.read_text_stream(&mut server, peek_buf).await {
                             warn!("Text stream read error: {}", e);
                         }
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     debug!("Client disconnected before sending data: {}", e);
+                }
+                Err(_) => {
+                    warn!("Timeout waiting for trace data (2s) - artifact connected but sent nothing");
                 }
             }
 
@@ -165,51 +173,122 @@ impl TraceCollector {
     {
         use tokio::io::AsyncReadExt;
 
+        debug!("Binary stream: reading first header (expecting {} more bytes)", HEADER_SIZE - 4);
+
         // Read rest of header (we already have first 4 bytes = magic)
         let mut header_rest = vec![0u8; HEADER_SIZE - 4];
-        stream.read_exact(&mut header_rest).await?;
-
-        loop {
-            // Reconstruct full header
-            let mut header_bytes = Vec::with_capacity(HEADER_SIZE);
-            header_bytes.extend_from_slice(&first_bytes);
-            header_bytes.extend_from_slice(&header_rest);
-
-            // Parse header
-            let hdr: InstRecordHeader = unsafe {
-                std::ptr::read(header_bytes.as_ptr() as *const _)
-            };
-
-            // Validate magic
-            if hdr.magic != MAGIC_BINARY {
-                warn!("Invalid magic in stream: 0x{:08x}", hdr.magic);
-                break;
+        match stream.read_exact(&mut header_rest).await {
+            Ok(_) => {
+                debug!("Binary stream: successfully read header rest");
             }
+            Err(e) => {
+                warn!("Binary stream: failed to read header rest: {}", e);
+                return Ok(());  // Not fatal - artifact disconnected
+            }
+        }
 
-            // Read payload
-            let mut payload = vec![0u8; hdr.payload_len as usize];
-            match stream.read_exact(&mut payload).await {
+        // Process first record using peek_buf + header_rest
+        let mut header_bytes = Vec::with_capacity(HEADER_SIZE);
+        header_bytes.extend_from_slice(&first_bytes);
+        header_bytes.extend_from_slice(&header_rest);
+
+        let hdr: InstRecordHeader = unsafe {
+            std::ptr::read_unaligned(header_bytes.as_ptr() as *const _)
+        };
+
+        // Read fields using ptr::read_unaligned to avoid alignment issues with packed struct
+        let magic = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.magic)) };
+        let event_type = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.event_type)) };
+        let payload_len = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.payload_len)) };
+        let seq_no = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.seq_no)) };
+
+        if magic != MAGIC_BINARY {
+            warn!("Invalid magic in first record: 0x{:08x}", magic);
+            return Ok(());
+        }
+
+        debug!("Binary stream: received record (type={}, payload_len={}, seq={})",
+               event_type, payload_len, seq_no);
+
+        // Read first payload
+        let mut payload = vec![0u8; payload_len as usize];
+        match stream.read_exact(&mut payload).await {
+            Ok(_) => {
+                debug!("Binary stream: successfully read payload ({} bytes)", payload.len());
+            },
+            Err(e) => {
+                warn!("Binary stream: failed to read first payload: {}", e);
+                return Ok(());
+            }
+        }
+
+        // Handle first record
+        match event_type {
+            1 => {
+                if let Err(e) = self.handle_binary_line_trace(&hdr, &payload) {
+                    warn!("Failed to parse binary line trace: {}", e);
+                } else {
+                    debug!("Binary stream: successfully parsed line trace event");
+                }
+            }
+            _ => {
+                debug!("Unknown event_type: {}", event_type);
+            }
+        }
+
+        // Now read subsequent records (full header each time, no peeking)
+        loop {
+            // Read full header (32 bytes with packed struct) in one shot
+            let mut full_header = vec![0u8; HEADER_SIZE];
+            match stream.read_exact(&mut full_header).await {
                 Ok(_) => {},
                 Err(_) => break,  // Client disconnected
             }
 
+            // Parse header with unaligned reads (packed struct)
+            let hdr: InstRecordHeader = unsafe {
+                std::ptr::read_unaligned(full_header.as_ptr() as *const _)
+            };
+
+            let magic = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.magic)) };
+            let event_type = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.event_type)) };
+            let payload_len = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.payload_len)) };
+            let seq_no = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.seq_no)) };
+
+            // Validate magic
+            if magic != MAGIC_BINARY {
+                warn!("Invalid magic in stream: 0x{:08x}", magic);
+                break;
+            }
+
+            debug!("Binary stream: received record (type={}, payload_len={}, seq={})",
+                   event_type, payload_len, seq_no);
+
+            // Read payload
+            let mut payload = vec![0u8; payload_len as usize];
+            match stream.read_exact(&mut payload).await {
+                Ok(_) => {
+                    debug!("Binary stream: successfully read payload ({} bytes)", payload.len());
+                },
+                Err(e) => {
+                    warn!("Binary stream: failed to read payload: {}", e);
+                    break;  // Client disconnected
+                }
+            }
+
             // Parse based on event_type
-            match hdr.event_type {
+            match event_type {
                 1 => {
                     // LINE_TRACE: payload is "file:line:func" UTF-8 string
                     if let Err(e) = self.handle_binary_line_trace(&hdr, &payload) {
                         warn!("Failed to parse binary line trace: {}", e);
+                    } else {
+                        debug!("Binary stream: successfully parsed line trace event");
                     }
                 }
                 _ => {
-                    debug!("Unknown event_type: {}", hdr.event_type);
+                    debug!("Unknown event_type: {}", event_type);
                 }
-            }
-
-            // Read next header for loop
-            match stream.read_exact(&mut header_rest).await {
-                Ok(_) => {},
-                Err(_) => break,  // Client disconnected
             }
         }
 
@@ -279,13 +358,18 @@ impl TraceCollector {
             anyhow::bail!("Invalid binary trace payload: {}", payload_str);
         }
 
+        // Read packed struct fields with unaligned access
+        let seq_no = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.seq_no)) };
+        let thread_id = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.thread_id)) };
+        let ts_us = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.ts_us)) };
+
         let event = TraceEvent {
-            seq: hdr.seq_no as u32,
-            thread_id: hdr.thread_id,
+            seq: seq_no as u32,
+            thread_id,
             file: parts[0].to_string(),
             line: parts[1].parse().context("Invalid line number")?,
             func: parts.get(2).unwrap_or(&"").to_string(),
-            ts_us: hdr.ts_us,
+            ts_us,
         };
 
         debug!("Binary trace: {}:{}:{} (thread={})", event.file, event.line, event.func, event.thread_id);
