@@ -70,6 +70,9 @@ impl TraceCollector {
             match ServerOptions::new()
                 // Don't require first_pipe_instance - allows reconnection even if pipe still exists
                 // .first_pipe_instance(true)  // REMOVED
+                // Increase buffer sizes to handle high-frequency line tracing (loops)
+                .in_buffer_size(1024 * 1024)   // 1MB input buffer (default is 4KB)
+                .out_buffer_size(1024 * 1024)  // 1MB output buffer
                 .create(&self.pipe_name)
             {
                 Ok(s) => {

@@ -202,7 +202,7 @@ void __coverage_flush(void) {
 // ============================================================================
 
 static HANDLE __trace_pipe = INVALID_HANDLE_VALUE;
-static char __trace_buffer[4096];
+static char __trace_buffer[65536];  // 64KB buffer (increased from 4KB for loops)
 static int __trace_buffer_pos = 0;
 
 /**
@@ -395,9 +395,10 @@ void __trace_line_binary(const char* file, uint32_t line, const char* func) {
     memcpy(__trace_buffer + __trace_buffer_pos, payload, payload_len);
     __trace_buffer_pos += payload_len;
 
-    // Flush aggressively (every 512 bytes) to ensure events reach collector
-    // This is critical for short-lived processes that may be killed before reaching 3KB
-    if (__trace_buffer_pos > 512) {
+    // Flush when buffer is 75% full (48KB of 64KB)
+    // This balances throughput (fewer flushes) vs latency (don't wait too long)
+    // For short-lived processes, atexit() will flush remaining data
+    if (__trace_buffer_pos > 49152) {  // 48KB threshold
         __trace_flush();
     }
 }
