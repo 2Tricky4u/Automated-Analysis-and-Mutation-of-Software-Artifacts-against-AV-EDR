@@ -225,8 +225,9 @@ fn generate_trace_statement(
             // Binary protocol format: direct call with structured arguments
             // No Base64 encoding, no string formatting - just pass pointers
             // Runtime will build binary header + payload
+            // Use __func__ macro (C99) for automatic function name capture
             format!(
-                "{}__trace_line_binary(\"{}\", {}, \"\");\n{}",
+                "{}__trace_line_binary(\"{}\", {}, __func__);\n{}",
                 indent, file_path, line, delay
             )
         }
