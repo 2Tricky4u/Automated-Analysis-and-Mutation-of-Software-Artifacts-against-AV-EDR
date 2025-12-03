@@ -27,7 +27,7 @@ use edr::worker::{
     worker_agent_server::{WorkerAgent, WorkerAgentServer},
 };
 
-const DELAY: u64 = 5;
+const DELAY: u64 = 10;
 
 // ============================================================================
 // RAII Guards for Resource Cleanup
