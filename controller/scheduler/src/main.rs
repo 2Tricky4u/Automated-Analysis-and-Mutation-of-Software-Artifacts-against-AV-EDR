@@ -266,6 +266,8 @@ impl Controller for SchedulerService {
         &self,
         request: Request<StatusReport>,
     ) -> Result<Response<StatusAck>, Status> {
+        use tokio::time::Duration;
+
         let report = request.into_inner();
 
         // Format status display: [WORKER: ip] [PID: pid] [JOB: job_id] [STATUS: event_type] details
@@ -292,9 +294,27 @@ impl Controller for SchedulerService {
         }
 
         // Store RunResult to Elasticsearch when final status received
+        // Use timeout to prevent blocking RPC if Elasticsearch is slow/unreachable
         if matches!(report.event_type.as_str(), "success" | "error" | "timeout") {
-            if let Err(e) = self.store_run_result(&report).await {
-                error!("Failed to store run result: {}", e);
+            match tokio::time::timeout(
+                Duration::from_secs(2),
+                self.store_run_result(&report)
+            ).await {
+                Ok(Ok(())) => { /* success */ }
+                Ok(Err(e)) => {
+                    error!("Failed to store run result to Elasticsearch: {}", e);
+                    error!("Status report received but not indexed (Elasticsearch may be down)");
+                    // Don't fail the RPC - status was received, just not indexed
+                }
+                Err(_) => {
+                    error!(
+                        "Timeout storing run result to Elasticsearch (2s limit exceeded)"
+                    );
+                    error!(
+                        "Status report received but not indexed (Elasticsearch is slow/unavailable)"
+                    );
+                    // Don't fail the RPC - status was received, just not indexed
+                }
             }
         }
 
