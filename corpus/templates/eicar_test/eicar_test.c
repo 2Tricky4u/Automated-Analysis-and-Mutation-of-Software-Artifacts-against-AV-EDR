@@ -14,6 +14,8 @@
 #include <windows.h>
 #include <stdio.h>
 
+//extern void __artifact_checkpoint(const char* checkpoint_name);
+
 // EICAR test string (split to avoid detection during compilation)
 // Full string: X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*
 const char* eicar_part1 = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$";
@@ -145,6 +147,7 @@ int main(void) {
     printf("[NOTICE] If your AV doesn't catch this, it may be disabled!\n");
     printf("\n");
 
+    //__artifact_checkpoint("print passed");
     printf("Press Enter to start tests...\n");
     //getchar();
     printf("\n");

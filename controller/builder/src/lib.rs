@@ -144,15 +144,18 @@ impl ArtifactBuilder {
             } => {
                 info!("Building {} with trace_mode: {}", source_file, trace_mode);
 
+                // Determine if we need to link runtime (any trace mode except "off")
+                let needs_runtime = trace_mode != "off" && !trace_mode.is_empty();
+
                 // Build artifact (with or without mutations)
                 let mut built = if mutations.is_empty() {
-                    self.build_template(&template_name, &source_file).await?
+                    self.build_template_with_runtime(&template_name, &source_file, needs_runtime).await?
                 } else {
-                    self.build_template_with_mutations(&template_name, &source_file, &mutations).await?
+                    self.build_template_with_mutations_and_runtime(&template_name, &source_file, &mutations, needs_runtime).await?
                 };
 
                 // Apply instrumentation if trace_mode is not "off"
-                if trace_mode != "off" && !trace_mode.is_empty() {
+                if needs_runtime {
                     info!("Applying instrumentation: trace_mode={}", trace_mode);
                     built = self.apply_instrumentation(built, &trace_mode).await?;
                 }
@@ -198,6 +201,24 @@ impl ArtifactBuilder {
         template_name: &str,
         source_file: &str,
     ) -> Result<BuiltArtifact> {
+        self.build_template_with_runtime(template_name, source_file, false).await
+    }
+
+    /// Build a template from source file with optional runtime linking
+    ///
+    /// # Arguments
+    /// * `template_name` - Template directory name (e.g., "rwx_direct")
+    /// * `source_file` - Source filename (e.g., "rwx_direct.c")
+    /// * `link_runtime` - If true, link with instrumentation runtime
+    ///
+    /// # Returns
+    /// Metadata about the built artifact
+    async fn build_template_with_runtime(
+        &self,
+        template_name: &str,
+        source_file: &str,
+        link_runtime: bool,
+    ) -> Result<BuiltArtifact> {
         // 1. Validate source exists
         let source_path = self
             .config
@@ -222,7 +243,7 @@ impl ArtifactBuilder {
             .join(template_name)
             .join(&output_name);
 
-        self.invoke_clang(template_name, &source_path, &temp_output)
+        self.invoke_clang_internal(template_name, &source_path, &temp_output, link_runtime)
             .await?;
 
         // 3. Read the built artifact
@@ -275,9 +296,20 @@ impl ArtifactBuilder {
         source_file: &str,
         mutations: &[mutator::MutationSpec],
     ) -> Result<BuiltArtifact> {
+        self.build_template_with_mutations_and_runtime(template_name, source_file, mutations, false).await
+    }
+
+    /// Build template with mutations and optional runtime linking
+    async fn build_template_with_mutations_and_runtime(
+        &self,
+        template_name: &str,
+        source_file: &str,
+        mutations: &[mutator::MutationSpec],
+        link_runtime: bool,
+    ) -> Result<BuiltArtifact> {
         if mutations.is_empty() {
             // No mutations - use original build path
-            return self.build_template(template_name, source_file).await;
+            return self.build_template_with_runtime(template_name, source_file, link_runtime).await;
         }
 
         info!(
@@ -446,7 +478,7 @@ impl ArtifactBuilder {
             .join(template_name)
             .join(&output_name);
 
-        self.invoke_clang(template_name, &mutated_path, &temp_output)
+        self.invoke_clang_internal(template_name, &mutated_path, &temp_output, link_runtime)
             .await?;
 
         // 6. Clean up mutated source file
@@ -686,7 +718,18 @@ impl ArtifactBuilder {
     /// - SDK includes: ucrt, shared, um, winrt
     /// - Libraries: kernel32, libcmt
     /// - Template-specific libs (advapi32, wininet, ws2_32, etc.)
+    ///
+    /// # Arguments
+    /// * `template_name` - Template name for library lookup
+    /// * `source` - Source file path (can be .c or runtime .o file)
+    /// * `output` - Output executable path
+    /// * `link_runtime` - If true, also link instrumentation_runtime.o
     async fn invoke_clang(&self, template_name: &str, source: &Path, output: &Path) -> Result<()> {
+        self.invoke_clang_internal(template_name, source, output, false).await
+    }
+
+    /// Internal invoke_clang with optional runtime linking
+    async fn invoke_clang_internal(&self, template_name: &str, source: &Path, output: &Path, link_runtime: bool) -> Result<()> {
         let xwin = &self.config.xwin_dir;
 
         // Pre-format paths to avoid lifetime issues
@@ -701,6 +744,12 @@ impl ArtifactBuilder {
 
         let output_str = output.to_str().context("Invalid output path")?;
         let source_str = source.to_str().context("Invalid source path")?;
+
+        // Pre-format runtime include path (always needed for instrumentation.h header)
+        let runtime_include_str = format!("{}", self.config.runtime_src
+            .parent()
+            .context("Invalid runtime source path")?
+            .display());
 
         // Base flags (from build_all.sh COMMON_FLAGS + BASE_LIBS)
         let mut args = vec![
@@ -729,6 +778,15 @@ impl ArtifactBuilder {
             "-Wl,-defaultlib:kernel32",
         ];
 
+        // Always add instrumentation header path (needed for instrumentation.h)
+        args.push("-I");
+        args.push(runtime_include_str.as_str());
+
+        // Define ENABLE_INSTRUMENTATION macro only when runtime will be linked
+        if link_runtime {
+            args.push("-DENABLE_INSTRUMENTATION");
+        }
+
         // Add template-specific libraries (format for clang wrapper: -Wl,-defaultlib:name)
         let extra_libs = get_template_libs(template_name);
         let mut formatted_lib_args: Vec<String> = Vec::new();
@@ -739,10 +797,32 @@ impl ArtifactBuilder {
             args.push(lib_arg.as_str());
         }
 
+        // If linking with runtime, compile runtime first
+        let runtime_obj_str = if link_runtime {
+            let runtime_obj = self.config.output_dir.join("instrumentation_runtime.o");
+
+            // Compile runtime if not already compiled
+            if !runtime_obj.exists() {
+                info!("Compiling instrumentation runtime for direct linking...");
+                self.compile_runtime(&self.config.runtime_src, &runtime_obj)
+                    .await
+                    .context("Failed to compile instrumentation runtime")?;
+            }
+
+            Some(runtime_obj.to_string_lossy().into_owned())
+        } else {
+            None
+        };
+
         // Add output and source
         args.push("-o");
         args.push(output_str);
         args.push(source_str);
+
+        // Add runtime object file if requested
+        if let Some(ref runtime_str) = runtime_obj_str {
+            args.push(runtime_str.as_str());
+        }
 
         info!("Invoking: clang {}", args.join(" "));
 
@@ -792,7 +872,14 @@ impl ArtifactBuilder {
         let sdk_um_include = xwin_root.join("sdk/include/um");
         let sdk_winrt_include = xwin_root.join("sdk/include/winrt");
 
-        let args = vec![
+        // Get runtime include path for instrumentation.h
+        let runtime_include = self.config.runtime_src
+            .parent()
+            .context("Invalid runtime source path")?
+            .to_str()
+            .context("Runtime include path is not valid UTF-8")?;
+
+        let mut args = vec![
             "-target",
             "x86_64-pc-windows-msvc",
             "-isystem",
@@ -805,6 +892,9 @@ impl ArtifactBuilder {
             sdk_um_include.to_str().unwrap(),
             "-isystem",
             sdk_winrt_include.to_str().unwrap(),
+            "-I",
+            runtime_include,  // Add instrumentation header path
+            "-DENABLE_INSTRUMENTATION",  // Always define when compiling to IR (instrumentation will be applied)
             "-S",         // Emit assembly (LLVM IR in this case)
             "-emit-llvm", // Output LLVM IR instead of native assembly
             "-O0",        // No optimization to preserve all instructions for mutation

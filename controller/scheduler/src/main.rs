@@ -26,6 +26,8 @@ use edr::controller::{
     controller_server::{Controller, ControllerServer},
 };
 
+const DELAY: u64 = 20;
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct Job {
@@ -297,7 +299,7 @@ impl Controller for SchedulerService {
         // Use timeout to prevent blocking RPC if Elasticsearch is slow/unreachable
         if matches!(report.event_type.as_str(), "success" | "error" | "timeout") {
             match tokio::time::timeout(
-                Duration::from_secs(2),
+                Duration::from_secs(DELAY),
                 self.store_run_result(&report)
             ).await {
                 Ok(Ok(())) => { /* success */ }
@@ -308,7 +310,7 @@ impl Controller for SchedulerService {
                 }
                 Err(_) => {
                     error!(
-                        "Timeout storing run result to Elasticsearch (2s limit exceeded)"
+                        "Timeout storing run result to Elasticsearch ({}s limit exceeded)", DELAY
                     );
                     error!(
                         "Status report received but not indexed (Elasticsearch is slow/unavailable)"

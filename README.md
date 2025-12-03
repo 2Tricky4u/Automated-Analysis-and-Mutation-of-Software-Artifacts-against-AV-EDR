@@ -9,8 +9,7 @@ This lab implements a build → run → collect → visualize loop for testing E
 - **Windows Workers (Hyper-V)**: Windows VMs (baseline and Windows Defender/Cortex)
 - **WSL2 Ubuntu**: Controller with Docker containers running Elastic Stack
 - **Rust gRPC Services**: Controller and Worker agents
-- **C++ ETW Consumer**: Real-time Windows telemetry with krabsetw
-- **Telemetry Pipeline**: RedEDR → Filebeat → Elasticsearch → Kibana
+- **Telemetry Pipeline**: RedEDR → Elasticsearch → Kibana
 
 
 ## 📁 Project Structure
