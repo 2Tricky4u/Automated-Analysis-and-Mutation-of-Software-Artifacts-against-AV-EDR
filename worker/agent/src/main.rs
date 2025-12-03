@@ -495,7 +495,8 @@ impl WorkerAgent for WorkerAgentService {
         }
 
         // 5b. Start line-level trace collector (named pipe server for instrumented artifacts)
-        let (trace_tx, mut trace_rx) = tokio::sync::mpsc::channel(1000);
+        // Large capacity for high-frequency line tracing (loops can generate 50K+ events/sec)
+        let (trace_tx, mut trace_rx) = tokio::sync::mpsc::channel(500_000);
         let trace_collector = telemetry::collectors::trace::TraceCollector::new(trace_tx);
 
         // Spawn async trace collector (fully async with tokio::net::windows::named_pipe)
