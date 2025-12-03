@@ -858,29 +858,94 @@ impl WorkerAgent for WorkerAgentService {
         // Also collect from trace.log file (fallback if pipe wasn't available)
         let trace_log_path = telemetry_dir.join("trace.log");
         if trace_log_path.exists() {
-            info!("Found trace.log file, collecting AST-level line traces: {:?}", trace_log_path);
+            info!("Found trace.log file, collecting binary protocol events: {:?}", trace_log_path);
 
-            match std::fs::read_to_string(&trace_log_path) {
-                Ok(trace_content) => {
+            // Read as binary (new binary protocol format)
+            match std::fs::read(&trace_log_path) {
+                Ok(trace_bytes) => {
                     let mut file_trace_count = 0;
-                    for (line_num, line) in trace_content.lines().enumerate() {
-                        // AST line traces are Base64-encoded with "YjY0" prefix
-                        // Store as raw payload for now (worker sends to controller, controller decodes)
-                        let telemetry_data = edr::common::TelemetryData {
-                            job_id: job_id.clone(),
-                            event_type: "trace_line".to_string(),
-                            timestamp: chrono::Utc::now().timestamp_millis(),
-                            payload: line.as_bytes().to_vec(),
-                            metadata: [("line_num".to_string(), line_num.to_string())]
-                                .iter()
-                                .cloned()
-                                .collect(),
-                            typed_event: None,
-                        };
-                        telemetry_events.push(telemetry_data);
-                        file_trace_count += 1;
+                    let mut checkpoint_count = 0;
+                    let mut success_count = 0;
+                    let mut failure_count = 0;
+
+                    // Parse binary protocol records
+                    let mut offset = 0;
+                    while offset + 32 <= trace_bytes.len() {
+                        // Read header (32 bytes)
+                        let header_bytes = &trace_bytes[offset..offset + 32];
+
+                        // Parse header fields (little-endian)
+                        let magic = u32::from_le_bytes([header_bytes[0], header_bytes[1], header_bytes[2], header_bytes[3]]);
+
+                        // Check magic (0x49535452 = 'ISTR')
+                        if magic != 0x49535452 {
+                            warn!("Invalid magic in trace.log at offset {}: 0x{:08x}, stopping parse", offset, magic);
+                            break;
+                        }
+
+                        let event_type = u16::from_le_bytes([header_bytes[6], header_bytes[7]]);
+                        let payload_len = u32::from_le_bytes([header_bytes[28], header_bytes[29], header_bytes[30], header_bytes[31]]);
+
+                        offset += 32;
+
+                        // Read payload
+                        if offset + payload_len as usize > trace_bytes.len() {
+                            warn!("Incomplete payload in trace.log at offset {}, expected {} bytes", offset, payload_len);
+                            break;
+                        }
+
+                        let payload = &trace_bytes[offset..offset + payload_len as usize];
+                        offset += payload_len as usize;
+
+                        // Handle based on event type
+                        match event_type {
+                            1 => {
+                                // LINE_TRACE: payload is "file:line:func"
+                                if let Ok(payload_str) = std::str::from_utf8(payload) {
+                                    let telemetry_data = edr::common::TelemetryData {
+                                        job_id: job_id.clone(),
+                                        event_type: "trace_line".to_string(),
+                                        timestamp: chrono::Utc::now().timestamp_millis(),
+                                        payload: payload_str.as_bytes().to_vec(),
+                                        metadata: std::collections::HashMap::new(),
+                                        typed_event: None,
+                                    };
+                                    telemetry_events.push(telemetry_data);
+                                    file_trace_count += 1;
+                                }
+                            }
+                            2 => {
+                                // CHECKPOINT
+                                if let Ok(checkpoint_name) = std::str::from_utf8(payload) {
+                                    info!("✅ CHECKPOINT from file: '{}'", checkpoint_name);
+                                    checkpoint_count += 1;
+                                }
+                            }
+                            3 => {
+                                // SUCCESS
+                                if let Ok(success_msg) = std::str::from_utf8(payload) {
+                                    info!("🎉 ARTIFACT SUCCESS from file: '{}'", success_msg);
+                                    success_count += 1;
+                                }
+                            }
+                            4 => {
+                                // FAILURE
+                                if let Ok(failure_data) = std::str::from_utf8(payload) {
+                                    let parts: Vec<&str> = failure_data.splitn(2, '|').collect();
+                                    let message = parts.get(0).unwrap_or(&"unknown");
+                                    let error_code = parts.get(1).unwrap_or(&"0");
+                                    warn!("❌ ARTIFACT FAILURE from file: '{}' (error_code={})", message, error_code);
+                                    failure_count += 1;
+                                }
+                            }
+                            _ => {
+                                debug!("Unknown event_type {} in trace.log", event_type);
+                            }
+                        }
                     }
-                    info!("✅ Collected {} AST-level line traces from trace.log", file_trace_count);
+
+                    info!("✅ Collected from trace.log: {} line traces, {} checkpoints, {} success, {} failure",
+                          file_trace_count, checkpoint_count, success_count, failure_count);
                 }
                 Err(e) => {
                     warn!("Failed to read trace.log: {}", e);
