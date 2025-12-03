@@ -767,8 +767,30 @@ impl WorkerAgent for WorkerAgentService {
 
         // Continue collecting telemetry for 10 seconds after process exit
         // This captures any late-arriving events (kernel buffer flush, EDR alerts, etc.)
-        info!("Process exited. Waiting 10 seconds for late telemetry events...");
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        // During this window, actively collect line traces from the named pipe
+        info!("Process exited. Waiting 10 seconds for late telemetry events (actively collecting line traces)...");
+
+        // Collect trace events during the wait period (store them for later conversion)
+        let mut drained_trace_events = Vec::new();
+        let wait_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+
+        while tokio::time::Instant::now() < wait_deadline {
+            // Try to receive trace events without blocking
+            match trace_rx.try_recv() {
+                Ok(trace_event) => {
+                    drained_trace_events.push(trace_event);
+                    // Successfully received an event, keep draining immediately
+                }
+                Err(_) => {
+                    // No events available, sleep briefly before checking again
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }
+
+        if !drained_trace_events.is_empty() {
+            info!("Drained {} trace events during 10-second wait window", drained_trace_events.len());
+        }
         info!("Telemetry collection window closed.");
 
         // ====================================================================
@@ -794,9 +816,18 @@ impl WorkerAgent for WorkerAgentService {
 
         // Collect line-level trace events from named pipe
         trace_rx.close();  // Stop accepting new events
-        let mut trace_events_count = 0;
+
+        // First, add the events we drained during the 10-second wait
+        let mut all_trace_events = drained_trace_events;
+
+        // Then, collect any remaining events that might have arrived
         while let Ok(trace_event) = trace_rx.try_recv() {
-            // Convert trace event to TelemetryData proto (includes thread_id from binary protocol)
+            all_trace_events.push(trace_event);
+        }
+
+        // Convert all trace events to TelemetryData proto
+        let trace_events_count = all_trace_events.len();
+        for trace_event in all_trace_events {
             let telemetry_data = edr::common::TelemetryData {
                 job_id: job_id.clone(),
                 event_type: "trace".to_string(),
@@ -815,7 +846,6 @@ impl WorkerAgent for WorkerAgentService {
                 )),
             };
             telemetry_events.push(telemetry_data);
-            trace_events_count += 1;
         }
 
         if trace_events_count > 0 {

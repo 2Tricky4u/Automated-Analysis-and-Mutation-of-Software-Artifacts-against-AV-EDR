@@ -387,8 +387,9 @@ void __trace_line_binary(const char* file, uint32_t line, const char* func) {
     memcpy(__trace_buffer + __trace_buffer_pos, payload, payload_len);
     __trace_buffer_pos += payload_len;
 
-    // Flush if buffer > 3KB
-    if (__trace_buffer_pos > 3072) {
+    // Flush aggressively (every 512 bytes) to ensure events reach collector
+    // This is critical for short-lived processes that may be killed before reaching 3KB
+    if (__trace_buffer_pos > 512) {
         __trace_flush();
     }
 }
@@ -401,6 +402,9 @@ void __trace_flush(void) {
         DWORD written;
         WriteFile(__trace_pipe, __trace_buffer, __trace_buffer_pos, &written, NULL);
         __trace_buffer_pos = 0;
+
+        // Ensure data is flushed to the pipe reader (important for process exit)
+        FlushFileBuffers(__trace_pipe);
     }
 }
 
