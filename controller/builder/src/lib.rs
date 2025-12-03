@@ -1166,9 +1166,17 @@ impl ArtifactBuilder {
             // Detect language from file extension
             let language = build_emitter::SourceLanguage::from_path(&built.source_path);
 
-            // Inject line traces at AST level
-            let instrumented_source = build_emitter::inject_line_traces(&original_source, language)
-                .context("Failed to inject line traces at AST level")?;
+            // Convert source path to string for embedding in trace calls
+            let file_path_str = built.source_path.to_string_lossy();
+
+            // Inject line traces at AST level with actual file path
+            let instrumented_source = build_emitter::inject_line_traces_with_opts(
+                &original_source,
+                language,
+                &file_path_str,
+                build_emitter::TraceFormat::default()
+            )
+            .context("Failed to inject line traces at AST level")?;
 
             // Count how many trace calls were injected
             let trace_call_count = instrumented_source.matches("__trace_line_binary(").count();
