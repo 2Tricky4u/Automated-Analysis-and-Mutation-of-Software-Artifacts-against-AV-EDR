@@ -13,6 +13,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include "instrumentation.h"
 
 //extern void __artifact_checkpoint(const char* checkpoint_name);
 
@@ -166,6 +167,8 @@ int main(void) {
 
     // Test 3: EICAR in executable memory
     test_eicar_execute();
+
+    ARTIFACT_SUCCESS("Could be executed");
 
     printf("\n========================================\n");
     printf("[INFO] All tests complete\n");
