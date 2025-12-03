@@ -494,20 +494,6 @@ impl WorkerAgent for WorkerAgentService {
             info!("RedEDR tracing started for artifact: {}", artifact_name);
         }
 
-        // 5b. Start line-level trace collector (named pipe server for instrumented artifacts)
-        // Large capacity for high-frequency line tracing (loops can generate 50K+ events/sec)
-        let (trace_tx, mut trace_rx) = tokio::sync::mpsc::channel(500_000);
-        let trace_collector = telemetry::collectors::trace::TraceCollector::new(trace_tx);
-
-        // Spawn async trace collector (fully async with tokio::net::windows::named_pipe)
-        let trace_handle = tokio::spawn(async move {
-            if let Err(e) = trace_collector.start_server().await {
-                error!("Trace collector failed: {}", e);
-            }
-        });
-
-        info!("Async trace collector started on named pipe: \\\\.\\pipe\\rededr_trace");
-
         // 4. Spawn process with guard (guard ensures kill if error occurs)
         // Create artifact-specific telemetry directory to avoid cross-contamination
         let artifacts_base = std::path::Path::new("C:\\temp\\artifacts");
@@ -523,6 +509,69 @@ impl WorkerAgent for WorkerAgentService {
         })?;
 
         info!("Created artifact-specific telemetry directory: {:?}", telemetry_dir);
+
+        // 5b. Start line-level trace collector with streaming to file
+        // Stream events to file during execution (handles unlimited events, survives crashes)
+        let trace_events_file = telemetry_dir.join("trace_events.jsonl");
+        let trace_events_file_clone = trace_events_file.clone();
+
+        let (trace_tx, mut trace_rx) = tokio::sync::mpsc::channel(10_000);  // Small buffer (only for I/O batching)
+        let trace_collector = telemetry::collectors::trace::TraceCollector::new(trace_tx.clone());
+
+        // Spawn streaming writer (drains channel and writes to file during execution)
+        let streaming_handle = tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+
+            match tokio::fs::File::create(&trace_events_file_clone).await {
+                Ok(mut file) => {
+                    let mut event_count = 0u64;
+                    while let Some(event) = trace_rx.recv().await {
+                        // Serialize event to JSON
+                        match serde_json::to_string(&event) {
+                            Ok(json) => {
+                                // Write JSON line
+                                if let Err(e) = file.write_all(json.as_bytes()).await {
+                                    error!("Failed to write trace event to file: {}", e);
+                                    break;
+                                }
+                                if let Err(e) = file.write_all(b"\n").await {
+                                    error!("Failed to write newline to trace file: {}", e);
+                                    break;
+                                }
+                                event_count += 1;
+
+                                // Flush every 1000 events for safety (balance performance vs data loss)
+                                if event_count % 1000 == 0 {
+                                    if let Err(e) = file.flush().await {
+                                        error!("Failed to flush trace file: {}", e);
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to serialize trace event: {}", e);
+                            }
+                        }
+                    }
+
+                    // Final flush
+                    let _ = file.flush().await;
+                    info!("✅ Streaming writer closed, wrote {} trace events to file", event_count);
+                }
+                Err(e) => {
+                    error!("Failed to create trace events file: {}", e);
+                }
+            }
+        });
+
+        // Spawn async trace collector (reads from named pipe, sends to channel)
+        let trace_handle = tokio::spawn(async move {
+            if let Err(e) = trace_collector.start_server().await {
+                error!("Trace collector failed: {}", e);
+            }
+        });
+
+        info!("Async trace collector started on named pipe: \\\\.\\pipe\\rededr_trace (streaming to file)");
 
         let child = tokio::process::Command::new(&artifact_path)
             .current_dir(&telemetry_dir)  // Runtime will write coverage.bin, checkpoints.log here
@@ -768,31 +817,31 @@ impl WorkerAgent for WorkerAgentService {
 
         // Continue collecting telemetry for 10 seconds after process exit
         // This captures any late-arriving events (kernel buffer flush, EDR alerts, etc.)
-        // During this window, actively collect line traces from the named pipe
-        info!("Process exited. Waiting 10 seconds for late telemetry events (actively collecting line traces)...");
+        info!("Process exited. Waiting 10 seconds for late telemetry events...");
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        info!("Telemetry collection window closed.");
 
-        // Collect trace events during the wait period (store them for later conversion)
-        let mut drained_trace_events = Vec::new();
-        let wait_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        // Give trace collector a moment to read any final events from the pipe
+        // (Don't abort immediately - SUCCESS/CHECKPOINT events may still be in pipe buffer)
+        info!("Waiting for trace collector to finish reading pipe...");
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
-        while tokio::time::Instant::now() < wait_deadline {
-            // Try to receive trace events without blocking
-            match trace_rx.try_recv() {
-                Ok(trace_event) => {
-                    drained_trace_events.push(trace_event);
-                    // Successfully received an event, keep draining immediately
-                }
-                Err(_) => {
-                    // No events available, sleep briefly before checking again
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
+        // Now stop trace collector and streaming writer
+        trace_handle.abort();  // Stop named pipe collector
+        drop(trace_tx);  // Close channel sender, which will cause streaming_handle to finish
+
+        // Wait for streaming writer to flush all events to disk
+        match tokio::time::timeout(Duration::from_secs(5), streaming_handle).await {
+            Ok(Ok(())) => {
+                info!("Streaming writer completed successfully");
+            }
+            Ok(Err(e)) => {
+                error!("Streaming writer panicked: {:?}", e);
+            }
+            Err(_) => {
+                warn!("Streaming writer timeout after 5 seconds");
             }
         }
-
-        if !drained_trace_events.is_empty() {
-            info!("Drained {} trace events during 10-second wait window", drained_trace_events.len());
-        }
-        info!("Telemetry collection window closed.");
 
         // ====================================================================
         // Phase 7: Collect telemetry and reset RedEDR (BEFORE final status)
@@ -815,46 +864,53 @@ impl WorkerAgent for WorkerAgentService {
 
         info!("Collected {} RedEDR events", telemetry_events.len());
 
-        // Collect line-level trace events from named pipe
-        trace_rx.close();  // Stop accepting new events
+        // Read line-level trace events from file (already written during execution)
+        let mut trace_events_count = 0;
+        if trace_events_file.exists() {
+            info!("Reading trace events from file: {:?}", trace_events_file);
 
-        // First, add the events we drained during the 10-second wait
-        let mut all_trace_events = drained_trace_events;
+            match std::fs::read_to_string(&trace_events_file) {
+                Ok(contents) => {
+                    for (line_num, line) in contents.lines().enumerate() {
+                        match serde_json::from_str::<telemetry::collectors::trace::TraceEvent>(line) {
+                            Ok(trace_event) => {
+                                let telemetry_data = edr::common::TelemetryData {
+                                    job_id: job_id.clone(),
+                                    event_type: "trace".to_string(),
+                                    timestamp: trace_event.ts_us as i64,
+                                    payload: vec![],  // Empty payload (data in typed_event)
+                                    metadata: std::collections::HashMap::new(),
+                                    typed_event: Some(edr::common::telemetry_data::TypedEvent::Trace(
+                                        edr::common::TraceEvent {
+                                            seq: trace_event.seq,
+                                            file: trace_event.file,
+                                            line: trace_event.line,
+                                            func: trace_event.func,
+                                            ts_us: trace_event.ts_us,
+                                            thread_id: trace_event.thread_id,
+                                        },
+                                    )),
+                                };
+                                telemetry_events.push(telemetry_data);
+                                trace_events_count += 1;
+                            }
+                            Err(e) => {
+                                error!("Failed to parse trace event at line {}: {}", line_num + 1, e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to read trace events file: {}", e);
+                }
+            }
 
-        // Then, collect any remaining events that might have arrived
-        while let Ok(trace_event) = trace_rx.try_recv() {
-            all_trace_events.push(trace_event);
+            if trace_events_count > 0 {
+                info!("✅ Collected {} line-level trace events from file", trace_events_count);
+            }
+        } else {
+            info!("No trace events file found (artifact may not have line tracing enabled)");
         }
-
-        // Convert all trace events to TelemetryData proto
-        let trace_events_count = all_trace_events.len();
-        for trace_event in all_trace_events {
-            let telemetry_data = edr::common::TelemetryData {
-                job_id: job_id.clone(),
-                event_type: "trace".to_string(),
-                timestamp: trace_event.ts_us as i64,
-                payload: vec![],  // Empty payload (data in typed_event)
-                metadata: std::collections::HashMap::new(),
-                typed_event: Some(edr::common::telemetry_data::TypedEvent::Trace(
-                    edr::common::TraceEvent {
-                        seq: trace_event.seq,
-                        file: trace_event.file,
-                        line: trace_event.line,
-                        func: trace_event.func,
-                        ts_us: trace_event.ts_us,
-                        thread_id: trace_event.thread_id,  // Thread ID from binary protocol (0 for Base64)
-                    },
-                )),
-            };
-            telemetry_events.push(telemetry_data);
-        }
-
-        if trace_events_count > 0 {
-            info!("✅ Collected {} line-level trace events from pipe", trace_events_count);
-        }
-
-        // Abort trace collector (it's blocking in named pipe accept, so just abort)
-        trace_handle.abort();
 
         // Also collect from trace.log file (fallback if pipe wasn't available)
         let trace_log_path = telemetry_dir.join("trace.log");

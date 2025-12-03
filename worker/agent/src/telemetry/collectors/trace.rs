@@ -27,7 +27,7 @@ const MAGIC_BINARY: u32 = 0x49535452; // 'ISTR'
 const HEADER_SIZE: usize = std::mem::size_of::<InstRecordHeader>();
 
 /// Parsed line trace event from artifact
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TraceEvent {
     pub seq: u32,
     pub thread_id: u32,
