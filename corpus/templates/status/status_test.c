@@ -2,20 +2,18 @@
  * Artifact Status API Test
  *
  * Demonstrates the new instrumentation API for C programmers:
- * - __artifact_checkpoint(name)     - Mark progress checkpoints
- * - __artifact_success(message)     - Signal successful completion
- * - __artifact_failure(msg, code)   - Signal failure with error code
+ * - ARTIFACT_CHECKPOINT(name)     - Mark progress checkpoints
+ * - ARTIFACT_SUCCESS(message)     - Signal successful completion
+ * - ARTIFACT_FAILURE(msg, code)   - Signal failure with error code
  *
- * These functions are automatically available when building with --trace=all or --trace=lines
+ * These macros work with both trace=on and trace=off modes:
+ * - trace=on:  Macros expand to real function calls
+ * - trace=off: Macros expand to no-ops (zero overhead, no linker errors)
  */
 
 #include <stdio.h>
 #include <windows.h>
-
-// Forward declarations (provided by instrumentation runtime)
-extern void __artifact_checkpoint(const char* checkpoint_name);
-extern void __artifact_success(const char* message);
-extern void __artifact_failure(const char* message, int error_code);
+#include "instrumentation.h"  // Use the header with macros
 
 int main() {
     printf("========================================\n");
@@ -24,36 +22,36 @@ int main() {
 
     // Stage 1: Initialization
     printf("[Stage 1] Initialization...\n");
-    __artifact_checkpoint("init_start");
+    ARTIFACT_CHECKPOINT("init_start");
 
     Sleep(100);  // Simulate work
     printf("  -> Allocating resources\n");
 
-    __artifact_checkpoint("init_complete");
+    ARTIFACT_CHECKPOINT("init_complete");
     printf("  -> Initialization complete\n\n");
 
     // Stage 2: Main work
     printf("[Stage 2] Performing main task...\n");
-    __artifact_checkpoint("work_start");
+    ARTIFACT_CHECKPOINT("work_start");
 
     Sleep(200);  // Simulate work
     printf("  -> Processing data\n");
 
-    __artifact_checkpoint("work_50pct");
+    ARTIFACT_CHECKPOINT("work_50pct");
     printf("  -> 50%% complete\n");
 
     Sleep(200);  // More work
-    __artifact_checkpoint("work_complete");
+    ARTIFACT_CHECKPOINT("work_complete");
     printf("  -> Main task complete\n\n");
 
     // Stage 3: Cleanup
     printf("[Stage 3] Cleanup...\n");
-    __artifact_checkpoint("cleanup_start");
+    ARTIFACT_CHECKPOINT("cleanup_start");
 
     Sleep(100);  // Simulate cleanup
     printf("  -> Releasing resources\n");
 
-    __artifact_checkpoint("cleanup_complete");
+    ARTIFACT_CHECKPOINT("cleanup_complete");
     printf("  -> Cleanup complete\n\n");
 
     // Signal overall success
@@ -61,7 +59,7 @@ int main() {
     printf("All stages completed successfully!\n");
     printf("========================================\n\n");
 
-    __artifact_success("All 3 stages completed without EDR intervention");
+    ARTIFACT_SUCCESS("All 3 stages completed without EDR intervention");
 
     printf("Press Enter to exit...\n");
     getchar();

@@ -68,7 +68,8 @@ impl TraceCollector {
 
         for attempt in 1..=max_retries {
             match ServerOptions::new()
-                .first_pipe_instance(true)
+                // Don't require first_pipe_instance - allows reconnection even if pipe still exists
+                // .first_pipe_instance(true)  // REMOVED
                 .create(&self.pipe_name)
             {
                 Ok(s) => {
@@ -81,7 +82,7 @@ impl TraceCollector {
                         "Failed to create named pipe (attempt {}/{}): {} - retrying in 200ms...",
                         attempt, max_retries, e
                     );
-                    // Pipe may already exist from previous run, wait for it to be released
+                    // Pipe may still be in use from previous run, wait for it to be released
                     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
                 }
                 Err(e) => {

@@ -210,6 +210,11 @@ static int __trace_buffer_pos = 0;
  * Pipe name: \\.\pipe\rededr_trace
  */
 void __trace_init(const char* pipe_name) {
+    // Already initialized? Skip
+    if (__trace_pipe != INVALID_HANDLE_VALUE) {
+        return;
+    }
+
     if (pipe_name == NULL) {
         pipe_name = "\\\\.\\pipe\\rededr_trace";
     }
