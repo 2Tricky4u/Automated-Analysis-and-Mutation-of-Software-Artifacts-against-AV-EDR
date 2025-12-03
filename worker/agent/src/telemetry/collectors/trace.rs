@@ -225,10 +225,17 @@ impl TraceCollector {
         // Handle first record
         match event_type {
             1 => {
+                // LINE_TRACE
                 if let Err(e) = self.handle_binary_line_trace(&hdr, &payload) {
                     warn!("Failed to parse binary line trace: {}", e);
                 } else {
                     debug!("Binary stream: successfully parsed line trace event");
+                }
+            }
+            2 | 3 | 4 => {
+                // CHECKPOINT (2), SUCCESS (3), FAILURE (4)
+                if let Err(e) = self.handle_artifact_status(&hdr, &payload, event_type) {
+                    warn!("Failed to parse artifact status event: {}", e);
                 }
             }
             _ => {
@@ -284,6 +291,12 @@ impl TraceCollector {
                         warn!("Failed to parse binary line trace: {}", e);
                     } else {
                         debug!("Binary stream: successfully parsed line trace event");
+                    }
+                }
+                2 | 3 | 4 => {
+                    // CHECKPOINT (2), SUCCESS (3), FAILURE (4)
+                    if let Err(e) = self.handle_artifact_status(&hdr, &payload, event_type) {
+                        warn!("Failed to parse artifact status event: {}", e);
                     }
                 }
                 _ => {
@@ -377,6 +390,43 @@ impl TraceCollector {
         // Send to gRPC stream
         if let Err(e) = self.event_tx.try_send(event) {
             warn!("Failed to send trace event to gRPC stream: {}", e);
+        }
+
+        Ok(())
+    }
+
+    /// Handle artifact status events (checkpoint, success, failure)
+    fn handle_artifact_status(&self, hdr: &InstRecordHeader, payload: &[u8], event_type: u16) -> Result<()> {
+        let payload_str = String::from_utf8(payload.to_vec())
+            .context("Payload is not valid UTF-8")?;
+
+        // Read packed struct fields
+        let seq_no = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.seq_no)) };
+        let thread_id = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.thread_id)) };
+        let ts_us = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.ts_us)) };
+
+        match event_type {
+            2 => {
+                // CHECKPOINT: payload is just the checkpoint name
+                info!("✅ CHECKPOINT reached: '{}' (seq={}, thread={}, ts={}µs)",
+                    payload_str, seq_no, thread_id, ts_us);
+            }
+            3 => {
+                // SUCCESS: payload is success message
+                info!("🎉 ARTIFACT SUCCESS: '{}' (seq={}, thread={}, ts={}µs)",
+                    payload_str, seq_no, thread_id, ts_us);
+            }
+            4 => {
+                // FAILURE: payload is "message|error_code"
+                let parts: Vec<&str> = payload_str.splitn(2, '|').collect();
+                let message = parts.get(0).unwrap_or(&"unknown");
+                let error_code = parts.get(1).unwrap_or(&"0");
+                warn!("❌ ARTIFACT FAILURE: '{}' (error_code={}, seq={}, thread={}, ts={}µs)",
+                    message, error_code, seq_no, thread_id, ts_us);
+            }
+            _ => {
+                warn!("Unknown status event_type: {}", event_type);
+            }
         }
 
         Ok(())
