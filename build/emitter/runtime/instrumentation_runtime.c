@@ -2,9 +2,15 @@
  * Instrumentation Runtime Library
  *
  * Provides runtime support for:
- * - BB coverage (AFL-style bitmap to shared memory)
+ * - BB coverage (LLVM SanitizerCoverage + AFL-style edge bitmap)
  * - Line-level tracing (Base64-encoded events to named pipe)
  * - Checkpoint markers (API call tracking)
+ *
+ * BB Coverage uses LLVM SanitizerCoverage (industry standard):
+ * - __sanitizer_cov_trace_pc_guard_init() - Called once to initialize guards
+ * - __sanitizer_cov_trace_pc_guard() - Called on every BB entry
+ * - Produces AFL-compatible edge coverage bitmap (64KB)
+ * - Outputs: coverage.bin (bitmap), coverage_bbs.txt (metadata)
  *
  * Linked into instrumented artifacts at build time
  */
@@ -18,6 +24,14 @@
 __attribute__((visibility("default"))) void __coverage_init(void);
 __attribute__((visibility("default"))) void __coverage_bb(uint32_t bb_id);
 __attribute__((visibility("default"))) void __coverage_flush(void);
+
+// SanitizerCoverage callbacks (LLVM standard interface)
+// Note: Using trace-pc mode (simple callback) instead of trace-pc-guard (section-based)
+// trace-pc is more portable and works better on Windows COFF
+__attribute__((visibility("default"))) void __sanitizer_cov_trace_pc(void);
+__attribute__((visibility("default"))) void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *stop);
+__attribute__((visibility("default"))) void __sanitizer_cov_trace_pc_guard(uint32_t *guard);
+
 __attribute__((visibility("default"))) void __trace_init(const char* pipe_name);
 __attribute__((visibility("default"))) void __trace_line(uint32_t seq, const char* file, uint32_t line, const char* func);
 __attribute__((visibility("default"))) void __trace_line_b64(const char* base64_marker);
@@ -45,6 +59,43 @@ static int __coverage_flushed = 0;
 static uint32_t __bb_ids[MAX_BB_IDS];
 static uint32_t __bb_hit_counts[MAX_BB_IDS];
 static uint32_t __bb_count = 0;
+
+// SanitizerCoverage guard tracking
+static uint32_t *__sancov_guards_start = NULL;
+static uint32_t *__sancov_guards_end = NULL;
+static uint32_t __total_bbs = 0;
+
+// SanitizerCoverage guard section markers
+// LLVM SanitizerCoverage expects these symbols to bound the guard array
+// On Windows MSVC, we use sorted sections: .SCOV$GA (start) < .SCOV$GM (middle) < .SCOV$GZ (end)
+// The guards themselves are placed in .SCOV$GM by LLVM
+#pragma section(".SCOV$GA", read, write)
+#pragma section(".SCOV$GZ", read, write)
+
+// Start marker (goes at beginning of .SCOV section)
+__declspec(allocate(".SCOV$GA"))
+uint32_t __start___sancov_guards_dummy = 0;
+
+// End marker (goes at end of .SCOV section)
+__declspec(allocate(".SCOV$GZ"))
+uint32_t __stop___sancov_guards_dummy = 0;
+
+// Provide the symbols that LLVM expects (pointers to the markers)
+// These need to be extern (non-static) so linker can resolve them
+// Use weak linkage to allow override if needed
+#ifdef _MSC_VER
+__declspec(selectany)
+#else
+__attribute__((weak))
+#endif
+uint32_t* __start___sancov_guards = &__start___sancov_guards_dummy;
+
+#ifdef _MSC_VER
+__declspec(selectany)
+#else
+__attribute__((weak))
+#endif
+uint32_t* __stop___sancov_guards = &__stop___sancov_guards_dummy;
 
 /**
  * Initialize coverage tracking (called automatically via constructor)
@@ -177,7 +228,12 @@ void __coverage_flush(void) {
         int len = snprintf(bb_info, sizeof(bb_info), "# Basic Block Coverage Report\n");
         WriteFile(hBBFile, bb_info, len, &written, NULL);
 
-        len = snprintf(bb_info, sizeof(bb_info), "# Total BBs instrumented: %u\n", __bb_count);
+        // Use __total_bbs if SanitizerCoverage was used, otherwise __bb_count
+        uint32_t total_instrumented = (__total_bbs > 0) ? __total_bbs : __bb_count;
+        len = snprintf(bb_info, sizeof(bb_info), "# Total BBs instrumented: %u\n", total_instrumented);
+        WriteFile(hBBFile, bb_info, len, &written, NULL);
+
+        len = snprintf(bb_info, sizeof(bb_info), "# Total BBs hit: %u\n", __bb_count);
         WriteFile(hBBFile, bb_info, len, &written, NULL);
 
         len = snprintf(bb_info, sizeof(bb_info), "# BB_ID HIT_COUNT\n");
@@ -195,6 +251,145 @@ void __coverage_flush(void) {
         CloseHandle(hBBFile);
         fprintf(stderr, "[RUNTIME] Wrote BB metadata: %u basic blocks\n", __bb_count);
     }
+}
+
+// ============================================================================
+// SanitizerCoverage Callbacks (LLVM standard interface)
+// ============================================================================
+
+// BB counter for trace-pc mode (simple incrementing ID)
+static uint32_t __sancov_bb_counter = 0;
+
+/**
+ * Simple PC trace callback (called on every BB entry)
+ * This is used with -sanitizer-coverage-trace-pc mode
+ * More portable than guard-based mode, works on all platforms
+ */
+void __sanitizer_cov_trace_pc(void) {
+    // Initialize coverage if needed
+    if (!__coverage_initialized) {
+        __coverage_init();
+    }
+
+    // Get caller's return address to use as BB ID
+    // On x86-64, return address is at [rsp]
+    void *return_address = __builtin_return_address(0);
+    uint32_t bb_id = (uint32_t)((uintptr_t)return_address & 0xFFFFFFFF);
+
+    // Track this BB
+    int found_idx = -1;
+    for (uint32_t i = 0; i < __bb_count; i++) {
+        if (__bb_ids[i] == bb_id) {
+            found_idx = (int)i;
+            break;
+        }
+    }
+
+    if (found_idx >= 0) {
+        // BB already registered, increment hit count
+        if (__bb_hit_counts[found_idx] < UINT32_MAX) {
+            __bb_hit_counts[found_idx]++;
+        }
+    } else if (__bb_count < MAX_BB_IDS) {
+        // New BB, register it
+        __bb_ids[__bb_count] = bb_id;
+        __bb_hit_counts[__bb_count] = 1;
+        __bb_count++;
+    }
+
+    // AFL-style edge coverage
+    uint32_t edge = (__coverage_prev_bb << 1) ^ bb_id;
+    uint32_t idx = edge % COVERAGE_MAP_SIZE;
+    if (__coverage_map[idx] < 255) {
+        __coverage_map[idx]++;
+    }
+    __coverage_prev_bb = bb_id;
+}
+
+/**
+ * Called once at program startup by LLVM SanitizerCoverage (guard mode)
+ * Initializes guard array and assigns unique IDs to each guard
+ *
+ * @param start Pointer to first guard in .data section
+ * @param stop Pointer to end of guard array
+ */
+void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *stop) {
+    if (start == stop || *start) {
+        return;  // Already initialized or empty range
+    }
+
+    __sancov_guards_start = start;
+    __sancov_guards_end = stop;
+    __total_bbs = (uint32_t)(stop - start);
+
+    fprintf(stderr, "[RUNTIME] SanitizerCoverage initialized: %u basic blocks\n", __total_bbs);
+
+    // Initialize coverage tracking
+    if (!__coverage_initialized) {
+        __coverage_init();
+    }
+
+    // Assign unique IDs to each guard (1-based, 0 means "already visited")
+    uint32_t id = 1;
+    for (uint32_t *guard = start; guard < stop; guard++) {
+        *guard = id++;
+    }
+
+    fprintf(stderr, "[RUNTIME] Assigned IDs 1 to %u\n", __total_bbs);
+}
+
+/**
+ * Called on every instrumented basic block entry by LLVM SanitizerCoverage
+ * Records BB hit and updates AFL-style edge coverage map
+ *
+ * @param guard Pointer to this BB's guard value (contains unique BB ID)
+ */
+void __sanitizer_cov_trace_pc_guard(uint32_t *guard) {
+    if (!guard || *guard == 0) {
+        return;  // Invalid guard or already visited (if single-visit mode enabled)
+    }
+
+    uint32_t bb_id = *guard;
+
+    // Initialize coverage if needed (shouldn't happen, but defensive)
+    if (!__coverage_initialized) {
+        __coverage_init();
+    }
+
+    // Track this BB ID and increment its hit count
+    int found_idx = -1;
+    for (uint32_t i = 0; i < __bb_count; i++) {
+        if (__bb_ids[i] == bb_id) {
+            found_idx = (int)i;
+            break;
+        }
+    }
+
+    if (found_idx >= 0) {
+        // BB already registered, increment hit count
+        if (__bb_hit_counts[found_idx] < UINT32_MAX) {
+            __bb_hit_counts[found_idx]++;
+        }
+    } else if (__bb_count < MAX_BB_IDS) {
+        // New BB, register it with hit count = 1
+        __bb_ids[__bb_count] = bb_id;
+        __bb_hit_counts[__bb_count] = 1;
+        __bb_count++;
+    }
+
+    // AFL-style edge coverage: XOR previous BB with current BB
+    uint32_t edge = (__coverage_prev_bb << 1) ^ bb_id;
+    uint32_t idx = edge % COVERAGE_MAP_SIZE;
+
+    // Increment hit count (saturating at 255)
+    if (__coverage_map[idx] < 255) {
+        __coverage_map[idx]++;
+    }
+
+    __coverage_prev_bb = bb_id;
+
+    // Optional: Enable single-visit mode by uncommenting:
+    // *guard = 0;  // Mark as visited (won't call again for this BB)
 }
 
 // ============================================================================

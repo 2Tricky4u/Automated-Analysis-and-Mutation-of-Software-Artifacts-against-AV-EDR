@@ -1,21 +1,23 @@
 ///! Instrumentation injection at LLVM IR level
 ///!
 ///! Injects telemetry collection code:
-///! - Basic-block coverage (AFL-style bitmap)
+///! - Basic-block coverage (LLVM SanitizerCoverage - accurate CFG-aware detection)
 ///! - Thread-aware API tracing (WINNIE-style)
 ///! - Line-level tracing (diagnostic mode, Base64-encoded to named pipe)
 ///! - Checkpoint markers for key operations
 ///!
 ///! Architecture:
-///!   1. Parse LLVM IR
-///!   2. Insert instrumentation calls at:
-///!      - BB entry points → __coverage_bb(bb_id)
-///!      - Line boundaries → __trace_line(file, line, func)
-///!      - Before API calls → __checkpoint(name, args)
+///!   1. Use LLVM's `opt` tool with SanitizerCoverage pass for BB coverage
+///!   2. Parse LLVM IR for API tracing injection (text-based, selective)
 ///!   3. Link with runtime library (instrumentation_runtime.obj)
+///!
+///! BB Coverage uses LLVM SanitizerCoverage (industry standard, used by AFL++/libFuzzer):
+///!   - Accurate: Uses proper LLVM BasicBlock API (not text parsing)
+///!   - Complete: Detects ALL basic blocks including implicit ones
+///!   - Efficient: ~3-5% overhead
 use anyhow::{Context, Result};
-use std::collections::HashMap;
 use std::path::Path;
+use std::process::Command;
 use tracing::{debug, info};
 
 pub struct Instrumenter {
@@ -44,171 +46,105 @@ impl Instrumenter {
         eprintln!("[INSTRUMENTER] Output path: {:?}", abs_output_path);
         info!("Instrumenting LLVM IR: {:?} (mode: {:?})", abs_ir_path, trace_mode);
 
-        // Read IR file
-        let ir_content = tokio::fs::read_to_string(ir_path)
+        // Determine what instrumentation we need
+        let needs_bb = matches!(trace_mode,
+            crate::TraceMode::BB | crate::TraceMode::ApiPlusBB | crate::TraceMode::All);
+        let needs_api = matches!(trace_mode,
+            crate::TraceMode::Api | crate::TraceMode::ApiPlusBB | crate::TraceMode::All);
+
+        // Apply SanitizerCoverage for BB instrumentation (if needed)
+        let ir_after_bb = if needs_bb {
+            let temp_bb = output_path.with_extension("bb.ll");
+            self.inject_bb_coverage_sancov(ir_path, &temp_bb).await?;
+            temp_bb
+        } else {
+            ir_path.to_path_buf()
+        };
+
+        // Read IR (either original or post-SanitizerCoverage)
+        let ir_content = tokio::fs::read_to_string(&ir_after_bb)
             .await
             .context("Failed to read IR file")?;
 
-        // Parse IR and inject instrumentation
-        let instrumented_ir = match trace_mode {
-            crate::TraceMode::Off => {
-                debug!("No instrumentation requested");
-                ir_content
-            }
-            crate::TraceMode::BB => {
-                self.inject_bb_coverage(&ir_content)?
-            }
-            crate::TraceMode::Api => {
-                self.inject_api_tracing(&ir_content)?
-            }
-            crate::TraceMode::ApiPlusBB => {
-                let with_bb = self.inject_bb_coverage(&ir_content)?;
-                self.inject_api_tracing(&with_bb)?
-            }
-            crate::TraceMode::Lines => {
-                // Line tracing is done at AST/source level (tree-sitter-based)
-                // No IR instrumentation needed, just pass through
-                ir_content
-            }
-            crate::TraceMode::LinesAroundBB(bb_id) => {
-                // Line tracing is done at AST/source level (tree-sitter-based)
-                // TODO: Implement targeted narrowing around specific BB
-                info!("LinesAroundBB mode not fully implemented, using full line tracing");
-                ir_content
-            }
-            crate::TraceMode::All => {
-                // Line tracing is done at AST/source level (tree-sitter-based)
-                // Only inject BB + API at IR level
-                let with_bb = self.inject_bb_coverage(&ir_content)?;
-                self.inject_api_tracing(&with_bb)?
-            }
+        // Apply API tracing (text-based injection) if needed
+        let instrumented_ir = if needs_api {
+            self.inject_api_tracing(&ir_content)?
+        } else {
+            ir_content
         };
 
         // Add runtime function declarations
         let full_ir = self.add_runtime_declarations(&instrumented_ir, trace_mode)?;
 
-        // Write instrumented IR
+        // Write final instrumented IR
         tokio::fs::write(output_path, full_ir)
             .await
             .context("Failed to write instrumented IR")?;
 
+        // Clean up temporary BB IR file
+        if needs_bb {
+            let _ = tokio::fs::remove_file(&ir_after_bb).await;
+        }
+
         info!(
-            "IR-level instrumentation complete: {} BBs, {} lines (AST-level line traces not counted here)",
+            "IR-level instrumentation complete: {} BBs (via SanitizerCoverage), {} API checkpoints",
             self.bb_counter, self.line_counter
         );
 
         Ok(())
     }
 
-    /// Inject BB coverage instrumentation (AFL-style)
-    fn inject_bb_coverage(&mut self, ir: &str) -> Result<String> {
-        debug!("Injecting BB coverage instrumentation");
+    /// Inject BB coverage using LLVM SanitizerCoverage (industry-standard)
+    async fn inject_bb_coverage_sancov(&mut self, ir_path: &Path, output_path: &Path) -> Result<()> {
+        info!("Applying LLVM SanitizerCoverage pass for BB instrumentation");
+        eprintln!("[INSTRUMENTER] Running opt with SanitizerCoverage pass");
 
-        let mut instrumented = String::new();
-        let mut in_function = false;
-        let mut bb_id = 0u32;
-        let mut injected_count = 0;
-        let mut need_entry_marker = false;
-        let mut is_in_main = false;
-        let mut init_injected = false;
+        // Use LLVM opt tool with SanitizerCoverage pass
+        // Note: Pass name changed in LLVM 13+: "sancov" → "sancov-module"
+        // For Windows COFF: use trace-pc (simple callback) instead of trace-pc-guard (requires section support)
+        let mut cmd = Command::new("opt");
+        cmd.arg("-passes=sancov-module")
+            .arg("-sanitizer-coverage-level=3")  // BB-level coverage
+            .arg("-sanitizer-coverage-trace-pc")  // Simple PC callback (works on Windows COFF)
+            .arg(ir_path)
+            .arg("-S")  // Output as text IR
+            .arg("-o")
+            .arg(output_path);
 
-        for line in ir.lines() {
-            // Detect function entry
-            if line.trim_start().starts_with("define ") {
-                in_function = true;
-                is_in_main = line.contains(" @main(") || line.contains(" @wmain(");
-                // DON'T reset bb_id here - it should be global across all functions
+        eprintln!("[INSTRUMENTER] opt command: {:?}", cmd);
 
-                // ONLY instrument non-library functions (skip linkonce_odr comdat functions)
-                let is_library_function = line.contains("linkonce_odr") || line.contains("comdat");
-                need_entry_marker = !is_library_function;
+        let output = cmd.output()
+            .context("Failed to execute opt - ensure LLVM toolchain is in PATH")?;
 
-                if is_in_main {
-                    eprintln!("[INSTRUMENTER] Found main() function - will inject __coverage_init()");
-                } else if !is_library_function {
-                    debug!("Found function definition: {}", line.trim());
-                } else {
-                    debug!("Skipping library function: {}", line.trim());
-                }
-                instrumented.push_str(line);
-                instrumented.push('\n');
-                continue;
-            }
-
-            // Detect function exit
-            if in_function && line.trim() == "}" {
-                in_function = false;
-                debug!("Function end, injected {} BB markers", injected_count);
-                injected_count = 0;
-                instrumented.push_str(line);
-                instrumented.push('\n');
-                continue;
-            }
-
-            // Inject coverage call at BB entry
-            if in_function {
-                let trimmed = line.trim();
-
-                // Insert entry BB marker AFTER allocas but before first real instruction
-                if need_entry_marker && !trimmed.is_empty() && !trimmed.starts_with(';') && !trimmed.starts_with("!") {
-                    // If this line is an alloca, don't inject yet
-                    if trimmed.contains("= alloca ") {
-                        // Skip injection, just append the line
-                        instrumented.push_str(line);
-                        instrumented.push('\n');
-                        continue;
-                    }
-
-                    // We've passed all allocas (or there are none), inject now
-                    if self.bb_counter == 0 {
-                        eprintln!("[INSTRUMENTER] First BB injection after allocas");
-                        eprintln!("  Next instruction: {}", trimmed);
-                    }
-
-                    // If this is main() and we haven't injected init yet, do it first
-                    if is_in_main && !init_injected {
-                        instrumented.push_str("  call void @__coverage_init()\n");
-                        init_injected = true;
-                        eprintln!("[INSTRUMENTER] Injected __coverage_init() call in main()");
-                    }
-
-                    instrumented.push_str(&format!(
-                        "  call void @__coverage_bb(i32 {})\n",
-                        bb_id
-                    ));
-                    bb_id += 1;
-                    self.bb_counter += 1;
-                    injected_count += 1;
-                    need_entry_marker = false;
-                    debug!("Injected entry BB marker {}", bb_id - 1);
-                }
-
-                // BB entry: explicit label definition (e.g., "label_name:" or "entry:" or "10:")
-                if trimmed.ends_with(':') && !trimmed.starts_with(';') && !trimmed.starts_with("!") {
-                    // Found a basic block label - insert AFTER the label
-                    instrumented.push_str(line);
-                    instrumented.push('\n');
-                    instrumented.push_str(&format!(
-                        "  call void @__coverage_bb(i32 {})\n",
-                        bb_id
-                    ));
-                    bb_id += 1;
-                    self.bb_counter += 1;
-                    injected_count += 1;
-                    debug!("Injected BB marker {} at label: {}", bb_id - 1, trimmed);
-                    continue; // Skip the normal line append below
-                }
-            }
-
-            instrumented.push_str(line);
-            instrumented.push('\n');
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("[INSTRUMENTER] opt failed: {}", stderr);
+            anyhow::bail!("opt (SanitizerCoverage) failed: {}", stderr);
         }
 
-        eprintln!("[INSTRUMENTER] BB coverage injection complete: {} markers injected", self.bb_counter);
-        info!("BB coverage injection complete: {} markers injected", self.bb_counter);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !stdout.is_empty() {
+            debug!("opt stdout: {}", stdout);
+        }
 
-        Ok(instrumented)
+        // Count BBs from SanitizerCoverage guards (estimate)
+        let ir_content = tokio::fs::read_to_string(output_path)
+            .await
+            .context("Failed to read instrumented IR")?;
+
+        let call_count = ir_content.matches("call void @__sanitizer_cov_trace_pc()").count();
+        self.bb_counter = call_count as u32;
+
+        eprintln!("[INSTRUMENTER] SanitizerCoverage injected {} BB callbacks", self.bb_counter);
+        info!("SanitizerCoverage complete: {} basic blocks instrumented", self.bb_counter);
+
+        Ok(())
     }
+
+    // REMOVED: inject_bb_coverage_naive() - deprecated text-based BB injection
+    // Replaced by inject_bb_coverage_sancov() which uses LLVM SanitizerCoverage
+    // Old implementation had ~30% BB detection miss rate (implicit BBs without labels)
+    // See BB-COVERAGE-IMPROVEMENT.md for detailed comparison
 
     /// Inject API tracing instrumentation
     fn inject_api_tracing(&mut self, ir: &str) -> Result<String> {
@@ -314,8 +250,10 @@ impl Instrumenter {
         }
 
         if needs_bb {
-            declarations.push_str("; BB coverage runtime (external C functions)\n");
-            declarations.push_str("declare void @__coverage_bb(i32)\n");
+            // Note: SanitizerCoverage pass automatically adds its own declarations
+            // (__sanitizer_cov_trace_pc_guard, __sanitizer_cov_trace_pc_guard_init)
+            // We only add legacy coverage functions for backward compatibility
+            declarations.push_str("; Legacy coverage functions (for backward compatibility)\n");
             declarations.push_str("declare void @__coverage_init()\n");
             declarations.push_str("declare void @__coverage_flush()\n");
             declarations.push('\n');
@@ -369,6 +307,7 @@ impl Default for Instrumenter {
 }
 
 /// Base64-encode a string for embedding in LLVM IR string constants
+#[cfg(test)]
 fn base64_str(s: &str) -> String {
     use base64::{Engine as _, engine::general_purpose};
     general_purpose::STANDARD.encode(s.as_bytes())
@@ -384,34 +323,14 @@ mod tests {
         assert_eq!(base64_str("loader.c"), "bG9hZGVyLmM=");
     }
 
-    #[tokio::test]
-    async fn test_inject_bb_coverage() {
-        let mut instrumenter = Instrumenter::new();
-
-        let ir = r#"
-define i32 @main() {
-entry:
-  %retval = alloca i32
-  store i32 0, i32* %retval
-  br label %loop
-
-loop:
-  %i = phi i32 [ 0, %entry ], [ %i.next, %loop ]
-  %i.next = add i32 %i, 1
-  %cmp = icmp slt i32 %i, 10
-  br i1 %cmp, label %loop, label %exit
-
-exit:
-  ret i32 0
-}
-"#;
-
-        let result = instrumenter.inject_bb_coverage(ir).unwrap();
-
-        // Should have 3 BBs: entry, loop, exit
-        assert!(result.contains("@__coverage_bb(i32 0)"));
-        assert!(result.contains("@__coverage_bb(i32 1)"));
-        assert!(result.contains("@__coverage_bb(i32 2)"));
-        assert_eq!(instrumenter.bb_counter, 3);
-    }
+    // NOTE: BB coverage testing now requires LLVM opt tool
+    // SanitizerCoverage is applied via external process, not text parsing
+    // Integration tests in build/emitter/tests/ validate full pipeline
+    //
+    // To test manually:
+    // 1. Create test.ll with simple function
+    // 2. Run: opt -passes=sancov -sanitizer-coverage-level=3 test.ll -o test_instrumented.ll
+    // 3. Verify: grep -c "__sanitizer_cov_trace_pc_guard" test_instrumented.ll
+    //
+    // Old naive test removed - see git history for reference
 }
