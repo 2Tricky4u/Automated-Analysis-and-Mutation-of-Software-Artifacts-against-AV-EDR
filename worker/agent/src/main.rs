@@ -912,10 +912,11 @@ impl WorkerAgent for WorkerAgentService {
                         metadata.insert("event_count".to_string(), trace_events_count.to_string());
                         metadata.insert("original_size_bytes".to_string(), original_size.to_string());
 
-                        // This is literally your old payload logic
+                        // Wrap payload in JSON so controller can parse it
                         let payload = if original_size <= MAX_PAYLOAD_SIZE {
                             metadata.insert("compression".to_string(), "none".to_string());
-                            contents.into_bytes()
+                            // Wrap in JSON: {"content": "trace content here"}
+                            serde_json::json!({"content": contents}).to_string().into_bytes()
                         } else {
                             info!("Trace log too large ({} bytes), applying loop compression...", original_size);
                             let compressed = telemetry::trace_compressor::compress_trace_log(&contents, 3);
@@ -931,7 +932,8 @@ impl WorkerAgent for WorkerAgentService {
                             original_size, compressed.compressed_size, compressed.compression_ratio
                         );
                                 metadata.insert("compression".to_string(), "loop_detection".to_string());
-                                compressed.content.into_bytes()
+                                // Wrap compressed content in JSON
+                                serde_json::json!({"content": compressed.content}).to_string().into_bytes()
                             } else {
                                 info!("Still too large after loop compression, applying gzip...");
                                 match telemetry::trace_compressor::gzip_compress(compressed.content.as_bytes()) {
@@ -942,7 +944,10 @@ impl WorkerAgent for WorkerAgentService {
                                     gzipped.len()
                                 );
                                         metadata.insert("compression".to_string(), "loop+gzip".to_string());
-                                        gzipped
+                                        // Store gzipped as base64 in JSON (can't put raw binary in JSON string)
+                                        use base64::{engine::general_purpose, Engine as _};
+                                        let gzipped_b64 = general_purpose::STANDARD.encode(&gzipped);
+                                        serde_json::json!({"content_b64": gzipped_b64, "encoding": "gzip+base64"}).to_string().into_bytes()
                                     }
                                     Ok(gzipped) => {
                                         warn!(
@@ -965,12 +970,13 @@ impl WorkerAgent for WorkerAgentService {
                                         } else {
                                             contents.clone()
                                         };
-                                        sample.into_bytes()
+                                        // Wrap truncated sample in JSON
+                                        serde_json::json!({"content": sample}).to_string().into_bytes()
                                     }
                                     Err(e) => {
                                         error!("Gzip compression failed: {}", e);
                                         metadata.insert("compression".to_string(), "error".to_string());
-                                        vec![]
+                                        serde_json::json!({"error": "compression_failed"}).to_string().into_bytes()
                                     }
                                 }
                             }
@@ -997,34 +1003,46 @@ impl WorkerAgent for WorkerAgentService {
                     // ========== CASE 2: LARGE TRACE (> 2KB) ==========
                     } else {
                         // PHASE 1: send last 2KB immediately in main batch
+                        // Extract complete JSON lines only (JSONL format - one JSON object per line)
                         let byte_offset = original_size.saturating_sub(MAX_IMMEDIATE_SIZE);
-                        let last_2kb = contents[byte_offset..].to_string();
+                        let mut last_2kb = contents[byte_offset..].to_string();
+
+                        // Remove incomplete first line (likely cut in the middle)
+                        if let Some(first_newline) = last_2kb.find('\n') {
+                            last_2kb = last_2kb[first_newline + 1..].to_string();
+                        }
+
+                        let immediate_line_count = last_2kb.lines().count();
 
                         let mut immediate_metadata = std::collections::HashMap::new();
                         immediate_metadata.insert("trace_file".to_string(), trace_events_file.to_string_lossy().to_string());
                         immediate_metadata.insert("event_count".to_string(), trace_events_count.to_string());
                         immediate_metadata.insert("original_size_bytes".to_string(), original_size.to_string());
                         immediate_metadata.insert("compression".to_string(), "none".to_string());
-                        immediate_metadata.insert("payload_type".to_string(), "last_2kb".to_string());
-                        immediate_metadata.insert("final_size_bytes".to_string(), last_2kb.len().to_string());
+                        immediate_metadata.insert("payload_type".to_string(), "last_complete_jsonl".to_string());
+                        immediate_metadata.insert("immediate_line_count".to_string(), immediate_line_count.to_string());
                         immediate_metadata.insert(
                             "note".to_string(),
-                            "Last 2KB sent immediately; full compressed trace will follow".to_string(),
+                            format!("Last {} complete JSON lines (~2KB) sent immediately; full compressed trace will follow", immediate_line_count),
                         );
+
+                        // Wrap last 2KB in JSON
+                        let immediate_payload = serde_json::json!({"content": last_2kb}).to_string().into_bytes();
+                        immediate_metadata.insert("final_size_bytes".to_string(), immediate_payload.len().to_string());
 
                         let immediate_telemetry = edr::common::TelemetryData {
                             job_id: job_id.clone(),
                             event_type: "trace_log".to_string(),
                             timestamp: chrono::Utc::now().timestamp(),
-                            payload: last_2kb.into_bytes(),
+                            payload: immediate_payload,
                             metadata: immediate_metadata,
                             typed_event: None,
                         };
                         telemetry_events.push(immediate_telemetry);
 
                         info!(
-                    "✅ Collected last 2KB of trace log ({} total line traces, {} bytes total)",
-                    trace_events_count, original_size
+                    "✅ Collected last {} complete JSON lines (~2KB) of trace log ({} total line traces, {} bytes total)",
+                    immediate_line_count, trace_events_count, original_size
                 );
 
                         // PHASE 2: async compression of full trace
@@ -1054,7 +1072,8 @@ impl WorkerAgent for WorkerAgentService {
 
                             let payload = if original_size <= MAX_PAYLOAD_SIZE {
                                 metadata.insert("compression".to_string(), "none".to_string());
-                                contents_clone.clone().into_bytes()
+                                // Wrap full content in JSON
+                                serde_json::json!({"content": contents_clone.clone()}).to_string().into_bytes()
                             } else {
                                 info!(
                             "Trace log too large ({} bytes), applying loop compression...",
@@ -1076,7 +1095,8 @@ impl WorkerAgent for WorkerAgentService {
                                 compressed.compression_ratio
                             );
                                     metadata.insert("compression".to_string(), "loop_detection".to_string());
-                                    compressed.content.into_bytes()
+                                    // Wrap compressed content in JSON
+                                    serde_json::json!({"content": compressed.content}).to_string().into_bytes()
                                 } else {
                                     info!("Still too large after loop compression, applying gzip...");
                                     match telemetry::trace_compressor::gzip_compress(
@@ -1089,7 +1109,10 @@ impl WorkerAgent for WorkerAgentService {
                                         gzipped.len()
                                     );
                                             metadata.insert("compression".to_string(), "loop+gzip".to_string());
-                                            gzipped
+                                            // Store gzipped as base64 in JSON
+                                            use base64::{engine::general_purpose, Engine as _};
+                                            let gzipped_b64 = general_purpose::STANDARD.encode(&gzipped);
+                                            serde_json::json!({"content_b64": gzipped_b64, "encoding": "gzip+base64"}).to_string().into_bytes()
                                         }
                                         Ok(gzipped) => {
                                             warn!(
@@ -1106,19 +1129,20 @@ impl WorkerAgent for WorkerAgentService {
                                             let lines: Vec<&str> = contents_clone.lines().collect();
                                             let sample = if lines.len() > 200 {
                                                 format!(
-                                                    "=== First 100 lines ===\n{}\n\n=== Last 100 lines ===\n{}",
+                                                    "=== First 100 lines ===\n{}\n=== Last 100 lines ===\n{}",
                                                     lines[..100].join("\n"),
                                                     lines[lines.len() - 100..].join("\n")
                                                 )
                                             } else {
                                                 contents_clone.clone()
                                             };
-                                            sample.into_bytes()
+                                            // Wrap truncated sample in JSON
+                                            serde_json::json!({"content": sample}).to_string().into_bytes()
                                         }
                                         Err(e) => {
                                             error!("Gzip compression failed: {}", e);
                                             metadata.insert("compression".to_string(), "error".to_string());
-                                            vec![]
+                                            serde_json::json!({"error": "compression_failed"}).to_string().into_bytes()
                                         }
                                     }
                                 }
