@@ -5,3 +5,4 @@
 /// - External telemetry export (Cortex, MDE, custom HTTP)
 pub mod collectors;
 pub mod exporters;
+pub mod trace_compressor;

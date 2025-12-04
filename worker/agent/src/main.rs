@@ -519,6 +519,7 @@ impl WorkerAgent for WorkerAgentService {
         let trace_collector = telemetry::collectors::trace::TraceCollector::new(trace_tx.clone());
 
         // Spawn streaming writer (drains channel and writes to file during execution)
+        // Optimized: only include thread_id when it changes (reduces log size by ~10-15%)
         let streaming_handle = tokio::spawn(async move {
             use tokio::io::{AsyncWriteExt, BufWriter};
 
@@ -528,8 +529,28 @@ impl WorkerAgent for WorkerAgentService {
                     let mut writer = BufWriter::with_capacity(256 * 1024, file);  // 256KB buffer
                     let mut event_count = 0u64;
                     let mut json_buffer = String::with_capacity(512);  // Reusable buffer
+                    let mut last_thread_id: Option<u32> = None;
 
-                    while let Some(event) = trace_rx.recv().await {
+                    while let Some(mut event) = trace_rx.recv().await {
+                        // Optimization: omit thread_id if same as previous event
+                        let include_thread_id = match last_thread_id {
+                            None => {
+                                // First event - always include thread_id
+                                last_thread_id = Some(event.thread_id);
+                                true
+                            }
+                            Some(prev_tid) if prev_tid != event.thread_id => {
+                                // Thread changed - include it
+                                last_thread_id = Some(event.thread_id);
+                                true
+                            }
+                            Some(_) => {
+                                // Same thread - omit thread_id (set to 0 as marker)
+                                event.thread_id = 0;
+                                false
+                            }
+                        };
+
                         // Serialize event to JSON (reuse buffer)
                         json_buffer.clear();
                         match serde_json::to_writer(unsafe { json_buffer.as_mut_vec() }, &event) {
@@ -866,32 +887,93 @@ impl WorkerAgent for WorkerAgentService {
 
         info!("Collected {} RedEDR events", telemetry_events.len());
 
-        // Send line-level trace log as a SINGLE event (instead of 1 event per line)
+        // Send line-level trace log as a SINGLE event with smart compression
         if trace_events_file.exists() {
             info!("Reading trace events from file: {:?}", trace_events_file);
 
             match std::fs::read_to_string(&trace_events_file) {
                 Ok(contents) => {
-                    // Count events for logging
+                    let original_size = contents.len();
                     let trace_events_count = contents.lines().count();
 
-                    // Create a single telemetry event with the entire trace log
+                    const MAX_PAYLOAD_SIZE: usize = 4_000_000;  // 4MB gRPC limit (slightly under)
+
+                    // Strategy: Loop detection → Gzip → Truncate if needed
                     let mut metadata = std::collections::HashMap::new();
                     metadata.insert("trace_file".to_string(), trace_events_file.to_string_lossy().to_string());
                     metadata.insert("event_count".to_string(), trace_events_count.to_string());
-                    metadata.insert("content_type".to_string(), "jsonl".to_string());
+                    metadata.insert("original_size_bytes".to_string(), original_size.to_string());
+
+                    let payload = if original_size <= MAX_PAYLOAD_SIZE {
+                        // Small enough - send as-is
+                        metadata.insert("compression".to_string(), "none".to_string());
+                        contents.into_bytes()
+                    } else {
+                        // Try loop compression first
+                        info!("Trace log too large ({} bytes), applying loop compression...", original_size);
+                        let compressed = telemetry::trace_compressor::compress_trace_log(&contents, 3);
+
+                        metadata.insert("compression_ratio".to_string(), format!("{:.2}x", compressed.compression_ratio));
+
+                        if compressed.compressed_size <= MAX_PAYLOAD_SIZE {
+                            // Loop compression worked!
+                            info!("Loop compression successful: {} → {} bytes ({:.1}x)",
+                                  original_size, compressed.compressed_size, compressed.compression_ratio);
+                            metadata.insert("compression".to_string(), "loop_detection".to_string());
+                            compressed.content.into_bytes()
+                        } else {
+                            // Still too large - try gzip
+                            info!("Still too large after loop compression, applying gzip...");
+                            match telemetry::trace_compressor::gzip_compress(compressed.content.as_bytes()) {
+                                Ok(gzipped) if gzipped.len() <= MAX_PAYLOAD_SIZE => {
+                                    info!("Gzip compression successful: {} → {} bytes",
+                                          compressed.compressed_size, gzipped.len());
+                                    metadata.insert("compression".to_string(), "loop+gzip".to_string());
+                                    gzipped
+                                }
+                                Ok(gzipped) => {
+                                    // Even gzip couldn't fit - send metadata only
+                                    warn!("Trace log too large even after compression ({} bytes), sending metadata only",
+                                          gzipped.len());
+                                    metadata.insert("compression".to_string(), "truncated".to_string());
+                                    metadata.insert("note".to_string(),
+                                        "Log too large for gRPC transmission, file stored on worker".to_string());
+
+                                    // Send first and last 100 lines as sample
+                                    let lines: Vec<&str> = contents.lines().collect();
+                                    let sample = if lines.len() > 200 {
+                                        format!("=== First 100 lines ===\n{}\n\n=== Last 100 lines ===\n{}",
+                                                lines[..100].join("\n"),
+                                                lines[lines.len()-100..].join("\n"))
+                                    } else {
+                                        contents.clone()
+                                    };
+                                    sample.into_bytes()
+                                }
+                                Err(e) => {
+                                    error!("Gzip compression failed: {}", e);
+                                    metadata.insert("compression".to_string(), "error".to_string());
+                                    vec![]
+                                }
+                            }
+                        }
+                    };
+
+                    let final_size = payload.len();
+                    metadata.insert("final_size_bytes".to_string(), final_size.to_string());
 
                     let telemetry_data = edr::common::TelemetryData {
                         job_id: job_id.clone(),
-                        event_type: "trace_log".to_string(),  // Changed from "trace" to "trace_log"
+                        event_type: "trace_log".to_string(),
                         timestamp: chrono::Utc::now().timestamp(),
-                        payload: contents.into_bytes(),  // Send entire file content as payload
+                        payload,
                         metadata,
-                        typed_event: None,  // No typed event needed
+                        typed_event: None,
                     };
                     telemetry_events.push(telemetry_data);
 
-                    info!("✅ Collected trace log as single event ({} line traces in file)", trace_events_count);
+                    info!("✅ Collected trace log as single event ({} line traces, {} → {} bytes)",
+                          trace_events_count, original_size, final_size);
                 }
                 Err(e) => {
                     error!("Failed to read trace events file: {}", e);

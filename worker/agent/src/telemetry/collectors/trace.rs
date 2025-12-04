@@ -409,16 +409,19 @@ impl TraceCollector {
         let thread_id = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.thread_id)) };
         let ts_us = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.ts_us)) };
 
-        match event_type {
+        // Create a pseudo-TraceEvent for status events (using special file/line markers)
+        let (event_label, log_message) = match event_type {
             2 => {
                 // CHECKPOINT: payload is just the checkpoint name
                 info!("✅ CHECKPOINT reached: '{}' (seq={}, thread={}, ts={}µs)",
                     payload_str, seq_no, thread_id, ts_us);
+                ("CHECKPOINT", format!("✅ CHECKPOINT: {}", payload_str))
             }
             3 => {
                 // SUCCESS: payload is success message
                 info!("🎉 ARTIFACT SUCCESS: '{}' (seq={}, thread={}, ts={}µs)",
                     payload_str, seq_no, thread_id, ts_us);
+                ("SUCCESS", format!("🎉 SUCCESS: {}", payload_str))
             }
             4 => {
                 // FAILURE: payload is "message|error_code"
@@ -427,10 +430,28 @@ impl TraceCollector {
                 let error_code = parts.get(1).unwrap_or(&"0");
                 warn!("❌ ARTIFACT FAILURE: '{}' (error_code={}, seq={}, thread={}, ts={}µs)",
                     message, error_code, seq_no, thread_id, ts_us);
+                ("FAILURE", format!("❌ FAILURE: {} (error_code={})", message, error_code))
             }
             _ => {
                 warn!("Unknown status event_type: {}", event_type);
+                return Ok(());
             }
+        };
+
+        // Send as TraceEvent to be included in trace_events.jsonl
+        // Use special markers so they're distinguishable from regular line traces
+        let event = TraceEvent {
+            seq: seq_no as u32,
+            thread_id,
+            file: format!("__STATUS__:{}", event_label),  // Special marker
+            line: event_type as u32,  // Event type as line number
+            func: log_message,  // Full message in func field
+            ts_us,
+        };
+
+        // Send to streaming writer
+        if let Err(e) = self.event_tx.try_send(event) {
+            warn!("Failed to send status event to trace file: {}", e);
         }
 
         Ok(())
