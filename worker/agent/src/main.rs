@@ -888,11 +888,8 @@ impl WorkerAgent for WorkerAgentService {
         info!("Collected {} RedEDR events", telemetry_events.len());
 
         // Send line-level trace log with TWO-PHASE approach:
-        // 1. Always send up to 2KB immediately with main telemetry batch (RedEDR, BB, API)
-        // 2. If trace > 2KB, spawn async task to compress and send full trace afterward
-        // Send line-level trace log with TWO-PHASE approach:
-        // 1. If trace ≤ 2KB, behave exactly like before: single event with smart compression.
-        // 2. If trace > 2KB, send last 2KB immediately, then compress & send full trace async.
+        // 1. If trace ≤ 2MB: send entire trace immediately with main telemetry batch (RedEDR, BB, API)
+        // 2. If trace > 2MB: send last 2MB immediately, then spawn async task to compress & send full trace
         if trace_events_file.exists() {
             info!("Reading trace events from file: {:?}", trace_events_file);
 
@@ -901,11 +898,11 @@ impl WorkerAgent for WorkerAgentService {
                     let original_size = contents.len();
                     let trace_events_count = contents.lines().count();
 
-                    const MAX_IMMEDIATE_SIZE: usize = 2048;      // 2KB threshold
+                    const MAX_IMMEDIATE_SIZE: usize = 2_097_152;  // 2MB threshold
                     const MAX_PAYLOAD_SIZE: usize = 4_000_000;   // 4MB gRPC limit (slightly under)
 
-                    // ========== CASE 1: SMALL TRACE (≤ 2KB) ==========
-                    // Keep EXACT same behavior as the "working" version.
+                    // ========== CASE 1: SMALL TRACE (≤ 2MB) ==========
+                    // Send entire trace immediately, no async task
                     if original_size <= MAX_IMMEDIATE_SIZE {
                         let mut metadata = std::collections::HashMap::new();
                         metadata.insert("trace_file".to_string(), trace_events_file.to_string_lossy().to_string());
@@ -918,12 +915,16 @@ impl WorkerAgent for WorkerAgentService {
                             // Wrap in JSON: {"content": "trace content here"}
                             serde_json::json!({"content": contents}).to_string().into_bytes()
                         } else {
-                            info!("Trace log too large ({} bytes), applying loop compression...", original_size);
+                            info!("Trace log too large ({} bytes), applying CLP+MatrixProfile+Sequitur compression...", original_size);
                             let compressed = telemetry::trace_compressor::compress_trace_log(&contents, 3);
 
                             metadata.insert(
                                 "compression_ratio".to_string(),
                                 format!("{:.2}x", compressed.compression_ratio),
+                            );
+                            metadata.insert(
+                                "compression_stats".to_string(),
+                                serde_json::to_string(&compressed.statistics).unwrap_or_default(),
                             );
 
                             if compressed.compressed_size <= MAX_PAYLOAD_SIZE {
@@ -1000,19 +1001,19 @@ impl WorkerAgent for WorkerAgentService {
                     trace_events_count, original_size, final_size
                 );
 
-                    // ========== CASE 2: LARGE TRACE (> 2KB) ==========
+                    // ========== CASE 2: LARGE TRACE (> 2MB) ==========
                     } else {
-                        // PHASE 1: send last 2KB immediately in main batch
+                        // PHASE 1: send last 2MB immediately in main batch
                         // Extract complete JSON lines only (JSONL format - one JSON object per line)
                         let byte_offset = original_size.saturating_sub(MAX_IMMEDIATE_SIZE);
-                        let mut last_2kb = contents[byte_offset..].to_string();
+                        let mut last_2mb = contents[byte_offset..].to_string();
 
                         // Remove incomplete first line (likely cut in the middle)
-                        if let Some(first_newline) = last_2kb.find('\n') {
-                            last_2kb = last_2kb[first_newline + 1..].to_string();
+                        if let Some(first_newline) = last_2mb.find('\n') {
+                            last_2mb = last_2mb[first_newline + 1..].to_string();
                         }
 
-                        let immediate_line_count = last_2kb.lines().count();
+                        let immediate_line_count = last_2mb.lines().count();
 
                         let mut immediate_metadata = std::collections::HashMap::new();
                         immediate_metadata.insert("trace_file".to_string(), trace_events_file.to_string_lossy().to_string());
@@ -1023,11 +1024,11 @@ impl WorkerAgent for WorkerAgentService {
                         immediate_metadata.insert("immediate_line_count".to_string(), immediate_line_count.to_string());
                         immediate_metadata.insert(
                             "note".to_string(),
-                            format!("Last {} complete JSON lines (~2KB) sent immediately; full compressed trace will follow", immediate_line_count),
+                            format!("Last {} complete JSON lines (~2MB) sent immediately; full compressed trace will follow", immediate_line_count),
                         );
 
-                        // Wrap last 2KB in JSON
-                        let immediate_payload = serde_json::json!({"content": last_2kb}).to_string().into_bytes();
+                        // Wrap last 2MB in JSON
+                        let immediate_payload = serde_json::json!({"content": last_2mb}).to_string().into_bytes();
                         immediate_metadata.insert("final_size_bytes".to_string(), immediate_payload.len().to_string());
 
                         let immediate_telemetry = edr::common::TelemetryData {
@@ -1041,7 +1042,7 @@ impl WorkerAgent for WorkerAgentService {
                         telemetry_events.push(immediate_telemetry);
 
                         info!(
-                    "✅ Collected last {} complete JSON lines (~2KB) of trace log ({} total line traces, {} bytes total)",
+                    "✅ Collected last {} complete JSON lines (~2MB) of trace log ({} total line traces, {} bytes total)",
                     immediate_line_count, trace_events_count, original_size
                 );
 
@@ -1076,7 +1077,7 @@ impl WorkerAgent for WorkerAgentService {
                                 serde_json::json!({"content": contents_clone.clone()}).to_string().into_bytes()
                             } else {
                                 info!(
-                            "Trace log too large ({} bytes), applying loop compression...",
+                            "Trace log too large ({} bytes), applying CLP+MatrixProfile+Sequitur compression...",
                             original_size
                         );
                                 let compressed =
@@ -1085,6 +1086,10 @@ impl WorkerAgent for WorkerAgentService {
                                 metadata.insert(
                                     "compression_ratio".to_string(),
                                     format!("{:.2}x", compressed.compression_ratio),
+                                );
+                                metadata.insert(
+                                    "compression_stats".to_string(),
+                                    serde_json::to_string(&compressed.statistics).unwrap_or_default(),
                                 );
 
                                 if compressed.compressed_size <= MAX_PAYLOAD_SIZE {
