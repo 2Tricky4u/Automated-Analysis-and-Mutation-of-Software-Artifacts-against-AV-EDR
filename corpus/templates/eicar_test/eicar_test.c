@@ -73,9 +73,11 @@ void test_eicar_file_write() {
         return;
     }
 
+    ARTIFACT_CHECKPOINT("Will write EICAR");
     // Write EICAR signature to file
     fprintf(f, "%s%s", eicar_part1, eicar_part2);
     fclose(f);
+    ARTIFACT_CHECKPOINT("File written");
 
     printf("[SUCCESS] File written\n");
     printf("[WARNING] AV should detect and delete this file immediately!\n");
