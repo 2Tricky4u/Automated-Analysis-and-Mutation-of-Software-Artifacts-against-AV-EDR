@@ -515,34 +515,36 @@ impl WorkerAgent for WorkerAgentService {
         let trace_events_file = telemetry_dir.join("trace_events.jsonl");
         let trace_events_file_clone = trace_events_file.clone();
 
-        let (trace_tx, mut trace_rx) = tokio::sync::mpsc::channel(10_000);  // Small buffer (only for I/O batching)
+        let (trace_tx, mut trace_rx) = tokio::sync::mpsc::channel(100_000);  // Larger buffer for high-frequency tracing
         let trace_collector = telemetry::collectors::trace::TraceCollector::new(trace_tx.clone());
 
         // Spawn streaming writer (drains channel and writes to file during execution)
         let streaming_handle = tokio::spawn(async move {
-            use tokio::io::AsyncWriteExt;
+            use tokio::io::{AsyncWriteExt, BufWriter};
 
             match tokio::fs::File::create(&trace_events_file_clone).await {
-                Ok(mut file) => {
+                Ok(file) => {
+                    // Use buffered writer for better performance
+                    let mut writer = BufWriter::with_capacity(256 * 1024, file);  // 256KB buffer
                     let mut event_count = 0u64;
+                    let mut json_buffer = String::with_capacity(512);  // Reusable buffer
+
                     while let Some(event) = trace_rx.recv().await {
-                        // Serialize event to JSON
-                        match serde_json::to_string(&event) {
-                            Ok(json) => {
-                                // Write JSON line
-                                if let Err(e) = file.write_all(json.as_bytes()).await {
+                        // Serialize event to JSON (reuse buffer)
+                        json_buffer.clear();
+                        match serde_json::to_writer(unsafe { json_buffer.as_mut_vec() }, &event) {
+                            Ok(_) => {
+                                // Write JSON line with newline
+                                json_buffer.push('\n');
+                                if let Err(e) = writer.write_all(json_buffer.as_bytes()).await {
                                     error!("Failed to write trace event to file: {}", e);
-                                    break;
-                                }
-                                if let Err(e) = file.write_all(b"\n").await {
-                                    error!("Failed to write newline to trace file: {}", e);
                                     break;
                                 }
                                 event_count += 1;
 
-                                // Flush every 1000 events for safety (balance performance vs data loss)
-                                if event_count % 1000 == 0 {
-                                    if let Err(e) = file.flush().await {
+                                // Flush every 10000 events for safety (less frequent = faster)
+                                if event_count % 10_000 == 0 {
+                                    if let Err(e) = writer.flush().await {
                                         error!("Failed to flush trace file: {}", e);
                                         break;
                                     }
@@ -555,7 +557,7 @@ impl WorkerAgent for WorkerAgentService {
                     }
 
                     // Final flush
-                    let _ = file.flush().await;
+                    let _ = writer.flush().await;
                     info!("✅ Streaming writer closed, wrote {} trace events to file", event_count);
                 }
                 Err(e) => {
@@ -864,49 +866,36 @@ impl WorkerAgent for WorkerAgentService {
 
         info!("Collected {} RedEDR events", telemetry_events.len());
 
-        // Read line-level trace events from file (already written during execution)
-        let mut trace_events_count = 0;
+        // Send line-level trace log as a SINGLE event (instead of 1 event per line)
         if trace_events_file.exists() {
             info!("Reading trace events from file: {:?}", trace_events_file);
 
             match std::fs::read_to_string(&trace_events_file) {
                 Ok(contents) => {
-                    for (line_num, line) in contents.lines().enumerate() {
-                        match serde_json::from_str::<telemetry::collectors::trace::TraceEvent>(line) {
-                            Ok(trace_event) => {
-                                let telemetry_data = edr::common::TelemetryData {
-                                    job_id: job_id.clone(),
-                                    event_type: "trace".to_string(),
-                                    timestamp: trace_event.ts_us as i64,
-                                    payload: vec![],  // Empty payload (data in typed_event)
-                                    metadata: std::collections::HashMap::new(),
-                                    typed_event: Some(edr::common::telemetry_data::TypedEvent::Trace(
-                                        edr::common::TraceEvent {
-                                            seq: trace_event.seq,
-                                            file: trace_event.file,
-                                            line: trace_event.line,
-                                            func: trace_event.func,
-                                            ts_us: trace_event.ts_us,
-                                            thread_id: trace_event.thread_id,
-                                        },
-                                    )),
-                                };
-                                telemetry_events.push(telemetry_data);
-                                trace_events_count += 1;
-                            }
-                            Err(e) => {
-                                error!("Failed to parse trace event at line {}: {}", line_num + 1, e);
-                            }
-                        }
-                    }
+                    // Count events for logging
+                    let trace_events_count = contents.lines().count();
+
+                    // Create a single telemetry event with the entire trace log
+                    let mut metadata = std::collections::HashMap::new();
+                    metadata.insert("trace_file".to_string(), trace_events_file.to_string_lossy().to_string());
+                    metadata.insert("event_count".to_string(), trace_events_count.to_string());
+                    metadata.insert("content_type".to_string(), "jsonl".to_string());
+
+                    let telemetry_data = edr::common::TelemetryData {
+                        job_id: job_id.clone(),
+                        event_type: "trace_log".to_string(),  // Changed from "trace" to "trace_log"
+                        timestamp: chrono::Utc::now().timestamp(),
+                        payload: contents.into_bytes(),  // Send entire file content as payload
+                        metadata,
+                        typed_event: None,  // No typed event needed
+                    };
+                    telemetry_events.push(telemetry_data);
+
+                    info!("✅ Collected trace log as single event ({} line traces in file)", trace_events_count);
                 }
                 Err(e) => {
                     error!("Failed to read trace events file: {}", e);
                 }
-            }
-
-            if trace_events_count > 0 {
-                info!("✅ Collected {} line-level trace events from file", trace_events_count);
             }
         } else {
             info!("No trace events file found (artifact may not have line tracing enabled)");
