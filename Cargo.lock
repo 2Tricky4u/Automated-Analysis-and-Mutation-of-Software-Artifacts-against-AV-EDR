@@ -3340,6 +3340,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "edr-config",
+ "flate2",
  "futures",
  "prost",
  "reqwest 0.12.24",
