@@ -872,18 +872,14 @@ impl WorkerAgent for WorkerAgentService {
 
         // Collect full telemetry batch (best effort - don't fail job if collection fails)
         info!("Collecting telemetry events from RedEDR...");
-        let mut telemetry_events = match rededr_guard
+        let mut telemetry_events = rededr_guard
             .collector()
             .collect_all(&job_id)
-            .await
-        {
-            Ok(events) => events,
-            Err(e) => {
-                error!("Failed to collect telemetry: {}", e);
-                error!("Continuing with empty telemetry - execution status will still be reported");
-                Vec::new() // Continue with empty telemetry instead of failing entire job
-            }
-        };
+            .await.unwrap_or_else(|e| {
+            error!("Failed to collect telemetry: {}", e);
+            error!("Continuing with empty telemetry - execution status will still be reported");
+            Vec::new() // Continue with empty telemetry instead of failing entire job
+        });
 
         info!("Collected {} RedEDR events", telemetry_events.len());
 
