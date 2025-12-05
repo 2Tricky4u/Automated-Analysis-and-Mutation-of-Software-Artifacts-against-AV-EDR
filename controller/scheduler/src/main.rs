@@ -173,13 +173,16 @@ impl Controller for SchedulerService {
     ) -> Result<Response<TelemetryAck>, Status> {
         use tokio::time::{timeout, Duration};
 
+        // Get remote_addr BEFORE into_inner() consumes the request
+        let remote_addr = request.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string());
+
         let mut stream = request.into_inner();
         let mut events_count = 0;
         let mut first_job_id = String::new();
         let mut batch = Vec::new();
         const MAX_BATCH_SIZE: usize = 10000; // Prevent memory exhaustion
 
-        info!("Telemetry stream opened");
+        info!("⬇️  Telemetry stream opened from worker: {}", remote_addr);
 
         // Collect all events from stream with timeout
         let collection_result = timeout(Duration::from_secs(30), async {
@@ -194,8 +197,8 @@ impl Controller for SchedulerService {
                 // Prevent unbounded memory growth
                 if batch.len() >= MAX_BATCH_SIZE {
                     warn!(
-                        "Telemetry batch size limit reached ({} events), stopping collection",
-                        MAX_BATCH_SIZE
+                        "⚠️  Telemetry batch size limit reached ({} events), stopping collection [worker: {}]",
+                        MAX_BATCH_SIZE, remote_addr
                     );
                     break;
                 }
@@ -207,25 +210,30 @@ impl Controller for SchedulerService {
         match collection_result {
             Ok(Ok(())) => {
                 info!(
-                    "Telemetry batch collected: job={}, events_count={}",
-                    first_job_id, events_count
+                    "✅ Telemetry batch collected: job={}, events_count={}, worker={}",
+                    first_job_id, events_count, remote_addr
                 );
             }
             Ok(Err(e)) => {
-                error!("Error collecting telemetry stream: {}", e);
+                error!("❌ STREAM ERROR: Failed to collect telemetry from worker: {}", remote_addr);
+                error!("   Error details: {:?}", e);
+                error!("   Status code: {}, Message: {}", e.code(), e.message());
                 return Err(e);
             }
             Err(_) => {
                 error!(
-                    "Timeout collecting telemetry stream after 30s (collected {} events so far)",
-                    events_count
+                    "⏱️  TIMEOUT: Telemetry stream collection exceeded 30s limit [worker: {}]",
+                    remote_addr
                 );
+                error!("   Collected {} events before timeout (partial batch)", events_count);
+                warn!("   Possible causes: slow network, large payload, worker stalled");
                 // Continue with partial batch rather than failing
             }
         }
 
         // Index batch to Elasticsearch with timeout
         if !batch.is_empty() {
+            info!("📤 Indexing {} events to Elasticsearch [job: {}]", events_count, first_job_id);
             match timeout(
                 Duration::from_secs(10),
                 self.index_telemetry_batch(&batch)
@@ -234,28 +242,36 @@ impl Controller for SchedulerService {
             {
                 Ok(Ok(())) => {
                     info!(
-                        "✅ Successfully indexed {} telemetry events to Elasticsearch",
-                        events_count
+                        "✅ Successfully indexed {} telemetry events to Elasticsearch [job: {}]",
+                        events_count, first_job_id
                     );
                 }
                 Ok(Err(e)) => {
-                    error!("Failed to index telemetry batch to Elasticsearch: {}", e);
-                    error!("Telemetry received but not indexed (Elasticsearch may be down)");
+                    error!("❌ ELASTICSEARCH ERROR: Failed to index telemetry batch");
+                    error!("   Job: {}, Events: {}, Worker: {}", first_job_id, events_count, remote_addr);
+                    error!("   Error details: {}", e);
+                    error!("   ⚠️  Telemetry received but NOT INDEXED (Elasticsearch may be down/unreachable)");
+                    warn!("   Possible causes: Elasticsearch down, network issue, mapping conflict, disk full");
                     // Don't fail the RPC - telemetry was received, just not indexed
                 }
                 Err(_) => {
                     error!(
-                        "Timeout indexing telemetry batch to Elasticsearch (10s limit exceeded)"
+                        "⏱️  ELASTICSEARCH TIMEOUT: Indexing exceeded 10s limit [job: {}]",
+                        first_job_id
                     );
                     error!(
-                        "Telemetry received ({} events) but not indexed (Elasticsearch is slow/unavailable)",
-                        events_count
+                        "   Events: {}, Worker: {}", events_count, remote_addr
                     );
+                    error!(
+                        "   ⚠️  Telemetry received but NOT INDEXED (Elasticsearch is slow/unavailable)"
+                    );
+                    warn!("   Possible causes: Elasticsearch overloaded, slow disk I/O, large batch size");
                     // Don't fail the RPC - telemetry was received, just not indexed
                 }
             }
         } else {
-            warn!("Telemetry stream closed with no events");
+            warn!("⚠️  Telemetry stream closed with ZERO events [worker: {}]", remote_addr);
+            warn!("   This may indicate: worker had no telemetry to send, or stream failed early");
         }
 
         Ok(Response::new(TelemetryAck {
@@ -270,6 +286,7 @@ impl Controller for SchedulerService {
     ) -> Result<Response<StatusAck>, Status> {
         use tokio::time::Duration;
 
+        let remote_addr = request.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string());
         let report = request.into_inner();
 
         // Format status display: [WORKER: ip] [PID: pid] [JOB: job_id] [STATUS: event_type] details
@@ -288,33 +305,41 @@ impl Controller for SchedulerService {
         // Use appropriate log level based on status type
         match report.event_type.as_str() {
             "error" | "timeout" | "stuck" | "crashed" => {
-                tracing::warn!("{}", status_line);
+                tracing::warn!("⚠️  {}", status_line);
             }
             _ => {
-                info!("{}", status_line);
+                info!("📊 {}", status_line);
             }
         }
 
         // Store RunResult to Elasticsearch when final status received
         // Use timeout to prevent blocking RPC if Elasticsearch is slow/unreachable
         if matches!(report.event_type.as_str(), "success" | "error" | "timeout") {
+            info!("💾 Storing final run result for job: {} [worker: {}]", report.job_id, remote_addr);
             match tokio::time::timeout(
                 Duration::from_secs(DELAY),
                 self.store_run_result(&report)
             ).await {
-                Ok(Ok(())) => { /* success */ }
+                Ok(Ok(())) => {
+                    info!("✅ Run result stored successfully [job: {}, run: {}]", report.job_id, report.run_id);
+                }
                 Ok(Err(e)) => {
-                    error!("Failed to store run result to Elasticsearch: {}", e);
-                    error!("Status report received but not indexed (Elasticsearch may be down)");
+                    error!("❌ ELASTICSEARCH ERROR: Failed to store run result");
+                    error!("   Job: {}, Run: {}, Worker: {}", report.job_id, report.run_id, remote_addr);
+                    error!("   Error details: {}", e);
+                    error!("   ⚠️  Status report received but NOT INDEXED (Elasticsearch may be down/unreachable)");
+                    warn!("   Possible causes: Elasticsearch down, network issue, mapping conflict, disk full");
                     // Don't fail the RPC - status was received, just not indexed
                 }
                 Err(_) => {
                     error!(
-                        "Timeout storing run result to Elasticsearch ({}s limit exceeded)", DELAY
+                        "⏱️  ELASTICSEARCH TIMEOUT: Storing run result exceeded {}s limit", DELAY
                     );
+                    error!("   Job: {}, Run: {}, Worker: {}", report.job_id, report.run_id, remote_addr);
                     error!(
-                        "Status report received but not indexed (Elasticsearch is slow/unavailable)"
+                        "   ⚠️  Status report received but NOT INDEXED (Elasticsearch is slow/unavailable)"
                     );
+                    warn!("   Possible causes: Elasticsearch overloaded, slow disk I/O, query queue backlog");
                     // Don't fail the RPC - status was received, just not indexed
                 }
             }

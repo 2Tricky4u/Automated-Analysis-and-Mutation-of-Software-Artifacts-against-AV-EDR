@@ -1449,6 +1449,7 @@ impl WorkerAgent for WorkerAgentService {
 
         // Send telemetry to controller (best effort with timeout - don't block on this)
         if !telemetry_events.is_empty() {
+            info!("📡 Preparing to send {} telemetry events to controller...", telemetry_count);
             match tokio::time::timeout(
                 Duration::from_secs(DELAY),
                 self.send_telemetry_batch_to_controller(telemetry_events)
@@ -1457,16 +1458,24 @@ impl WorkerAgent for WorkerAgentService {
                     info!("✅ Successfully sent {} telemetry events to controller", telemetry_count);
                 }
                 Ok(Err(e)) => {
-                    warn!("Failed to send telemetry to controller: {}", e);
-                    warn!("Telemetry collected ({} events) but not sent - controller may be unavailable", telemetry_count);
+                    error!("❌ TELEMETRY TRANSMISSION ERROR: Failed to send telemetry to controller");
+                    error!("   Job: {}, Run: {}, Events: {}", job_id, run_id, telemetry_count);
+                    error!("   Error: {}", e);
+                    warn!("   ⚠️  Telemetry collected ({} events) but NOT SENT - controller may be unavailable", telemetry_count);
+                    warn!("   Data is LOST - these telemetry events will not be indexed");
                     // Don't fail the RPC - execution completed successfully
                 }
                 Err(_) => {
-                    warn!("Timeout sending {} telemetry events to controller ({}s limit exceeded)", telemetry_count, DELAY);
-                    warn!("Controller may not implement StreamTelemetry RPC or is unreachable");
+                    error!("⏱️  TELEMETRY TIMEOUT: Sending {} events exceeded {}s limit", telemetry_count, DELAY);
+                    error!("   Job: {}, Run: {}", job_id, run_id);
+                    warn!("   Controller may not implement StreamTelemetry RPC or is unreachable/slow");
+                    warn!("   ⚠️  Telemetry collected ({} events) but NOT SENT - data is LOST", telemetry_count);
                     // Don't fail the RPC - execution completed successfully
                 }
             }
+        } else {
+            warn!("⚠️  No telemetry events collected [job: {}, run: {}]", job_id, run_id);
+            warn!("   This may indicate: RedEDR collection failed, no events generated, or collection error");
         }
 
         // Reset RedEDR for next run (guard ensures cleanup on error, but we do it explicitly here)
@@ -1668,9 +1677,12 @@ impl WorkerAgentService {
         use edr::controller::controller_client::ControllerClient;
         use futures::stream;
 
+        let event_count = telemetry_events.len();
+        let first_job_id = telemetry_events.first().map(|e| e.job_id.clone()).unwrap_or_else(|| "unknown".to_string());
+
         info!(
-            "Sending {} telemetry events to controller...",
-            telemetry_events.len()
+            "⬆️  Sending {} telemetry events to controller [job: {}]",
+            event_count, first_job_id
         );
 
         // Ensure controller address has http:// scheme
@@ -1690,31 +1702,62 @@ impl WorkerAgentService {
             format!("http://{}", self.config.controller.controller_address)
         };
 
+        info!("🔌 Connecting to controller at: {}", controller_addr);
+
         // Connect to controller
         let mut client = ControllerClient::connect(controller_addr.clone())
             .await
             .map_err(|e| {
-                error!(
-                    "Failed to connect to controller at {}: {}",
-                    controller_addr, e
-                );
+                error!("❌ CONNECTION ERROR: Failed to connect to controller");
+                error!("   Controller address: {}", controller_addr);
+                error!("   Job: {}, Events: {}", first_job_id, event_count);
+                error!("   Error type: {}", std::any::type_name_of_val(&e));
+                error!("   Error details: {}", e);
+                error!("   Debug: {:?}", e);
+                warn!("   Possible causes: controller down, network unreachable, firewall blocking, DNS resolution failure");
                 Status::unavailable(format!("Controller unavailable: {}", e))
             })?;
+
+        info!("✅ Connected to controller successfully");
 
         // Create stream from telemetry events
         let stream = stream::iter(telemetry_events);
 
+        info!("📡 Starting telemetry stream...");
+
         // Send batch via streaming RPC
         let response = client.stream_telemetry(stream).await.map_err(|e| {
-            error!("Failed to stream telemetry to controller: {}", e);
+            error!("❌ STREAM ERROR: Failed to stream telemetry to controller");
+            error!("   Controller address: {}", controller_addr);
+            error!("   Job: {}, Events: {}", first_job_id, event_count);
+            error!("   Status code: {}", e.code());
+            error!("   Error message: {}", e.message());
+            error!("   Error details: {:?}", e);
+            warn!("   Possible causes: network failure mid-stream, controller crashed, timeout, payload too large");
             Status::internal(format!("Telemetry streaming failed: {}", e))
         })?;
 
         let ack = response.into_inner();
-        info!(
-            "Telemetry sent successfully: {} events acknowledged",
-            ack.events_count
-        );
+
+        if ack.received {
+            info!(
+                "✅ Telemetry sent successfully: {} events acknowledged by controller [job: {}]",
+                ack.events_count, first_job_id
+            );
+
+            if ack.events_count != event_count as i32 {
+                warn!(
+                    "⚠️  EVENT COUNT MISMATCH: Sent {} events but controller acknowledged {}",
+                    event_count, ack.events_count
+                );
+                warn!("   This may indicate events were dropped or partially received");
+            }
+        } else {
+            warn!(
+                "⚠️  Controller acknowledged but received=false [job: {}, events: {}]",
+                first_job_id, event_count
+            );
+        }
 
         Ok(())
     }
@@ -1727,10 +1770,12 @@ impl WorkerAgentService {
         use edr::controller::controller_client::ControllerClient;
         use futures::stream;
 
+        let job_id = telemetry_data.job_id.clone();
+        let payload_size = telemetry_data.payload.len();
+
         info!(
-            "Sending reduced trace to controller (event_type={}, payload_size={})",
-            telemetry_data.event_type,
-            telemetry_data.payload.len()
+            "⬆️  Sending reduced trace to controller [job: {}, event_type: {}, payload_size: {} bytes]",
+            job_id, telemetry_data.event_type, payload_size
         );
 
         // Ensure controller address has http:// scheme
@@ -1742,30 +1787,47 @@ impl WorkerAgentService {
             format!("http://{}", controller_address)
         };
 
+        info!("🔌 Connecting to controller at: {} [async compression task]", controller_addr);
+
         // Connect to controller
         let mut client = ControllerClient::connect(controller_addr.clone())
             .await
             .map_err(|e| {
-                error!(
-                    "Failed to connect to controller at {}: {}",
-                    controller_addr, e
-                );
+                error!("❌ CONNECTION ERROR: Failed to connect to controller [async trace compression task]");
+                error!("   Controller address: {}", controller_addr);
+                error!("   Job: {}, Payload size: {} bytes", job_id, payload_size);
+                error!("   Error type: {}", std::any::type_name_of_val(&e));
+                error!("   Error details: {}", e);
+                error!("   Debug: {:?}", e);
+                warn!("   Possible causes: controller down, network unreachable, firewall blocking");
+                warn!("   ⚠️  COMPRESSED TRACE LOST - this large trace will NOT be indexed");
                 Status::unavailable(format!("Controller unavailable: {}", e))
             })?;
+
+        info!("✅ Connected to controller successfully [async trace task]");
 
         // Create stream with single event
         let stream = stream::iter(vec![telemetry_data]);
 
+        info!("📡 Streaming compressed trace...");
+
         // Send via streaming RPC
         let response = client.stream_telemetry(stream).await.map_err(|e| {
-            error!("Failed to stream reduced trace to controller: {}", e);
+            error!("❌ STREAM ERROR: Failed to stream reduced trace to controller");
+            error!("   Controller address: {}", controller_addr);
+            error!("   Job: {}, Payload size: {} bytes", job_id, payload_size);
+            error!("   Status code: {}", e.code());
+            error!("   Error message: {}", e.message());
+            error!("   Error details: {:?}", e);
+            warn!("   Possible causes: network failure mid-stream, controller timeout, payload too large");
+            warn!("   ⚠️  COMPRESSED TRACE LOST - this large trace will NOT be indexed");
             Status::internal(format!("Reduced trace streaming failed: {}", e))
         })?;
 
         let ack = response.into_inner();
         info!(
-            "Reduced trace sent successfully: {} events acknowledged",
-            ack.events_count
+            "✅ Reduced trace sent successfully: {} events acknowledged by controller [job: {}]",
+            ack.events_count, job_id
         );
 
         Ok(())
@@ -1785,6 +1847,11 @@ impl WorkerAgentService {
         telemetry_events_count: i32,
     ) {
         use edr::controller::{StatusReport, controller_client::ControllerClient};
+
+        info!(
+            "📊 Sending final status report to controller [job: {}, run: {}, status: {}, elapsed: {}s]",
+            job_id, run_id, status_type, elapsed_seconds
+        );
 
         // Ensure controller address has http:// scheme
         let controller_addr = if self
@@ -1819,18 +1886,48 @@ impl WorkerAgentService {
             details: details.to_string(),
         };
 
+        info!("🔌 Connecting to controller at: {} [final status]", controller_addr);
+
         // Try to connect and send final status report
         match ControllerClient::connect(controller_addr.clone()).await {
             Ok(mut client) => {
-                if let Err(e) = client.report_status(Request::new(status_report)).await {
-                    warn!("Failed to send final status to controller: {}", e);
+                info!("✅ Connected to controller [final status]");
+                match client.report_status(Request::new(status_report)).await {
+                    Ok(response) => {
+                        let ack = response.into_inner();
+                        if ack.received {
+                            info!(
+                                "✅ Final status report acknowledged by controller [job: {}, status: {}]",
+                                job_id, status_type
+                            );
+                        } else {
+                            warn!(
+                                "⚠️  Controller responded but received=false [job: {}, status: {}]",
+                                job_id, status_type
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("❌ RPC ERROR: Failed to send final status report to controller");
+                        error!("   Controller address: {}", controller_addr);
+                        error!("   Job: {}, Run: {}, Status: {}", job_id, run_id, status_type);
+                        error!("   Status code: {}", e.code());
+                        error!("   Error message: {}", e.message());
+                        error!("   Error details: {:?}", e);
+                        warn!("   Possible causes: controller RPC handler failed, network timeout, RPC version mismatch");
+                        warn!("   ⚠️  FINAL STATUS NOT RECORDED - this run may appear incomplete in dashboard");
+                    }
                 }
             }
             Err(e) => {
-                warn!(
-                    "Failed to connect to controller at {}: {}",
-                    controller_addr, e
-                );
+                error!("❌ CONNECTION ERROR: Failed to connect to controller [final status]");
+                error!("   Controller address: {}", controller_addr);
+                error!("   Job: {}, Run: {}, Status: {}", job_id, run_id, status_type);
+                error!("   Error type: {}", std::any::type_name_of_val(&e));
+                error!("   Error details: {}", e);
+                error!("   Debug: {:?}", e);
+                warn!("   Possible causes: controller down, network unreachable, firewall blocking, DNS failure");
+                warn!("   ⚠️  FINAL STATUS NOT RECORDED - this run may appear incomplete in dashboard");
             }
         }
     }

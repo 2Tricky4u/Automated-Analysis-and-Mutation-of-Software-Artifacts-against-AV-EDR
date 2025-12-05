@@ -285,19 +285,37 @@ impl ExecutionMonitor {
         let send_future = async {
             match ControllerClient::connect(controller_addr.clone()).await {
                 Ok(mut client) => {
-                    if let Err(e) = client.report_status(Request::new(status_report)).await {
-                        warn!("Monitor: Failed to send status to controller: {}", e);
+                    match client.report_status(Request::new(status_report)).await {
+                        Ok(response) => {
+                            let ack = response.into_inner();
+                            if !ack.received {
+                                warn!(
+                                    "⚠️  Monitor: Controller responded but received=false [event: {}, job: {}]",
+                                    event_type, self.job_id
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!("❌ Monitor RPC ERROR: Failed to send status [event: {}, job: {}]", event_type, self.job_id);
+                            warn!("   Controller: {}, Status code: {}, Message: {}", controller_addr, e.code(), e.message());
+                        }
                     }
                 }
                 Err(e) => {
-                    warn!("Monitor: Failed to connect to controller at {}: {}", controller_addr, e);
+                    warn!("❌ Monitor CONNECTION ERROR: Failed to connect to controller");
+                    warn!("   Controller: {}, Event: {}, Job: {}", controller_addr, event_type, self.job_id);
+                    warn!("   Error: {}", e);
                 }
             }
         };
 
         // 1-second timeout for monitor heartbeats (shouldn't block monitoring loop)
         if let Err(_) = tokio::time::timeout(Duration::from_secs(1), send_future).await {
-            warn!("Monitor: Timeout sending status to controller (1s limit) - controller may be slow");
+            warn!(
+                "⏱️  Monitor TIMEOUT: Status report exceeded 1s limit [event: {}, job: {}]",
+                event_type, self.job_id
+            );
+            warn!("   Controller may be slow/unavailable - monitoring will continue");
         }
     }
 

@@ -25,17 +25,13 @@ delete_object() {
 
     echo "[*] Deleting $obj_type: $obj_id"
     curl -X DELETE "$KIBANA_URL/api/saved_objects/$obj_type/$obj_id" \
-        -H 'kbn-xsrf: true' 2>/dev/null || echo "  (not found or already deleted)"
+        -H 'kbn-xsrf: true' 2>/dev/null | grep -q "200" || echo "  (not found or already deleted)"
 }
 
-echo "=== Step 1: Deleting Existing Dashboard and Visualizations ==="
+echo "=== Step 1: Deleting Existing Dashboard and Saved Searches ==="
 delete_object "dashboard" "artifact-execution-dashboard"
-delete_object "visualization" "run-status-metric"
-delete_object "visualization" "exit-code-metric"
-delete_object "visualization" "bb-coverage-bar"
-delete_object "visualization" "function-timeline"
-delete_object "visualization" "event-type-pie"
-delete_object "visualization" "api-trace-table"
+delete_object "search" "run-results-search"
+delete_object "search" "coverage-events-search"
 
 echo ""
 echo "[+] Cleanup complete"
