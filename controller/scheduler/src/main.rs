@@ -49,13 +49,15 @@ struct SchedulerState {
 pub struct SchedulerService {
     state: Arc<Mutex<SchedulerState>>,
     es_client: Elasticsearch,
+    controller_ip: String,
 }
 
 impl SchedulerService {
-    pub fn new(es_client: Elasticsearch) -> Self {
+    pub fn new(es_client: Elasticsearch, controller_ip: String) -> Self {
         Self {
             state: Arc::new(Mutex::new(SchedulerState::default())),
             es_client,
+            controller_ip,
         }
     }
 }
@@ -737,6 +739,7 @@ impl SchedulerService {
     }
 
     /// Store run result to Elasticsearch
+    /// Tries worker IP first, falls back to configured localhost if that fails
     async fn store_run_result(
         &self,
         report: &StatusReport,
@@ -759,6 +762,30 @@ impl SchedulerService {
             "timestamp": chrono::Utc::now().to_rfc3339(),
         });
 
+        // Strategy: Try controller IP first (Elasticsearch runs on controller),
+        // then fall back to configured localhost
+        let controller_es_url = format!("http://{}:9200", self.controller_ip);
+
+        // Try controller IP first (as seen from worker's network perspective)
+        info!("Attempting to store run result to Elasticsearch at controller IP: {}", controller_es_url);
+        match self.try_index_to_es(&controller_es_url, &index_name, &report.run_id, &doc).await {
+            Ok(()) => {
+                info!(
+                    "✅ Stored run result to controller ES ({}): {} (status: {})",
+                    self.controller_ip, report.run_id, report.event_type
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to store to controller ES ({}): {} - falling back to localhost",
+                    controller_es_url, e
+                );
+            }
+        }
+
+        // Fallback to configured localhost client
+        info!("Falling back to configured Elasticsearch client (localhost)");
         let response = self
             .es_client
             .index(IndexParts::IndexId(&index_name, &report.run_id))
@@ -768,7 +795,7 @@ impl SchedulerService {
 
         if response.status_code().is_success() {
             info!(
-                "Stored run result: {} (status: {})",
+                "✅ Stored run result to localhost ES: {} (status: {})",
                 report.run_id, report.event_type
             );
         } else {
@@ -780,6 +807,62 @@ impl SchedulerService {
 
         Ok(())
     }
+
+    /// Try to index document to a specific Elasticsearch URL
+    async fn try_index_to_es(
+        &self,
+        es_url: &str,
+        index_name: &str,
+        doc_id: &str,
+        doc: &serde_json::Value,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Create temporary ES client for this specific URL
+        let es_transport = Transport::single_node(es_url)?;
+        let es_client = Elasticsearch::new(es_transport);
+
+        let response = es_client
+            .index(IndexParts::IndexId(index_name, doc_id))
+            .body(doc.clone())
+            .send()
+            .await?;
+
+        if response.status_code().is_success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Elasticsearch returned non-success status: {}",
+                response.status_code()
+            )
+            .into())
+        }
+    }
+}
+
+/// Detect the controller's IP address for network communication
+/// Returns the first non-loopback IPv4 address found
+fn detect_controller_ip() -> Option<String> {
+    use std::net::IpAddr;
+
+    // Try to detect by connecting to a known external address
+    // This works even without actual internet connectivity
+    // The connect() call doesn't send packets, just selects the appropriate local interface
+    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        // Connect to a public DNS server (doesn't actually send packets)
+        if socket.connect("8.8.8.8:80").is_ok() {
+            if let Ok(local_addr) = socket.local_addr() {
+                if let IpAddr::V4(ipv4) = local_addr.ip() {
+                    if !ipv4.is_loopback() {
+                        info!("Detected controller IP via routing table: {}", ipv4);
+                        return Some(ipv4.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // If all else fails, fallback to localhost
+    warn!("Could not auto-detect controller IP, falling back to localhost");
+    None
 }
 
 #[tokio::main]
@@ -824,7 +907,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let addr = config.server.bind_address.parse()?;
-    let scheduler = SchedulerService::new(es_client);
+
+    // Extract controller IP from bind address (e.g., "0.0.0.0:50051" or "10.200.200.1:50051")
+    // If bind address is 0.0.0.0, try to detect actual IP
+    let controller_ip = if config.server.bind_address.starts_with("0.0.0.0") {
+        // Try to detect the actual network IP
+        detect_controller_ip().unwrap_or_else(|| "127.0.0.1".to_string())
+    } else {
+        // Extract IP from bind address
+        config.server.bind_address
+            .split(':')
+            .next()
+            .unwrap_or("127.0.0.1")
+            .to_string()
+    };
+
+    info!("Controller IP for Elasticsearch access: {}", controller_ip);
+
+    let scheduler = SchedulerService::new(es_client, controller_ip);
 
     info!("Controller/Scheduler starting...");
 

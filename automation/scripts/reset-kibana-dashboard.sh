@@ -28,16 +28,11 @@ delete_object() {
         -H 'kbn-xsrf: true' 2>/dev/null | grep -q "200" || echo "  (not found or already deleted)"
 }
 
-echo "=== Step 1: Deleting Existing Dashboard, Visualizations, and Saved Searches ==="
+echo "=== Step 1: Deleting Existing Dashboard and Saved Searches ==="
 delete_object "dashboard" "artifact-execution-dashboard"
-delete_object "lens" "run-status-pie"
-delete_object "lens" "bb-coverage-metric"
-delete_object "lens" "bb-coverage-line"
-delete_object "lens" "exec-time-histogram"
-delete_object "lens" "top-workers-bar"
-delete_object "lens" "event-type-pie"
 delete_object "search" "run-results-search"
 delete_object "search" "coverage-events-search"
+delete_object "search" "all-telemetry-search"
 
 echo ""
 echo "[+] Cleanup complete"
