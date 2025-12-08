@@ -118,7 +118,7 @@ async fn test_named_pipe_trace_collection() {
     }
 
     // Verify results
-    println!("\n📊 Results:");
+    println!("\n[STATUS] Results:");
     println!("   Received {} trace events", events.len());
 
     assert_eq!(events.len(), 3, "Should receive 3 trace events");
@@ -141,18 +141,18 @@ async fn test_named_pipe_trace_collection() {
     assert_eq!(events[1].seq, 1);
     assert_eq!(events[2].seq, 2);
 
-    println!("   ✅ All events parsed correctly!");
-    println!("   ✅ Sequence numbers: {} {} {}", events[0].seq, events[1].seq, events[2].seq);
-    println!("   ✅ Timestamps present: {} {} {}", events[0].ts_us, events[1].ts_us, events[2].ts_us);
+    println!("   [OK] All events parsed correctly!");
+    println!("   [OK] Sequence numbers: {} {} {}", events[0].seq, events[1].seq, events[2].seq);
+    println!("   [OK] Timestamps present: {} {} {}", events[0].ts_us, events[1].ts_us, events[2].ts_us);
 
     // Abort collector (it's in infinite loop)
     collector_handle.abort();
 
-    println!("\n✅ Named pipe trace collection test passed!");
+    println!("\n[OK] Named pipe trace collection test passed!");
 }
 
 #[cfg(not(windows))]
 #[tokio::test]
 async fn test_named_pipe_trace_collection() {
-    println!("⏭️  Skipping named pipe test (Windows only)");
+    println!("[SKIP]  Skipping named pipe test (Windows only)");
 }

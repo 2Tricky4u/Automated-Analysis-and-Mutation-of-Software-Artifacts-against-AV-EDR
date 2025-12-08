@@ -325,12 +325,12 @@ impl WorkerAgent for WorkerAgentService {
             .try_acquire_execution_lock(job_id.clone(), artifact_name.clone())
             .await
             .map_err(|msg| {
-                warn!("❌ REJECTED: {}", msg);
+                warn!("[ERROR] REJECTED: {}", msg);
                 Status::resource_exhausted(msg)
             })?;
 
         info!(
-            "✅ Starting sample execution: job_id={}, artifact_id={}",
+            "[OK] Starting sample execution: job_id={}, artifact_id={}",
             job_id, req.artifact_id
         );
 
@@ -477,7 +477,7 @@ impl WorkerAgent for WorkerAgentService {
             }
             info!("RedEDR force-reset completed. Now watching: {}", artifact_name);
         } else {
-            info!("✓ Pre-run sanity check passed: RedEDR is clean");
+            info!("[+] Pre-run sanity check passed: RedEDR is clean");
         }
 
         // 5. Start RedEDR tracing if not already started (normal path when no real contamination)
@@ -579,7 +579,7 @@ impl WorkerAgent for WorkerAgentService {
 
                     // Final flush
                     let _ = writer.flush().await;
-                    info!("✅ Streaming writer closed, wrote {} trace events to file", event_count);
+                    info!("[OK] Streaming writer closed, wrote {} trace events to file", event_count);
                 }
                 Err(e) => {
                     error!("Failed to create trace events file: {}", e);
@@ -925,7 +925,7 @@ impl WorkerAgent for WorkerAgentService {
 
                             if compressed.compressed_size <= MAX_PAYLOAD_SIZE {
                                 info!(
-                            "Loop compression successful: {} → {} bytes ({:.1}x)",
+                            "Loop compression successful: {} -> {} bytes ({:.1}x)",
                             original_size, compressed.compressed_size, compressed.compression_ratio
                         );
                                 metadata.insert("compression".to_string(), "loop_detection".to_string());
@@ -936,7 +936,7 @@ impl WorkerAgent for WorkerAgentService {
                                 match telemetry::trace_compressor::gzip_compress(compressed.content.as_bytes()) {
                                     Ok(gzipped) if gzipped.len() <= MAX_PAYLOAD_SIZE => {
                                         info!(
-                                    "Gzip compression successful: {} → {} bytes",
+                                    "Gzip compression successful: {} -> {} bytes",
                                     compressed.compressed_size,
                                     gzipped.len()
                                 );
@@ -993,7 +993,7 @@ impl WorkerAgent for WorkerAgentService {
                         telemetry_events.push(telemetry_data);
 
                         info!(
-                    "✅ Collected trace log as single event ({} line traces, {} → {} bytes)",
+                    "[OK] Collected trace log as single event ({} line traces, {} -> {} bytes)",
                     trace_events_count, original_size, final_size
                 );
 
@@ -1038,7 +1038,7 @@ impl WorkerAgent for WorkerAgentService {
                         telemetry_events.push(immediate_telemetry);
 
                         info!(
-                    "✅ Collected last {} complete JSON lines (~2MB) of trace log ({} total line traces, {} bytes total)",
+                    "[OK] Collected last {} complete JSON lines (~2MB) of trace log ({} total line traces, {} bytes total)",
                     immediate_line_count, trace_events_count, original_size
                 );
 
@@ -1090,7 +1090,7 @@ impl WorkerAgent for WorkerAgentService {
 
                                 if compressed.compressed_size <= MAX_PAYLOAD_SIZE {
                                     info!(
-                                "Loop compression successful: {} → {} bytes ({:.1}x)",
+                                "Loop compression successful: {} -> {} bytes ({:.1}x)",
                                 original_size,
                                 compressed.compressed_size,
                                 compressed.compression_ratio
@@ -1105,7 +1105,7 @@ impl WorkerAgent for WorkerAgentService {
                                     ) {
                                         Ok(gzipped) if gzipped.len() <= MAX_PAYLOAD_SIZE => {
                                             info!(
-                                        "Gzip compression successful: {} → {} bytes",
+                                        "Gzip compression successful: {} -> {} bytes",
                                         compressed.compressed_size,
                                         gzipped.len()
                                     );
@@ -1170,7 +1170,7 @@ impl WorkerAgent for WorkerAgentService {
                                 error!("Failed to send reduced trace to controller: {}", e);
                             } else {
                                 info!(
-                            "✅ Successfully sent reduced trace ({} → {} bytes)",
+                            "[OK] Successfully sent reduced trace ({} -> {} bytes)",
                             original_size, final_size
                         );
                             }
@@ -1248,7 +1248,7 @@ impl WorkerAgent for WorkerAgentService {
                             2 => {
                                 // CHECKPOINT
                                 if let Ok(checkpoint_name) = std::str::from_utf8(payload) {
-                                    info!("✅ CHECKPOINT from file: '{}'", checkpoint_name);
+                                    info!("[OK] CHECKPOINT from file: '{}'", checkpoint_name);
                                     checkpoint_count += 1;
                                 }
                             }
@@ -1265,7 +1265,7 @@ impl WorkerAgent for WorkerAgentService {
                                     let parts: Vec<&str> = failure_data.splitn(2, '|').collect();
                                     let message = parts.get(0).unwrap_or(&"unknown");
                                     let error_code = parts.get(1).unwrap_or(&"0");
-                                    warn!("❌ ARTIFACT FAILURE from file: '{}' (error_code={})", message, error_code);
+                                    warn!("[ERROR] ARTIFACT FAILURE from file: '{}' (error_code={})", message, error_code);
                                     failure_count += 1;
                                 }
                             }
@@ -1275,7 +1275,7 @@ impl WorkerAgent for WorkerAgentService {
                         }
                     }
 
-                    info!("✅ Collected from trace.log: {} line traces, {} checkpoints, {} success, {} failure",
+                    info!("[OK] Collected from trace.log: {} line traces, {} checkpoints, {} success, {} failure",
                           file_trace_count, checkpoint_count, success_count, failure_count);
                 }
                 Err(e) => {
@@ -1449,32 +1449,32 @@ impl WorkerAgent for WorkerAgentService {
 
         // Send telemetry to controller (best effort with timeout - don't block on this)
         if !telemetry_events.is_empty() {
-            info!("📡 Preparing to send {} telemetry events to controller...", telemetry_count);
+            info!("[TRANSMIT]Preparing to send {} telemetry events to controller...", telemetry_count);
             match tokio::time::timeout(
                 Duration::from_secs(DELAY),
                 self.send_telemetry_batch_to_controller(telemetry_events)
             ).await {
                 Ok(Ok(())) => {
-                    info!("✅ Successfully sent {} telemetry events to controller", telemetry_count);
+                    info!("[OK] Successfully sent {} telemetry events to controller", telemetry_count);
                 }
                 Ok(Err(e)) => {
-                    error!("❌ TELEMETRY TRANSMISSION ERROR: Failed to send telemetry to controller");
+                    error!("[ERROR] TELEMETRY TRANSMISSION ERROR: Failed to send telemetry to controller");
                     error!("   Job: {}, Run: {}, Events: {}", job_id, run_id, telemetry_count);
                     error!("   Error: {}", e);
-                    warn!("   ⚠️  Telemetry collected ({} events) but NOT SENT - controller may be unavailable", telemetry_count);
+                    warn!("   [WARN]  Telemetry collected ({} events) but NOT SENT - controller may be unavailable", telemetry_count);
                     warn!("   Data is LOST - these telemetry events will not be indexed");
                     // Don't fail the RPC - execution completed successfully
                 }
                 Err(_) => {
-                    error!("⏱️  TELEMETRY TIMEOUT: Sending {} events exceeded {}s limit", telemetry_count, DELAY);
+                    error!("[TIMEOUT]  TELEMETRY TIMEOUT: Sending {} events exceeded {}s limit", telemetry_count, DELAY);
                     error!("   Job: {}, Run: {}", job_id, run_id);
                     warn!("   Controller may not implement StreamTelemetry RPC or is unreachable/slow");
-                    warn!("   ⚠️  Telemetry collected ({} events) but NOT SENT - data is LOST", telemetry_count);
+                    warn!("   [WARN]  Telemetry collected ({} events) but NOT SENT - data is LOST", telemetry_count);
                     // Don't fail the RPC - execution completed successfully
                 }
             }
         } else {
-            warn!("⚠️  No telemetry events collected [job: {}, run: {}]", job_id, run_id);
+            warn!("[WARN]  No telemetry events collected [job: {}, run: {}]", job_id, run_id);
             warn!("   This may indicate: RedEDR collection failed, no events generated, or collection error");
         }
 
@@ -1681,7 +1681,7 @@ impl WorkerAgentService {
         let first_job_id = telemetry_events.first().map(|e| e.job_id.clone()).unwrap_or_else(|| "unknown".to_string());
 
         info!(
-            "⬆️  Sending {} telemetry events to controller [job: {}]",
+            "[SEND]  Sending {} telemetry events to controller [job: {}]",
             event_count, first_job_id
         );
 
@@ -1702,13 +1702,13 @@ impl WorkerAgentService {
             format!("http://{}", self.config.controller.controller_address)
         };
 
-        info!("🔌 Connecting to controller at: {}", controller_addr);
+        info!("Connecting to controller at: {}", controller_addr);
 
         // Connect to controller
         let mut client = ControllerClient::connect(controller_addr.clone())
             .await
             .map_err(|e| {
-                error!("❌ CONNECTION ERROR: Failed to connect to controller");
+                error!("[ERROR] CONNECTION ERROR: Failed to connect to controller");
                 error!("   Controller address: {}", controller_addr);
                 error!("   Job: {}, Events: {}", first_job_id, event_count);
                 error!("   Error type: {}", std::any::type_name_of_val(&e));
@@ -1718,16 +1718,16 @@ impl WorkerAgentService {
                 Status::unavailable(format!("Controller unavailable: {}", e))
             })?;
 
-        info!("✅ Connected to controller successfully");
+        info!("[OK] Connected to controller successfully");
 
         // Create stream from telemetry events
         let stream = stream::iter(telemetry_events);
 
-        info!("📡 Starting telemetry stream...");
+        info!("[TRANSMIT]Starting telemetry stream...");
 
         // Send batch via streaming RPC
         let response = client.stream_telemetry(stream).await.map_err(|e| {
-            error!("❌ STREAM ERROR: Failed to stream telemetry to controller");
+            error!("[ERROR] STREAM ERROR: Failed to stream telemetry to controller");
             error!("   Controller address: {}", controller_addr);
             error!("   Job: {}, Events: {}", first_job_id, event_count);
             error!("   Status code: {}", e.code());
@@ -1741,20 +1741,20 @@ impl WorkerAgentService {
 
         if ack.received {
             info!(
-                "✅ Telemetry sent successfully: {} events acknowledged by controller [job: {}]",
+                "[OK] Telemetry sent successfully: {} events acknowledged by controller [job: {}]",
                 ack.events_count, first_job_id
             );
 
             if ack.events_count != event_count as i32 {
                 warn!(
-                    "⚠️  EVENT COUNT MISMATCH: Sent {} events but controller acknowledged {}",
+                    "[WARN]  EVENT COUNT MISMATCH: Sent {} events but controller acknowledged {}",
                     event_count, ack.events_count
                 );
                 warn!("   This may indicate events were dropped or partially received");
             }
         } else {
             warn!(
-                "⚠️  Controller acknowledged but received=false [job: {}, events: {}]",
+                "[WARN]  Controller acknowledged but received=false [job: {}, events: {}]",
                 first_job_id, event_count
             );
         }
@@ -1774,7 +1774,7 @@ impl WorkerAgentService {
         let payload_size = telemetry_data.payload.len();
 
         info!(
-            "⬆️  Sending reduced trace to controller [job: {}, event_type: {}, payload_size: {} bytes]",
+            "[SEND]  Sending reduced trace to controller [job: {}, event_type: {}, payload_size: {} bytes]",
             job_id, telemetry_data.event_type, payload_size
         );
 
@@ -1787,46 +1787,46 @@ impl WorkerAgentService {
             format!("http://{}", controller_address)
         };
 
-        info!("🔌 Connecting to controller at: {} [async compression task]", controller_addr);
+        info!("Connecting to controller at: {} [async compression task]", controller_addr);
 
         // Connect to controller
         let mut client = ControllerClient::connect(controller_addr.clone())
             .await
             .map_err(|e| {
-                error!("❌ CONNECTION ERROR: Failed to connect to controller [async trace compression task]");
+                error!("[ERROR] CONNECTION ERROR: Failed to connect to controller [async trace compression task]");
                 error!("   Controller address: {}", controller_addr);
                 error!("   Job: {}, Payload size: {} bytes", job_id, payload_size);
                 error!("   Error type: {}", std::any::type_name_of_val(&e));
                 error!("   Error details: {}", e);
                 error!("   Debug: {:?}", e);
                 warn!("   Possible causes: controller down, network unreachable, firewall blocking");
-                warn!("   ⚠️  COMPRESSED TRACE LOST - this large trace will NOT be indexed");
+                warn!("   [WARN]  COMPRESSED TRACE LOST - this large trace will NOT be indexed");
                 Status::unavailable(format!("Controller unavailable: {}", e))
             })?;
 
-        info!("✅ Connected to controller successfully [async trace task]");
+        info!("[OK] Connected to controller successfully [async trace task]");
 
         // Create stream with single event
         let stream = stream::iter(vec![telemetry_data]);
 
-        info!("📡 Streaming compressed trace...");
+        info!("[TRANSMIT]Streaming compressed trace...");
 
         // Send via streaming RPC
         let response = client.stream_telemetry(stream).await.map_err(|e| {
-            error!("❌ STREAM ERROR: Failed to stream reduced trace to controller");
+            error!("[ERROR] STREAM ERROR: Failed to stream reduced trace to controller");
             error!("   Controller address: {}", controller_addr);
             error!("   Job: {}, Payload size: {} bytes", job_id, payload_size);
             error!("   Status code: {}", e.code());
             error!("   Error message: {}", e.message());
             error!("   Error details: {:?}", e);
             warn!("   Possible causes: network failure mid-stream, controller timeout, payload too large");
-            warn!("   ⚠️  COMPRESSED TRACE LOST - this large trace will NOT be indexed");
+            warn!("   [WARN]  COMPRESSED TRACE LOST - this large trace will NOT be indexed");
             Status::internal(format!("Reduced trace streaming failed: {}", e))
         })?;
 
         let ack = response.into_inner();
         info!(
-            "✅ Reduced trace sent successfully: {} events acknowledged by controller [job: {}]",
+            "[OK] Reduced trace sent successfully: {} events acknowledged by controller [job: {}]",
             ack.events_count, job_id
         );
 
@@ -1849,7 +1849,7 @@ impl WorkerAgentService {
         use edr::controller::{StatusReport, controller_client::ControllerClient};
 
         info!(
-            "📊 Sending final status report to controller [job: {}, run: {}, status: {}, elapsed: {}s]",
+            "[STATUS] Sending final status report to controller [job: {}, run: {}, status: {}, elapsed: {}s]",
             job_id, run_id, status_type, elapsed_seconds
         );
 
@@ -1886,48 +1886,48 @@ impl WorkerAgentService {
             details: details.to_string(),
         };
 
-        info!("🔌 Connecting to controller at: {} [final status]", controller_addr);
+        info!("Connecting to controller at: {} [final status]", controller_addr);
 
         // Try to connect and send final status report
         match ControllerClient::connect(controller_addr.clone()).await {
             Ok(mut client) => {
-                info!("✅ Connected to controller [final status]");
+                info!("[OK] Connected to controller [final status]");
                 match client.report_status(Request::new(status_report)).await {
                     Ok(response) => {
                         let ack = response.into_inner();
                         if ack.received {
                             info!(
-                                "✅ Final status report acknowledged by controller [job: {}, status: {}]",
+                                "[OK] Final status report acknowledged by controller [job: {}, status: {}]",
                                 job_id, status_type
                             );
                         } else {
                             warn!(
-                                "⚠️  Controller responded but received=false [job: {}, status: {}]",
+                                "[WARN]  Controller responded but received=false [job: {}, status: {}]",
                                 job_id, status_type
                             );
                         }
                     }
                     Err(e) => {
-                        error!("❌ RPC ERROR: Failed to send final status report to controller");
+                        error!("[ERROR] RPC ERROR: Failed to send final status report to controller");
                         error!("   Controller address: {}", controller_addr);
                         error!("   Job: {}, Run: {}, Status: {}", job_id, run_id, status_type);
                         error!("   Status code: {}", e.code());
                         error!("   Error message: {}", e.message());
                         error!("   Error details: {:?}", e);
                         warn!("   Possible causes: controller RPC handler failed, network timeout, RPC version mismatch");
-                        warn!("   ⚠️  FINAL STATUS NOT RECORDED - this run may appear incomplete in dashboard");
+                        warn!("   [WARN]  FINAL STATUS NOT RECORDED - this run may appear incomplete in dashboard");
                     }
                 }
             }
             Err(e) => {
-                error!("❌ CONNECTION ERROR: Failed to connect to controller [final status]");
+                error!("[ERROR] CONNECTION ERROR: Failed to connect to controller [final status]");
                 error!("   Controller address: {}", controller_addr);
                 error!("   Job: {}, Run: {}, Status: {}", job_id, run_id, status_type);
                 error!("   Error type: {}", std::any::type_name_of_val(&e));
                 error!("   Error details: {}", e);
                 error!("   Debug: {:?}", e);
                 warn!("   Possible causes: controller down, network unreachable, firewall blocking, DNS failure");
-                warn!("   ⚠️  FINAL STATUS NOT RECORDED - this run may appear incomplete in dashboard");
+                warn!("   [WARN]  FINAL STATUS NOT RECORDED - this run may appear incomplete in dashboard");
             }
         }
     }

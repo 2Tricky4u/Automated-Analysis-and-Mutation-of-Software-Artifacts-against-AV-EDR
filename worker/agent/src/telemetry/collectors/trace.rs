@@ -413,9 +413,9 @@ impl TraceCollector {
         let (event_label, log_message) = match event_type {
             2 => {
                 // CHECKPOINT: payload is just the checkpoint name
-                info!("✅ CHECKPOINT reached: '{}' (seq={}, thread={}, ts={}µs)",
+                info!("[OK] CHECKPOINT reached: '{}' (seq={}, thread={}, ts={}µs)",
                     payload_str, seq_no, thread_id, ts_us);
-                ("CHECKPOINT", format!("✅ CHECKPOINT: {}", payload_str))
+                ("CHECKPOINT", format!("[OK] CHECKPOINT: {}", payload_str))
             }
             3 => {
                 // SUCCESS: payload is success message
@@ -428,9 +428,9 @@ impl TraceCollector {
                 let parts: Vec<&str> = payload_str.splitn(2, '|').collect();
                 let message = parts.get(0).unwrap_or(&"unknown");
                 let error_code = parts.get(1).unwrap_or(&"0");
-                warn!("❌ ARTIFACT FAILURE: '{}' (error_code={}, seq={}, thread={}, ts={}µs)",
+                warn!("[ERROR] ARTIFACT FAILURE: '{}' (error_code={}, seq={}, thread={}, ts={}µs)",
                     message, error_code, seq_no, thread_id, ts_us);
-                ("FAILURE", format!("❌ FAILURE: {} (error_code={})", message, error_code))
+                ("FAILURE", format!("[ERROR] FAILURE: {} (error_code={})", message, error_code))
             }
             _ => {
                 warn!("Unknown status event_type: {}", event_type);

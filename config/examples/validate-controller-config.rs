@@ -9,7 +9,7 @@ fn main() {
 
     match ControllerConfig::from_file("automation/templates/controller.toml") {
         Ok(config) => {
-            println!("✓ Controller config is valid\n");
+            println!("[+] Controller config is valid\n");
 
             println!("Configuration Summary:");
             println!("  Server:");
@@ -52,11 +52,11 @@ fn main() {
                 config.telemetry.bb_coverage_enabled
             );
 
-            println!("\n✅ All checks passed!");
+            println!("\n[OK] All checks passed!");
             std::process::exit(0);
         }
         Err(e) => {
-            eprintln!("✗ Controller config parse error:");
+            eprintln!("[x] Controller config parse error:");
             eprintln!("  {}", e);
             eprintln!("\nPlease check automation/templates/controller.toml for syntax errors.");
             std::process::exit(1);
