@@ -792,6 +792,13 @@ impl SchedulerService {
                         || key_lower.contains("rva")
                         || key_lower.contains("offset") && value.is_number();
 
+                    // Detect fields that should be numeric (daddr, saddr, port, etc.)
+                    let should_be_numeric = key_lower.contains("addr")
+                        || key_lower.contains("port")
+                        || key_lower.contains("pid")
+                        || key_lower.contains("tid")
+                        || key_lower.contains("size");
+
                     // Smart conversion: keep small numbers as numbers, convert problematic ones
                     let converted_value = match value {
                         serde_json::Value::Number(n) => {
@@ -826,7 +833,15 @@ impl SchedulerService {
                                 }
                             }
                         }
-                        serde_json::Value::String(s) => json!(s),
+                        serde_json::Value::String(s) => {
+                            // If field should be numeric but contains "unsupported" or other non-numeric string,
+                            // convert to null to avoid Elasticsearch type conflicts
+                            if should_be_numeric && (s == "unsupported" || s.parse::<i64>().is_err()) {
+                                json!(null)
+                            } else {
+                                json!(s)
+                            }
+                        }
                         serde_json::Value::Bool(b) => json!(b),
                         serde_json::Value::Null => json!(null),
                         serde_json::Value::Array(arr) => json!(arr),
