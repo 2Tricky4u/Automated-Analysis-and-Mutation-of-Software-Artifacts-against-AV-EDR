@@ -32,6 +32,9 @@ service Controller {
 
   // Deploy artifact to worker (orchestrates SendArtifact streaming)
   rpc DeployArtifact(DeployRequest) returns (DeployResponse);
+
+  // List workers (scheduler management)
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
 }
 
 // Selector Service - mutation selection with feedback
@@ -237,4 +240,22 @@ message DeployResponse {
   string worker_storage_path = 4;  // Where worker stored it (e.g., "C:\temp\artifacts\...")
   uint32 chunks_sent = 5;
   string error = 6;
+}
+
+// List workers request/response
+message ListWorkersRequest {
+  // Empty - list all workers
+}
+
+message ListWorkersResponse {
+  repeated WorkerInfo workers = 1;
+}
+
+message WorkerInfo {
+  string worker_id = 1;           // e.g., "win10-worker-01"
+  string address = 2;             // e.g., "10.200.200.100:50052"
+  string status = 3;              // "available", "busy", "offline"
+  string current_job_id = 4;      // Job ID if busy (empty if available)
+  int64 last_ping_seconds_ago = 5; // Seconds since last health check
+  bool enabled = 6;               // Whether worker is enabled in config
 }

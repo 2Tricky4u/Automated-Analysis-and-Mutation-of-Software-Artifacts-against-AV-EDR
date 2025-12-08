@@ -6,6 +6,13 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, transport::Server};
 use tracing::{error, info, warn};
 
+mod job;
+mod queue;
+mod worker_pool;
+mod scheduler_core;
+
+use scheduler_core::{SchedulerConfig as CoreSchedulerConfig, create_scheduler_core};
+
 pub mod edr {
     pub mod common {
         tonic::include_proto!("edr.common");
@@ -21,8 +28,9 @@ pub mod edr {
 use edr::common::{JobId, TelemetryAck, TelemetryData};
 use edr::controller::{
     BuildRequest, BuildResponse, DeployRequest, DeployResponse, JobRequest, JobResponse,
-    JobStatusRequest, JobStatusResponse, PingRequest, PingResponse, QueryRequest, QueryResponse,
-    StatusAck, StatusReport, TriageRequest, TriageResponse,
+    JobStatusRequest, JobStatusResponse, ListWorkersRequest, ListWorkersResponse,
+    PingRequest, PingResponse, QueryRequest, QueryResponse,
+    StatusAck, StatusReport, TriageRequest, TriageResponse, WorkerInfo,
     controller_server::{Controller, ControllerServer},
 };
 
@@ -45,11 +53,12 @@ struct SchedulerState {
     job_counter: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SchedulerService {
     state: Arc<Mutex<SchedulerState>>,
     es_client: Elasticsearch,
     controller_ip: String,
+    scheduler_core: Option<Arc<scheduler_core::SchedulerCore>>,
 }
 
 impl SchedulerService {
@@ -58,7 +67,12 @@ impl SchedulerService {
             state: Arc::new(Mutex::new(SchedulerState::default())),
             es_client,
             controller_ip,
+            scheduler_core: None,
         }
+    }
+
+    pub fn set_scheduler_core(&mut self, core: Arc<scheduler_core::SchedulerCore>) {
+        self.scheduler_core = Some(core);
     }
 }
 
@@ -85,32 +99,65 @@ impl Controller for SchedulerService {
         request: Request<JobRequest>,
     ) -> Result<Response<JobResponse>, Status> {
         let req = request.into_inner();
-        let mut state = self.state.lock().await;
 
-        state.job_counter += 1;
-        let job_id = format!("job-{:06}", state.job_counter);
-
-        let job = Job {
-            id: job_id.clone(),
-            name: req.name.clone(),
-            status: "queued".to_string(),
-            progress: 0,
-            phase: "initializing".to_string(),
-            logs: vec![format!("Job {} created", job_id)],
+        // Check if scheduler core is available
+        let scheduler_core = match &self.scheduler_core {
+            Some(core) => core,
+            None => {
+                warn!("Scheduler core not available, job submission rejected");
+                return Ok(Response::new(JobResponse {
+                    job_id: None,
+                    accepted: false,
+                    message: "Scheduler core not initialized. Check that worker configs exist in automation/generated/".to_string(),
+                    estimated_duration_seconds: 0,
+                }));
+            }
         };
 
-        state.jobs.insert(job_id.clone(), job);
+        // Parse mutations from mutation_strategies field
+        // Format: "ast.import_reshape,beh.preamble.fs"
+        let mutations: Vec<job::MutationSpec> = req
+            .mutation_strategies
+            .iter()
+            .map(|s| job::MutationSpec {
+                id: s.clone(),
+                params: None,
+            })
+            .collect();
 
-        info!("Scheduled job: {} ({})", job_id, req.name);
+        // Submit job to scheduler queue
+        match scheduler_core.queue().submit_job(
+            req.artifact_type.clone(),  // template_name
+            req.source.clone(),          // source_file
+            mutations,
+            "api+bb".to_string(),        // Default trace mode (Phase 1)
+            req.priority,
+        ) {
+            Ok(job_id) => {
+                info!(
+                    "Job {} submitted to scheduler queue: {} ({})",
+                    job_id, req.name, req.artifact_type
+                );
 
-        Ok(Response::new(JobResponse {
-            job_id: Some(JobId {
-                value: job_id.clone(),
-            }),
-            accepted: true,
-            message: format!("Job {} scheduled successfully", job_id),
-            estimated_duration_seconds: 300,
-        }))
+                Ok(Response::new(JobResponse {
+                    job_id: Some(JobId {
+                        value: job_id.clone(),
+                    }),
+                    accepted: true,
+                    message: format!("Job {} queued for execution", job_id),
+                    estimated_duration_seconds: 60, // Estimated from config timeout
+                }))
+            }
+            Err(e) => {
+                error!("Failed to submit job: {}", e);
+                Ok(Response::new(JobResponse {
+                    job_id: None,
+                    accepted: false,
+                    message: format!("Failed to queue job: {}", e),
+                    estimated_duration_seconds: 0,
+                }))
+            }
+        }
     }
 
     async fn get_job_status(
@@ -118,16 +165,35 @@ impl Controller for SchedulerService {
         request: Request<JobStatusRequest>,
     ) -> Result<Response<JobStatusResponse>, Status> {
         let req = request.into_inner();
-        let state = self.state.lock().await;
 
-        match state.jobs.get(&req.job_id) {
-            Some(job) => Ok(Response::new(JobStatusResponse {
-                job_id: job.id.clone(),
-                status: job.status.clone(),
-                progress_percent: job.progress,
-                current_phase: job.phase.clone(),
-                logs: job.logs.clone(),
-            })),
+        // Check if scheduler core is available
+        let scheduler_core = match &self.scheduler_core {
+            Some(core) => core,
+            None => {
+                return Err(Status::unavailable("Scheduler core not initialized"));
+            }
+        };
+
+        // Query job from scheduler queue
+        match scheduler_core.queue().get_job(&req.job_id) {
+            Some(job) => {
+                let progress_percent = match job.status {
+                    job::JobStatus::Queued => 0,
+                    job::JobStatus::Building => 25,
+                    job::JobStatus::Deployed => 50,
+                    job::JobStatus::Running => 75,
+                    job::JobStatus::Completed => 100,
+                    job::JobStatus::Failed | job::JobStatus::Timeout => 100,
+                };
+
+                Ok(Response::new(JobStatusResponse {
+                    job_id: job.id.clone(),
+                    status: job.status.to_string(),
+                    progress_percent,
+                    current_phase: format!("{:?}", job.status),
+                    logs: vec![format!("Job {} is {}", job.id, job.status)],
+                }))
+            }
             None => Err(Status::not_found(format!("Job {} not found", req.job_id))),
         }
     }
@@ -290,6 +356,42 @@ impl Controller for SchedulerService {
 
         let remote_addr = request.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string());
         let report = request.into_inner();
+
+        // Update worker health and job status in scheduler core (if available)
+        if let Some(ref scheduler_core) = self.scheduler_core {
+            // Update worker health timestamp
+            if let Err(e) = scheduler_core.pool().update_health(&report.worker_id) {
+                warn!("Failed to update worker health for {}: {}", report.worker_id, e);
+            }
+
+            // Update job status based on status report
+            if let Some(mut job) = scheduler_core.queue().get_job(&report.job_id) {
+                match report.event_type.as_str() {
+                    "success" => {
+                        job.mark_completed();
+                        let _ = scheduler_core.queue().update_job(&job);
+                        // Release worker
+                        let _ = scheduler_core.pool().release_worker(&report.worker_id);
+                    }
+                    "error" => {
+                        job.mark_failed(report.details.clone());
+                        let _ = scheduler_core.queue().update_job(&job);
+                        // Release worker
+                        let _ = scheduler_core.pool().release_worker(&report.worker_id);
+                    }
+                    "timeout" => {
+                        job.mark_timeout();
+                        let _ = scheduler_core.queue().update_job(&job);
+                        // Release worker
+                        let _ = scheduler_core.pool().release_worker(&report.worker_id);
+                    }
+                    _ => {
+                        // Heartbeat or other status - job is still running, just update
+                        let _ = scheduler_core.queue().update_job(&job);
+                    }
+                }
+            }
+        }
 
         // Format status display: [WORKER: ip] [PID: pid] [JOB: job_id] [STATUS: event_type] details
         let status_line = format!(
@@ -572,6 +674,43 @@ impl Controller for SchedulerService {
             worker_storage_path: response.storage_path,
             chunks_sent: response.chunks_received,
             error: String::new(),
+        }))
+    }
+
+    async fn list_workers(
+        &self,
+        _request: Request<ListWorkersRequest>,
+    ) -> Result<Response<ListWorkersResponse>, Status> {
+        let scheduler_core = match &self.scheduler_core {
+            Some(core) => core,
+            None => {
+                return Err(Status::unavailable("Scheduler core not initialized"));
+            }
+        };
+
+        let workers = scheduler_core.pool().list_workers();
+        let worker_infos: Vec<WorkerInfo> = workers
+            .iter()
+            .map(|w| {
+                let last_ping_secs = w
+                    .last_ping
+                    .elapsed()
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+
+                WorkerInfo {
+                    worker_id: w.id.clone(),
+                    address: w.address.clone(),
+                    status: w.status.to_string(),
+                    current_job_id: w.current_job.clone().unwrap_or_default(),
+                    last_ping_seconds_ago: last_ping_secs,
+                    enabled: w.enabled,
+                }
+            })
+            .collect();
+
+        Ok(Response::new(ListWorkersResponse {
+            workers: worker_infos,
         }))
     }
 }
@@ -924,9 +1063,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Controller IP for Elasticsearch access: {}", controller_ip);
 
-    let scheduler = SchedulerService::new(es_client, controller_ip);
+    let mut scheduler = SchedulerService::new(es_client, controller_ip);
 
     info!("Controller/Scheduler starting...");
+
+    // Create scheduler core configuration from controller config
+    let scheduler_core_config = CoreSchedulerConfig {
+        poll_interval_seconds: 5,
+        max_concurrent_jobs: config.scheduler.max_concurrent_runs_per_worker as usize,
+        default_timeout_seconds: config.scheduler.run_timeout_secs,
+        health_timeout_seconds: 30, // Default health check timeout
+    };
+
+    // Create and spawn scheduler core
+    match create_scheduler_core(scheduler_core_config) {
+        Ok(scheduler_core) => {
+            info!("Scheduler core initialized successfully");
+
+            // Set scheduler core in service (for gRPC methods)
+            scheduler.set_scheduler_core(Arc::clone(&scheduler_core));
+
+            // Spawn scheduler core in background task
+            tokio::spawn(async move {
+                scheduler_core.run().await;
+            });
+        }
+        Err(e) => {
+            warn!("Failed to initialize scheduler core: {}", e);
+            warn!("gRPC server will still start, but job scheduling will not be available");
+        }
+    }
 
     // gRPC reflection for grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
