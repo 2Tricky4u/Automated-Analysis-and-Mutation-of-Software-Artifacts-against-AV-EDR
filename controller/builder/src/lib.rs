@@ -367,7 +367,7 @@ impl ArtifactBuilder {
                 .await
                 .context("Failed to write temp source")?;
 
-            // 4b. Compile source → LLVM IR
+            // 4b. Compile source -> LLVM IR
             let ir_filename = source_file.replace(".c", ".ll");
             let ir_path = self
                 .config
@@ -406,7 +406,7 @@ impl ArtifactBuilder {
                 all_mutations_applied
             );
 
-            // 4e. Compile IR → binary
+            // 4e. Compile IR -> binary
             let output_name = source_file.replace(".c", ".exe");
             let temp_output = self
                 .config
@@ -903,7 +903,7 @@ impl ArtifactBuilder {
             source_path.to_str().unwrap(),
         ];
 
-        info!("Compiling source → IR: clang {}", args.join(" "));
+        info!("Compiling source -> IR: clang {}", args.join(" "));
 
         let output = tokio::process::Command::new("clang")
             .args(&args)
@@ -961,7 +961,7 @@ impl ArtifactBuilder {
         args.push(exe_path.to_str().unwrap());
         args.push(ir_path.to_str().unwrap());
 
-        info!("Compiling IR → EXE: clang {}", args.join(" "));
+        info!("Compiling IR -> EXE: clang {}", args.join(" "));
 
         let output = tokio::process::Command::new("clang")
             .args(&args)
@@ -1024,8 +1024,8 @@ impl ArtifactBuilder {
     ///
     /// # Workflow
     /// 1. Write IR to temporary .ll file
-    /// 2. Compile IR → object file (clang -c)
-    /// 3. Link object → exe (clang with xwin libs)
+    /// 2. Compile IR -> object file (clang -c)
+    /// 3. Link object -> exe (clang with xwin libs)
     /// 4. Compute SHA256 and move to artifacts/
     async fn build_from_llvm_ir(
         &self,
@@ -1288,7 +1288,7 @@ impl ArtifactBuilder {
             built.source_path.clone()
         };
 
-        // Step 2: Compile source → LLVM IR
+        // Step 2: Compile source -> LLVM IR
         let ir_path = source_for_compilation.with_extension("instrumented.ll");
 
         info!("Compiling source to LLVM IR for instrumentation...");
@@ -1320,7 +1320,7 @@ impl ArtifactBuilder {
             let _ = tokio::fs::remove_file(&source_for_compilation).await;
         }
 
-        // Step 4: Compile instrumented IR → object file
+        // Step 4: Compile instrumented IR -> object file
         let obj_path = built.source_path.with_extension("instrumented.o");
 
         info!("Compiling instrumented IR to object file...");
@@ -1360,7 +1360,7 @@ impl ArtifactBuilder {
             }
         }
 
-        // Step 6: Link instrumented object + runtime → final executable
+        // Step 6: Link instrumented object + runtime -> final executable
         let instrumented_exe_path = built.source_path.with_extension("instrumented.exe");
 
         info!("Linking instrumented binary with runtime...");

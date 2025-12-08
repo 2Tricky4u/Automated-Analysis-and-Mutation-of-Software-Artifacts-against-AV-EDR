@@ -296,13 +296,13 @@ impl ExecutionMonitor {
                             }
                         }
                         Err(e) => {
-                            warn!("❌ Monitor RPC ERROR: Failed to send status [event: {}, job: {}]", event_type, self.job_id);
+                            warn!("[!] Monitor RPC ERROR: Failed to send status [event: {}, job: {}]", event_type, self.job_id);
                             warn!("   Controller: {}, Status code: {}, Message: {}", controller_addr, e.code(), e.message());
                         }
                     }
                 }
                 Err(e) => {
-                    warn!("❌ Monitor CONNECTION ERROR: Failed to connect to controller");
+                    warn!("[!] Monitor CONNECTION ERROR: Failed to connect to controller");
                     warn!("   Controller: {}, Event: {}, Job: {}", controller_addr, event_type, self.job_id);
                     warn!("   Error: {}", e);
                 }

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
 /// Job status states following the state machine:
-/// Queued → Building → Deployed → Running → Completed/Failed/Timeout
+/// Queued -> Building -> Deployed -> Running -> Completed/Failed/Timeout
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum JobStatus {
     /// Job is waiting in queue
@@ -210,22 +210,22 @@ mod tests {
             0,
         );
 
-        // Queued → Building
+        // Queued -> Building
         job.start_building();
         assert_eq!(job.status, JobStatus::Building);
         assert!(job.started_at.is_some());
 
-        // Building → Deployed
+        // Building -> Deployed
         job.mark_deployed("abc123".to_string());
         assert_eq!(job.status, JobStatus::Deployed);
         assert_eq!(job.artifact_id, Some("abc123".to_string()));
 
-        // Deployed → Running
+        // Deployed -> Running
         job.mark_running("worker-01".to_string(), "run-uuid".to_string());
         assert_eq!(job.status, JobStatus::Running);
         assert_eq!(job.worker_id, Some("worker-01".to_string()));
 
-        // Running → Completed
+        // Running -> Completed
         job.mark_completed();
         assert_eq!(job.status, JobStatus::Completed);
         assert!(job.is_terminal());

@@ -9,7 +9,7 @@ fn main() {
 
     match WorkerConfig::from_file("automation/templates/worker.toml") {
         Ok(config) => {
-            println!("✓ Worker config is valid\n");
+            println!("[+] Worker config is valid\n");
 
             println!("Configuration Summary:");
             println!("  Worker Identity:");
@@ -86,11 +86,11 @@ fn main() {
                 config.security.allowed_ips.len()
             );
 
-            println!("\n✅ All checks passed!");
+            println!("\n[OK] All checks passed!");
             std::process::exit(0);
         }
         Err(e) => {
-            eprintln!("✗ Worker config parse error:");
+            eprintln!("[x] Worker config parse error:");
             eprintln!("  {}", e);
             eprintln!("\nPlease check automation/templates/worker.toml for syntax errors.");
             std::process::exit(1);
