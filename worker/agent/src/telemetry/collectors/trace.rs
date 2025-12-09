@@ -419,9 +419,9 @@ impl TraceCollector {
             }
             3 => {
                 // SUCCESS: payload is success message
-                info!("🎉 ARTIFACT SUCCESS: '{}' (seq={}, thread={}, ts={}µs)",
+                info!("[SUCCESS] ARTIFACT SUCCESS: '{}' (seq={}, thread={}, ts={}µs)",
                     payload_str, seq_no, thread_id, ts_us);
-                ("SUCCESS", format!("🎉 SUCCESS: {}", payload_str))
+                ("SUCCESS", format!("SUCCESS: {}", payload_str))
             }
             4 => {
                 // FAILURE: payload is "message|error_code"
