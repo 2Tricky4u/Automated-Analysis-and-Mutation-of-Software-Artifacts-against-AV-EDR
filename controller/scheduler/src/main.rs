@@ -130,7 +130,7 @@ impl Controller for SchedulerService {
             req.artifact_type.clone(),  // template_name
             req.source.clone(),          // source_file
             mutations,
-            "api+bb".to_string(),        // Default trace mode (Phase 1)
+            "off".to_string(),        // Default trace mode (Phase 1) //TODO make modular
             req.priority,
         ) {
             Ok(job_id) => {
