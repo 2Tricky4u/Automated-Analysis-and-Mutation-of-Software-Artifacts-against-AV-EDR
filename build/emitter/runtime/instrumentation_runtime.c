@@ -66,7 +66,7 @@ static uint32_t __bb_count = 0;
 
 // Granular flush control (for EDR early termination)
 static uint32_t __bb_since_last_flush = 0;
-#define BB_FLUSH_INTERVAL 50  // Flush coverage every 50 BBs
+#define BB_FLUSH_INTERVAL 1  // Flush coverage every 50 BBs
 
 // SanitizerCoverage guard tracking
 static uint32_t *__sancov_guards_start = NULL;
@@ -187,28 +187,21 @@ static void __coverage_write_internal(void) {
 
     HANDLE hFile = INVALID_HANDLE_VALUE;
     for (int i = 0; i < 3 && hFile == INVALID_HANDLE_VALUE; i++) {
-        fprintf(stderr, "[RUNTIME] Trying path: %s\n", paths[i]);
         hFile = CreateFileA(
             paths[i],
             GENERIC_WRITE,
-            0,
+            FILE_SHARE_READ,  // Allow worker to read while we write
             NULL,
             CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL,
             NULL
         );
-        if (hFile != INVALID_HANDLE_VALUE) {
-            fprintf(stderr, "[RUNTIME] Successfully opened: %s\n", paths[i]);
-        }
     }
 
     if (hFile != INVALID_HANDLE_VALUE) {
         DWORD written;
         WriteFile(hFile, __coverage_map, COVERAGE_MAP_SIZE, &written, NULL);
-        fprintf(stderr, "[RUNTIME] Wrote %lu bytes to coverage file\n", written);
         CloseHandle(hFile);
-    } else {
-        fprintf(stderr, "[RUNTIME] ERROR: Could not create coverage file!\n");
     }
 
     // Save BB metadata (which BBs exist and were hit)
@@ -223,7 +216,7 @@ static void __coverage_write_internal(void) {
         hBBFile = CreateFileA(
             bb_paths[i],
             GENERIC_WRITE,
-            0,
+            FILE_SHARE_READ,  // Allow worker to read while we write
             NULL,
             CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL,
@@ -282,6 +275,9 @@ void __coverage_flush(void) {
  * Can be called multiple times - overwrites file with latest snapshot
  */
 static void __coverage_flush_incremental(void) {
+    static uint32_t flush_count = 0;
+    flush_count++;
+    fprintf(stderr, "[RUNTIME] Incremental BB flush #%u (bb_count=%u)\n", flush_count, __bb_count);
     __coverage_write_internal();
     __bb_since_last_flush = 0;
 }
@@ -337,6 +333,12 @@ void __sanitizer_cov_trace_pc(void) {
         __coverage_map[idx]++;
     }
     __coverage_prev_bb = bb_id;
+
+    // Incremental flush every N BBs (for EDR early termination)
+    __bb_since_last_flush++;
+    if (__bb_since_last_flush >= BB_FLUSH_INTERVAL) {
+        __coverage_flush_incremental();
+    }
 }
 
 /**
@@ -420,6 +422,12 @@ void __sanitizer_cov_trace_pc_guard(uint32_t *guard) {
     }
 
     __coverage_prev_bb = bb_id;
+
+    // Incremental flush every N BBs (for EDR early termination)
+    __bb_since_last_flush++;
+    if (__bb_since_last_flush >= BB_FLUSH_INTERVAL) {
+        __coverage_flush_incremental();
+    }
 
     // Optional: Enable single-visit mode by uncommenting:
     // *guard = 0;  // Mark as visited (won't call again for this BB)
