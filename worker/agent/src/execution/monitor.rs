@@ -75,6 +75,9 @@ impl ExecutionMonitor {
         let mut last_event_count = 0;
         let mut idle_count = 0;
 
+        let TIMEOUT_THR = 5;
+        let IDLE_COUNT_THR = 3;
+
         // Send initial "started" event
         let started_details = format!("Process started: pid={}", self.pid);
 
@@ -118,11 +121,11 @@ impl ExecutionMonitor {
                             last_event_count = event_count;
 
                             // Detect approaching timeout (within 5 seconds of timeout threshold)
-                            let approaching_timeout = status.elapsed_seconds >= (self.timeout_seconds - 5);
+                            let approaching_timeout = status.elapsed_seconds >= (self.timeout_seconds - TIMEOUT_THR);
 
                             let event_type = if approaching_timeout && process_is_alive {
                                 "approaching_timeout".to_string()
-                            } else if idle_count >= 3 && status.elapsed_seconds > 10 {
+                            } else if idle_count >= IDLE_COUNT_THR && status.elapsed_seconds > 0{
                                 "stuck".to_string()
                             } else if process_is_alive {
                                 "heartbeat".to_string()
@@ -290,7 +293,7 @@ impl ExecutionMonitor {
                             let ack = response.into_inner();
                             if !ack.received {
                                 warn!(
-                                    "⚠️  Monitor: Controller responded but received=false [event: {}, job: {}]",
+                                    "[!] Monitor: Controller responded but received=false [event: {}, job: {}]",
                                     event_type, self.job_id
                                 );
                             }
@@ -312,7 +315,7 @@ impl ExecutionMonitor {
         // 1-second timeout for monitor heartbeats (shouldn't block monitoring loop)
         if let Err(_) = tokio::time::timeout(Duration::from_secs(1), send_future).await {
             warn!(
-                "⏱️  Monitor TIMEOUT: Status report exceeded 1s limit [event: {}, job: {}]",
+                "[!] Monitor TIMEOUT: Status report exceeded 1s limit [event: {}, job: {}]",
                 event_type, self.job_id
             );
             warn!("   Controller may be slow/unavailable - monitoring will continue");

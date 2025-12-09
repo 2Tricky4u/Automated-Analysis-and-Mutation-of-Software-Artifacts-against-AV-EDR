@@ -729,53 +729,86 @@ impl WorkerAgent for WorkerAgentService {
                 (-1, false) // -1 = wait() failed
             }
             Err(_) => {
-                // Timeout - kill process forcefully
+                // Timeout triggered - but check if process already exited naturally (race condition)
                 let pid = process_guard.child_mut().id();
 
-                // On Windows, use taskkill /F /T to kill process tree forcefully
-                #[cfg(target_os = "windows")]
-                if let Some(pid) = pid {
-                    info!("Timeout: Forcefully killing process tree for PID {}", pid);
-                    let kill_result = std::process::Command::new("taskkill")
-                        .args(&["/F", "/T", "/PID", &pid.to_string()])
-                        .output();
+                // Give the process a brief moment to report its exit status
+                // (race condition: process might have exited just as timeout fired)
+                tokio::time::sleep(Duration::from_millis(100)).await;
 
-                    if let Err(e) = kill_result {
-                        error!("Failed to run taskkill: {}", e);
-                    }
-                }
-
-                // Also try Tokio's kill as backup
-                let _ = process_guard.child_mut().kill().await;
-
-                // Wait a moment for process to die
-                tokio::time::sleep(Duration::from_millis(500)).await;
-
-                // Verify process is dead
-                #[cfg(target_os = "windows")]
-                if let Some(pid) = pid {
-                    use windows::Win32::Foundation::CloseHandle;
-                    use windows::Win32::System::Threading::OpenProcess;
-                    unsafe {
-                        if let Ok(handle) = OpenProcess(
-                            windows::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
-                            false,
-                            pid,
-                        ) {
-                            if !handle.is_invalid() {
-                                let _ = CloseHandle(handle);
-                                warn!("Process {} still alive after kill attempt!", pid);
+                // Try to collect exit status without blocking
+                match process_guard.child_mut().try_wait() {
+                    Ok(Some(status)) => {
+                        // Process already exited! This was a race condition, not a real timeout
+                        info!("Process exited naturally just as timeout expired (race condition)");
+                        match status.code() {
+                            Some(code) => {
+                                info!("Process exited with code: {}", code);
+                                // Stop monitor since process completed
+                                if let Some(guard) = monitor_guard.take() {
+                                    guard.stop().await;
+                                }
+                                (code, false) // NOT a timeout - process completed
+                            }
+                            None => {
+                                warn!("Process was terminated externally (likely by AV/EDR)");
+                                if let Some(guard) = monitor_guard.take() {
+                                    guard.stop().await;
+                                }
+                                (-2, false) // External termination, not timeout
                             }
                         }
                     }
-                }
+                    Ok(None) | Err(_) => {
+                        // Process is still running or status unavailable - this is a real timeout
+                        info!("Timeout: Process still running after {}s, forcefully killing", req.timeout_seconds);
 
-                // Stop monitor immediately
-                if let Some(guard) = monitor_guard.take() {
-                    guard.stop().await;
-                }
+                        // On Windows, use taskkill /F /T to kill process tree forcefully
+                        #[cfg(target_os = "windows")]
+                        if let Some(pid) = pid {
+                            info!("Timeout: Forcefully killing process tree for PID {}", pid);
+                            let kill_result = std::process::Command::new("taskkill")
+                                .args(&["/F", "/T", "/PID", &pid.to_string()])
+                                .output();
 
-                (-1, true)
+                            if let Err(e) = kill_result {
+                                error!("Failed to run taskkill: {}", e);
+                            }
+                        }
+
+                        // Also try Tokio's kill as backup
+                        let _ = process_guard.child_mut().kill().await;
+
+                        // Wait a moment for process to die
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+
+                        // Verify process is dead
+                        #[cfg(target_os = "windows")]
+                        if let Some(pid) = pid {
+                            use windows::Win32::Foundation::CloseHandle;
+                            use windows::Win32::System::Threading::OpenProcess;
+                            unsafe {
+                                if let Ok(handle) = OpenProcess(
+                                    windows::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
+                                    false,
+                                    pid,
+                                ) {
+                                    if !handle.is_invalid() {
+                                        let _ = CloseHandle(handle);
+                                        warn!("Process {} still alive after kill attempt!", pid);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Stop monitor immediately
+                        if let Some(guard) = monitor_guard.take() {
+                            guard.stop().await;
+                        }
+
+                        (-1, true) // Real timeout
+                    }
+                }
             }
         };
 
@@ -840,9 +873,9 @@ impl WorkerAgent for WorkerAgentService {
 
         // Continue collecting telemetry for 10 seconds after process exit
         // This captures any late-arriving events (kernel buffer flush, EDR alerts, etc.)
-        info!("Process exited. Waiting 10 seconds for late telemetry events...");
-        tokio::time::sleep(Duration::from_secs(10)).await;
-        info!("Telemetry collection window closed.");
+        //info!("Process exited. Waiting 10 seconds for late telemetry events...");
+        //tokio::time::sleep(Duration::from_secs(10)).await;
+        //info!("Telemetry collection window closed.");
 
         // Give trace collector a moment to read any final events from the pipe
         // (Don't abort immediately - SUCCESS/CHECKPOINT events may still be in pipe buffer)
