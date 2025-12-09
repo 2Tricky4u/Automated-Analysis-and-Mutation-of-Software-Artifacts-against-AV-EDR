@@ -43,6 +43,10 @@ __attribute__((visibility("default"))) void __artifact_checkpoint(const char* ch
 __attribute__((visibility("default"))) void __artifact_success(const char* message);
 __attribute__((visibility("default"))) void __artifact_failure(const char* message, int error_code);
 
+// Internal functions (granular flushing)
+static void __coverage_write_internal(void);
+static void __coverage_flush_incremental(void);
+
 // ============================================================================
 // BB Coverage (AFL-style bitmap)
 // ============================================================================
@@ -59,6 +63,10 @@ static int __coverage_flushed = 0;
 static uint32_t __bb_ids[MAX_BB_IDS];
 static uint32_t __bb_hit_counts[MAX_BB_IDS];
 static uint32_t __bb_count = 0;
+
+// Granular flush control (for EDR early termination)
+static uint32_t __bb_since_last_flush = 0;
+#define BB_FLUSH_INTERVAL 50  // Flush coverage every 50 BBs
 
 // SanitizerCoverage guard tracking
 static uint32_t *__sancov_guards_start = NULL;
@@ -153,19 +161,22 @@ void __coverage_bb(uint32_t bb_id) {
     }
 
     __coverage_prev_bb = bb_id;
+
+    // Incremental flush every N BBs (for EDR early termination)
+    __bb_since_last_flush++;
+    if (__bb_since_last_flush >= BB_FLUSH_INTERVAL) {
+        __coverage_flush_incremental();
+    }
 }
 
 /**
- * Flush coverage bitmap to file or shared memory
+ * Internal function to write coverage bitmap (called by both incremental and final flush)
  */
-void __coverage_flush(void) {
-    // Prevent double-flush
-    if (__coverage_flushed) {
+static void __coverage_write_internal(void) {
+    // Skip if no coverage data yet
+    if (!__coverage_initialized) {
         return;
     }
-    __coverage_flushed = 1;
-
-    fprintf(stderr, "[RUNTIME] Flushing coverage bitmap\n");
 
     // Write bitmap to current directory (works in Wine, WSL, and native Windows)
     const char* paths[] = {
@@ -249,8 +260,30 @@ void __coverage_flush(void) {
         }
 
         CloseHandle(hBBFile);
-        fprintf(stderr, "[RUNTIME] Wrote BB metadata: %u basic blocks\n", __bb_count);
     }
+}
+
+/**
+ * Flush coverage bitmap to file (final flush at exit)
+ */
+void __coverage_flush(void) {
+    // Prevent double-flush
+    if (__coverage_flushed) {
+        return;
+    }
+    __coverage_flushed = 1;
+
+    fprintf(stderr, "[RUNTIME] Final coverage flush\n");
+    __coverage_write_internal();
+}
+
+/**
+ * Incremental coverage flush (called periodically during execution)
+ * Can be called multiple times - overwrites file with latest snapshot
+ */
+static void __coverage_flush_incremental(void) {
+    __coverage_write_internal();
+    __bb_since_last_flush = 0;
 }
 
 // ============================================================================
@@ -473,10 +506,8 @@ void __trace_line(uint32_t seq, const char* file, uint32_t line, const char* fun
 
     __trace_buffer_pos += len;
 
-    // Flush if buffer > 3KB
-    if (__trace_buffer_pos > 3072) {
-        __trace_flush();
-    }
+    // AGGRESSIVE FLUSH: Flush immediately for EDR early termination
+    __trace_flush();
 }
 
 /**
@@ -499,10 +530,8 @@ void __trace_line_b64(const char* base64_marker) {
 
     __trace_buffer_pos += len;
 
-    // Flush if buffer > 3KB
-    if (__trace_buffer_pos > 3072) {
-        __trace_flush();
-    }
+    // AGGRESSIVE FLUSH: Flush immediately for EDR early termination
+    __trace_flush();
 }
 
 // ============================================================================
@@ -590,12 +619,10 @@ void __trace_line_binary(const char* file, uint32_t line, const char* func) {
     memcpy(__trace_buffer + __trace_buffer_pos, payload, payload_len);
     __trace_buffer_pos += payload_len;
 
-    // Flush when buffer is 75% full (48KB of 64KB)
-    // This balances throughput (fewer flushes) vs latency (don't wait too long)
-    // For short-lived processes, atexit() will flush remaining data
-    if (__trace_buffer_pos > 49152) {  // 48KB threshold
-        __trace_flush();
-    }
+    // AGGRESSIVE FLUSH: Flush after EVERY trace event for EDR early termination
+    // This ensures we capture the exact line where EDR kills the process
+    // Trade-off: Higher overhead, but critical for death-bed telemetry
+    __trace_flush();
 }
 
 /**
