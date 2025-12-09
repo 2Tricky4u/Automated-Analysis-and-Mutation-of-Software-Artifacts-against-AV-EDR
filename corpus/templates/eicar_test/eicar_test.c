@@ -184,6 +184,8 @@ int main(void) {
     //getchar();
 
 
+     //RUNTIME_EXIT(0);
 
-    return 0;
+     ARTIFACT_CHECKPOINT("Should have exited here!");
+    return 1;
 }

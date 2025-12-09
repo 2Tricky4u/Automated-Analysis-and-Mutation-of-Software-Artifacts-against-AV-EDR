@@ -16,7 +16,7 @@
  *       }
  *
  *       ARTIFACT_SUCCESS("All stages completed");
- *       return 0;
+ *       __runtime_exit(0);  // Clean exit via direct syscalls
  *   }
  *
  * When compiled with instrumentation (trace != off):
@@ -25,15 +25,22 @@
  *
  * When compiled without instrumentation (trace=off):
  *   - Macros expand to no-ops (empty statements)
- *   - No runtime dependency, no linker errors
+ *   - __runtime_exit() is still available (from minimal_runtime.c)
  */
 
 #ifndef INSTRUMENTATION_H
 #define INSTRUMENTATION_H
 
+// Include minimal runtime (provides __runtime_exit, always available)
+#include "minimal_runtime.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// ============================================================================
+// Instrumentation API (conditional on ENABLE_INSTRUMENTATION)
+// ============================================================================
 
 // Check if instrumentation is enabled
 // The builder will define ENABLE_INSTRUMENTATION when trace_mode != "off"
