@@ -177,12 +177,20 @@ impl ArtifactBuilder {
         self.compile_to_obj(&instrumented_ir, &obj_path).await?;
         eprintln!("[BUILD] Object file created: {:?}", obj_path);
 
-        // Step 5.5: Compile runtime library if instrumentation is enabled
+        // Step 5.5: Compile runtime libraries
         let mut obj_files = vec![obj_path];
+
+        // ALWAYS compile minimal_runtime.c (provides __runtime_exit for clean exit)
+        eprintln!("[BUILD] Compiling minimal runtime library...");
+        let minimal_runtime_obj = self.compile_minimal_runtime(temp_path).await?;
+        eprintln!("[BUILD] Minimal runtime object: {:?}", minimal_runtime_obj);
+        obj_files.push(minimal_runtime_obj);
+
+        // Compile full instrumentation_runtime.c only if instrumentation is enabled
         if self.config.trace_mode != TraceMode::Off {
-            eprintln!("[BUILD] Compiling runtime library...");
+            eprintln!("[BUILD] Compiling instrumentation runtime library...");
             let runtime_obj = self.compile_runtime_library(temp_path).await?;
-            eprintln!("[BUILD] Runtime object: {:?}", runtime_obj);
+            eprintln!("[BUILD] Instrumentation runtime object: {:?}", runtime_obj);
             obj_files.push(runtime_obj);
         }
 
@@ -252,11 +260,32 @@ impl ArtifactBuilder {
         Ok(())
     }
 
+    /// Find runtime include directory (for instrumentation headers)
+    fn find_runtime_include_dir() -> Result<PathBuf> {
+        let possible_paths = vec![
+            PathBuf::from("build/emitter/runtime"),
+            PathBuf::from("../build/emitter/runtime"),
+            PathBuf::from("../../build/emitter/runtime"),
+            std::env::current_dir()?.join("build/emitter/runtime"),
+        ];
+
+        possible_paths.iter()
+            .find(|p| p.exists())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!(
+                "Runtime include directory not found. Tried: {:?}",
+                possible_paths
+            ))
+    }
+
     /// Compile source to LLVM IR
     async fn compile_to_ir(&self, source: &Path, output: &Path) -> Result<()> {
         info!("Compiling to LLVM IR...");
 
         let xwin = &self.config.xwin_path;
+
+        // Find runtime header directory (for instrumentation.h, minimal_runtime.h)
+        let runtime_include = Self::find_runtime_include_dir()?;
 
         let mut cmd = Command::new("clang");
         cmd.arg(format!("--target={}", self.config.target))
@@ -265,6 +294,7 @@ impl ArtifactBuilder {
             .arg(format!("-isystem{}/sdk/include/shared", xwin.display()))
             .arg(format!("-isystem{}/sdk/include/um", xwin.display()))
             .arg(format!("-isystem{}/sdk/include/winrt", xwin.display()))
+            .arg(format!("-I{}", runtime_include.display()))  // Add runtime headers
             .arg("-emit-llvm")
             .arg("-S")
             .arg(format!("-O{}", self.config.optimization))
@@ -417,6 +447,62 @@ impl ArtifactBuilder {
         Ok(runtime_obj)
     }
 
+    /// Compile minimal runtime library to object file (ALWAYS linked, even with trace=off)
+    async fn compile_minimal_runtime(&self, temp_dir: &Path) -> Result<PathBuf> {
+        info!("Compiling minimal runtime library...");
+
+        // Path to minimal runtime source - try multiple possible locations
+        let possible_paths = vec![
+            PathBuf::from("build/emitter/runtime/minimal_runtime.c"),
+            PathBuf::from("../build/emitter/runtime/minimal_runtime.c"),
+            PathBuf::from("../../build/emitter/runtime/minimal_runtime.c"),
+            std::env::current_dir()?.join("build/emitter/runtime/minimal_runtime.c"),
+        ];
+
+        let runtime_source = possible_paths.iter()
+            .find(|p| p.exists())
+            .ok_or_else(|| anyhow::anyhow!(
+                "Minimal runtime library source not found. Tried: {:?}",
+                possible_paths
+            ))?;
+
+        let abs_runtime_source = std::fs::canonicalize(runtime_source).unwrap_or_else(|_| runtime_source.clone());
+        eprintln!("[BUILD] Minimal runtime source: {:?}", abs_runtime_source);
+        info!("Found minimal runtime library at: {:?}", abs_runtime_source);
+
+        let runtime_obj = temp_dir.join("minimal_runtime.obj");
+        eprintln!("[BUILD] Minimal runtime object path: {:?}", runtime_obj);
+        let xwin = &self.config.xwin_path;
+
+        // Compile minimal_runtime.c to object file
+        let mut cmd = Command::new("clang");
+        cmd.arg(format!("--target={}", self.config.target))
+            .arg(format!("-isystem{}/crt/include", xwin.display()))
+            .arg(format!("-isystem{}/sdk/include/ucrt", xwin.display()))
+            .arg(format!("-isystem{}/sdk/include/shared", xwin.display()))
+            .arg(format!("-isystem{}/sdk/include/um", xwin.display()))
+            .arg(format!("-isystem{}/sdk/include/winrt", xwin.display()))
+            .arg("-c")
+            .arg(format!("-O{}", self.config.optimization))
+            .arg("-o")
+            .arg(&runtime_obj)
+            .arg(runtime_source)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let output_result = cmd.output().context("Failed to compile minimal runtime library")?;
+
+        if !output_result.status.success() {
+            anyhow::bail!(
+                "Minimal runtime compilation failed: {}",
+                String::from_utf8_lossy(&output_result.stderr)
+            );
+        }
+
+        info!("Minimal runtime library compiled: {:?}", runtime_obj);
+        Ok(runtime_obj)
+    }
+
     /// Link object files to PE executable
     async fn link_to_pe(&self, obj_files: &[PathBuf], output: &Path) -> Result<()> {
         info!("Linking to PE executable...");
@@ -440,8 +526,10 @@ impl ArtifactBuilder {
             cmd.arg("-Brepro");
         }
 
-        // Add object files
-        for obj in obj_files {
+        // Add object files (debug: print each one)
+        eprintln!("[LINK] Linking {} object files:", obj_files.len());
+        for (i, obj) in obj_files.iter().enumerate() {
+            eprintln!("[LINK]   {}: {:?}", i + 1, obj);
             cmd.arg(obj);
         }
 

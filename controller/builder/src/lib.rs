@@ -22,6 +22,8 @@ pub struct BuilderConfig {
     pub xwin_dir: PathBuf,
     /// Path to instrumentation runtime source (e.g., "build/emitter/runtime/instrumentation_runtime.c")
     pub runtime_src: PathBuf,
+    /// Path to minimal runtime source (e.g., "build/emitter/runtime/minimal_runtime.c")
+    pub minimal_runtime_src: PathBuf,
 }
 
 impl Default for BuilderConfig {
@@ -31,6 +33,7 @@ impl Default for BuilderConfig {
             output_dir: PathBuf::from("artifacts"),
             xwin_dir: PathBuf::from("/root/.xwin"),
             runtime_src: PathBuf::from("build/emitter/runtime/instrumentation_runtime.c"),
+            minimal_runtime_src: PathBuf::from("build/emitter/runtime/minimal_runtime.c"),
         }
     }
 }
@@ -61,7 +64,7 @@ pub struct BuiltArtifact {
 /// Template-specific library dependencies
 /// Returns base library names (without .lib extension or -Wl prefix)
 /// Caller is responsible for formatting for specific linker
-fn get_template_libs(template_name: &str) -> &'static [&'static str] {
+fn get_template_libs(template_name: &str) -> &'static [&'static str] { //TODO change that
     match template_name {
         "loader_v1" => &[],
         "rwx_direct" => &["advapi32", "wininet"],
@@ -797,7 +800,17 @@ impl ArtifactBuilder {
             args.push(lib_arg.as_str());
         }
 
-        // If linking with runtime, compile runtime first
+        // ALWAYS compile and link minimal_runtime.o (provides __runtime_exit)
+        let minimal_runtime_obj = self.config.output_dir.join("minimal_runtime.o");
+        if !minimal_runtime_obj.exists() {
+            info!("Compiling minimal runtime (for __runtime_exit)...");
+            self.compile_runtime(&self.config.minimal_runtime_src, &minimal_runtime_obj)
+                .await
+                .context("Failed to compile minimal runtime")?;
+        }
+        let minimal_runtime_str = minimal_runtime_obj.to_string_lossy().into_owned();
+
+        // If linking with instrumentation, compile instrumentation_runtime too
         let runtime_obj_str = if link_runtime {
             let runtime_obj = self.config.output_dir.join("instrumentation_runtime.o");
 
@@ -819,7 +832,10 @@ impl ArtifactBuilder {
         args.push(output_str);
         args.push(source_str);
 
-        // Add runtime object file if requested
+        // ALWAYS add minimal_runtime.o
+        args.push(minimal_runtime_str.as_str());
+
+        // Add instrumentation_runtime.o if instrumentation is enabled
         if let Some(ref runtime_str) = runtime_obj_str {
             args.push(runtime_str.as_str());
         }
@@ -1503,9 +1519,19 @@ impl ArtifactBuilder {
             "lld-link" // Fallback to PATH lookup on other platforms
         };
 
+        // ALWAYS compile minimal_runtime.o (provides __runtime_exit)
+        let minimal_runtime_obj = self.config.output_dir.join("minimal_runtime.o");
+        if !minimal_runtime_obj.exists() {
+            info!("Compiling minimal runtime (for __runtime_exit)...");
+            self.compile_runtime(&self.config.minimal_runtime_src, &minimal_runtime_obj)
+                .await
+                .context("Failed to compile minimal runtime")?;
+        }
+
         let mut cmd = tokio::process::Command::new(lld_link_path);
         cmd.arg(obj_path)
             .arg(runtime_obj) // Link with instrumentation runtime
+            .arg(&minimal_runtime_obj) // ALWAYS link minimal runtime
             .arg("/out:".to_owned() + output_exe.to_str().unwrap())
             .arg("/subsystem:console")
             .arg("/machine:x64")
