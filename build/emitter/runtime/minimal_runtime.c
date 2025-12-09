@@ -5,13 +5,33 @@
  * This runtime is ALWAYS linked (even when trace_mode=off) to ensure
  * artifacts can exit cleanly when RedEDR or other hooks are active.
  *
- * Standalone - no dependencies on instrumentation_runtime.c
+ * When instrumentation is enabled (ENABLE_INSTRUMENTATION defined):
+ * - Flushes all telemetry (coverage, trace, checkpoints) before exit
+ * - Calls flush functions from instrumentation_runtime.c
+ *
+ * When instrumentation is disabled (trace=off):
+ * - Just exits cleanly via direct syscall (no telemetry to flush)
  */
 
 #include <windows.h>
 
 // Forward declaration
 __attribute__((visibility("default"))) __declspec(noreturn) void __runtime_exit(int exit_code);
+
+// ============================================================================
+// Conditional Instrumentation Support
+// ============================================================================
+
+// Declare flush functions as WEAK symbols
+// When instrumentation_runtime.o is linked (trace != off):
+//   - Real implementations are used from instrumentation_runtime.c
+// When instrumentation_runtime.o is NOT linked (trace = off):
+//   - Weak symbols resolve to NULL, calls are skipped (no-op)
+//
+// This allows minimal_runtime.o to be ALWAYS linked regardless of trace mode
+__attribute__((weak)) extern void __coverage_flush(void);
+__attribute__((weak)) extern void __trace_flush(void);
+__attribute__((weak)) extern void __checkpoint_flush(void);
 
 // ============================================================================
 // Direct Syscall Exit (bypasses all hooks including RedEDR)
@@ -100,9 +120,14 @@ static NTSTATUS DirectSyscall2(DWORD syscall_number, ULONG_PTR arg1, ULONG_PTR a
  * USE THIS INSTEAD OF: return 0, exit(), ExitProcess()
  *
  * Safe for:
- * - Instrumented artifacts (runtime flushes happen before this is called)
+ * - Instrumented artifacts (flushes coverage, trace, checkpoints before exit)
  * - Non-instrumented artifacts (just exits cleanly)
  * - RedEDR observation (bypasses hooked exit functions)
+ *
+ * Flush order (when instrumentation enabled):
+ * 1. Coverage bitmap (BB execution map)
+ * 2. Trace events (line-level execution)
+ * 3. Checkpoints (API call markers)
  *
  * Usage:
  *   #include "instrumentation.h"
@@ -112,7 +137,19 @@ static NTSTATUS DirectSyscall2(DWORD syscall_number, ULONG_PTR arg1, ULONG_PTR a
  *   }
  */
 __attribute__((visibility("default"))) __declspec(noreturn) void __runtime_exit(int exit_code) {
-    // Small delay to let any pending I/O flush (if instrumentation was used)
+    // Flush all telemetry before exit (if instrumentation functions are available)
+    // Check weak symbols - they are NULL if instrumentation_runtime.o wasn't linked
+    if (__coverage_flush != NULL) {
+        __coverage_flush();    // Flush BB coverage bitmap
+    }
+    if (__trace_flush != NULL) {
+        __trace_flush();       // Flush line-level trace events
+    }
+    if (__checkpoint_flush != NULL) {
+        __checkpoint_flush();  // Flush checkpoint markers
+    }
+
+    // Small delay to ensure file writes complete
     Sleep(50);
 
     // Initialize syscalls if needed
@@ -125,15 +162,37 @@ __attribute__((visibility("default"))) __declspec(noreturn) void __runtime_exit(
     HANDLE current_process = (HANDLE)-1;
     DirectSyscall2(g_syscall_NtTerminateProcess, (ULONG_PTR)current_process, (ULONG_PTR)exit_code);
 
-    // Should never reach here, but loop forever if syscall fails
-    while(1) {
-        Sleep(1000);
+    // Should never reach here - syscall termination failed
+    const char* error_msg = "[FATAL] __runtime_exit: Direct syscall termination failed!\r\n";
+    DWORD written;
+
+    // Write to stderr (visible in console/logs)
+    HANDLE stderr_handle = GetStdHandle(STD_ERROR_HANDLE);
+    if (stderr_handle != INVALID_HANDLE_VALUE) {
+        WriteFile(stderr_handle, error_msg, 59, &written, NULL);
     }
+
+    // Write to debugger output (visible in debuggers like WinDbg)
+    OutputDebugStringA(error_msg);
+
+    // Fallback: use normal exit as last resort
+    ExitProcess((UINT)exit_code);
 }
 
 #else
 // Non-x64 fallback: use normal exit
 __attribute__((visibility("default"))) __declspec(noreturn) void __runtime_exit(int exit_code) {
+    // Flush all telemetry before exit (if instrumentation functions are available)
+    if (__coverage_flush != NULL) {
+        __coverage_flush();
+    }
+    if (__trace_flush != NULL) {
+        __trace_flush();
+    }
+    if (__checkpoint_flush != NULL) {
+        __checkpoint_flush();
+    }
+
     Sleep(50);
     ExitProcess((UINT)exit_code);
 }
