@@ -607,8 +607,20 @@ void __trace_flush(void) {
         WriteFile(__trace_pipe, __trace_buffer, __trace_buffer_pos, &written, NULL);
         __trace_buffer_pos = 0;
 
-        // Ensure data is flushed to the pipe reader (important for process exit)
-        FlushFileBuffers(__trace_pipe);
+        // DON'T call FlushFileBuffers() on named pipes - it blocks indefinitely
+        // waiting for the reader to consume data, causing deadlock during exit.
+        // The pipe buffer is large enough (4KB default) and WriteFile() returns
+        // when data is copied to the buffer, not when it's read by the consumer.
+        // The worker agent will read remaining data after process exits.
+
+        // Only flush for regular files (not pipes)
+        // Check if it's a pipe using GetFileType()
+        DWORD fileType = GetFileType(__trace_pipe);
+        if (fileType == FILE_TYPE_DISK) {
+            // Regular file - safe to flush
+            FlushFileBuffers(__trace_pipe);
+        }
+        // For FILE_TYPE_PIPE: don't flush, just return immediately
     }
 }
 
@@ -624,7 +636,11 @@ static int __checkpoint_initialized = 0;
  */
 void __checkpoint_flush(void) {
     if (__checkpoint_pipe != INVALID_HANDLE_VALUE) {
-        FlushFileBuffers(__checkpoint_pipe);
+        // Only flush for regular files, not pipes (avoids deadlock)
+        DWORD fileType = GetFileType(__checkpoint_pipe);
+        if (fileType == FILE_TYPE_DISK) {
+            FlushFileBuffers(__checkpoint_pipe);
+        }
         CloseHandle(__checkpoint_pipe);
         __checkpoint_pipe = INVALID_HANDLE_VALUE;
     }
