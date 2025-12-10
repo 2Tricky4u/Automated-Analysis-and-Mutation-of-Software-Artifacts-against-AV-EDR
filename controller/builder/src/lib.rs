@@ -1243,8 +1243,8 @@ impl ArtifactBuilder {
             "lines" => build_emitter::TraceMode::Lines,
             "all" => build_emitter::TraceMode::All,
             _ => {
-                warn!("Unknown trace_mode '{}', defaulting to 'api+bb'", trace_mode_str);
-                build_emitter::TraceMode::ApiPlusBB
+                warn!("Unknown trace_mode '{}', defaulting to 'lines'", trace_mode_str);
+                build_emitter::TraceMode::Lines
             }
         };
 
