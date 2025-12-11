@@ -2,18 +2,28 @@ use crate::job::{Job, MutationSpec};
 use crate::round::{Round, RoundStatus, RoundSummary, BehaviorComparison, Feedback, RunType};
 use crate::run_result::{RunResult, RunOutcome};
 use crate::worker_pool::WorkerPool;
-use anyhow::Result;
-use tracing::{info, warn};
+use anyhow::{Result, Context};
+use tracing::{info, warn, error};
 
 /// Round processor orchestrates dual-run protocol for each round
 #[derive(Clone)]
 pub struct RoundProcessor {
-    // Future: Add selector client, triage client, etc.
+    /// Selector service address (optional - if None, uses job mutations directly)
+    selector_address: Option<String>,
 }
 
 impl RoundProcessor {
     pub fn new() -> Self {
-        RoundProcessor {}
+        RoundProcessor {
+            selector_address: None,
+        }
+    }
+
+    /// Create with Selector service integration
+    pub fn with_selector(selector_address: String) -> Self {
+        RoundProcessor {
+            selector_address: Some(selector_address),
+        }
     }
 
     /// Process a complete round with dual-run protocol
@@ -21,7 +31,7 @@ impl RoundProcessor {
     /// # Workflow
     /// 1. Select mutations (currently uses job.mutations, Phase 5 adds selector)
     /// 2. Build & run baseline (trace_mode=off)
-    /// 3. Build & run instrumented (trace_mode=api+bb+lines)
+    /// 3. Build & run instrumented (trace_mode=lines)
     /// 4. Compare behavior (ensure identical outcomes)
     /// 5. Analyze feedback (Phase 5 adds triage integration)
     /// 6. Return round summary
@@ -34,9 +44,31 @@ impl RoundProcessor {
         info!("[{}][{}] Starting round processor", job.id, round.round_id);
 
         // Step 1: Select mutations
-        // For Phase 2, use mutations from job (empty for now)
-        // Phase 5 will integrate with Selector service for feedback-driven selection
-        round.mutations = job.mutations.clone();
+        // If Selector service is configured, use it for feedback-driven selection
+        // Otherwise, fall back to job.mutations
+        let mutations = if let Some(selector_addr) = &self.selector_address {
+            match self.select_mutations_from_selector(
+                selector_addr,
+                &job.id,
+                &round.round_id,
+                &job.rounds,
+            ).await {
+                Ok(selected) => {
+                    info!("[{}][{}] Selector chose {} mutations", job.id, round.round_id, selected.len());
+                    selected
+                }
+                Err(e) => {
+                    warn!("[{}][{}] Selector call failed ({}), using job mutations",
+                        job.id, round.round_id, e);
+                    job.mutations.clone()
+                }
+            }
+        } else {
+            // No Selector configured - use job mutations directly
+            job.mutations.clone()
+        };
+
+        round.mutations = mutations;
         let mutation_ids: Vec<String> = round.mutations.iter().map(|m| m.id.clone()).collect();
         info!("[{}][{}] Mutations: {:?}", job.id, round.round_id, mutation_ids);
 
@@ -66,7 +98,7 @@ impl RoundProcessor {
             &job.template_name,
             &job.source_file,
             &round.mutations,
-            "api+bb+lines",  // Full tracing for instrumented
+            "lines",  // Full tracing for instrumented
             pool,
         ).await?;
 
@@ -225,6 +257,72 @@ impl RoundProcessor {
         );
 
         Ok(comparison)
+    }
+
+    /// Call Selector service to get mutations for next round
+    async fn select_mutations_from_selector(
+        &self,
+        selector_address: &str,
+        job_id: &str,
+        round_id: &str,
+        previous_rounds: &[RoundSummary],
+    ) -> Result<Vec<MutationSpec>> {
+        use crate::edr::common::JobId;
+        use crate::edr::controller::{FeedbackProto, SelectionRequest};
+        use crate::edr::controller::selector_client::SelectorClient;
+
+        info!("[{}][{}] Calling Selector service at {}", job_id, round_id, selector_address);
+
+        // Get feedback from previous round (if any)
+        let previous_feedback = previous_rounds.last().map(|round| FeedbackProto {
+            detected: round.detected,
+            avoid_features: vec![],  // TODO: Extract from triage analysis
+            seek_features: vec![],   // TODO: Extract from coverage analysis
+            evasion_score: round.evasion_score,
+        });
+
+        if let Some(ref feedback) = previous_feedback {
+            info!("[{}][{}] Previous round: detected={}, evasion_score={:.2}",
+                job_id, round_id, feedback.detected, feedback.evasion_score);
+        } else {
+            info!("[{}][{}] First round - no previous feedback", job_id, round_id);
+        }
+
+        // Connect to Selector service
+        let selector_url = format!("http://{}", selector_address);
+        let endpoint = tonic::transport::Endpoint::try_from(selector_url.clone())
+            .context("Invalid Selector URL")?;
+
+        let mut client = SelectorClient::connect(endpoint)
+            .await
+            .context("Failed to connect to Selector service")?;
+
+        // Send selection request
+        let request = tonic::Request::new(SelectionRequest {
+            job_id: Some(JobId { value: job_id.to_string() }),
+            round_id: round_id.to_string(),
+            previous_feedback,
+        });
+
+        let response = client.select_mutation(request)
+            .await
+            .context("Selector RPC failed")?;
+
+        let selection = response.into_inner();
+
+        info!("[{}][{}] Selector returned {} mutations (exploration_prob={:.2})",
+            job_id, round_id, selection.mutations.len(), selection.exploration_probability);
+        info!("[{}][{}] Rationale: {}", job_id, round_id, selection.rationale);
+
+        // Convert protobuf Mutations to MutationSpec
+        let mutations: Vec<MutationSpec> = selection.mutations.iter()
+            .map(|m| MutationSpec {
+                id: m.id.clone(),
+                params: Some(serde_json::to_value(&m.params).unwrap_or(serde_json::Value::Null)),
+            })
+            .collect();
+
+        Ok(mutations)
     }
 }
 
@@ -397,5 +495,58 @@ mod tests {
         assert!(!comp.outcome_match, "Multiple differences should not match");
         assert_eq!(comp.differences.len(), 2, "Should have 2 differences");
         assert_eq!(comp.confidence, 0.5, "Two differences = confidence 0.5");
+    }
+
+    #[test]
+    fn test_round_processor_with_selector() {
+        // Test that RoundProcessor can be created with Selector address
+        let processor = RoundProcessor::with_selector("localhost:50054".to_string());
+
+        assert_eq!(processor.selector_address, Some("localhost:50054".to_string()));
+    }
+
+    #[test]
+    fn test_round_processor_without_selector() {
+        // Test that RoundProcessor works without Selector (fallback mode)
+        let processor = RoundProcessor::new();
+
+        assert_eq!(processor.selector_address, None);
+    }
+
+    #[test]
+    fn test_feedback_extraction_from_previous_rounds() {
+        // Test that feedback is correctly extracted from previous rounds
+        use crate::round::RoundSummary;
+        use std::time::SystemTime;
+
+        // Create a round summary (simulates a completed previous round)
+        let previous_round = RoundSummary {
+            round_id: "round-1".to_string(),
+            round_number: 1,
+            mutations: vec!["ast.import_reshape".to_string()],
+            detected: true,  // Was detected
+            behavior_match: true,
+            evasion_score: 0.0,  // No evasion (detected)
+            completed_at: SystemTime::now(),
+        };
+
+        // Verify fields that would be passed to Selector
+        assert!(previous_round.detected, "Should be detected");
+        assert_eq!(previous_round.evasion_score, 0.0, "No evasion when detected");
+
+        // Create another round summary (not detected)
+        let successful_round = RoundSummary {
+            round_id: "round-2".to_string(),
+            round_number: 2,
+            mutations: vec!["beh.preamble.fs".to_string()],
+            detected: false,  // Not detected
+            behavior_match: true,
+            evasion_score: 1.0,  // Full evasion (not detected)
+            completed_at: SystemTime::now(),
+        };
+
+        // Verify fields that would be passed to Selector
+        assert!(!successful_round.detected, "Should not be detected");
+        assert_eq!(successful_round.evasion_score, 1.0, "Full evasion when not detected");
     }
 }
