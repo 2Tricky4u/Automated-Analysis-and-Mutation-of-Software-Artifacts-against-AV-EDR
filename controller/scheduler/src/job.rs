@@ -3,37 +3,32 @@
 
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
+use crate::round::RoundSummary;
 
-/// Job status states following the state machine:
-/// Queued -> Building -> Deployed -> Running -> Completed/Failed/Timeout
+/// Job status for iterative mutation loop
+/// Queued -> Running -> Completed/Failed/Stopped
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum JobStatus {
     /// Job is waiting in queue
     Queued,
-    /// Build/emitter is running
-    Building,
-    /// Artifact sent to worker
-    Deployed,
-    /// Worker is executing artifact
+    /// Job is actively running mutation rounds
     Running,
-    /// Finished successfully
+    /// All rounds completed successfully
     Completed,
-    /// Error occurred during any phase
+    /// Job failed (unrecoverable error)
     Failed,
-    /// Execution timed out
-    Timeout,
+    /// User manually stopped job
+    Stopped,
 }
 
 impl std::fmt::Display for JobStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             JobStatus::Queued => write!(f, "queued"),
-            JobStatus::Building => write!(f, "building"),
-            JobStatus::Deployed => write!(f, "deployed"),
             JobStatus::Running => write!(f, "running"),
             JobStatus::Completed => write!(f, "completed"),
             JobStatus::Failed => write!(f, "failed"),
-            JobStatus::Timeout => write!(f, "timeout"),
+            JobStatus::Stopped => write!(f, "stopped"),
         }
     }
 }
@@ -71,6 +66,21 @@ pub struct Job {
     /// Priority (higher = earlier execution)
     pub priority: i32,
 
+    /// Current round number (1-indexed, 0 means not started)
+    pub current_round: u32,
+
+    /// Maximum rounds to execute (stop condition)
+    pub max_rounds: u32,
+
+    /// Stop condition: evasion goal
+    pub stop_on_evasion: bool,  // If true, stop when not_detected
+
+    /// Stop condition: detection goal (for testing)
+    pub stop_on_detection: bool,  // If true, stop when detected
+
+    /// History of completed rounds
+    pub rounds: Vec<RoundSummary>,
+
     /// Assigned worker ID (None if not assigned yet)
     pub worker_id: Option<String>,
 
@@ -102,6 +112,7 @@ impl Job {
         mutations: Vec<MutationSpec>,
         trace_mode: String,
         priority: i32,
+        max_rounds: u32,  // NEW parameter
     ) -> Self {
         Job {
             id,
@@ -111,6 +122,11 @@ impl Job {
             mutations,
             trace_mode,
             priority,
+            current_round: 0,           // NEW
+            max_rounds,                  // NEW
+            stop_on_evasion: false,      // NEW
+            stop_on_detection: false,    // NEW
+            rounds: Vec::new(),          // NEW
             worker_id: None,
             artifact_id: None,
             run_id: None,
@@ -121,25 +137,12 @@ impl Job {
         }
     }
 
-    /// Transition job to Building state
-    pub fn start_building(&mut self) {
-        self.status = JobStatus::Building;
+    /// Start job execution (transition to Running)
+    pub fn start_running(&mut self) {
+        self.status = JobStatus::Running;
         if self.started_at.is_none() {
             self.started_at = Some(SystemTime::now());
         }
-    }
-
-    /// Transition job to Deployed state with artifact ID
-    pub fn mark_deployed(&mut self, artifact_id: String) {
-        self.status = JobStatus::Deployed;
-        self.artifact_id = Some(artifact_id);
-    }
-
-    /// Transition job to Running state with worker and run IDs
-    pub fn mark_running(&mut self, worker_id: String, run_id: String) {
-        self.status = JobStatus::Running;
-        self.worker_id = Some(worker_id);
-        self.run_id = Some(run_id);
     }
 
     /// Transition job to Completed state
@@ -155,9 +158,9 @@ impl Job {
         self.completed_at = Some(SystemTime::now());
     }
 
-    /// Transition job to Timeout state
-    pub fn mark_timeout(&mut self) {
-        self.status = JobStatus::Timeout;
+    /// Transition job to Stopped state (user request)
+    pub fn mark_stopped(&mut self) {
+        self.status = JobStatus::Stopped;
         self.completed_at = Some(SystemTime::now());
     }
 
@@ -165,8 +168,52 @@ impl Job {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self.status,
-            JobStatus::Completed | JobStatus::Failed | JobStatus::Timeout
+            JobStatus::Completed | JobStatus::Failed | JobStatus::Stopped
         )
+    }
+
+    /// Determine if job should continue with next round
+    pub fn should_continue(&self) -> bool {
+        // Check max rounds limit
+        if self.current_round >= self.max_rounds {
+            return false;
+        }
+
+        // Check stop conditions based on last round results
+        if let Some(last_round) = self.rounds.last() {
+            // Stop if evasion achieved and flag is set
+            if self.stop_on_evasion && !last_round.detected {
+                return false;
+            }
+
+            // Stop if detection occurred and flag is set (for testing)
+            if self.stop_on_detection && last_round.detected {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Start a new round
+    pub fn start_round(&mut self) {
+        self.current_round += 1;
+        if self.status == JobStatus::Queued {
+            self.status = JobStatus::Running;
+        }
+    }
+
+    /// Complete a round and store summary
+    pub fn complete_round(&mut self, round_summary: RoundSummary) {
+        self.rounds.push(round_summary);
+    }
+
+    /// Get progress percentage (0-100)
+    pub fn progress_percent(&self) -> u32 {
+        if self.max_rounds == 0 {
+            return 0;
+        }
+        ((self.current_round as f32 / self.max_rounds as f32) * 100.0) as u32
     }
 
     /// Get elapsed time since job creation
@@ -191,12 +238,16 @@ mod tests {
             vec![],
             "api+bb".to_string(),
             0,
+            10,  // max_rounds
         );
 
         assert_eq!(job.id, "job-000001");
         assert_eq!(job.status, JobStatus::Queued);
         assert_eq!(job.priority, 0);
+        assert_eq!(job.current_round, 0);
+        assert_eq!(job.max_rounds, 10);
         assert!(job.worker_id.is_none());
+        assert!(job.rounds.is_empty());
     }
 
     #[test]
@@ -208,22 +259,13 @@ mod tests {
             vec![],
             "api+bb".to_string(),
             0,
+            10,  // max_rounds
         );
 
-        // Queued -> Building
-        job.start_building();
-        assert_eq!(job.status, JobStatus::Building);
-        assert!(job.started_at.is_some());
-
-        // Building -> Deployed
-        job.mark_deployed("abc123".to_string());
-        assert_eq!(job.status, JobStatus::Deployed);
-        assert_eq!(job.artifact_id, Some("abc123".to_string()));
-
-        // Deployed -> Running
-        job.mark_running("worker-01".to_string(), "run-uuid".to_string());
+        // Queued -> Running
+        job.start_running();
         assert_eq!(job.status, JobStatus::Running);
-        assert_eq!(job.worker_id, Some("worker-01".to_string()));
+        assert!(job.started_at.is_some());
 
         // Running -> Completed
         job.mark_completed();
@@ -240,11 +282,32 @@ mod tests {
             vec![],
             "api+bb".to_string(),
             0,
+            10,  // max_rounds
         );
 
         job.mark_failed("Build error".to_string());
         assert_eq!(job.status, JobStatus::Failed);
         assert_eq!(job.error, Some("Build error".to_string()));
         assert!(job.is_terminal());
+    }
+
+    #[test]
+    fn test_should_continue_max_rounds() {
+        let mut job = Job::new(
+            "job-000001".to_string(),
+            "test".to_string(),
+            "test.c".to_string(),
+            vec![],
+            "api+bb".to_string(),
+            0,
+            5,  // max_rounds
+        );
+
+        // Should continue when current_round < max_rounds
+        assert!(job.should_continue());
+
+        // Should not continue when reaching max_rounds
+        job.current_round = 5;
+        assert!(!job.should_continue());
     }
 }

@@ -41,6 +41,7 @@ impl JobQueue {
         mutations: Vec<crate::job::MutationSpec>,
         trace_mode: String,
         priority: i32,
+        max_rounds: u32,
     ) -> Result<String> {
         let mut state = self.state.lock().unwrap();
 
@@ -56,6 +57,7 @@ impl JobQueue {
             mutations,
             trace_mode,
             priority,
+            max_rounds,
         );
 
         // Add to queue
@@ -158,6 +160,7 @@ mod tests {
                 vec![],
                 "api+bb".to_string(),
                 0,
+                10,  // max_rounds
             )
             .unwrap();
 
@@ -172,13 +175,13 @@ mod tests {
 
         // Submit 3 jobs
         queue
-            .submit_job("test1".to_string(), "test1.c".to_string(), vec![], "api+bb".to_string(), 0)
+            .submit_job("test1".to_string(), "test1.c".to_string(), vec![], "api+bb".to_string(), 0, 10)
             .unwrap();
         queue
-            .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0)
+            .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0, 10)
             .unwrap();
         queue
-            .submit_job("test3".to_string(), "test3.c".to_string(), vec![], "api+bb".to_string(), 0)
+            .submit_job("test3".to_string(), "test3.c".to_string(), vec![], "api+bb".to_string(), 0, 10)
             .unwrap();
 
         // Pop should return first job (FIFO)
@@ -192,16 +195,16 @@ mod tests {
         let queue = JobQueue::new();
 
         let job_id = queue
-            .submit_job("test".to_string(), "test.c".to_string(), vec![], "api+bb".to_string(), 0)
+            .submit_job("test".to_string(), "test.c".to_string(), vec![], "api+bb".to_string(), 0, 10)
             .unwrap();
 
         let mut job = queue.get_job(&job_id).unwrap();
-        job.start_building();
+        job.start_running();
 
         queue.update_job(&job).unwrap();
 
         let updated_job = queue.get_job(&job_id).unwrap();
-        assert_eq!(updated_job.status, JobStatus::Building);
+        assert_eq!(updated_job.status, JobStatus::Running);
     }
 
     #[test]
@@ -210,15 +213,15 @@ mod tests {
 
         // Submit jobs
         let job_id1 = queue
-            .submit_job("test1".to_string(), "test1.c".to_string(), vec![], "api+bb".to_string(), 0)
+            .submit_job("test1".to_string(), "test1.c".to_string(), vec![], "api+bb".to_string(), 0, 10)
             .unwrap();
         let job_id2 = queue
-            .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0)
+            .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0, 10)
             .unwrap();
 
-        // Mark one as building
+        // Mark one as running
         let mut job1 = queue.get_job(&job_id1).unwrap();
-        job1.start_building();
+        job1.start_running();
         queue.update_job(&job1).unwrap();
 
         // Filter queued
@@ -226,9 +229,9 @@ mod tests {
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].id, job_id2);
 
-        // Filter building
-        let building = queue.list_jobs(Some(JobStatus::Building));
-        assert_eq!(building.len(), 1);
-        assert_eq!(building[0].id, job_id1);
+        // Filter running
+        let running = queue.list_jobs(Some(JobStatus::Running));
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].id, job_id1);
     }
 }

@@ -1,9 +1,11 @@
 // Scheduler core - main scheduling loop
 // Phase 1: Simple FIFO scheduling with single job execution
 
-use crate::job::{Job, JobStatus};
+use crate::job::Job;
 use crate::queue::JobQueue;
 use crate::worker_pool::WorkerPool;
+use crate::round_processor::RoundProcessor;
+use crate::round::Round;
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use std::path::Path;
@@ -59,6 +61,8 @@ pub struct SchedulerCore {
     queue: JobQueue,
     /// Worker pool
     pool: WorkerPool,
+    /// Round processor for iterative mutation
+    round_processor: RoundProcessor,
     /// Scheduler configuration
     config: SchedulerConfig,
 }
@@ -76,12 +80,16 @@ impl SchedulerCore {
         let queue = JobQueue::new();
         let pool = WorkerPool::new(config.health_timeout_seconds);
 
+        // Create round processor
+        let round_processor = RoundProcessor::new();
+
         // Discover and register workers from automation/generated/*.toml
         Self::discover_and_register_workers(&pool)?;
 
         Ok(SchedulerCore {
             queue,
             pool,
+            round_processor,
             config,
         })
     }
@@ -193,15 +201,16 @@ impl SchedulerCore {
 
             info!("Processing job: {} (template: {})", job.id, job.template_name);
 
-            // 5. Process job (build → deploy → execute)
+            // 5. Process job (iterative rounds)
             let job_id = job.id.clone();
             let queue = self.queue.clone();
             let pool = self.pool.clone();
+            let round_processor = self.round_processor.clone();
             let config = self.config.clone();
 
             // Spawn async task to process job
             tokio::spawn(async move {
-                if let Err(e) = Self::process_job(job, queue, pool, config).await {
+                if let Err(e) = Self::process_job(job, queue, pool, round_processor, config).await {
                     error!("Job {} failed: {}", job_id, e);
                 }
             });
@@ -211,95 +220,79 @@ impl SchedulerCore {
         }
     }
 
-    /// Process a single job through all phases
+    /// Process a single job through iterative rounds
+    ///
+    /// # Round-Based Iteration Protocol
+    /// 1. Mark job as running
+    /// 2. Loop through rounds (1 to max_rounds):
+    ///    a. Create new Round
+    ///    b. Call RoundProcessor.process_round() (dual-run protocol)
+    ///    c. Save round to job
+    ///    d. Check stopping conditions (stop_on_evasion, stop_on_detection, max_rounds)
+    /// 3. Mark job as completed
     async fn process_job(
         mut job: Job,
         queue: JobQueue,
         pool: WorkerPool,
+        round_processor: RoundProcessor,
         _config: SchedulerConfig,
     ) -> Result<()> {
-        // Phase 1: Build artifact
-        info!("[{}] Building artifact", job.id);
-        job.start_building();
+        info!("[{}] Starting job (max_rounds: {})", job.id, job.max_rounds);
+        job.start_running();
         queue.update_job(&job)?;
 
-        match Self::build_artifact(&job).await {
-            Ok(artifact_id) => {
-                job.mark_deployed(artifact_id.clone());
-                queue.update_job(&job)?;
-                info!("[{}] Build complete: {}", job.id, artifact_id);
-            }
-            Err(e) => {
-                error!("[{}] Build failed: {}", job.id, e);
-                job.mark_failed(format!("Build error: {}", e));
-                queue.update_job(&job)?;
-                return Err(e);
-            }
-        }
+        // Round iteration loop
+        while job.should_continue() {
+            let round_number = job.current_round + 1;
 
-        // Phase 2: Select worker
-        let available_workers = pool.get_available_workers();
-        if available_workers.is_empty() {
-            let err = "No available workers";
-            error!("[{}] {}", job.id, err);
-            job.mark_failed(err.to_string());
+            info!("[{}][round-{}] Starting round {}/{}", job.id, round_number, round_number, job.max_rounds);
+
+            // Create new round
+            let mut round = Round::new(
+                job.id.clone(),
+                round_number,
+            );
+            let round_id = round.round_id.clone();
+
+            // Start round in job
+            job.start_round();
             queue.update_job(&job)?;
-            return Err(anyhow!(err));
-        }
 
-        // Select first available worker (FIFO)
-        let worker_id = available_workers[0].clone();
+            // Process round (dual-run protocol)
+            match round_processor.process_round(&mut round, &job, &pool).await {
+                Ok(summary) => {
+                    info!("[{}][{}] Round complete: detected={}, behavior_match={}, evasion_score={:.2}",
+                        job.id, round_id, summary.detected, summary.behavior_match, summary.evasion_score);
 
-        // Assign worker
-        let worker_address = match pool.assign_worker(&worker_id, &job.id) {
-            Ok(addr) => addr,
-            Err(e) => {
-                error!("[{}] Failed to assign worker: {}", job.id, e);
-                job.mark_failed(format!("Worker assignment error: {}", e));
-                queue.update_job(&job)?;
-                return Err(e);
-            }
-        };
+                    // Complete round in job
+                    job.complete_round(summary);
+                    queue.update_job(&job)?;
 
-        info!("[{}] Assigned to worker: {} ({})", job.id, worker_id, worker_address);
+                    // Check stopping conditions
+                    if job.stop_on_evasion && !round.feedback.as_ref().unwrap().detected {
+                        info!("[{}] Stopping: artifact not detected (evasion success)", job.id);
+                        break;
+                    }
 
-        // Phase 3: Deploy artifact
-        info!("[{}] Deploying artifact to worker", job.id);
-
-        match Self::deploy_artifact(&job, &worker_address).await {
-            Ok(_) => {
-                info!("[{}] Deploy complete", job.id);
-            }
-            Err(e) => {
-                error!("[{}] Deploy failed: {}", job.id, e);
-                pool.release_worker(&worker_id)?;
-                job.mark_failed(format!("Deploy error: {}", e));
-                queue.update_job(&job)?;
-                return Err(e);
+                    if job.stop_on_detection && round.feedback.as_ref().unwrap().detected {
+                        info!("[{}] Stopping: artifact detected", job.id);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!("[{}][{}] Round failed: {}", job.id, round_id, e);
+                    job.mark_failed(format!("Round {} error: {}", round_number, e));
+                    queue.update_job(&job)?;
+                    return Err(e);
+                }
             }
         }
 
-        // Phase 4: Execute artifact
-        info!("[{}] Executing artifact on worker", job.id);
-
-        let run_id = uuid::Uuid::new_v4().to_string();
-        job.mark_running(worker_id.clone(), run_id.clone());
+        // Mark job as completed
+        job.mark_completed();
         queue.update_job(&job)?;
 
-        match Self::execute_artifact(&job, &worker_address).await {
-            Ok(_) => {
-                info!("[{}] Execution started successfully", job.id);
-                // Note: Worker will send StatusReport updates (heartbeat, success, error, timeout)
-                // Job status and worker release will be handled by ReportStatus in main.rs
-            }
-            Err(e) => {
-                error!("[{}] Failed to start execution: {}", job.id, e);
-                job.mark_failed(format!("Execution start error: {}", e));
-                queue.update_job(&job)?;
-                // Release worker since execution never started
-                pool.release_worker(&worker_id)?;
-            }
-        }
+        info!("[{}] Job complete: {} rounds processed", job.id, job.rounds.len());
 
         Ok(())
     }

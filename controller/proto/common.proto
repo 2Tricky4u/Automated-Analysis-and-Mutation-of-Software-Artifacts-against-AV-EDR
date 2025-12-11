@@ -106,3 +106,10 @@ message TelemetryAck {
   bool received = 1;
   int32 events_count = 2;
 }
+
+// Run type for dual-run protocol
+enum RunType {
+  RUN_TYPE_UNSPECIFIED = 0;
+  RUN_TYPE_BASELINE = 1;       // No instrumentation
+  RUN_TYPE_INSTRUMENTED = 2;   // Full tracing
+}
