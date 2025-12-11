@@ -4,7 +4,6 @@ members = [
     # Controller components
     "controller/scheduler",
     "controller/builder",
-    "controller/queue",
     "controller/selector",
     "controller/mutator",
     "controller/triage-engine",
@@ -14,15 +13,9 @@ members = [
 
     # Worker components
     "worker/agent",
-    "worker/harness",
-    "worker/harness-ipc",
-    "worker/monitor",
 
     # Build system
     "build/emitter",
-
-    # Telemetry
-    "telemetry/collector",
 
     # UI
     "ui/backend",

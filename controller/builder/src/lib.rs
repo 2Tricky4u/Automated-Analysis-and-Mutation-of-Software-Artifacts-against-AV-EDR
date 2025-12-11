@@ -87,7 +87,7 @@ pub enum BuildInput {
         source_file: String,
         mutations: Vec<mutator::MutationSpec>,
         /// Instrumentation mode: "off" | "lines" | "api" | "bb" | "api+bb" | "all" | "lines-around-bb=<id>"
-        /// Default: "api+bb" if empty
+        /// Default: "lines" if empty
         trace_mode: String,
     },
     /// Build from LLVM IR (post-mutation)
