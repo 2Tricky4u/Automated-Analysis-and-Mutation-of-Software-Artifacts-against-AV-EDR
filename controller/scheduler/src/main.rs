@@ -10,6 +10,9 @@ mod job;
 mod queue;
 mod worker_pool;
 mod scheduler_core;
+mod round;
+mod run_result;
+mod round_processor;
 
 use scheduler_core::{SchedulerConfig as CoreSchedulerConfig, create_scheduler_core};
 
@@ -31,6 +34,10 @@ use edr::controller::{
     JobStatusRequest, JobStatusResponse, ListWorkersRequest, ListWorkersResponse,
     PingRequest, PingResponse, QueryRequest, QueryResponse,
     StatusAck, StatusReport, TriageRequest, TriageResponse, WorkerInfo,
+    // NEW: Iterative loop types
+    JobProgressRequest, JobProgressResponse, StopJobRequest, StopJobResponse,
+    GetRoundRequest, GetRoundResponse, CompareRunsRequest, CompareRunsResponse,
+    RoundSummaryProto, RoundProto, BehaviorComparisonProto,
     controller_server::{Controller, ControllerServer},
 };
 
@@ -110,20 +117,16 @@ impl Controller for SchedulerService {
                     accepted: false,
                     message: "Scheduler core not initialized. Check that worker configs exist in automation/generated/".to_string(),
                     estimated_duration_seconds: 0,
+                    max_rounds: 0,
                 }));
             }
         };
 
-        // Parse mutations from mutation_strategies field
-        // Format: "ast.import_reshape,beh.preamble.fs"
-        let mutations: Vec<job::MutationSpec> = req
-            .mutation_strategies
-            .iter()
-            .map(|s| job::MutationSpec {
-                id: s.clone(),
-                params: None,
-            })
-            .collect();
+        // Mutations are now selected per-round by Selector service
+        let mutations: Vec<job::MutationSpec> = vec![];  // Empty for now
+
+        // Get max_rounds from request (default to 10 if not specified)
+        let max_rounds = if req.max_rounds == 0 { 10 } else { req.max_rounds };
 
         // Submit job to scheduler queue
         match scheduler_core.queue().submit_job(
@@ -132,6 +135,7 @@ impl Controller for SchedulerService {
             mutations,
             "lines".to_string(),        // Default trace mode (Phase 1) //TODO make modular
             req.priority,
+            max_rounds,
         ) {
             Ok(job_id) => {
                 info!(
@@ -146,6 +150,7 @@ impl Controller for SchedulerService {
                     accepted: true,
                     message: format!("Job {} queued for execution", job_id),
                     estimated_duration_seconds: 60, // Estimated from config timeout
+                    max_rounds,
                 }))
             }
             Err(e) => {
@@ -155,6 +160,7 @@ impl Controller for SchedulerService {
                     accepted: false,
                     message: format!("Failed to queue job: {}", e),
                     estimated_duration_seconds: 0,
+                    max_rounds: 0,
                 }))
             }
         }
@@ -177,19 +183,16 @@ impl Controller for SchedulerService {
         // Query job from scheduler queue
         match scheduler_core.queue().get_job(&req.job_id) {
             Some(job) => {
-                let progress_percent = match job.status {
-                    job::JobStatus::Queued => 0,
-                    job::JobStatus::Building => 25,
-                    job::JobStatus::Deployed => 50,
-                    job::JobStatus::Running => 75,
-                    job::JobStatus::Completed => 100,
-                    job::JobStatus::Failed | job::JobStatus::Timeout => 100,
+                let progress_percent = if job.is_terminal() {
+                    100
+                } else {
+                    job.progress_percent()
                 };
 
                 Ok(Response::new(JobStatusResponse {
                     job_id: job.id.clone(),
                     status: job.status.to_string(),
-                    progress_percent,
+                    progress_percent: progress_percent as i32,
                     current_phase: format!("{:?}", job.status),
                     logs: vec![format!("Job {} is {}", job.id, job.status)],
                 }))
@@ -380,7 +383,7 @@ impl Controller for SchedulerService {
                         let _ = scheduler_core.pool().release_worker(&report.worker_id);
                     }
                     "timeout" => {
-                        job.mark_timeout();
+                        job.mark_failed("Execution timeout".to_string());
                         let _ = scheduler_core.queue().update_job(&job);
                         // Release worker
                         let _ = scheduler_core.pool().release_worker(&report.worker_id);
@@ -712,6 +715,169 @@ impl Controller for SchedulerService {
         Ok(Response::new(ListWorkersResponse {
             workers: worker_infos,
         }))
+    }
+
+    // NEW METHODS (Phase 3 implementation - stubs for now)
+
+    async fn get_job_progress(
+        &self,
+        request: Request<JobProgressRequest>,
+    ) -> Result<Response<JobProgressResponse>, Status> {
+        let job_id = &request.get_ref().job_id;
+
+        info!("[RPC] GetJobProgress: job_id={}", job_id);
+
+        // Get job from queue
+        let scheduler = self.scheduler_core.as_ref()
+            .ok_or_else(|| Status::internal("Scheduler not initialized"))?;
+        let job = scheduler.queue().get_job(job_id)
+            .ok_or_else(|| Status::not_found(format!("Job not found: {}", job_id)))?;
+
+        // Calculate progress percentage
+        let progress_percent = job.progress_percent();
+
+        // Convert rounds to protobuf format
+        let rounds: Vec<RoundSummaryProto> = job.rounds
+            .iter()
+            .map(|r| RoundSummaryProto {
+                round_id: r.round_id.clone(),
+                round_number: r.round_number,
+                mutations: r.mutations.clone(),
+                detected: r.detected,
+                behavior_match: r.behavior_match,
+                evasion_score: r.evasion_score,
+                status: if r.behavior_match { "completed".to_string() } else { "behavior_mismatch".to_string() },
+                completed_at: r.completed_at
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+            })
+            .collect();
+
+        let response = JobProgressResponse {
+            job_id: job.id.clone(),
+            status: job.status.to_string(),
+            current_round: job.current_round,
+            max_rounds: job.max_rounds,
+            progress_percent,
+            rounds,
+        };
+
+        Ok(Response::new(response))
+    }
+
+    async fn stop_job(
+        &self,
+        request: Request<StopJobRequest>,
+    ) -> Result<Response<StopJobResponse>, Status> {
+        let job_id = &request.get_ref().job_id;
+
+        info!("[RPC] StopJob: job_id={}", job_id);
+
+        // Get scheduler
+        let scheduler = self.scheduler_core.as_ref()
+            .ok_or_else(|| Status::internal("Scheduler not initialized"))?;
+
+        // Get job from queue
+        let mut job = scheduler.queue().get_job(job_id)
+            .ok_or_else(|| Status::not_found(format!("Job not found: {}", job_id)))?;
+
+        // Check if job can be stopped (only stop running jobs)
+        if !matches!(job.status, job::JobStatus::Running) {
+            let message = format!(
+                "Job {} cannot be stopped (current status: {})",
+                job_id,
+                job.status.to_string()
+            );
+            warn!("[RPC] {}", message);
+            return Ok(Response::new(StopJobResponse {
+                stopped: false,
+                message,
+            }));
+        }
+
+        // Mark job as stopped
+        job.mark_stopped();
+
+        // Update job in queue
+        scheduler.queue().update_job(&job)
+            .map_err(|e| Status::internal(format!("Failed to update job: {}", e)))?;
+
+        info!("[RPC] Job {} stopped successfully", job_id);
+
+        let response = StopJobResponse {
+            stopped: true,
+            message: format!("Job {} stopped after {} rounds", job_id, job.current_round),
+        };
+
+        Ok(Response::new(response))
+    }
+
+    async fn get_round(
+        &self,
+        request: Request<GetRoundRequest>,
+    ) -> Result<Response<GetRoundResponse>, Status> {
+        let req = request.get_ref();
+        let job_id = &req.job_id;
+        let round_id = &req.round_id;
+
+        info!("[RPC] GetRound: job_id={}, round_id={}", job_id, round_id);
+
+        // Get job from queue
+        let scheduler = self.scheduler_core.as_ref()
+            .ok_or_else(|| Status::internal("Scheduler not initialized"))?;
+        let job = scheduler.queue().get_job(job_id)
+            .ok_or_else(|| Status::not_found(format!("Job not found: {}", job_id)))?;
+
+        // Find the round
+        let round_summary = job.rounds
+            .iter()
+            .find(|r| r.round_id == *round_id)
+            .ok_or_else(|| Status::not_found(format!("Round not found: {}", round_id)))?;
+
+        // Convert to RoundProto (detailed format)
+        // Note: For Phase 2, we don't have full RunResult details yet
+        // Phase 3/4 will add baseline_run and instrumented_run data
+
+        // Infer status from RoundSummary fields
+        let status = if round_summary.behavior_match {
+            "completed"
+        } else {
+            "behavior_mismatch"
+        };
+
+        let round_proto = RoundProto {
+            round_id: round_summary.round_id.clone(),
+            job_id: job.id.clone(),
+            round_number: round_summary.round_number,
+            mutations: vec![], // TODO Phase 3: Convert mutations to protobuf format
+            baseline_run: None,      // TODO Phase 3: Add RunResult data
+            instrumented_run: None,  // TODO Phase 3: Add RunResult data
+            status: status.to_string(),
+            behavior_match: Some(BehaviorComparisonProto {
+                outcome_match: round_summary.behavior_match,
+                baseline_detected: round_summary.detected,
+                baseline_exit_code: 0,  // TODO Phase 3: Add from RunResult
+                instrumented_detected: round_summary.detected,
+                instrumented_exit_code: 0,  // TODO Phase 3: Add from RunResult
+                differences: vec![],  // TODO Phase 3: Add from BehaviorComparison
+                confidence: 1.0,  // TODO Phase 3: Add from BehaviorComparison
+            }),
+        };
+
+        let response = GetRoundResponse {
+            round: Some(round_proto),
+        };
+
+        Ok(Response::new(response))
+    }
+
+    async fn compare_runs(
+        &self,
+        _request: Request<CompareRunsRequest>,
+    ) -> Result<Response<CompareRunsResponse>, Status> {
+        // TODO: Implement in Phase 3
+        Err(Status::unimplemented("compare_runs not implemented yet"))
     }
 }
 

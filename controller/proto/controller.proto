@@ -35,6 +35,18 @@ service Controller {
 
   // List workers (scheduler management)
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+
+  // NEW: Get detailed job progress (all rounds)
+  rpc GetJobProgress(JobProgressRequest) returns (JobProgressResponse);
+
+  // NEW: Manually stop a running job
+  rpc StopJob(StopJobRequest) returns (StopJobResponse);
+
+  // NEW: Get round details
+  rpc GetRound(GetRoundRequest) returns (GetRoundResponse);
+
+  // NEW: Compare two runs (differential analysis)
+  rpc CompareRuns(CompareRunsRequest) returns (CompareRunsResponse);
 }
 
 // Selector Service - mutation selection with feedback
@@ -71,8 +83,16 @@ message JobRequest {
   string name = 1;
   string artifact_type = 2;  // exe, dll, shellcode
   string source = 3;
-  repeated string mutation_strategies = 4;
+
+  // REMOVED: repeated string mutation_strategies = 4;
+  // Mutations now selected per-round by Selector
+
   int32 priority = 5;
+
+  // NEW: Iterative mutation parameters
+  uint32 max_rounds = 6;              // Maximum rounds (default: 10)
+  bool stop_on_evasion = 7;           // Stop when not_detected (default: false)
+  bool stop_on_detection = 8;         // Stop when detected (default: false)
 }
 
 message JobResponse {
@@ -80,6 +100,7 @@ message JobResponse {
   bool accepted = 2;
   string message = 3;
   int64 estimated_duration_seconds = 4;
+  uint32 max_rounds = 5;  // NEW: Echo max_rounds
 }
 
 // Job status query
@@ -135,7 +156,10 @@ message AnalysisResult {
 // Selection messages
 message SelectionRequest {
   edr.common.JobId job_id = 1;
-  repeated string avoid_features = 2;  // From triage feedback
+  string round_id = 2;  // NEW: Current round ID
+
+  // NEW: Feedback from previous round (if any)
+  FeedbackProto previous_feedback = 3;
 }
 
 message SelectionResponse {
@@ -258,4 +282,106 @@ message WorkerInfo {
   string current_job_id = 4;      // Job ID if busy (empty if available)
   int64 last_ping_seconds_ago = 5; // Seconds since last health check
   bool enabled = 6;               // Whether worker is enabled in config
+}
+
+// ===== NEW MESSAGES FOR ITERATIVE LOOP =====
+
+// Job progress (all rounds)
+message JobProgressRequest {
+  string job_id = 1;
+}
+
+message JobProgressResponse {
+  string job_id = 1;
+  string status = 2;  // "queued", "running", "completed", "failed", "stopped"
+  uint32 current_round = 3;
+  uint32 max_rounds = 4;
+  uint32 progress_percent = 5;
+  repeated RoundSummaryProto rounds = 6;
+}
+
+message RoundSummaryProto {
+  string round_id = 1;
+  uint32 round_number = 2;
+  repeated string mutations = 3;
+  bool detected = 4;
+  bool behavior_match = 5;
+  double evasion_score = 6;
+  string status = 7;
+  int64 completed_at = 8;  // Unix timestamp
+}
+
+// Stop job
+message StopJobRequest {
+  string job_id = 1;
+}
+
+message StopJobResponse {
+  bool stopped = 1;
+  string message = 2;
+}
+
+// Get round details
+message GetRoundRequest {
+  string job_id = 1;
+  string round_id = 2;
+}
+
+message GetRoundResponse {
+  RoundProto round = 1;
+}
+
+message RoundProto {
+  string round_id = 1;
+  string job_id = 2;
+  uint32 round_number = 3;
+  repeated edr.common.Mutation mutations = 4;
+  RunResultProto baseline_run = 5;
+  RunResultProto instrumented_run = 6;
+  string status = 7;
+  BehaviorComparisonProto behavior_match = 8;
+}
+
+message RunResultProto {
+  string run_id = 1;
+  string job_id = 2;
+  string round_id = 3;
+  edr.common.RunType run_type = 4;
+  string artifact_id = 5;
+  repeated string mutations = 6;
+  string outcome = 7;
+  bool detected = 8;
+  int32 exit_code = 9;
+  uint64 telemetry_events_count = 10;
+  uint64 elapsed_seconds = 11;
+  int64 started_at = 12;
+  int64 completed_at = 13;
+}
+
+message BehaviorComparisonProto {
+  bool outcome_match = 1;
+  bool baseline_detected = 2;
+  int32 baseline_exit_code = 3;
+  bool instrumented_detected = 4;
+  int32 instrumented_exit_code = 5;
+  repeated string differences = 6;
+  double confidence = 7;
+}
+
+// Compare runs
+message CompareRunsRequest {
+  string baseline_run_id = 1;
+  string instrumented_run_id = 2;
+}
+
+message CompareRunsResponse {
+  BehaviorComparisonProto comparison = 1;
+}
+
+// Feedback for selector (updated SelectionRequest)
+message FeedbackProto {
+  bool detected = 1;
+  repeated string avoid_features = 2;
+  repeated string seek_features = 3;
+  double evasion_score = 4;
 }
