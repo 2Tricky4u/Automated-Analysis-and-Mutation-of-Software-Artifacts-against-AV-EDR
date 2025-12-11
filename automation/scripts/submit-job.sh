@@ -103,6 +103,8 @@ echo ""
 # Submit job via grpcurl
 # Note: Requires grpcurl to be installed (go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest)
 RESPONSE=$(grpcurl -plaintext \
+    -import-path controller/proto \
+    -proto controller.proto \
     -d "{
         \"name\": \"$NAME\",
         \"artifact_type\": \"$TEMPLATE\",
