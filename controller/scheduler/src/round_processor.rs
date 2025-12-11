@@ -143,6 +143,13 @@ impl RoundProcessor {
 
     /// Execute a single run (baseline or instrumented)
     ///
+    /// # Workflow (following test-e2e-eicar.sh pattern):
+    /// 1. Build artifact using builder crate
+    /// 2. Select available worker from pool
+    /// 3. Deploy artifact to worker via gRPC streaming
+    /// 4. Execute artifact on worker via RunSample RPC (BLOCKING)
+    /// 5. Parse response and populate RunResult
+    ///
     /// # Returns
     /// RunResult with execution outcome
     async fn execute_run(
@@ -150,37 +157,138 @@ impl RoundProcessor {
         job_id: &str,
         round_id: &str,
         run_type: RunType,
-        _template_name: &str,
-        _source_file: &str,
+        template_name: &str,
+        source_file: &str,
         mutations: &[MutationSpec],
         trace_mode: &str,
-        _pool: &WorkerPool,
+        pool: &WorkerPool,
     ) -> Result<RunResult> {
-        let run_id = format!("{}/{}/{}", job_id, round_id, run_type.as_str());
-        info!("[{}] Building artifact (trace_mode: {})", run_id, trace_mode);
+        use crate::edr::worker::{ArtifactChunk, SampleRequest, worker_agent_client::WorkerAgentClient};
+        use futures::stream;
+        use std::time::Instant;
 
-        // For Phase 2, create a placeholder RunResult
-        // Phase 3/4 will integrate with actual builder/worker services
-        // This allows the round processor logic to be tested independently
+        let run_id = format!("{}/{}/{}", job_id, round_id, run_type.as_str());
+        let start_time = Instant::now();
+
+        // Step 1: Build artifact
+        info!("[{}] Building artifact (template: {}, trace_mode: {})",
+            run_id, template_name, trace_mode);
+
+        let builder_config = builder::BuilderConfig::default();
+        let artifact_builder = builder::ArtifactBuilder::new(builder_config.clone())?;
+
+        // Convert mutations
+        let builder_mutations: Vec<builder::mutator::MutationSpec> = mutations
+            .iter()
+            .map(|m| {
+                let params = m.params.as_ref()
+                    .and_then(|v| v.as_object().map(|obj| {
+                        obj.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect::<std::collections::HashMap<String, String>>()
+                    }))
+                    .unwrap_or_default();
+                builder::mutator::MutationSpec {
+                    id: m.id.clone(),
+                    params,
+                }
+            })
+            .collect();
+
+        let built = artifact_builder.build(builder::BuildInput::SourceFile {
+            template_name: template_name.to_string(),
+            source_file: source_file.to_string(),
+            mutations: builder_mutations,
+            trace_mode: trace_mode.to_string(),
+        }).await?;
+
+        let artifact_id = built.artifact_id.clone();
+        info!("[{}] Build complete: artifact_id={}, size={} bytes",
+            run_id, artifact_id, built.size_bytes);
+
+        // Step 2: Select available worker
+        let worker_ids = pool.get_available_workers();
+        if worker_ids.is_empty() {
+            return Err(anyhow::anyhow!("No available workers in pool"));
+        }
+        let worker_id = &worker_ids[0];
+        let worker = pool.get_worker(worker_id)
+            .ok_or_else(|| anyhow::anyhow!("Worker {} not found", worker_id))?;
+        let worker_address = worker.address.clone();
+        info!("[{}] Selected worker: {} at {}", run_id, worker.id, worker_address);
+
+        // Step 3: Deploy artifact to worker
+        info!("[{}] Deploying artifact to worker...", run_id);
+        let artifact_path = builder_config.output_dir.join(format!("{}.exe", artifact_id));
+        let artifact_data = tokio::fs::read(&artifact_path).await?;
+
+        let worker_url = format!("http://{}", worker_address);
+        let endpoint = tonic::transport::Endpoint::try_from(worker_url.clone())?;
+        let mut client = WorkerAgentClient::connect(endpoint.clone()).await?;
+
+        // Stream artifact in chunks (4MB each)
+        let chunk_size = 4 * 1024 * 1024;
+        let total_chunks = ((artifact_data.len() + chunk_size - 1) / chunk_size) as u32;
+        let chunks: Vec<ArtifactChunk> = artifact_data
+            .chunks(chunk_size)
+            .enumerate()
+            .map(|(i, chunk)| ArtifactChunk {
+                artifact_id: artifact_id.clone(),
+                data: chunk.to_vec(),
+                chunk_index: i as u32,
+                total_chunks,
+                sha256: artifact_id.clone(),
+            })
+            .collect();
+
+        client.send_artifact(stream::iter(chunks)).await?;
+        info!("[{}] Deployment complete", run_id);
+
+        // Step 4: Execute artifact (BLOCKING - wait for completion)
+        info!("[{}] Executing artifact on worker...", run_id);
+        let mut exec_client = WorkerAgentClient::connect(endpoint).await?;
+
+        let request = tonic::Request::new(SampleRequest {
+            job_id: run_id.clone(),
+            artifact_id: artifact_id.clone(),
+            timeout_seconds: 60,
+            enable_etw: trace_mode != "off",
+        });
+
+        let response = exec_client.run_sample(request).await?;
+        let exec_result = response.into_inner();
+
+        let elapsed = start_time.elapsed().as_secs();
+
+        // Step 5: Parse response and populate RunResult
+        let detected = !exec_result.success;
+        let exit_code = exec_result.exit_code;
+
+        let outcome = if detected {
+            RunOutcome::Detected
+        } else if exit_code != 0 {
+            RunOutcome::Crashed
+        } else {
+            RunOutcome::NotDetected
+        };
 
         let mut result = RunResult::new(
             job_id.to_string(),
             round_id.to_string(),
             run_type,
-            "placeholder-artifact-id".to_string(),  // Phase 3: actual artifact_id from builder
+            artifact_id.clone(),
             mutations.iter().map(|m| m.id.clone()).collect(),
         );
 
-        // Placeholder: simulate execution result
-        // Phase 3/4: call actual builder.build() and worker.run_sample()
-        result.detected = false;  // Assume not detected for now
-        result.exit_code = 0;      // Assume success
-        result.elapsed_seconds = 1; // Placeholder timing
-        result.telemetry_events_count = if trace_mode == "off" { 0 } else { 100 }; // Simulate telemetry
-        result.outcome = RunOutcome::NotDetected;
-        result.worker_id = "placeholder-worker".to_string();  // Phase 3: actual worker_id from pool
+        result.detected = detected;
+        result.exit_code = exit_code;
+        result.elapsed_seconds = elapsed;
+        result.telemetry_events_count = exec_result.telemetry_ids.len() as u64;
+        result.outcome = outcome;
+        result.worker_id = worker.id.clone();
 
-        info!("[{}] Execution complete (placeholder mode)", run_id);
+        info!("[{}] Execution complete: detected={}, exit_code={}, elapsed={}s, telemetry_events={}",
+            run_id, detected, exit_code, elapsed, result.telemetry_events_count);
 
         Ok(result)
     }
@@ -339,40 +447,9 @@ mod tests {
     use crate::round::Round;
     use crate::worker_pool::WorkerPool;
 
-    #[tokio::test]
-    async fn test_process_round_with_placeholder() {
-        // Create test job
-        let job = Job::new(
-            "job-000001".to_string(),
-            "test".to_string(),
-            "test.c".to_string(),
-            vec![],  // No mutations for test
-            "api+bb".to_string(),
-            0,
-            10,
-        );
-
-        // Create round
-        let mut round = Round::new(job.id.clone(), 1);
-
-        // Create round processor and worker pool
-        let processor = RoundProcessor::new();
-        let pool = WorkerPool::new(30);
-
-        // Process round (uses placeholder execution)
-        let result = processor.process_round(&mut round, &job, &pool).await;
-
-        // Verify round completed successfully
-        assert!(result.is_ok(), "Round processing should succeed");
-        let summary = result.unwrap();
-
-        // Verify summary fields
-        assert_eq!(summary.round_id, "round-1");
-        assert_eq!(summary.round_number, 1);
-        assert!(summary.behavior_match, "Placeholder runs should match");
-        assert!(!summary.detected, "Placeholder runs should not be detected");
-        assert_eq!(summary.evasion_score, 1.0, "No detection = score 1.0");
-    }
+    // NOTE: Full process_round() tests require actual builder + worker infrastructure
+    // Use test-e2e-eicar.sh for end-to-end testing
+    // Unit tests below cover individual components (compare_behavior, feedback extraction)
 
     #[test]
     fn test_compare_behavior_identical_runs() {
