@@ -42,6 +42,8 @@ impl JobQueue {
         trace_mode: String,
         priority: i32,
         max_rounds: u32,
+        stop_on_evasion: bool,
+        stop_on_detection: bool,
     ) -> Result<String> {
         let mut state = self.state.lock().unwrap();
 
@@ -50,7 +52,7 @@ impl JobQueue {
         state.next_id += 1;
 
         // Create job
-        let job = Job::new(
+        let mut job = Job::new(
             job_id.clone(),
             template_name,
             source_file,
@@ -59,6 +61,10 @@ impl JobQueue {
             priority,
             max_rounds,
         );
+
+        // Set stopping conditions
+        job.stop_on_evasion = stop_on_evasion;
+        job.stop_on_detection = stop_on_detection;
 
         // Add to queue
         state.jobs.push(job);
@@ -161,6 +167,8 @@ mod tests {
                 "api+bb".to_string(),
                 0,
                 10,  // max_rounds
+                false,  // stop_on_evasion
+                false,  // stop_on_detection
             )
             .unwrap();
 
@@ -175,13 +183,13 @@ mod tests {
 
         // Submit 3 jobs
         queue
-            .submit_job("test1".to_string(), "test1.c".to_string(), vec![], "api+bb".to_string(), 0, 10)
+            .submit_job("test1".to_string(), "test1.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
             .unwrap();
         queue
-            .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0, 10)
+            .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
             .unwrap();
         queue
-            .submit_job("test3".to_string(), "test3.c".to_string(), vec![], "api+bb".to_string(), 0, 10)
+            .submit_job("test3".to_string(), "test3.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
             .unwrap();
 
         // Pop should return first job (FIFO)
@@ -195,7 +203,7 @@ mod tests {
         let queue = JobQueue::new();
 
         let job_id = queue
-            .submit_job("test".to_string(), "test.c".to_string(), vec![], "api+bb".to_string(), 0, 10)
+            .submit_job("test".to_string(), "test.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
             .unwrap();
 
         let mut job = queue.get_job(&job_id).unwrap();
@@ -213,10 +221,10 @@ mod tests {
 
         // Submit jobs
         let job_id1 = queue
-            .submit_job("test1".to_string(), "test1.c".to_string(), vec![], "api+bb".to_string(), 0, 10)
+            .submit_job("test1".to_string(), "test1.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
             .unwrap();
         let job_id2 = queue
-            .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0, 10)
+            .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
             .unwrap();
 
         // Mark one as running

@@ -128,6 +128,10 @@ impl Controller for SchedulerService {
         // Get max_rounds from request (default to 10 if not specified)
         let max_rounds = if req.max_rounds == 0 { 10 } else { req.max_rounds };
 
+        // Get stopping conditions from request (default to false)
+        let stop_on_evasion = req.stop_on_evasion;
+        let stop_on_detection = req.stop_on_detection;
+
         // Submit job to scheduler queue
         match scheduler_core.queue().submit_job(
             req.artifact_type.clone(),  // template_name
@@ -136,12 +140,21 @@ impl Controller for SchedulerService {
             "lines".to_string(),        // Default trace mode (Phase 1) //TODO make modular
             req.priority,
             max_rounds,
+            stop_on_evasion,
+            stop_on_detection,
         ) {
             Ok(job_id) => {
                 info!(
                     "Job {} submitted to scheduler queue: {} ({})",
                     job_id, req.name, req.artifact_type
                 );
+
+                // Index job to Elasticsearch
+                if let Some(job) = scheduler_core.queue().get_job(&job_id) {
+                    if let Err(e) = self.index_job(&job).await {
+                        warn!("Failed to index job {} to Elasticsearch: {}", job_id, e);
+                    }
+                }
 
                 Ok(Response::new(JobResponse {
                     job_id: Some(JobId {
@@ -463,7 +476,7 @@ impl Controller for SchedulerService {
 
         // Extract trace_mode with default (backwards compatibility)
         let trace_mode = if req.trace_mode.is_empty() {
-            "api+bb".to_string() // Default: API + BB coverage for mutation loop
+            "lines".to_string() // Default: API + BB coverage for mutation loop
         } else {
             req.trace_mode.clone()
         };
@@ -874,10 +887,70 @@ impl Controller for SchedulerService {
 
     async fn compare_runs(
         &self,
-        _request: Request<CompareRunsRequest>,
+        request: Request<CompareRunsRequest>,
     ) -> Result<Response<CompareRunsResponse>, Status> {
-        // TODO: Implement in Phase 3
-        Err(Status::unimplemented("compare_runs not implemented yet"))
+        let req = request.get_ref();
+        let baseline_run_id = &req.baseline_run_id;
+        let instrumented_run_id = &req.instrumented_run_id;
+
+        info!("[RPC] CompareRuns: baseline={}, instrumented={}",
+            baseline_run_id, instrumented_run_id);
+
+        // Parse run IDs (format: job_id/round_id/run_type)
+        let baseline_parts: Vec<&str> = baseline_run_id.split('/').collect();
+        let instrumented_parts: Vec<&str> = instrumented_run_id.split('/').collect();
+
+        if baseline_parts.len() != 3 || instrumented_parts.len() != 3 {
+            return Err(Status::invalid_argument(
+                "Invalid run ID format. Expected: job_id/round_id/run_type"
+            ));
+        }
+
+        let job_id = baseline_parts[0];
+        let round_id = baseline_parts[1];
+
+        // Verify both runs are from same job and round
+        if baseline_parts[0] != instrumented_parts[0] || baseline_parts[1] != instrumented_parts[1] {
+            return Err(Status::invalid_argument(
+                "Baseline and instrumented runs must be from same job and round"
+            ));
+        }
+
+        // Get scheduler
+        let scheduler = self.scheduler_core.as_ref()
+            .ok_or_else(|| Status::internal("Scheduler not initialized"))?;
+
+        // Get job
+        let job = scheduler.queue().get_job(job_id)
+            .ok_or_else(|| Status::not_found(format!("Job not found: {}", job_id)))?;
+
+        // Find the round
+        let round_summary = job.rounds
+            .iter()
+            .find(|r| r.round_id == round_id)
+            .ok_or_else(|| Status::not_found(format!("Round not found: {}", round_id)))?;
+
+        // Create comparison response from round summary
+        // Note: Phase 2 stores simplified data; Phase 4 will add full RunResult details
+        let comparison = BehaviorComparisonProto {
+            outcome_match: round_summary.behavior_match,
+            baseline_detected: round_summary.detected,
+            baseline_exit_code: 0,  // TODO Phase 4: Get from stored RunResult
+            instrumented_detected: round_summary.detected,
+            instrumented_exit_code: 0,  // TODO Phase 4: Get from stored RunResult
+            differences: if round_summary.behavior_match {
+                vec![]
+            } else {
+                vec!["Behavior mismatch detected".to_string()]
+            },
+            confidence: if round_summary.behavior_match { 1.0 } else { 0.5 },
+        };
+
+        let response = CompareRunsResponse {
+            comparison: Some(comparison),
+        };
+
+        Ok(Response::new(response))
     }
 }
 
@@ -1156,6 +1229,143 @@ impl SchedulerService {
             .into())
         }
     }
+
+    /// Create Elasticsearch index template for jobs
+    async fn create_jobs_index_template(&self) -> Result<(), Box<dyn std::error::Error>> {
+        use serde_json::json;
+
+        let template = json!({
+            "index_patterns": ["jobs-*"],
+            "template": {
+                "settings": {
+                    "number_of_shards": 1,
+                    "number_of_replicas": 0
+                },
+                "mappings": {
+                    "properties": {
+                        "job_id": { "type": "keyword" },
+                        "status": { "type": "keyword" },
+                        "template_name": { "type": "keyword" },
+                        "source_file": { "type": "keyword" },
+                        "trace_mode": { "type": "keyword" },
+                        "priority": { "type": "integer" },
+                        "current_round": { "type": "integer" },
+                        "max_rounds": { "type": "integer" },
+                        "stop_on_evasion": { "type": "boolean" },
+                        "stop_on_detection": { "type": "boolean" },
+                        "created_at": { "type": "date" },
+                        "updated_at": { "type": "date" }
+                    }
+                }
+            }
+        });
+
+        self.es_client
+            .indices()
+            .put_index_template(elasticsearch::indices::IndicesPutIndexTemplateParts::Name("jobs-template"))
+            .body(template)
+            .send()
+            .await?;
+
+        info!("Created Elasticsearch index template: jobs-template");
+        Ok(())
+    }
+
+    /// Create Elasticsearch index template for rounds
+    async fn create_rounds_index_template(&self) -> Result<(), Box<dyn std::error::Error>> {
+        use serde_json::json;
+
+        let template = json!({
+            "index_patterns": ["rounds-*"],
+            "template": {
+                "settings": {
+                    "number_of_shards": 1,
+                    "number_of_replicas": 0
+                },
+                "mappings": {
+                    "properties": {
+                        "round_id": { "type": "keyword" },
+                        "job_id": { "type": "keyword" },
+                        "round_number": { "type": "integer" },
+                        "mutations": { "type": "keyword" },
+                        "detected": { "type": "boolean" },
+                        "behavior_match": { "type": "boolean" },
+                        "evasion_score": { "type": "float" },
+                        "completed_at": { "type": "date" }
+                    }
+                }
+            }
+        });
+
+        self.es_client
+            .indices()
+            .put_index_template(elasticsearch::indices::IndicesPutIndexTemplateParts::Name("rounds-template"))
+            .body(template)
+            .send()
+            .await?;
+
+        info!("Created Elasticsearch index template: rounds-template");
+        Ok(())
+    }
+
+    /// Index job document to Elasticsearch
+    async fn index_job(&self, job: &job::Job) -> Result<(), Box<dyn std::error::Error>> {
+        use serde_json::json;
+
+        let index_name = format!("jobs-{}", chrono::Utc::now().format("%Y.%m"));
+
+        let doc = json!({
+            "job_id": job.id,
+            "status": job.status.to_string(),
+            "template_name": job.template_name,
+            "source_file": job.source_file,
+            "trace_mode": job.trace_mode,
+            "priority": job.priority,
+            "current_round": job.current_round,
+            "max_rounds": job.max_rounds,
+            "stop_on_evasion": job.stop_on_evasion,
+            "stop_on_detection": job.stop_on_detection,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+            "updated_at": chrono::Utc::now().to_rfc3339(),
+        });
+
+        self.es_client
+            .index(IndexParts::IndexId(&index_name, &job.id))
+            .body(doc)
+            .send()
+            .await?;
+
+        Ok(())
+    }
+
+    /// Index round document to Elasticsearch
+    async fn index_round(&self, job_id: &str, round: &round::RoundSummary) -> Result<(), Box<dyn std::error::Error>> {
+        use serde_json::json;
+
+        let index_name = format!("rounds-{}", chrono::Utc::now().format("%Y.%m"));
+
+        let doc = json!({
+            "round_id": round.round_id,
+            "job_id": job_id,
+            "round_number": round.round_number,
+            "mutations": round.mutations,
+            "detected": round.detected,
+            "behavior_match": round.behavior_match,
+            "evasion_score": round.evasion_score,
+            "completed_at": round.completed_at.duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        });
+
+        let doc_id = format!("{}/{}", job_id, round.round_id);
+        self.es_client
+            .index(IndexParts::IndexId(&index_name, &doc_id))
+            .body(doc)
+            .send()
+            .await?;
+
+        Ok(())
+    }
 }
 
 /// Detect the controller's IP address for network communication
@@ -1245,6 +1455,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Controller IP for Elasticsearch access: {}", controller_ip);
 
     let mut scheduler = SchedulerService::new(es_client, controller_ip);
+
+    // Create Elasticsearch index templates
+    info!("Creating Elasticsearch index templates...");
+    if let Err(e) = scheduler.create_jobs_index_template().await {
+        warn!("Failed to create jobs index template: {}", e);
+    }
+    if let Err(e) = scheduler.create_rounds_index_template().await {
+        warn!("Failed to create rounds index template: {}", e);
+    }
 
     info!("Controller/Scheduler starting...");
 
