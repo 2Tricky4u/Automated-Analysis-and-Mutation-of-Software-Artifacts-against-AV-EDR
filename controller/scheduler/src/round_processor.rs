@@ -72,37 +72,41 @@ impl RoundProcessor {
         let mutation_ids: Vec<String> = round.mutations.iter().map(|m| m.id.clone()).collect();
         info!("[{}][{}] Mutations: {:?}", job.id, round.round_id, mutation_ids);
 
-        // Step 2: Execute baseline run (no instrumentation)
-        info!("[{}][{}] Starting BASELINE run", job.id, round.round_id);
-        let baseline_result = self.execute_run(
-            &job.id,
-            &round.round_id,
-            RunType::Baseline,
-            &job.template_name,
-            &job.source_file,
-            &round.mutations,
-            "off",  // No tracing for baseline
-            pool,
-        ).await?;
+        // Step 2 & 3: Execute baseline AND instrumented runs IN PARALLEL
+        // This parallelizes the build phase (major speedup) and deployment (minor speedup)
+        // Execution may be sequential if using same worker (worker lock prevents concurrent execution)
+        info!("[{}][{}] Starting PARALLEL dual-run execution (baseline + instrumented)",
+            job.id, round.round_id);
 
-        info!("[{}][{}] Baseline run complete: detected={}, exit_code={}",
-            job.id, round.round_id, baseline_result.detected, baseline_result.exit_code);
+        let (baseline_result, instrumented_result) = tokio::try_join!(
+            self.execute_run(
+                &job.id,
+                &round.round_id,
+                RunType::Baseline,
+                &job.template_name,
+                &job.source_file,
+                &round.mutations,
+                "off",  // No tracing for baseline
+                pool,
+            ),
+            self.execute_run(
+                &job.id,
+                &round.round_id,
+                RunType::Instrumented,
+                &job.template_name,
+                &job.source_file,
+                &round.mutations,
+                "lines",  // Full tracing for instrumented
+                pool,
+            )
+        )?;
 
-        // Step 3: Execute instrumented run (full tracing)
         round.status = RoundStatus::BaselineComplete;
-        info!("[{}][{}] Starting INSTRUMENTED run", job.id, round.round_id);
-        let instrumented_result = self.execute_run(
-            &job.id,
-            &round.round_id,
-            RunType::Instrumented,
-            &job.template_name,
-            &job.source_file,
-            &round.mutations,
-            "lines",  // Full tracing for instrumented
-            pool,
-        ).await?;
 
-        info!("[{}][{}] Instrumented run complete: detected={}, exit_code={}",
+        info!("[{}][{}] PARALLEL execution complete", job.id, round.round_id);
+        info!("[{}][{}]   Baseline:     detected={}, exit_code={}",
+            job.id, round.round_id, baseline_result.detected, baseline_result.exit_code);
+        info!("[{}][{}]   Instrumented: detected={}, exit_code={}",
             job.id, round.round_id, instrumented_result.detected, instrumented_result.exit_code);
 
         // Step 4: Compare behavior
