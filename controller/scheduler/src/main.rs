@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 
 mod job;
 mod queue;
+mod run_queue;  // NEW: Async run queue
 mod worker_pool;
 mod scheduler_core;
 mod round;

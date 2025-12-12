@@ -113,6 +113,44 @@ impl WorkerPool {
             .collect()
     }
 
+    /// Get available workers grouped by OS (extracted from worker name)
+    ///
+    /// # Example
+    /// Worker IDs like "win10-worker-01", "win11-worker-02" are grouped by OS prefix
+    /// Returns: HashMap<"win10", vec!["win10-worker-01", "win10-worker-02"]>
+    pub fn get_available_workers_by_os(&self) -> std::collections::HashMap<String, Vec<String>> {
+        use std::collections::HashMap;
+
+        let state = self.state.lock().unwrap();
+        let mut by_os: HashMap<String, Vec<String>> = HashMap::new();
+
+        for worker in state.workers.values() {
+            if worker.status == WorkerStatus::Available && worker.enabled {
+                // Extract OS from worker ID (e.g., "win10" from "win10-worker-01")
+                let os = Self::extract_os_from_worker_id(&worker.id);
+                by_os.entry(os).or_insert_with(Vec::new).push(worker.id.clone());
+            }
+        }
+
+        by_os
+    }
+
+    /// Extract OS identifier from worker ID
+    ///
+    /// # Examples
+    /// - "win10-worker-01" → "win10"
+    /// - "win11-worker-02" → "win11"
+    /// - "ubuntu-worker-01" → "ubuntu"
+    /// - "worker-01" → "unknown" (fallback)
+    fn extract_os_from_worker_id(worker_id: &str) -> String {
+        // Split by '-' and take first part as OS identifier
+        worker_id.split('-')
+            .next()
+            .filter(|s| s.len() >= 3 && s.len() <= 10) // Sanity check
+            .map(|s| s.to_lowercase())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
     /// Assign a job to a worker (marks worker as busy)
     pub fn assign_worker(&self, worker_id: &str, job_id: &str) -> Result<String> {
         let mut state = self.state.lock().unwrap();

@@ -63,6 +63,10 @@ pub struct Job {
     /// Trace mode ("api+bb", "lines", "all", etc.)
     pub trace_mode: String,
 
+    /// Target OS for execution (e.g., "win10", "win11", "ubuntu")
+    /// If None, scheduler will auto-assign based on first available worker
+    pub target_os: Option<String>,
+
     /// Priority (higher = earlier execution)
     pub priority: i32,
 
@@ -121,6 +125,7 @@ impl Job {
             source_file,
             mutations,
             trace_mode,
+            target_os: None,  // Will be assigned by scheduler
             priority,
             current_round: 0,           // NEW
             max_rounds,                  // NEW
