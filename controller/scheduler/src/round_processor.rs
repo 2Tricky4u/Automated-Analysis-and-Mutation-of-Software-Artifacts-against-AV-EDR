@@ -73,10 +73,18 @@ impl RoundProcessor {
         info!("[{}][{}] Mutations: {:?}", job.id, round.round_id, mutation_ids);
 
         // Step 2 & 3: Execute baseline AND instrumented runs IN PARALLEL
+        // OS-aware worker selection: ensure both runs use workers with SAME OS
         // This parallelizes the build phase (major speedup) and deployment (minor speedup)
         // Execution may be sequential if using same worker (worker lock prevents concurrent execution)
-        info!("[{}][{}] Starting PARALLEL dual-run execution (baseline + instrumented)",
-            job.id, round.round_id);
+
+        // Select workers with matching OS
+        let workers_by_os = pool.get_available_workers_by_os();
+        let (baseline_worker_id, instrumented_worker_id, selected_os) = Self::select_os_matched_workers(&workers_by_os)?;
+
+        info!("[{}][{}] Starting PARALLEL dual-run execution on OS: {}",
+            job.id, round.round_id, selected_os);
+        info!("[{}][{}]   Baseline worker:     {}", job.id, round.round_id, baseline_worker_id);
+        info!("[{}][{}]   Instrumented worker: {}", job.id, round.round_id, instrumented_worker_id);
 
         let (baseline_result, instrumented_result) = tokio::try_join!(
             self.execute_run(
@@ -88,6 +96,7 @@ impl RoundProcessor {
                 &round.mutations,
                 "off",  // No tracing for baseline
                 pool,
+                Some(&baseline_worker_id),  // Specific worker
             ),
             self.execute_run(
                 &job.id,
@@ -98,6 +107,7 @@ impl RoundProcessor {
                 &round.mutations,
                 "lines",  // Full tracing for instrumented
                 pool,
+                Some(&instrumented_worker_id),  // Specific worker
             )
         )?;
 
@@ -145,14 +155,62 @@ impl RoundProcessor {
         Ok(round.to_summary())
     }
 
+    /// Select two workers with matching OS for dual-run protocol
+    ///
+    /// # Strategy
+    /// 1. Prefer OS with 2+ workers (true parallel execution)
+    /// 2. Fallback to OS with 1 worker (sequential execution, but same OS)
+    /// 3. Return (baseline_worker, instrumented_worker, os_name)
+    ///
+    /// # Returns
+    /// (baseline_worker_id, instrumented_worker_id, os)
+    fn select_os_matched_workers(
+        workers_by_os: &std::collections::HashMap<String, Vec<String>>
+    ) -> Result<(String, String, String)> {
+        use anyhow::Context;
+
+        if workers_by_os.is_empty() {
+            return Err(anyhow::anyhow!("No available workers in pool"));
+        }
+
+        // Strategy 1: Find OS with 2+ workers (best case - true parallelism)
+        if let Some((os, workers)) = workers_by_os.iter()
+            .find(|(_, workers)| workers.len() >= 2)
+        {
+            info!("Found OS '{}' with {} workers - enabling true parallel execution",
+                os, workers.len());
+            return Ok((
+                workers[0].clone(),
+                workers[1].clone(),
+                os.clone(),
+            ));
+        }
+
+        // Strategy 2: Fallback to any OS with 1 worker (same OS, sequential execution)
+        if let Some((os, workers)) = workers_by_os.iter().next() {
+            warn!("Only 1 worker available on OS '{}' - execution will be sequential (worker lock)",
+                os);
+            return Ok((
+                workers[0].clone(),
+                workers[0].clone(),  // Same worker for both
+                os.clone(),
+            ));
+        }
+
+        Err(anyhow::anyhow!("No workers available"))
+    }
+
     /// Execute a single run (baseline or instrumented)
     ///
     /// # Workflow (following test-e2e-eicar.sh pattern):
     /// 1. Build artifact using builder crate
-    /// 2. Select available worker from pool
+    /// 2. Use specified worker (or select from pool if None)
     /// 3. Deploy artifact to worker via gRPC streaming
     /// 4. Execute artifact on worker via RunSample RPC (BLOCKING)
     /// 5. Parse response and populate RunResult
+    ///
+    /// # Parameters
+    /// - `specific_worker_id`: If Some, use this specific worker (for OS-matching)
     ///
     /// # Returns
     /// RunResult with execution outcome
@@ -166,6 +224,7 @@ impl RoundProcessor {
         mutations: &[MutationSpec],
         trace_mode: &str,
         pool: &WorkerPool,
+        specific_worker_id: Option<&str>,  // NEW: specific worker for OS-matching
     ) -> Result<RunResult> {
         use crate::edr::worker::{ArtifactChunk, SampleRequest, worker_agent_client::WorkerAgentClient};
         use futures::stream;
@@ -210,16 +269,21 @@ impl RoundProcessor {
         info!("[{}] Build complete: artifact_id={}, size={} bytes",
             run_id, artifact_id, built.size_bytes);
 
-        // Step 2: Select available worker
-        let worker_ids = pool.get_available_workers();
-        if worker_ids.is_empty() {
-            return Err(anyhow::anyhow!("No available workers in pool"));
-        }
-        let worker_id = &worker_ids[0];
-        let worker = pool.get_worker(worker_id)
-            .ok_or_else(|| anyhow::anyhow!("Worker {} not found", worker_id))?;
+        // Step 2: Select worker (use specific worker if provided, otherwise select from pool)
+        let worker_id_to_use = if let Some(worker_id) = specific_worker_id {
+            worker_id.to_string()
+        } else {
+            let worker_ids = pool.get_available_workers();
+            if worker_ids.is_empty() {
+                return Err(anyhow::anyhow!("No available workers in pool"));
+            }
+            worker_ids[0].clone()
+        };
+
+        let worker = pool.get_worker(&worker_id_to_use)
+            .ok_or_else(|| anyhow::anyhow!("Worker {} not found", worker_id_to_use))?;
         let worker_address = worker.address.clone();
-        info!("[{}] Selected worker: {} at {}", run_id, worker.id, worker_address);
+        info!("[{}] Using worker: {} at {}", run_id, worker.id, worker_address);
 
         // Step 3: Deploy artifact to worker
         info!("[{}] Deploying artifact to worker...", run_id);

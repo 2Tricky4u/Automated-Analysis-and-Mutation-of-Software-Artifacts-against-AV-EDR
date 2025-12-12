@@ -3,6 +3,7 @@
 
 use crate::job::Job;
 use crate::queue::JobQueue;
+use crate::run_queue::RunQueue;  // NEW: Async run queue
 use crate::worker_pool::WorkerPool;
 use crate::round_processor::RoundProcessor;
 use crate::round::Round;
@@ -57,8 +58,10 @@ struct ControllerInfo {
 
 /// Scheduler core managing the scheduling loop
 pub struct SchedulerCore {
-    /// Job queue
+    /// Job queue (high-level: multi-round tasks)
     queue: JobQueue,
+    /// Run queue (low-level: individual baseline/instrumented executions)
+    run_queue: RunQueue,
     /// Worker pool
     pool: WorkerPool,
     /// Round processor for iterative mutation
@@ -76,8 +79,9 @@ impl SchedulerCore {
         info!("  Max concurrent jobs: {}", config.max_concurrent_jobs);
         info!("  Default timeout: {}s", config.default_timeout_seconds);
 
-        // Create queue and pool
+        // Create queues and pool
         let queue = JobQueue::new();
+        let run_queue = RunQueue::new();  // NEW: Run queue for async execution
         let pool = WorkerPool::new(config.health_timeout_seconds);
 
         // Create round processor
@@ -88,6 +92,7 @@ impl SchedulerCore {
 
         Ok(SchedulerCore {
             queue,
+            run_queue,  // NEW
             pool,
             round_processor,
             config,

@@ -3,6 +3,7 @@
 
 pub mod job;
 pub mod queue;
+pub mod run_queue;  // NEW: Async run queue for worker pull model
 pub mod worker_pool;
 pub mod scheduler_core;
 pub mod round;
@@ -25,6 +26,7 @@ pub mod edr {
 // Re-export commonly used types
 pub use job::{Job, JobStatus, MutationSpec};
 pub use queue::JobQueue;
+pub use run_queue::{RunQueue, PendingRun, RunResult as QueuedRunResult};  // NEW
 pub use worker_pool::{WorkerPool, WorkerState, WorkerStatus};
 pub use scheduler_core::{SchedulerCore, SchedulerConfig, create_scheduler_core};
 pub use round::{Round, RoundSummary, RoundStatus, RunType, BehaviorComparison, Feedback};
