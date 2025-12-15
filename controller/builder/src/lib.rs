@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 pub mod mutator;
 
@@ -239,7 +240,9 @@ impl ArtifactBuilder {
         );
 
         // 2. Invoke clang to build
-        let output_name = source_file.replace(".c", ".exe");
+        // Use UUID to ensure unique temp filenames for concurrent builds (parallel baseline + instrumented)
+        let unique_id = Uuid::new_v4();
+        let output_name = source_file.replace(".c", &format!(".{}.exe", unique_id));
         let temp_output = self
             .config
             .templates_dir
@@ -410,7 +413,9 @@ impl ArtifactBuilder {
             );
 
             // 4e. Compile IR -> binary
-            let output_name = source_file.replace(".c", ".exe");
+            // Use UUID to ensure unique temp filenames for concurrent builds
+            let unique_id = Uuid::new_v4();
+            let output_name = source_file.replace(".c", &format!(".{}.exe", unique_id));
             let temp_output = self
                 .config
                 .templates_dir
@@ -474,7 +479,9 @@ impl ArtifactBuilder {
             .await
             .context("Failed to write mutated source")?;
 
-        let output_name = source_file.replace(".c", ".exe");
+        // Use UUID to ensure unique temp filenames for concurrent builds
+        let unique_id = Uuid::new_v4();
+        let output_name = source_file.replace(".c", &format!(".{}.exe", unique_id));
         let temp_output = self
             .config
             .templates_dir
@@ -570,10 +577,12 @@ impl ArtifactBuilder {
         mutations_applied: Vec<String>,
     ) -> Result<BuiltArtifact> {
         // Write source to temporary file
+        // Use UUID to ensure unique temp filenames for concurrent builds
+        let unique_id = Uuid::new_v4();
         let temp_source = self
             .config
             .templates_dir
-            .join(format!("temp_{}.c", artifact_name));
+            .join(format!("temp_{}_{}.c", artifact_name, unique_id));
 
         tokio::fs::write(&temp_source, source_code)
             .await
@@ -583,7 +592,7 @@ impl ArtifactBuilder {
         let temp_output = self
             .config
             .templates_dir
-            .join(format!("temp_{}.exe", artifact_name));
+            .join(format!("temp_{}_{}.exe", artifact_name, unique_id));
 
         self.invoke_clang("", &temp_source, &temp_output).await?;
 
@@ -632,10 +641,12 @@ impl ArtifactBuilder {
         mutations_applied: Vec<String>,
     ) -> Result<BuiltArtifact> {
         // Write IR to temporary file
+        // Use UUID to ensure unique temp filenames for concurrent builds
+        let unique_id = Uuid::new_v4();
         let temp_ir = self
             .config
             .templates_dir
-            .join(format!("temp_{}.ll", artifact_name));
+            .join(format!("temp_{}_{}.ll", artifact_name, unique_id));
 
         tokio::fs::write(&temp_ir, ir_code)
             .await
@@ -645,7 +656,7 @@ impl ArtifactBuilder {
         let temp_output = self
             .config
             .templates_dir
-            .join(format!("temp_{}.exe", artifact_name));
+            .join(format!("temp_{}_{}.exe", artifact_name, unique_id));
 
         self.invoke_clang_on_ir(&temp_ir, &temp_output).await?;
 
