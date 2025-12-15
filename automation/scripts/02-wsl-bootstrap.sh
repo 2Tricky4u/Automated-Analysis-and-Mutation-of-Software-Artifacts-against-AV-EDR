@@ -426,7 +426,7 @@ echo ""
 # Build Controller binaries
 cd "$PROJECT_ROOT"
 echo "[i] Building Controller binaries..."
-cargo build --release -p scheduler -p selector -p queue -p triage-engine \
+cargo build --release -p scheduler -p selector \
     --target-dir "$PROJECT_ROOT/target"
 
 if [ $? -eq 0 ]; then
