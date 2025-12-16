@@ -39,11 +39,6 @@ pub async fn detect_capabilities() -> Result<WorkerCapabilities> {
         tools.insert("etw_version".to_string(), "native".to_string());
     }
 
-    // Check for GPU (basic check)
-    if check_gpu_available() {
-        capabilities.push("gpu".to_string());
-    }
-
     // System metadata
     metadata.insert("hostname".to_string(), get_hostname());
     metadata.insert("cpu_cores".to_string(), get_cpu_cores().to_string());
@@ -130,16 +125,6 @@ fn get_defender_version() -> Option<String> {
         }
     }
     None
-}
-
-fn check_gpu_available() -> bool {
-    // Basic GPU check (Windows has GPU if DXGI is available)
-    #[cfg(windows)]
-    {
-        std::path::Path::new("C:\\Windows\\System32\\dxgi.dll").exists()
-    }
-    #[cfg(not(windows))]
-    false
 }
 
 fn get_hostname() -> String {

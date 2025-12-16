@@ -15,12 +15,16 @@
 
 .PARAMETER Force
     Overwrite existing generated files
+
+.PARAMETER DynamicRegistration
+    Generate configs for dynamic worker registration (workers self-register on startup)
 #>
 
 param(
     [string]$ConfigPath = "",
     [string]$OutputDir = "",
-    [switch]$Force
+    [switch]$Force,
+    [switch]$DynamicRegistration
 )
 
 $ErrorActionPreference = "Stop"
@@ -265,7 +269,37 @@ foreach ($osType in @('windows10', 'windows11')) {
         # Use VM hostname as filename (e.g., "win10-worker-00.toml")
         $workerOutput = Join-Path $OutputDir "$vmName.toml"
 
-        Set-Content -Path $workerOutput -Value $workerToml -NoNewline
+        # Add header comment based on registration mode
+        if ($DynamicRegistration) {
+            $header = @"
+# Worker Runtime Configuration
+# Generated from automation/config.yaml
+# Do not edit manually - changes will be overwritten
+#
+# =============================================================================
+# Registration Mode: DYNAMIC (worker self-registers on startup)
+# =============================================================================
+# This worker will auto-register with the controller when it starts.
+# The controller does NOT need to read this file at startup.
+#
+# To deploy this worker to a remote VM:
+#   .\scripts\workers\deploy-remote-worker.ps1 ``
+#       -RemoteHost <IP> ``
+#       -Username <user> ``
+#       -WorkerConfigPath "$workerOutput"
+#
+# The worker will:
+#   1. Auto-detect capabilities (RedEDR, Defender, ETW, GPU)
+#   2. Register with controller via gRPC
+#   3. Appear in worker pool immediately (no controller restart needed!)
+# =============================================================================
+
+"@
+            Set-Content -Path $workerOutput -Value ($header + $workerToml) -NoNewline
+        } else {
+            Set-Content -Path $workerOutput -Value $workerToml -NoNewline
+        }
+
         Write-Host "    Created: $workerOutput (IP: $workerIp)" -ForegroundColor Green
 
         $workerIndex++
@@ -282,8 +316,31 @@ Write-Host "Generated files in: $OutputDir" -ForegroundColor White
 Write-Host "  - controller.toml (1 file)" -ForegroundColor White
 Write-Host "  - <hostname>.toml ($workerIndex worker files)" -ForegroundColor White
 Write-Host ""
-Write-Host "Next steps:" -ForegroundColor Yellow
-Write-Host "  1. Review generated configs: ls $OutputDir" -ForegroundColor White
-Write-Host "  2. Deploy controller to WSL2: .\scripts\02-wsl-bootstrap.sh" -ForegroundColor White
-Write-Host "  3. Deploy workers to VMs: Copy <hostname>.toml to C:\AutoMutate\worker.toml" -ForegroundColor White
+if ($DynamicRegistration) {
+    Write-Host "Registration Mode: DYNAMIC (workers self-register on startup)" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Next steps:" -ForegroundColor Yellow
+    Write-Host "  1. Review generated configs: ls $OutputDir" -ForegroundColor White
+    Write-Host "  2. Deploy controller to WSL2: .\scripts\02-wsl-bootstrap.sh" -ForegroundColor White
+    Write-Host "  3. Deploy workers using automated script:" -ForegroundColor White
+    Write-Host "     .\scripts\workers\deploy-remote-worker.ps1 -RemoteHost <IP> -Username <user> -WorkerConfigPath <path>" -ForegroundColor Gray
+    Write-Host "     Example: .\scripts\workers\deploy-remote-worker.ps1 -RemoteHost 20.123.45.67 -Username vmadmin -WorkerConfigPath $OutputDir\win10-worker-01.toml" -ForegroundColor Gray
+    Write-Host "  4. Verify workers registered: .\scripts\workers\list-workers.ps1" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Benefits of dynamic registration:" -ForegroundColor Yellow
+    Write-Host "  - No controller restart needed when adding workers" -ForegroundColor Gray
+    Write-Host "  - Workers auto-detect capabilities (RedEDR, Defender, ETW, GPU)" -ForegroundColor Gray
+    Write-Host "  - Deploy to cloud VMs (Azure, AWS, etc.) with single command" -ForegroundColor Gray
+} else {
+    Write-Host "Registration Mode: STATIC (controller reads worker configs at startup)" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Next steps:" -ForegroundColor Yellow
+    Write-Host "  1. Review generated configs: ls $OutputDir" -ForegroundColor White
+    Write-Host "  2. Deploy controller to WSL2: .\scripts\02-wsl-bootstrap.sh" -ForegroundColor White
+    Write-Host "  3. Deploy workers to VMs: Copy <hostname>.toml to C:\AutoMutate\worker.toml" -ForegroundColor White
+    Write-Host "  4. Restart controller to load new worker configs" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Tip: Use -DynamicRegistration flag for zero-downtime worker deployment:" -ForegroundColor Yellow
+    Write-Host "  .\generate-configs.ps1 -DynamicRegistration -Force" -ForegroundColor Gray
+}
 Write-Host ""
