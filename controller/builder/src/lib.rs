@@ -787,10 +787,7 @@ impl ArtifactBuilder {
             sdk_um_lib.as_str(),
             "-fuse-ld=lld",
             "-Wl,/subsystem:console",
-            "-O0",                    // No optimization - preserve all code for debugging
-            "-g",                     // Generate debug information (DWARF format)
-            "-gcodeview",             // Generate CodeView debug info (for Windows debuggers)
-            "-Wl,/DEBUG:FULL",        // Tell linker to generate full PDB
+            "-O2",
             "-Wl,-defaultlib:libcmt",
             "-Wl,-defaultlib:kernel32",
         ];
@@ -1479,9 +1476,7 @@ impl ArtifactBuilder {
             .arg("-fms-compatibility")
             .arg("-fms-extensions")
             .arg("-D_CRT_SECURE_NO_WARNINGS")
-            .arg("-O0")              // No optimization for debugging
-            .arg("-g")               // Generate debug symbols
-            .arg("-gcodeview")       // CodeView format for Windows debuggers
+            .arg("-O2")
             .arg(format!("--sysroot={}", self.config.xwin_dir.display()))
             // Add explicit include paths for xwin SDK
             .arg(format!("-I{}/crt/include", self.config.xwin_dir.display()))
@@ -1551,7 +1546,6 @@ impl ArtifactBuilder {
             .arg("/out:".to_owned() + output_exe.to_str().unwrap())
             .arg("/subsystem:console")
             .arg("/machine:x64")
-            .arg("/DEBUG:FULL")       // Generate full PDB with debug symbols
             // Add xwin library paths (CRT and Windows SDK)
             .arg(format!("/libpath:{}/crt/lib/x86_64", self.config.xwin_dir.display()))
             .arg(format!("/libpath:{}/sdk/lib/um/x86_64", self.config.xwin_dir.display()))
