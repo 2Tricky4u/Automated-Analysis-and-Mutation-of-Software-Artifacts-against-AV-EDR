@@ -18,6 +18,15 @@ pub enum WorkerStatus {
     Offline,
 }
 
+/// Worker registration type
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RegistrationType {
+    /// Loaded from TOML file
+    Static,
+    /// Registered via RPC
+    Dynamic,
+}
+
 impl std::fmt::Display for WorkerStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -48,6 +57,25 @@ pub struct WorkerState {
 
     /// Whether worker is enabled in config
     pub enabled: bool,
+
+    // NEW FIELDS for dynamic registration
+    /// Operating system version (e.g., "windows10", "windows11")
+    pub os_version: String,
+
+    /// Worker capabilities (e.g., ["rededr", "defender", "etw", "gpu"])
+    pub capabilities: Vec<String>,
+
+    /// Worker metadata (key-value pairs)
+    pub metadata: HashMap<String, String>,
+
+    /// Installed tool versions
+    pub tools: HashMap<String, String>,
+
+    /// When worker was registered
+    pub registered_at: SystemTime,
+
+    /// How worker was registered (Static TOML or Dynamic RPC)
+    pub registration_type: RegistrationType,
 }
 
 /// Worker pool managing multiple workers
@@ -75,28 +103,93 @@ impl WorkerPool {
         }
     }
 
-    /// Register a worker from configuration
+    /// Register a worker from configuration (backward compatible - static registration)
     pub fn register_worker(&self, id: String, address: String, enabled: bool) -> Result<()> {
+        // Delegate to internal method with default values and Static type
+        self.register_worker_internal(
+            id,
+            address,
+            enabled,
+            "unknown".to_string(),  // os_version (not specified in TOML)
+            vec![],                 // capabilities (empty for static)
+            HashMap::new(),         // metadata (empty)
+            HashMap::new(),         // tools (empty)
+            RegistrationType::Static,
+        )
+    }
+
+    /// Register a worker with full metadata (for dynamic registration)
+    pub fn register_worker_with_metadata(
+        &self,
+        id: String,
+        address: String,
+        enabled: bool,
+        os_version: String,
+        capabilities: Vec<String>,
+        metadata: HashMap<String, String>,
+        tools: HashMap<String, String>,
+    ) -> Result<()> {
+        self.register_worker_internal(
+            id,
+            address,
+            enabled,
+            os_version,
+            capabilities,
+            metadata,
+            tools,
+            RegistrationType::Dynamic,
+        )
+    }
+
+    /// Internal method to register a worker (used by both static and dynamic registration)
+    fn register_worker_internal(
+        &self,
+        id: String,
+        address: String,
+        enabled: bool,
+        os_version: String,
+        capabilities: Vec<String>,
+        metadata: HashMap<String, String>,
+        tools: HashMap<String, String>,
+        registration_type: RegistrationType,
+    ) -> Result<()> {
+        use tracing::info;
+
         let mut state = self.state.lock().unwrap();
 
-        if state.workers.contains_key(&id) {
-            return Err(anyhow!("Worker {} already registered", id));
+        // Check if worker already exists (allow re-registration)
+        if let Some(existing) = state.workers.get(&id) {
+            info!("Worker {} re-registering (was: {:?})", id, existing.status);
         }
 
         let worker = WorkerState {
             id: id.clone(),
             address,
-            status: if enabled {
-                WorkerStatus::Available
-            } else {
-                WorkerStatus::Offline
-            },
+            status: if enabled { WorkerStatus::Available } else { WorkerStatus::Offline },
             current_job: None,
             last_ping: SystemTime::now(),
             enabled,
+            os_version,
+            capabilities: capabilities.clone(),
+            metadata,
+            tools,
+            registered_at: SystemTime::now(),
+            registration_type: registration_type.clone(),
         };
 
-        state.workers.insert(id, worker);
+        state.workers.insert(id.clone(), worker);
+
+        match registration_type {
+            RegistrationType::Dynamic => {
+                info!(
+                    "Worker {} registered dynamically with capabilities: {:?}",
+                    id, capabilities
+                );
+            }
+            RegistrationType::Static => {
+                info!("Worker {} registered from TOML configuration", id);
+            }
+        }
 
         Ok(())
     }
@@ -151,6 +244,49 @@ impl WorkerPool {
             .unwrap_or_else(|| "unknown".to_string())
     }
 
+    /// Get available workers with specific capabilities
+    /// Returns workers that have ALL required capabilities
+    pub fn get_available_workers_with_capabilities(
+        &self,
+        required_capabilities: &[String],
+    ) -> Vec<String> {
+        let state = self.state.lock().unwrap();
+
+        state.workers.values()
+            .filter(|w| {
+                // Worker must be available and enabled
+                if w.status != WorkerStatus::Available || !w.enabled {
+                    return false;
+                }
+
+                // If no capabilities required, any worker is fine
+                if required_capabilities.is_empty() {
+                    return true;
+                }
+
+                // Worker must have ALL required capabilities
+                required_capabilities.iter().all(|req| {
+                    w.capabilities.iter().any(|cap| cap == req)
+                })
+            })
+            .map(|w| w.id.clone())
+            .collect()
+    }
+
+    /// Get workers by OS version
+    pub fn get_available_workers_by_os_version(&self, os: &str) -> Vec<String> {
+        let state = self.state.lock().unwrap();
+
+        state.workers.values()
+            .filter(|w| {
+                w.status == WorkerStatus::Available
+                    && w.enabled
+                    && w.os_version == os
+            })
+            .map(|w| w.id.clone())
+            .collect()
+    }
+
     /// Assign a job to a worker (marks worker as busy)
     pub fn assign_worker(&self, worker_id: &str, job_id: &str) -> Result<String> {
         let mut state = self.state.lock().unwrap();
@@ -186,6 +322,32 @@ impl WorkerPool {
         worker.status = WorkerStatus::Available;
         worker.current_job = None;
 
+        Ok(())
+    }
+
+    /// Mark worker as offline (for graceful deregistration)
+    pub fn mark_worker_offline(&self, worker_id: &str) -> Result<()> {
+        use tracing::{info, warn};
+
+        let mut state = self.state.lock().unwrap();
+
+        let worker = state
+            .workers
+            .get_mut(worker_id)
+            .ok_or_else(|| anyhow!("Worker not found: {}", worker_id))?;
+
+        // If worker was busy, log warning
+        if worker.status == WorkerStatus::Busy {
+            warn!(
+                "Worker {} deregistering while busy (job: {:?})",
+                worker_id, worker.current_job
+            );
+        }
+
+        worker.status = WorkerStatus::Offline;
+        worker.current_job = None;
+
+        info!("Worker {} marked offline", worker_id);
         Ok(())
     }
 

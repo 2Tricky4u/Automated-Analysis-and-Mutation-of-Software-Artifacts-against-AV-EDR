@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, transport::Server};
 use tracing::{debug, error, info, warn};
 
+mod capabilities;  // NEW: Capability detection for dynamic registration
 mod execution;
 mod telemetry;
 
@@ -1975,6 +1976,115 @@ fn extract_filename(path: &str) -> String {
         .to_string()
 }
 
+/// Attempt to register with controller
+/// Retries with exponential backoff if controller not reachable
+async fn register_with_controller(
+    worker_id: &str,
+    ip_address: &str,
+    os_version: &str,
+    controller_address: &str,
+    capabilities_data: capabilities::WorkerCapabilities,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::time::Duration;
+    use crate::edr::controller::{WorkerRegistration, ToolVersions, controller_client::ControllerClient};
+
+    let max_retries = 5;
+    let mut retry_delay = Duration::from_secs(1);
+
+    for attempt in 1..=max_retries {
+        info!("Attempting to register with controller (attempt {}/{})", attempt, max_retries);
+
+        // Try to connect to controller
+        match ControllerClient::connect(controller_address.to_string()).await {
+            Ok(mut client) => {
+                // Build registration request
+                let tools = ToolVersions {
+                    rededr_version: capabilities_data.tools.get("rededr_version")
+                        .cloned().unwrap_or_default(),
+                    defender_version: capabilities_data.tools.get("defender_version")
+                        .cloned().unwrap_or_default(),
+                    etw_version: capabilities_data.tools.get("etw_version")
+                        .cloned().unwrap_or_default(),
+                    llvm_version: capabilities_data.tools.get("llvm_version")
+                        .cloned().unwrap_or_default(),
+                };
+
+                let registration = WorkerRegistration {
+                    worker_id: worker_id.to_string(),
+                    ip_address: ip_address.to_string(),
+                    os_version: os_version.to_string(),
+                    capabilities: capabilities_data.capabilities.clone(),
+                    metadata: capabilities_data.metadata.clone(),
+                    tools: Some(tools),
+                };
+
+                // Send registration
+                match client.register_worker(tonic::Request::new(registration)).await {
+                    Ok(response) => {
+                        let ack = response.into_inner();
+                        if ack.accepted {
+                            info!("✓ Successfully registered with controller");
+                            info!("  Message: {}", ack.message);
+                            info!("  Heartbeat interval: {}s", ack.heartbeat_interval_seconds);
+                            return Ok(());
+                        } else {
+                            warn!("Registration rejected: {}", ack.message);
+                            return Err(format!("Registration rejected: {}", ack.message).into());
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Registration RPC failed (attempt {}): {}", attempt, e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to connect to controller (attempt {}): {}", attempt, e);
+            }
+        }
+
+        // Wait before retry (exponential backoff)
+        if attempt < max_retries {
+            info!("Retrying in {:?}...", retry_delay);
+            tokio::time::sleep(retry_delay).await;
+            retry_delay *= 2; // Exponential backoff
+        }
+    }
+
+    Err("Failed to register with controller after retries".into())
+}
+
+/// Deregister from controller on shutdown
+async fn deregister_from_controller(
+    worker_id: &str,
+    controller_address: &str,
+    reason: &str,
+) {
+    use crate::edr::controller::{WorkerDeregistration, controller_client::ControllerClient};
+
+    info!("Deregistering from controller (reason: {})", reason);
+
+    match ControllerClient::connect(controller_address.to_string()).await {
+        Ok(mut client) => {
+            let deregistration = WorkerDeregistration {
+                worker_id: worker_id.to_string(),
+                reason: reason.to_string(),
+            };
+
+            match client.deregister_worker(tonic::Request::new(deregistration)).await {
+                Ok(_) => {
+                    info!("✓ Successfully deregistered from controller");
+                }
+                Err(e) => {
+                    warn!("Failed to deregister: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            warn!("Failed to connect to controller for deregistration: {}", e);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
@@ -2039,6 +2149,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Controller: {}", controller_addr);
     info!("Sandbox enabled: {}", config.harness.sandbox_enabled);
     info!("ETW enabled: {}", config.telemetry.etw.enabled);
+
+    // === NEW: Detect capabilities ===
+    info!("Detecting worker capabilities...");
+    let capabilities = capabilities::detect_capabilities().await?;
+    info!("Capabilities: {:?}", capabilities.capabilities);
+    info!("Tools: {:?}", capabilities.tools);
+
+    // === NEW: Register with controller ===
+    info!("Registering with controller at {}", controller_addr);
+    if let Err(e) = register_with_controller(
+        &worker_id,
+        &config.worker.ip_address,
+        &config.worker.os_version,
+        &controller_addr,
+        capabilities,
+    )
+    .await
+    {
+        error!("Failed to register with controller: {}", e);
+        error!("Worker will start anyway (controller may register later via health check)");
+        // Continue anyway - controller might not be running yet
+    }
+
+    // === NEW: Setup graceful shutdown handler ===
+    let shutdown_controller_addr = controller_addr.clone();
+    let shutdown_worker_id = worker_id.clone();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for Ctrl+C");
+        info!("Received Ctrl+C, shutting down gracefully...");
+        deregister_from_controller(&shutdown_worker_id, &shutdown_controller_addr, "shutdown")
+            .await;
+        std::process::exit(0);
+    });
 
     let agent = WorkerAgentService::new(worker_id.clone(), config.clone());
 
