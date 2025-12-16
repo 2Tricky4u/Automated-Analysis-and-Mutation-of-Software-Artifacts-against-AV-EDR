@@ -47,6 +47,16 @@ service Controller {
 
   // NEW: Compare two runs (differential analysis)
   rpc CompareRuns(CompareRunsRequest) returns (CompareRunsResponse);
+
+  // ===== DYNAMIC WORKER REGISTRATION =====
+  // Register a worker dynamically (new worker or re-registration)
+  rpc RegisterWorker(WorkerRegistration) returns (RegistrationAck);
+
+  // Deregister a worker (graceful shutdown)
+  rpc DeregisterWorker(WorkerDeregistration) returns (DeregistrationAck);
+
+  // Update worker metadata at runtime
+  rpc UpdateWorkerMetadata(WorkerMetadataUpdate) returns (MetadataAck);
 }
 
 // Selector Service - mutation selection with feedback
@@ -282,6 +292,13 @@ message WorkerInfo {
   string current_job_id = 4;      // Job ID if busy (empty if available)
   int64 last_ping_seconds_ago = 5; // Seconds since last health check
   bool enabled = 6;               // Whether worker is enabled in config
+
+  // NEW FIELDS for dynamic registration
+  string os_version = 7;            // "windows10", "windows11", "ubuntu22.04"
+  repeated string capabilities = 8; // ["rededr", "defender", "etw", "gpu"]
+  map<string, string> metadata = 9; // {"cpu_cores": "8", "ram_gb": "32"}
+  ToolVersions tools = 10;          // Tool versions
+  string registration_type = 11;    // "static" (TOML) or "dynamic" (RPC)
 }
 
 // ===== NEW MESSAGES FOR ITERATIVE LOOP =====
@@ -384,4 +401,63 @@ message FeedbackProto {
   repeated string avoid_features = 2;
   repeated string seek_features = 3;
   double evasion_score = 4;
+}
+
+// ===== DYNAMIC WORKER REGISTRATION MESSAGES =====
+
+// Worker registration (sent by worker on startup)
+message WorkerRegistration {
+  string worker_id = 1;             // e.g., "win10-worker-01", "win11-azure-worker-05"
+  string ip_address = 2;            // e.g., "10.200.200.100" or "20.123.45.67" (public IP)
+  string os_version = 3;            // e.g., "windows10", "windows11", "ubuntu22.04"
+
+  // Worker capabilities
+  repeated string capabilities = 4;  // ["rededr", "defender", "etw", "gpu"]
+
+  // Worker metadata (key-value pairs)
+  map<string, string> metadata = 5;  // {"cpu_cores": "8", "ram_gb": "32", "region": "us-east-1"}
+
+  // Installed tool versions
+  ToolVersions tools = 6;
+}
+
+// Tool version information
+message ToolVersions {
+  string rededr_version = 1;     // e.g., "1.2.3" or empty if not installed
+  string defender_version = 2;   // e.g., "4.18.2106.1" or empty
+  string etw_version = 3;        // e.g., "native" (always available on Windows)
+  string llvm_version = 4;       // e.g., "17.0.6" or empty
+}
+
+// Registration acknowledgment (sent by controller)
+message RegistrationAck {
+  bool accepted = 1;                      // true if worker registered successfully
+  string message = 2;                     // Human-readable status message
+  int64 heartbeat_interval_seconds = 3;   // How often worker should send health checks (default: 30)
+}
+
+// Worker deregistration (sent by worker on shutdown)
+message WorkerDeregistration {
+  string worker_id = 1;
+  string reason = 2;  // e.g., "shutdown", "scaling_down", "maintenance"
+}
+
+// Deregistration acknowledgment
+message DeregistrationAck {
+  bool success = 1;
+  string message = 2;
+}
+
+// Worker metadata update (sent by worker when capabilities change)
+message WorkerMetadataUpdate {
+  string worker_id = 1;
+  repeated string capabilities_added = 2;    // New capabilities
+  repeated string capabilities_removed = 3;  // Removed capabilities (e.g., RedEDR crashed)
+  map<string, string> metadata_updates = 4;  // Updated metadata
+  string status = 5;  // "healthy", "degraded", "maintenance"
+}
+
+// Metadata update acknowledgment
+message MetadataAck {
+  bool success = 1;
 }
