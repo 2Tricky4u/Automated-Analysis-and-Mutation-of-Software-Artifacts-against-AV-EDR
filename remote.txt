@@ -37,3 +37,17 @@ New-NetFirewallRule `
   -RemoteAddress {controlleraddr} `
   -Action Allow
 
+New-NetFirewallRule `
+  -DisplayName "Allow TCP 50052" `
+  -Direction Inbound `
+  -Protocol TCP `
+  -LocalPort 50052 `
+  -Action Allow
+
+New-NetFirewallRule `
+  -DisplayName "Allow outbound TCP 50051 (gRPC)" `
+  -Direction Outbound `
+  -Protocol TCP `
+  -RemotePort 50051 `
+  -Action Allow
+
