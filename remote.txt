@@ -1,0 +1,39 @@
+Enable ssh:
+# Check if OpenSSH Server is available
+  Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*'
+
+# Install OpenSSH Server
+ Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+
+# Start the SSH service
+ Start-Service sshd
+
+# Set SSH to start automatically
+ Set-Service -Name sshd -StartupType 'Automatic'
+
+# Confirm the firewall rule is configured (should be created automatically)
+ Get-NetFirewallRule -Name *ssh*
+
+# If firewall rule doesn't exist, create it
+ New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+
+end enable ssh
+
+SEE last ssh ip
+
+Get-WinEvent -LogName "OpenSSH/Operational" |
+  Where-Object { $_.Message -match "Accepted" } |
+  Select-Object -First 1 -ExpandProperty Message
+
+end see last ssh ip
+
+Firewall rule
+
+New-NetFirewallRule `
+  -DisplayName "Allow TCP 50051-50052 (Restricted)" `
+  -Direction Inbound `
+  -Protocol TCP `
+  -LocalPort 50051,50052 `
+  -RemoteAddress {controlleraddr} `
+  -Action Allow
+
