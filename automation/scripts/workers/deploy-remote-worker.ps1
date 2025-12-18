@@ -64,7 +64,7 @@ param(
     [string]$WorkerId,
 
     [Parameter()]
-    [string]$OsVersion = "windows10",
+    [string]$OsVersion = "win10",
 
     [Parameter()]
     [string]$ControllerAddress = "10.200.200.1:50051",
@@ -103,7 +103,7 @@ Write-Info "User: $Username"
 $ScriptDir = $PSScriptRoot
 $AutomationDir = Split-Path $ScriptDir -Parent
 $ProjectRoot = Split-Path $AutomationDir -Parent
-$GeneratedDir = Join-Path $AutomationDir "generated"
+$GeneratedDir = Join-Path $ProjectRoot "generated"
 
 # Auto-generate minimal config if not provided
 if (-not $WorkerConfigPath -or -not (Test-Path $WorkerConfigPath))
