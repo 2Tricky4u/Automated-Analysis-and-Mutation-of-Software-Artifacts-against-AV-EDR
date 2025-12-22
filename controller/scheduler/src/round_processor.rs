@@ -3,7 +3,8 @@ use crate::round::{Round, RoundStatus, RoundSummary, BehaviorComparison, Feedbac
 use crate::run_result::{RunResult, RunOutcome};
 use crate::worker_pool::WorkerPool;
 use anyhow::{Result, Context};
-use tracing::{info, warn, error};
+use tracing::{info, warn};
+use tracing::error;
 
 /// Round processor orchestrates dual-run protocol for each round
 #[derive(Clone)]
@@ -406,6 +407,22 @@ impl RoundProcessor {
         info!("[{}] Execution complete: detected={}, exit_code={}, elapsed={}s, telemetry_events={}",
             run_id, detected, exit_code, elapsed, result.telemetry_events_count);
 
+        // Step 6: Pull telemetry events from worker and forward to controller for Elasticsearch indexing
+        if result.telemetry_events_count > 0 {
+            info!("[{}] Pulling {} telemetry events from worker...", run_id, result.telemetry_events_count);
+
+            match Self::pull_and_forward_telemetry(&mut exec_client, &run_id, &worker).await {
+                Ok(actual_count) => {
+                    info!("[{}] Successfully pulled and indexed {} telemetry events", run_id, actual_count);
+                    result.telemetry_events_count = actual_count as u64;
+                }
+                Err(e) => {
+                    warn!("[{}] Failed to pull/index telemetry: {}", run_id, e);
+                    warn!("[{}] Telemetry may be lost", run_id);
+                }
+            }
+        }
+
         Ok(result)
     }
 
@@ -547,6 +564,70 @@ impl RoundProcessor {
             .collect();
 
         Ok(mutations)
+    }
+
+    /// Pull telemetry from worker and forward to controller for Elasticsearch indexing
+    async fn pull_and_forward_telemetry(
+        worker_client: &mut crate::automutate::worker::worker_agent_client::WorkerAgentClient<tonic::transport::Channel>,
+        run_id: &str,
+        worker: &crate::worker_pool::WorkerState,
+    ) -> Result<usize> {
+        use crate::automutate::worker::TelemetryRequest;
+        use crate::automutate::controller::controller_client::ControllerClient;
+        use crate::automutate::common::TelemetryData;
+        use futures::stream;
+        use tokio_stream::StreamExt;
+
+        // Step 1: Pull telemetry from worker via GetTelemetry RPC
+        let request = tonic::Request::new(TelemetryRequest {
+            job_id: run_id.to_string(),
+            since_timestamp: 0, // Get all events
+            max_events: 0,      // No limit
+        });
+
+        let mut telemetry_stream = worker_client.get_telemetry(request).await
+            .context("Failed to call GetTelemetry RPC on worker")?
+            .into_inner();
+
+        // Step 2: Collect telemetry events from stream
+        let mut telemetry_events: Vec<TelemetryData> = Vec::new();
+        while let Some(event) = telemetry_stream.next().await {
+            match event {
+                Ok(telemetry_data) => {
+                    telemetry_events.push(telemetry_data);
+                }
+                Err(e) => {
+                    warn!("[{}] Error receiving telemetry event: {}", run_id, e);
+                    break;
+                }
+            }
+        }
+
+        let event_count = telemetry_events.len();
+        info!("[{}] Pulled {} telemetry events from worker {}", run_id, event_count, worker.id);
+
+        if telemetry_events.is_empty() {
+            return Ok(0);
+        }
+
+        // Step 3: Forward telemetry to controller's StreamTelemetry RPC for Elasticsearch indexing
+        // Connect to controller (loopback to ourselves)
+        let controller_addr = std::env::var("CONTROLLER_ADDRESS")
+            .unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
+
+        let mut controller_client = ControllerClient::connect(controller_addr).await
+            .context("Failed to connect to controller for telemetry forwarding")?;
+
+        // Stream telemetry to controller
+        let telemetry_stream = stream::iter(telemetry_events);
+        let request = tonic::Request::new(telemetry_stream);
+
+        controller_client.stream_telemetry(request).await
+            .context("Failed to forward telemetry to controller")?;
+
+        info!("[{}] Successfully forwarded {} telemetry events to controller for indexing", run_id, event_count);
+
+        Ok(event_count)
     }
 }
 
