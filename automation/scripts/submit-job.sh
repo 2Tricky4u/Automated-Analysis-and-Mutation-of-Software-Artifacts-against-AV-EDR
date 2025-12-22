@@ -109,11 +109,10 @@ RESPONSE=$(grpcurl -plaintext \
         \"name\": \"$NAME\",
         \"artifact_type\": \"$TEMPLATE\",
         \"source\": \"$SOURCE\",
-        \"mutation_strategies\": $MUTATION_ARRAY,
         \"priority\": $PRIORITY
     }" \
     "$CONTROLLER_ADDRESS" \
-    edr.controller.Controller/ScheduleJob)
+    automutate.controller.Controller/ScheduleJob)
 
 # Parse response
 JOB_ID=$(echo "$RESPONSE" | jq -r '.jobId.value // empty')

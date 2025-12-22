@@ -9,22 +9,23 @@ use tracing::{debug, error, info, warn};
 mod capabilities;  // NEW: Capability detection for dynamic registration
 mod execution;
 mod telemetry;
+mod stream_handler;  // PHASE 2: Bidirectional stream handler
 
-pub mod edr {
+pub mod automutate {
     pub mod common {
-        tonic::include_proto!("edr.common");
+        tonic::include_proto!("automutate.common");
     }
     pub mod controller {
-        tonic::include_proto!("edr.controller");
+        tonic::include_proto!("automutate.controller");
     }
     pub mod worker {
-        tonic::include_proto!("edr.worker");
+        tonic::include_proto!("automutate.worker");
     }
 }
 
-use edr::worker::{
-    ArtifactChunk, HealthRequest, HealthResponse, PingRequest, PingResponse, SampleRequest,
-    SampleResponse, TransferAck,
+use automutate::common::{ArtifactChunk, SampleRequest, SampleResponse};
+use automutate::worker::{
+    HealthRequest, HealthResponse, PingRequest, PingResponse, TransferAck,
     worker_agent_server::{WorkerAgent, WorkerAgentServer},
 };
 
@@ -288,6 +289,10 @@ impl WorkerAgentService {
 
 #[tonic::async_trait]
 impl WorkerAgent for WorkerAgentService {
+    type GetTelemetryStream = std::pin::Pin<
+        Box<dyn tokio_stream::Stream<Item = Result<automutate::common::TelemetryData, Status>> + Send>
+    >;
+
     async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PingResponse>, Status> {
         let req = request.into_inner();
         let timestamp = SystemTime::now()
@@ -409,7 +414,7 @@ impl WorkerAgent for WorkerAgentService {
             );
 
             // Send contaminated events with special metadata
-            let contaminated_events: Vec<edr::common::TelemetryData> = pre_run_events
+            let contaminated_events: Vec<automutate::common::TelemetryData> = pre_run_events
                 .into_iter()
                 .map(|mut event| {
                     // Override job_id and add metadata to mark as contaminated
@@ -428,7 +433,8 @@ impl WorkerAgent for WorkerAgentService {
                 })
                 .collect();
 
-            // Send to controller (best effort with short timeout - don't block execution)
+            /* DEPRECATED: Phase 1 - workers don't push telemetry to controller
+               Controller will pull telemetry via GetTelemetry RPC
             match tokio::time::timeout(
                 Duration::from_secs(DELAY),
                 self.send_telemetry_batch_to_controller(contaminated_events)
@@ -448,6 +454,11 @@ impl WorkerAgent for WorkerAgentService {
                     warn!("Continuing with execution anyway (contamination handling is best-effort)");
                 }
             }
+            */
+            warn!(
+                "Phase 1: {} contaminated events detected but not sent (controller will pull via GetTelemetry)",
+                leftover_count
+            );
 
             // CRITICAL: Start tracing the NEW artifact BEFORE resetting
             // This ensures RedEDR switches to watching the new process instead of the old one
@@ -665,7 +676,9 @@ impl WorkerAgent for WorkerAgentService {
             artifact_name.clone(),
             pid,
             self.config.telemetry.rededr.base_url.clone(),
-            self.config.controller.controller_address.clone(),
+            self.config.controller.as_ref()
+                .map(|c| c.controller_address.clone())
+                .unwrap_or_default(), // Phase 1: controller address not needed
             req.timeout_seconds,
         );
 
@@ -1016,7 +1029,7 @@ impl WorkerAgent for WorkerAgentService {
                         let final_size = payload.len();
                         metadata.insert("final_size_bytes".to_string(), final_size.to_string());
 
-                        let telemetry_data = edr::common::TelemetryData {
+                        let telemetry_data = automutate::common::TelemetryData {
                             job_id: job_id.clone(),
                             event_type: "trace_log".to_string(),
                             timestamp: chrono::Utc::now().timestamp(),
@@ -1061,7 +1074,7 @@ impl WorkerAgent for WorkerAgentService {
                         let immediate_payload = serde_json::json!({"content": last_2mb}).to_string().into_bytes();
                         immediate_metadata.insert("final_size_bytes".to_string(), immediate_payload.len().to_string());
 
-                        let immediate_telemetry = edr::common::TelemetryData {
+                        let immediate_telemetry = automutate::common::TelemetryData {
                             job_id: job_id.clone(),
                             event_type: "trace_log".to_string(),
                             timestamp: chrono::Utc::now().timestamp(),
@@ -1080,7 +1093,9 @@ impl WorkerAgent for WorkerAgentService {
                         let job_id_clone = job_id.clone();
                         let trace_file_clone = trace_events_file.clone();
                         let contents_clone = contents.clone();
-                        let controller_addr = self.config.controller.controller_address.clone();
+                        let controller_addr = self.config.controller.as_ref()
+                            .map(|c| c.controller_address.clone())
+                            .unwrap_or_default(); // Phase 1: controller address not needed
 
                         info!(
                     "Spawning async compression task for full trace ({} bytes)...",
@@ -1186,7 +1201,7 @@ impl WorkerAgent for WorkerAgentService {
                             let final_size = payload.len();
                             metadata.insert("final_size_bytes".to_string(), final_size.to_string());
 
-                            let reduced_telemetry = edr::common::TelemetryData {
+                            let reduced_telemetry = automutate::common::TelemetryData {
                                 job_id: job_id_clone.clone(),
                                 event_type: "trace_log_reduced".to_string(),
                                 timestamp: chrono::Utc::now().timestamp(),
@@ -1195,6 +1210,7 @@ impl WorkerAgent for WorkerAgentService {
                                 typed_event: None,
                             };
 
+                            /* DEPRECATED: Phase 1 - workers don't push telemetry
                             if let Err(e) = Self::send_reduced_trace_to_controller(
                                 &controller_addr,
                                 reduced_telemetry,
@@ -1208,6 +1224,11 @@ impl WorkerAgent for WorkerAgentService {
                             original_size, final_size
                         );
                             }
+                            */
+                            info!(
+                                "[PHASE1] Reduced trace prepared ({} -> {} bytes) - available for controller pull",
+                                original_size, final_size
+                            );
                         });
                     }
                 }
@@ -1267,7 +1288,7 @@ impl WorkerAgent for WorkerAgentService {
                             1 => {
                                 // LINE_TRACE: payload is "file:line:func"
                                 if let Ok(payload_str) = std::str::from_utf8(payload) {
-                                    let telemetry_data = edr::common::TelemetryData {
+                                    let telemetry_data = automutate::common::TelemetryData {
                                         job_id: job_id.clone(),
                                         event_type: "trace_line".to_string(),
                                         timestamp: chrono::Utc::now().timestamp_millis(),
@@ -1334,7 +1355,7 @@ impl WorkerAgent for WorkerAgentService {
                             .typed_event
                             .as_ref()
                             .and_then(|te| match te {
-                                edr::common::telemetry_data::TypedEvent::Coverage(c) => Some(c.total_bbs),
+                                automutate::common::telemetry_data::TypedEvent::Coverage(c) => Some(c.total_bbs),
                                 _ => None,
                             })
                             .unwrap_or(0)
@@ -1459,7 +1480,7 @@ impl WorkerAgent for WorkerAgentService {
             warn!("ERROR: {} - {}", artifact_name, final_details);
         }
 
-        // Send final status to controller with telemetry count (with timeout)
+        /* DEPRECATED: Phase 1 - workers don't push status to controller
         match tokio::time::timeout(
             Duration::from_secs(DELAY),
             self.send_final_status_to_controller(
@@ -1480,8 +1501,11 @@ impl WorkerAgent for WorkerAgentService {
                 warn!("Controller may be slow or unreachable");
             }
         }
+        */
+        info!("[PHASE1] Execution completed: {} telemetry events available for pull", telemetry_count);
 
-        // Send telemetry to controller (best effort with timeout - don't block on this)
+        /* DEPRECATED: Phase 1 - workers don't push telemetry to controller
+           Controller will pull telemetry via GetTelemetry RPC
         if !telemetry_events.is_empty() {
             info!("[TRANSMIT]Preparing to send {} telemetry events to controller...", telemetry_count);
             match tokio::time::timeout(
@@ -1510,6 +1534,14 @@ impl WorkerAgent for WorkerAgentService {
         } else {
             warn!("[WARN]  No telemetry events collected [job: {}, run: {}]", job_id, run_id);
             warn!("   This may indicate: RedEDR collection failed, no events generated, or collection error");
+        }
+        */
+
+        // Phase 1: Telemetry stored locally, controller pulls via GetTelemetry RPC
+        if !telemetry_events.is_empty() {
+            info!("[PHASE1] Collected {} telemetry events - available for controller pull via GetTelemetry", telemetry_count);
+        } else {
+            warn!("[WARN] No telemetry events collected [job: {}, run: {}]", job_id, run_id);
         }
 
         // Reset RedEDR for next run (guard ensures cleanup on error, but we do it explicitly here)
@@ -1699,16 +1731,224 @@ impl WorkerAgent for WorkerAgentService {
             storage_path: artifact_path.to_string_lossy().to_string(),
         }))
     }
+
+    /// PHASE 1: Get worker metadata (replaces dynamic registration push)
+    /// Controller calls this to query worker capabilities
+    async fn get_worker_info(
+        &self,
+        _request: Request<automutate::worker::WorkerInfoRequest>,
+    ) -> Result<Response<automutate::worker::WorkerInfoResponse>, Status> {
+        use automutate::common::ToolVersions;
+        use automutate::worker::HealthMetrics;
+
+        info!("GetWorkerInfo RPC called by controller");
+
+        // Detect current capabilities
+        let capabilities_data = capabilities::detect_capabilities().await
+            .map_err(|e| Status::internal(format!("Failed to detect capabilities: {}", e)))?;
+
+        // Get system health metrics
+        let mut sys = System::new_with_specifics(
+            RefreshKind::new()
+                .with_cpu(CpuRefreshKind::everything())
+                .with_memory(MemoryRefreshKind::everything()),
+        );
+
+        // Refresh CPU info and get usage
+        sys.refresh_cpu_usage();
+        let cpu_percent = sys.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32;
+        let cpu_percent = cpu_percent as i32;
+        let memory_percent = ((sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0) as i32;
+        let disk_percent = 0; // TODO: Implement disk usage
+
+        // Check if currently executing a job
+        let execution_state = self.execution_lock.lock().await;
+        let current_job_id = execution_state.current_job_id.clone().unwrap_or_default();
+
+        let active_jobs = if current_job_id.is_empty() { 0 } else { 1 };
+
+        // Calculate uptime (time since worker started)
+        let uptime_seconds = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let response = automutate::worker::WorkerInfoResponse {
+            worker_id: self.worker_id.clone(),
+            ip_address: self.config.worker.ip_address.clone(),
+            os_version: self.config.worker.os_version.clone(),
+            capabilities: capabilities_data.capabilities,
+            metadata: capabilities_data.metadata,
+            tools: Some(ToolVersions {
+                rededr_version: capabilities_data.tools.get("rededr_version")
+                    .cloned().unwrap_or_default(),
+                defender_version: capabilities_data.tools.get("defender_version")
+                    .cloned().unwrap_or_default(),
+                etw_version: capabilities_data.tools.get("etw_version")
+                    .cloned().unwrap_or_default(),
+                llvm_version: capabilities_data.tools.get("llvm_version")
+                    .cloned().unwrap_or_default(),
+            }),
+            health: Some(HealthMetrics {
+                cpu_percent,
+                memory_percent,
+                disk_percent,
+                active_jobs,
+                uptime_seconds,
+            }),
+            current_job_id,
+        };
+
+        info!("Returning worker metadata: {} capabilities, {} tools",
+              response.capabilities.len(),
+              response.tools.as_ref().map(|_| 4).unwrap_or(0));
+
+        Ok(Response::new(response))
+    }
+
+    /// PHASE 1: Get telemetry from worker (replaces worker streaming to controller)
+    /// Controller calls this to pull telemetry on demand
+    async fn get_telemetry(
+        &self,
+        request: Request<automutate::worker::TelemetryRequest>,
+    ) -> Result<Response<Self::GetTelemetryStream>, Status> {
+        use futures::stream;
+        use tokio_stream::wrappers::ReceiverStream;
+
+        let req = request.into_inner();
+
+        info!("GetTelemetry RPC called: job_id={}, since_timestamp={}, max_events={}",
+              req.job_id, req.since_timestamp, req.max_events);
+
+        // Check if RedEDR is enabled
+        if !self.config.telemetry.rededr.enabled {
+            return Err(Status::failed_precondition(
+                "RedEDR telemetry is disabled in config"
+            ));
+        }
+
+        // For now, return telemetry from the most recent run
+        // TODO: Implement persistent storage of telemetry per job_id
+
+        // Create a channel for streaming telemetry events
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+
+        // Spawn task to collect and stream telemetry
+        let base_url = self.config.telemetry.rededr.base_url.clone();
+        let job_id = req.job_id.clone();
+        let max_events = req.max_events;
+
+        tokio::spawn(async move {
+            // Collect telemetry from RedEDR
+            let collector = telemetry::collectors::rededr::RedEdrCollector::new(
+                telemetry::collectors::rededr::RedEdrCollectorConfig {
+                    base_url,
+                    flush_interval_ms: 1000,
+                    job_id: job_id.clone(),
+                    run_id: "telemetry-pull".to_string(),
+                },
+            );
+
+            match collector.collect_all(&job_id).await {
+                Ok(events) => {
+                    let events_to_send: Vec<_> = if max_events > 0 {
+                        events.into_iter().take(max_events as usize).collect()
+                    } else {
+                        events
+                    };
+
+                    info!("Collected {} telemetry events for job {}",
+                          events_to_send.len(), job_id);
+
+                    for event in events_to_send {
+                        if tx.send(Ok(event)).await.is_err() {
+                            break; // Client disconnected
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to collect telemetry: {}", e);
+                    let _ = tx.send(Err(Status::internal(
+                        format!("Failed to collect telemetry: {}", e)
+                    ))).await;
+                }
+            }
+        });
+
+        let stream = ReceiverStream::new(rx);
+        Ok(Response::new(Box::pin(stream) as Self::GetTelemetryStream))
+    }
+
+    /// PHASE 2: Bidirectional stream for real-time communication
+    /// Controller initiates the stream, both sides can send messages
+    type EstablishStreamStream = tokio_stream::wrappers::ReceiverStream<Result<automutate::common::WorkerMessage, Status>>;
+
+    async fn establish_stream(
+        &self,
+        request: Request<tonic::Streaming<automutate::common::ControllerMessage>>,
+    ) -> Result<Response<Self::EstablishStreamStream>, Status> {
+        use stream_handler::StreamHandler;
+        use capabilities::WorkerState;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        info!("EstablishStream RPC called - establishing bidirectional stream with controller");
+
+        // Detect current capabilities
+        let capabilities_data = capabilities::detect_capabilities().await
+            .map_err(|e| Status::internal(format!("Failed to detect capabilities: {}", e)))?;
+
+        // Create worker state
+        let worker_state = WorkerState::new(
+            self.worker_id.clone(),
+            capabilities_data,
+        );
+        let worker_state = Arc::new(RwLock::new(worker_state));
+
+        // Create stream handler
+        let (handler, rx) = StreamHandler::new(worker_state.clone());
+        let handler = Arc::new(handler);
+
+        // Send registration immediately
+        if let Err(e) = handler.send_registration().await {
+            error!("Failed to send registration: {}", e);
+            return Err(Status::internal(format!("Failed to send registration: {}", e)));
+        }
+
+        info!("Sent worker registration to controller");
+
+        // Spawn task to handle incoming controller messages
+        let stream = request.into_inner();
+        let handler_clone = handler.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handler_clone.handle_stream(stream).await {
+                error!("Stream handler error: {}", e);
+            }
+            info!("Controller stream handler terminated");
+        });
+
+        // Spawn heartbeat task
+        let handler_clone = handler.clone();
+        tokio::spawn(async move {
+            stream_handler::heartbeat_loop(handler_clone, 30).await;
+        });
+
+        info!("Bidirectional stream established successfully");
+
+        // Return outgoing message stream
+        let out_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        Ok(Response::new(out_stream))
+    }
 }
 
 // Helper methods for WorkerAgentService
 impl WorkerAgentService {
-    /// Send telemetry batch to controller via StreamTelemetry RPC
+    /* DEPRECATED: Phase 1 - workers don't push telemetry, controller pulls via GetTelemetry
     async fn send_telemetry_batch_to_controller(
         &self,
-        telemetry_events: Vec<edr::common::TelemetryData>,
+        telemetry_events: Vec<automutate::common::TelemetryData>,
     ) -> Result<(), Status> {
-        use edr::controller::controller_client::ControllerClient;
+        use automutate::controller::controller_client::ControllerClient;
         use futures::stream;
 
         let event_count = telemetry_events.len();
@@ -1795,13 +2035,15 @@ impl WorkerAgentService {
 
         Ok(())
     }
+    */ // End DEPRECATED send_telemetry_batch_to_controller
 
+    /* DEPRECATED: Phase 1 - workers don't push telemetry
     /// Send reduced trace to controller via StreamTelemetry RPC (static method for async task)
     async fn send_reduced_trace_to_controller(
         controller_address: &str,
-        telemetry_data: edr::common::TelemetryData,
+        telemetry_data: automutate::common::TelemetryData,
     ) -> Result<(), Status> {
-        use edr::controller::controller_client::ControllerClient;
+        use automutate::controller::controller_client::ControllerClient;
         use futures::stream;
 
         let job_id = telemetry_data.job_id.clone();
@@ -1880,7 +2122,7 @@ impl WorkerAgentService {
         elapsed_seconds: i32,
         telemetry_events_count: i32,
     ) {
-        use edr::controller::{StatusReport, controller_client::ControllerClient};
+        use automutate::controller::{StatusReport, controller_client::ControllerClient};
 
         info!(
             "[STATUS] Sending final status report to controller [job: {}, run: {}, status: {}, elapsed: {}s]",
@@ -1965,6 +2207,7 @@ impl WorkerAgentService {
             }
         }
     }
+    */ // End DEPRECATED helper methods
 }
 
 /// Extract filename from path (cross-platform)
@@ -1986,7 +2229,8 @@ async fn register_with_controller(
     capabilities_data: capabilities::WorkerCapabilities,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::time::Duration;
-    use crate::edr::controller::{WorkerRegistration, ToolVersions, controller_client::ControllerClient};
+    use crate::automutate::common::{WorkerRegistration, ToolVersions};
+    use crate::automutate::controller::controller_client::ControllerClient;
 
     let max_retries = 5;
     let mut retry_delay = Duration::from_secs(1);
@@ -2059,7 +2303,7 @@ async fn deregister_from_controller(
     controller_address: &str,
     reason: &str,
 ) {
-    use crate::edr::controller::{WorkerDeregistration, controller_client::ControllerClient};
+    use crate::automutate::controller::{WorkerDeregistration, controller_client::ControllerClient};
 
     info!("Deregistering from controller (reason: {})", reason);
 
@@ -2122,21 +2366,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let worker_id = config.worker.worker_id.clone();
 
-    // Ensure controller address has http:// scheme for tonic
-    let controller_addr = {
-        let addr = config.controller.controller_address.clone();
+    // PHASE 1: Worker no longer dials controller - controller dials worker
+    // Controller address is now optional and deprecated
+    /* DEPRECATED: Phase 1 removes worker->controller connections
+    let controller_addr = if let Some(ref controller_cfg) = config.controller {
+        let addr = controller_cfg.controller_address.clone();
         if addr.starts_with("http://") || addr.starts_with("https://") {
             addr
         } else {
             format!("http://{}", addr)
         }
+    } else {
+        // No controller configured - Phase 1 mode
+        String::new()
     };
+    */
 
-    // Worker listen port can be overridden via env var
+    // Worker listen port from config or env var
     let worker_port = std::env::var("WORKER_PORT")
-        .unwrap_or_else(|_| "50052".to_string())
-        .parse::<u16>()
-        .unwrap_or(50052);
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(config.worker.listen_port);
     let addr = format!("0.0.0.0:{}", worker_port).parse()?;
 
     info!(
@@ -2146,7 +2396,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Worker ID: {}", worker_id);
     info!("Worker IP: {}", config.worker.ip_address);
     info!("OS Version: {}", config.worker.os_version);
-    info!("Controller: {}", controller_addr);
+    info!("Worker listening on: {}", addr);
     info!("Sandbox enabled: {}", config.harness.sandbox_enabled);
     info!("ETW enabled: {}", config.telemetry.etw.enabled);
 
@@ -2156,7 +2406,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Capabilities: {:?}", capabilities.capabilities);
     info!("Tools: {:?}", capabilities.tools);
 
-    // === NEW: Register with controller ===
+    /* DEPRECATED: Phase 1 removes worker->controller registration
+       Controller now queries worker metadata via GetWorkerInfo RPC
     info!("Registering with controller at {}", controller_addr);
     if let Err(e) = register_with_controller(
         &worker_id,
@@ -2169,10 +2420,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         error!("Failed to register with controller: {}", e);
         error!("Worker will start anyway (controller may register later via health check)");
-        // Continue anyway - controller might not be running yet
     }
+    */
 
-    // === NEW: Setup graceful shutdown handler ===
+    /* DEPRECATED: Phase 1 removes worker->controller deregistration
+       Controller detects worker unavailability via failed health checks
     let shutdown_controller_addr = controller_addr.clone();
     let shutdown_worker_id = worker_id.clone();
     tokio::spawn(async move {
@@ -2182,6 +2434,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("Received Ctrl+C, shutting down gracefully...");
         deregister_from_controller(&shutdown_worker_id, &shutdown_controller_addr, "shutdown")
             .await;
+        std::process::exit(0);
+    });
+    */
+
+    // Setup graceful shutdown handler (Phase 1: no deregistration needed)
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for Ctrl+C");
+        info!("Received Ctrl+C, shutting down gracefully...");
         std::process::exit(0);
     });
 
@@ -2202,7 +2464,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // gRPC reflection for grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!("edr_descriptor"))
+        .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!("automutate_descriptor"))
         .build_v1()?;
 
     Server::builder()
@@ -2224,7 +2486,7 @@ async fn collect_bb_coverage(
     _bitmap_path: &std::path::Path,
     metadata_path: &std::path::Path,
     job_id: &str,
-) -> Result<edr::common::TelemetryData, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<automutate::common::TelemetryData, Box<dyn std::error::Error + Send + Sync>> {
     use tokio::fs;
 
     // Read BB metadata (text file with BB IDs and hit counts)
@@ -2259,14 +2521,14 @@ async fn collect_bb_coverage(
         total_bbs
     );
 
-    Ok(edr::common::TelemetryData {
+    Ok(automutate::common::TelemetryData {
         job_id: job_id.to_string(),
         event_type: "coverage".to_string(),
         timestamp: chrono::Utc::now().timestamp_millis(),
         payload: vec![], // Empty payload (data in typed_event)
         metadata: std::collections::HashMap::new(),
-        typed_event: Some(edr::common::telemetry_data::TypedEvent::Coverage(
-            edr::common::CoverageEvent {
+        typed_event: Some(automutate::common::telemetry_data::TypedEvent::Coverage(
+            automutate::common::CoverageEvent {
                 bitmap: vec![], // Empty - we only send bb_ids and hit_counts from .txt
                 bb_ids,
                 hit_counts,
@@ -2280,7 +2542,7 @@ async fn collect_bb_coverage(
 async fn collect_api_checkpoints(
     checkpoints_path: &std::path::Path,
     job_id: &str,
-) -> Result<Vec<edr::common::TelemetryData>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Vec<automutate::common::TelemetryData>, Box<dyn std::error::Error + Send + Sync>> {
     use tokio::fs;
 
     let checkpoints_text = fs::read_to_string(checkpoints_path).await?;
@@ -2302,14 +2564,14 @@ async fn collect_api_checkpoints(
                     .unwrap_or("unknown")
                     .to_string();
 
-                events.push(edr::common::TelemetryData {
+                events.push(automutate::common::TelemetryData {
                     job_id: job_id.to_string(),
                     event_type: "checkpoint".to_string(),
                     timestamp: (ts_us / 1000) as i64, // Convert to milliseconds for consistency
                     payload: vec![],
                     metadata: std::collections::HashMap::new(),
-                    typed_event: Some(edr::common::telemetry_data::TypedEvent::Checkpoint(
-                        edr::common::CheckpointEvent { name, ts_us },
+                    typed_event: Some(automutate::common::telemetry_data::TypedEvent::Checkpoint(
+                        automutate::common::CheckpointEvent { name, ts_us },
                     )),
                 });
             }

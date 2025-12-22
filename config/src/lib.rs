@@ -34,7 +34,10 @@ pub struct ControllerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerConfig {
     pub worker: WorkerIdentityConfig,
-    pub controller: ControllerEndpointConfig,
+    /// DEPRECATED: Phase 1 removes worker->controller connections
+    /// Workers now listen for controller-initiated connections
+    #[serde(default)]
+    pub controller: Option<ControllerEndpointConfig>,
     pub harness: HarnessConfig,
     pub telemetry: WorkerTelemetryConfig,
     pub build: BuildConfig,
@@ -137,6 +140,22 @@ pub struct SchedulerConfig {
     pub run_timeout_secs: u64,
     pub max_retries: u32,
     pub retry_backoff_secs: u64,
+    /// PHASE 1: List of workers (controller dials to these)
+    /// Format: [{id: "win10-worker-01", address: "10.200.200.11:50052", enabled: true}]
+    #[serde(default)]
+    pub workers: Vec<WorkerEntryConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerEntryConfig {
+    pub id: String,
+    pub address: String,
+    #[serde(default = "default_worker_enabled")]
+    pub enabled: bool,
+}
+
+fn default_worker_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,6 +226,13 @@ pub struct WorkerIdentityConfig {
     pub worker_id: String,
     pub ip_address: String,
     pub os_version: String,
+    /// PHASE 1: Worker gRPC listen port (controller dials to this)
+    #[serde(default = "default_listen_port")]
+    pub listen_port: u16,
+}
+
+fn default_listen_port() -> u16 {
+    50052 // Default gRPC port for workers
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -680,6 +706,7 @@ impl ControllerConfig {
                 run_timeout_secs: 300,
                 max_retries: 3,
                 retry_backoff_secs: 30,
+                workers: vec![], // PHASE 1: Empty, will be populated from config
             },
             corpus: CorpusConfig {
                 storage_path: "/var/lib/automutate/corpus".to_string(),
@@ -747,15 +774,16 @@ impl WorkerConfig {
                 worker_id: "win11-worker-01".to_string(),
                 ip_address: "192.168.200.100".to_string(),
                 os_version: "windows11".to_string(),
+                listen_port: 50052, // PHASE 1: Worker listen port
             },
-            controller: ControllerEndpointConfig {
+            controller: Some(ControllerEndpointConfig {
                 controller_address: "192.168.200.1:50051".to_string(),
                 connect_timeout_secs: 30,
                 request_timeout_secs: 300,
                 keepalive_interval_secs: 30,
                 tls_enabled: false,
                 tls_ca_cert_path: None,
-            },
+            }), // DEPRECATED: Phase 1 removes worker->controller connections
             harness: HarnessConfig {
                 working_directory: "C:\\AutoMutate\\runs".to_string(),
                 execution_timeout_secs: 120,

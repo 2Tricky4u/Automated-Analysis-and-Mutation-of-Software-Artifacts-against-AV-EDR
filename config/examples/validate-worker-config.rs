@@ -1,3 +1,4 @@
+use std::error::Error;
 /// Validation example for worker.toml template
 ///
 /// This binary validates that automation/templates/worker.toml parses correctly.
@@ -18,13 +19,13 @@ fn main() {
             println!("    - OS version: {}", config.worker.os_version);
 
             println!("\n  Controller Connection:");
-            println!("    - Address: {}", config.controller.controller_address);
-            println!("    - TLS enabled: {}", config.controller.tls_enabled);
-            println!(
-                "    - Connect timeout: {}s",
-                config.controller.connect_timeout_secs
-            );
-
+            if let Some(controller) = &config.controller {
+                println!("    - Address: {}", controller.controller_address);
+                println!("    - TLS enabled: {}", controller.tls_enabled);
+                println!("    - Connect timeout: {}s", controller.connect_timeout_secs);
+            } else {
+                println!("    - Not configured (standalone mode)");
+            }
             println!("\n  Harness:");
             println!(
                 "    - Working directory: {}",

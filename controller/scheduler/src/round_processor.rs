@@ -273,7 +273,8 @@ impl RoundProcessor {
         pool: &WorkerPool,
         specific_worker_id: Option<&str>,  // NEW: specific worker for OS-matching
     ) -> Result<RunResult> {
-        use crate::edr::worker::{ArtifactChunk, SampleRequest, worker_agent_client::WorkerAgentClient};
+        use crate::automutate::common::{ArtifactChunk, SampleRequest};
+        use crate::automutate::worker::worker_agent_client::WorkerAgentClient;
         use futures::stream;
         use std::time::Instant;
 
@@ -490,9 +491,9 @@ impl RoundProcessor {
         round_id: &str,
         previous_rounds: &[RoundSummary],
     ) -> Result<Vec<MutationSpec>> {
-        use crate::edr::common::JobId;
-        use crate::edr::controller::{FeedbackProto, SelectionRequest};
-        use crate::edr::controller::selector_client::SelectorClient;
+        use crate::automutate::common::JobId;
+        use crate::automutate::controller::{FeedbackProto, SelectionRequest};
+        use crate::automutate::controller::selector_client::SelectorClient;
 
         info!("[{}][{}] Calling Selector service at {}", job_id, round_id, selector_address);
 

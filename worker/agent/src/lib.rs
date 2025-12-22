@@ -3,17 +3,19 @@
 /// This allows integration tests to access internal modules like
 /// telemetry collectors without duplicating code.
 
-pub mod edr {
+pub mod automutate {
     pub mod common {
-        tonic::include_proto!("edr.common");
+        tonic::include_proto!("automutate.common");
     }
     pub mod controller {
-        tonic::include_proto!("edr.controller");
+        tonic::include_proto!("automutate.controller");
     }
     pub mod worker {
-        tonic::include_proto!("edr.worker");
+        tonic::include_proto!("automutate.worker");
     }
 }
 
 pub mod telemetry;
 pub mod execution;
+pub mod capabilities;
+pub mod stream_handler;

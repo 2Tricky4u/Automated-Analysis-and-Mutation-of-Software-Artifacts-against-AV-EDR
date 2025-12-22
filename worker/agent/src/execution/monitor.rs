@@ -5,8 +5,8 @@
 /// - Event count (detect stuck: no growth)
 /// - Process status (alive/dead)
 /// - Resource usage (CPU, memory)
-use crate::edr::controller::{StatusReport, controller_client::ControllerClient};
-use crate::edr::worker::{ExecutionStatus, MonitorEvent};
+use crate::automutate::controller::{StatusReport, controller_client::ControllerClient};
+use crate::automutate::worker::{ExecutionStatus, MonitorEvent};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
 use tonic::Request;

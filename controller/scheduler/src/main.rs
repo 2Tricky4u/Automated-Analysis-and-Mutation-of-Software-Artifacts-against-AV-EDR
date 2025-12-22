@@ -8,8 +8,9 @@ use tracing::{error, info, warn};
 
 mod job;
 mod queue;
-mod run_queue;  // NEW: Async run queue
+mod run_queue;
 mod worker_pool;
+mod worker_manager;  // Controller-initiated connections with bidirectional streaming
 mod scheduler_core;
 mod round;
 mod run_result;
@@ -17,20 +18,20 @@ mod round_processor;
 
 use scheduler_core::{SchedulerConfig as CoreSchedulerConfig, create_scheduler_core};
 
-pub mod edr {
+pub mod automutate {
     pub mod common {
-        tonic::include_proto!("edr.common");
+        tonic::include_proto!("automutate.common");
     }
     pub mod controller {
-        tonic::include_proto!("edr.controller");
+        tonic::include_proto!("automutate.controller");
     }
     pub mod worker {
-        tonic::include_proto!("edr.worker");
+        tonic::include_proto!("automutate.worker");
     }
 }
 
-use edr::common::{JobId, TelemetryAck, TelemetryData};
-use edr::controller::{
+use automutate::common::{JobId, TelemetryAck, TelemetryData, WorkerRegistration, ToolVersions};
+use automutate::controller::{
     BuildRequest, BuildResponse, DeployRequest, DeployResponse, JobRequest, JobResponse,
     JobStatusRequest, JobStatusResponse, ListWorkersRequest, ListWorkersResponse,
     PingRequest, PingResponse, QueryRequest, QueryResponse,
@@ -40,8 +41,8 @@ use edr::controller::{
     GetRoundRequest, GetRoundResponse, CompareRunsRequest, CompareRunsResponse,
     RoundSummaryProto, RoundProto, BehaviorComparisonProto,
     // NEW: Dynamic worker registration types
-    WorkerRegistration, RegistrationAck, WorkerDeregistration, DeregistrationAck,
-    WorkerMetadataUpdate, MetadataAck, ToolVersions,
+    RegistrationAck, WorkerDeregistration, DeregistrationAck,
+    WorkerMetadataUpdate, MetadataAck,
     controller_server::{Controller, ControllerServer},
 };
 
@@ -70,6 +71,7 @@ pub struct SchedulerService {
     es_client: Elasticsearch,
     controller_ip: String,
     scheduler_core: Option<Arc<scheduler_core::SchedulerCore>>,
+    worker_manager: Option<Arc<worker_manager::WorkerManager>>,  // Manages worker connections
 }
 
 impl SchedulerService {
@@ -79,11 +81,16 @@ impl SchedulerService {
             es_client,
             controller_ip,
             scheduler_core: None,
+            worker_manager: None,
         }
     }
 
     pub fn set_scheduler_core(&mut self, core: Arc<scheduler_core::SchedulerCore>) {
         self.scheduler_core = Some(core);
+    }
+
+    pub fn set_worker_manager(&mut self, manager: Arc<worker_manager::WorkerManager>) {
+        self.worker_manager = Some(manager);
     }
 }
 
@@ -555,7 +562,8 @@ impl Controller for SchedulerService {
         &self,
         request: Request<DeployRequest>,
     ) -> Result<Response<DeployResponse>, Status> {
-        use edr::worker::{ArtifactChunk, worker_agent_client::WorkerAgentClient};
+        use automutate::common::ArtifactChunk;
+        use automutate::worker::worker_agent_client::WorkerAgentClient;
         use futures::stream;
         use sha2::{Digest, Sha256};
 
@@ -712,7 +720,7 @@ impl Controller for SchedulerService {
         let worker_infos: Vec<WorkerInfo> = workers
             .iter()
             .map(|w| {
-                use edr::controller::ToolVersions;
+                use automutate::common::ToolVersions;
 
                 let last_ping_secs = w
                     .last_ping
@@ -1163,7 +1171,7 @@ impl SchedulerService {
             // Handle typed_event variants (for events using structured proto instead of JSON payload)
             // This is critical for trace events which use typed_event.trace instead of payload
             if let Some(ref typed_event) = event.typed_event {
-                use edr::common::telemetry_data::TypedEvent;
+                use automutate::common::telemetry_data::TypedEvent;
                 match typed_event {
                     TypedEvent::Trace(trace) => {
                         // Extract trace event fields into payload_fields for indexing
@@ -1651,6 +1659,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Controller/Scheduler starting...");
 
+    // Initialize WorkerManager with workers from config
+    info!("Initializing WorkerManager...");
+    let worker_manager = Arc::new(worker_manager::WorkerManager::new(30)); // 30s RPC timeout
+
+    // Add workers from config
+    for worker_config in &config.scheduler.workers {
+        if worker_config.enabled {
+            info!("Adding worker: {} at {}", worker_config.id, worker_config.address);
+            let worker_cfg = worker_manager::WorkerConfig {
+                id: worker_config.id.clone(),
+                address: worker_config.address.clone(),
+                enabled: worker_config.enabled,
+            };
+            if let Err(e) = worker_manager.add_worker(worker_cfg) {
+                warn!("Failed to add worker {}: {}", worker_config.id, e);
+            }
+        } else {
+            info!("Skipping disabled worker: {}", worker_config.id);
+        }
+    }
+
+    // Query worker info on startup (optional, non-blocking)
+    info!("Querying worker metadata...");
+    let worker_infos = worker_manager.query_all_workers().await;
+    for (worker_id, info) in worker_infos {
+        info!(
+            "Worker {} - OS: {}, Capabilities: {:?}",
+            worker_id, info.os_version, info.capabilities
+        );
+    }
+
+    // Establish bidirectional streams with all workers for real-time communication
+    info!("Establishing bidirectional streams with workers...");
+    let stream_results = worker_manager.establish_all_streams().await;
+
+    let mut streams_established = 0;
+    let mut streams_failed = 0;
+
+    for (worker_id, result) in stream_results {
+        match result {
+            Ok(()) => {
+                info!("Stream established with worker: {}", worker_id);
+                streams_established += 1;
+            }
+            Err(e) => {
+                warn!("Failed to establish stream with worker {}: {}", worker_id, e);
+                streams_failed += 1;
+            }
+        }
+    }
+
+    info!(
+        "Stream establishment complete: {} successful, {} failed",
+        streams_established, streams_failed
+    );
+
+    if streams_established > 0 {
+        info!("Workers connected - real-time communication active");
+    }
+
+    // Set worker manager in scheduler service
+    scheduler.set_worker_manager(Arc::clone(&worker_manager));
+    info!("WorkerManager initialized with {} workers", config.scheduler.workers.len());
+
     // Create scheduler core configuration from controller config
     let scheduler_core_config = CoreSchedulerConfig {
         poll_interval_seconds: 5,
@@ -1680,7 +1752,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // gRPC reflection for grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!("edr_descriptor"))
+        .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!("automutate_descriptor"))
         .build_v1()?;
 
     Server::builder()

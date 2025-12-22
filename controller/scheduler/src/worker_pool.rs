@@ -373,7 +373,7 @@ impl WorkerPool {
     /// Actively check worker health by calling HealthCheck RPC
     /// This should be called periodically by the scheduler loop
     pub async fn check_worker_health(&self) {
-        use crate::edr::worker::{HealthRequest, worker_agent_client::WorkerAgentClient};
+        use crate::automutate::worker::{HealthRequest, worker_agent_client::WorkerAgentClient};
 
         // Get list of workers to check (clone to avoid holding lock during async calls)
         let workers_to_check: Vec<(String, String)> = {

@@ -354,7 +354,8 @@ impl SchedulerCore {
 
     /// Deploy artifact to worker via gRPC
     async fn deploy_artifact(job: &Job, worker_address: &str) -> Result<()> {
-        use crate::edr::worker::{ArtifactChunk, worker_agent_client::WorkerAgentClient};
+        use crate::automutate::common::ArtifactChunk;
+        use crate::automutate::worker::worker_agent_client::WorkerAgentClient;
         use futures::stream;
 
         info!("[{}] Deploying to worker: {}", job.id, worker_address);
@@ -407,7 +408,8 @@ impl SchedulerCore {
 
     /// Execute artifact on worker via gRPC (non-blocking)
     async fn execute_artifact(job: &Job, worker_address: &str) -> Result<()> {
-        use crate::edr::worker::{SampleRequest, worker_agent_client::WorkerAgentClient};
+        use crate::automutate::common::SampleRequest;
+        use crate::automutate::worker::worker_agent_client::WorkerAgentClient;
 
         info!("[{}] Starting execution on worker: {}", job.id, worker_address);
         info!("  Run ID: {:?}", job.run_id);

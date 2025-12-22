@@ -151,20 +151,25 @@ if (-not $WorkerConfigPath -or -not (Test-Path $WorkerConfigPath))
 
     # Minimal worker config template
     $configTemplate = @"
-# Auto-generated minimal worker configuration for dynamic registration
+# Auto-generated minimal worker configuration for Phase 1 architecture
 # Generated: $( Get-Date -Format "yyyy-MM-dd HH:mm:ss" )
+# Phase 1: Controller dials worker (no worker->controller connections)
 
 [worker]
 worker_id = "$WorkerId"
 ip_address = "$RemoteHost"
 os_version = "$OsVersion"
+listen_port = 50052  # Phase 1: Worker listens for controller connections
 
-[controller]
-controller_address = "$ControllerAddress"
-connect_timeout_secs = 30
-request_timeout_secs = 300
-keepalive_interval_secs = 30
-tls_enabled = false
+# DEPRECATED: Phase 1 removes worker->controller connections
+# Controller now dials to worker's listen_port
+# Uncomment this section only if you need backward compatibility
+# [controller]
+# controller_address = "$ControllerAddress"
+# connect_timeout_secs = 30
+# request_timeout_secs = 300
+# keepalive_interval_secs = 30
+# tls_enabled = false
 
 [harness]
 working_directory = "C:\\\\AutoMutate\\\\runs"

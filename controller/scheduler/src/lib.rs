@@ -5,21 +5,22 @@ pub mod job;
 pub mod queue;
 pub mod run_queue;  // NEW: Async run queue for worker pull model
 pub mod worker_pool;
+pub mod worker_manager;  // PHASE 1: Controller-initiated connections
 pub mod scheduler_core;
 pub mod round;
 pub mod run_result;
 pub mod round_processor;
 
 // Protobuf definitions (shared with main.rs)
-pub mod edr {
+pub mod automutate {
     pub mod common {
-        tonic::include_proto!("edr.common");
+        tonic::include_proto!("automutate.common");
     }
     pub mod controller {
-        tonic::include_proto!("edr.controller");
+        tonic::include_proto!("automutate.controller");
     }
     pub mod worker {
-        tonic::include_proto!("edr.worker");
+        tonic::include_proto!("automutate.worker");
     }
 }
 
@@ -28,6 +29,7 @@ pub use job::{Job, JobStatus, MutationSpec};
 pub use queue::JobQueue;
 pub use run_queue::{RunQueue, PendingRun, RunResult as QueuedRunResult};  // NEW
 pub use worker_pool::{WorkerPool, WorkerState, WorkerStatus};
+pub use worker_manager::{WorkerManager, WorkerConfig};  // PHASE 1
 pub use scheduler_core::{SchedulerCore, SchedulerConfig, create_scheduler_core};
 pub use round::{Round, RoundSummary, RoundStatus, RunType, BehaviorComparison, Feedback};
 pub use run_result::{RunResult, RunOutcome};

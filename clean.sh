@@ -14,6 +14,5 @@ echo "[build-linux] REPO_ROOT = $REPO_ROOT"
 # Per-OS target directory
 export CARGO_TARGET_DIR="$REPO_ROOT/target-wsl"
 
-# Build + run scheduler
-cargo build
-cargo run --release -p scheduler
+# Clean
+cargo clean

@@ -111,6 +111,32 @@ run_timeout_secs = 300
 max_retries = 3
 retry_backoff_secs = 30
 
+# PHASE 1: Worker list (controller dials workers)
+# Add one [[scheduler.workers]] entry per worker VM
+# Controller will connect to these workers on startup
+
+# Example worker entry:
+# [[scheduler.workers]]
+# id = "win10-worker-01"
+# address = "10.200.200.11:50052"
+# enabled = true
+
+# Uncomment and configure for your workers:
+# [[scheduler.workers]]
+# id = "win10-worker-01"
+# address = "10.200.200.11:50052"
+# enabled = true
+#
+# [[scheduler.workers]]
+# id = "win10-worker-02"
+# address = "10.200.200.12:50052"
+# enabled = true
+#
+# [[scheduler.workers]]
+# id = "win11-worker-01"
+# address = "10.200.200.21:50052"
+# enabled = false  # Disabled workers are skipped on startup
+
 [corpus]
 # Corpus storage path
 storage_path = "/var/lib/automutate/corpus"

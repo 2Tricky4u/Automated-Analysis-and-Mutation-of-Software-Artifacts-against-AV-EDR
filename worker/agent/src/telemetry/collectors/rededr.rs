@@ -96,7 +96,7 @@ impl RedEdrCollector {
     /// Start polling RedEDR HTTP API and send events to channel
     pub async fn start(
         mut self,
-        tx: Sender<crate::edr::common::TelemetryData>,
+        tx: Sender<crate::automutate::common::TelemetryData>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         info!(
             "Starting RedEDR collector: {} (flush_interval={}ms)",
@@ -228,14 +228,14 @@ impl RedEdrCollector {
     pub async fn collect_all(
         &self,
         job_id: &str,
-    ) -> Result<Vec<crate::edr::common::TelemetryData>, Box<dyn std::error::Error + Send + Sync>>
+    ) -> Result<Vec<crate::automutate::common::TelemetryData>, Box<dyn std::error::Error + Send + Sync>>
     {
         info!("Collecting all RedEDR events for job_id={}", job_id);
 
         let events = self.fetch_events().await?;
         info!("Fetched {} events from RedEDR", events.len());
 
-        let telemetry_events: Vec<crate::edr::common::TelemetryData> = events
+        let telemetry_events: Vec<crate::automutate::common::TelemetryData> = events
             .iter()
             .map(|e| self.transform_event_with_job(job_id, e))
             .collect();
@@ -320,7 +320,7 @@ impl RedEdrCollector {
     }
 
     /// Transform RedEDR event to protobuf TelemetryData
-    fn transform_event(&self, event: &RedEdrEvent) -> crate::edr::common::TelemetryData {
+    fn transform_event(&self, event: &RedEdrEvent) -> crate::automutate::common::TelemetryData {
         self.transform_event_with_job(&self.config.job_id, event)
     }
 
@@ -329,7 +329,7 @@ impl RedEdrCollector {
         &self,
         job_id: &str,
         event: &RedEdrEvent,
-    ) -> crate::edr::common::TelemetryData {
+    ) -> crate::automutate::common::TelemetryData {
         // Serialize entire event as JSON payload
         let payload = serde_json::to_vec(event).unwrap_or_default();
 
@@ -353,7 +353,7 @@ impl RedEdrCollector {
             metadata.insert("trace_id".to_string(), trace_id.to_string());
         }
 
-        crate::edr::common::TelemetryData {
+        crate::automutate::common::TelemetryData {
             job_id: job_id.to_string(),
             event_type: event
                 .r#type
