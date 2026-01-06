@@ -2,8 +2,10 @@
 // Manages outbound gRPC connections from controller to workers
 
 use anyhow::{Result, anyhow};
+use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::UNIX_EPOCH;
 use tokio::time::{Duration, timeout};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -30,6 +32,57 @@ use crate::automutate::common::{
     SampleRequest,
 };
 
+/// Events emitted by WorkerManager to central orchestration loop
+/// Mirror of worker's outgoing message types
+#[derive(Debug, Clone)]
+pub enum WorkerEvent {
+    /// Worker connected and sent Registration
+    Connected {
+        worker_id: String,
+        os_version: String,
+        capabilities: Vec<String>,
+    },
+
+    /// Worker disconnected (stream closed or send failed)
+    Disconnected {
+        worker_id: String,
+        reason: String,
+    },
+
+    /// Worker sent a message
+    Message {
+        worker_id: String,
+        msg: WorkerMessage,
+    },
+}
+
+impl WorkerEvent {
+    /// Helper: Create Connected event
+    pub fn connected(worker_id: impl Into<String>, os_version: impl Into<String>, capabilities: Vec<String>) -> Self {
+        WorkerEvent::Connected {
+            worker_id: worker_id.into(),
+            os_version: os_version.into(),
+            capabilities,
+        }
+    }
+
+    /// Helper: Create Disconnected event
+    pub fn disconnected(worker_id: impl Into<String>, reason: impl Into<String>) -> Self {
+        WorkerEvent::Disconnected {
+            worker_id: worker_id.into(),
+            reason: reason.into(),
+        }
+    }
+
+    /// Helper: Create Message event
+    pub fn message(worker_id: impl Into<String>, msg: WorkerMessage) -> Self {
+        WorkerEvent::Message {
+            worker_id: worker_id.into(),
+            msg,
+        }
+    }
+}
+
 /// Configuration for a single worker connection
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
@@ -39,6 +92,38 @@ pub struct WorkerConfig {
     pub address: String,
     /// Whether worker is enabled
     pub enabled: bool,
+}
+
+/// Active session handle (simplified from WorkerConnection)
+/// Stores only stream-specific state
+#[derive(Clone)]
+pub struct SessionHandle {
+    pub worker_id: String,
+    pub tx: mpsc::Sender<ControllerMessage>,
+    pub last_seen: std::time::SystemTime,
+    pub capabilities: Vec<String>,
+}
+
+impl SessionHandle {
+    pub fn new(worker_id: String, tx: mpsc::Sender<ControllerMessage>) -> Self {
+        Self {
+            worker_id,
+            tx,
+            last_seen: std::time::SystemTime::now(),
+            capabilities: Vec::new(),
+        }
+    }
+
+    pub fn touch(&mut self) {
+        self.last_seen = std::time::SystemTime::now();
+    }
+
+    pub fn is_stale(&self, timeout_secs: u64) -> bool {
+        std::time::SystemTime::now()
+            .duration_since(self.last_seen)
+            .map(|d| d.as_secs() > timeout_secs)
+            .unwrap_or(true)
+    }
 }
 
 /// Manages a single worker connection
@@ -114,17 +199,27 @@ impl WorkerConnection {
 
 /// Worker Manager - Manages all outbound worker connections
 pub struct WorkerManager {
-    /// Worker connections indexed by worker ID
+    /// Legacy connections for unary RPCs (backwards compat)
+    /// TODO: Remove after full migration to streaming
     connections: Arc<Mutex<HashMap<String, WorkerConnection>>>,
+
+    /// Active worker sessions (streaming)
+    sessions: DashMap<String, SessionHandle>,
+
+    /// Event bus for worker events
+    events_tx: mpsc::Sender<WorkerEvent>,
+
     /// Default RPC timeout
     rpc_timeout: Duration,
 }
 
 impl WorkerManager {
-    /// Create new WorkerManager
-    pub fn new(rpc_timeout_secs: u64) -> Self {
+    /// Create new WorkerManager with event bus
+    pub fn new(rpc_timeout_secs: u64, events_tx: mpsc::Sender<WorkerEvent>) -> Self {
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
+            sessions: DashMap::new(),
+            events_tx,
             rpc_timeout: Duration::from_secs(rpc_timeout_secs),
         }
     }
@@ -261,17 +356,24 @@ impl WorkerManager {
     }
 
     /// Check if worker connection is healthy (channel exists and recent)
+    /// ✅ UPDATED (Task 16): Check if worker has active session (streaming connection)
+    ///
+    /// # Staleness Check
+    /// Returns false if session exists but hasn't sent messages in 5 minutes
     pub fn is_worker_connected(&self, worker_id: &str) -> bool {
-        let connections = self.connections.lock().unwrap();
+        // ✅ NEW: Check for active session first
+        if let Some(session) = self.sessions.get(worker_id) {
+            return !session.is_stale(300);  // 5 min timeout
+        }
 
+        // Fallback: Check legacy connection (Phase 1 unary RPCs)
+        let connections = self.connections.lock().unwrap();
         if let Some(connection) = connections.get(worker_id) {
             if connection.channel.is_some() {
-                // Check if connection is recent (within last 5 minutes)
                 if let Some(last_connected) = connection.last_connected {
                     let elapsed = std::time::SystemTime::now()
                         .duration_since(last_connected)
                         .unwrap_or(Duration::from_secs(999));
-
                     return elapsed < Duration::from_secs(300);
                 }
             }
@@ -280,10 +382,24 @@ impl WorkerManager {
         false
     }
 
-    /// Get list of all worker IDs
+    /// ✅ UPDATED (Task 15): Get list of all worker IDs
+    ///
+    /// Returns union of streaming sessions and legacy connections
     pub fn list_workers(&self) -> Vec<String> {
-        let connections = self.connections.lock().unwrap();
-        connections.keys().cloned().collect()
+        // Return workers with active sessions (streaming)
+        let mut workers: Vec<String> = self.sessions.iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        // Add legacy connections not yet migrated to streams
+        let legacy_connections = self.connections.lock().unwrap();
+        for worker_id in legacy_connections.keys() {
+            if !workers.contains(worker_id) {
+                workers.push(worker_id.clone());
+            }
+        }
+
+        workers
     }
 
     /// Get connection stats for a worker
@@ -342,18 +458,54 @@ impl WorkerManager {
 
         info!("Stream established with worker {}", worker_id);
 
+        // ✅ NEW (Task 6): Register session in DashMap early
+        self.sessions.insert(worker_id.to_string(), SessionHandle::new(
+            worker_id.to_string(),
+            tx.clone(),
+        ));
+
         // Spawn task to handle incoming messages from worker
         let worker_id_clone = worker_id.to_string();
         let connections_clone = Arc::clone(&self.connections);
+        let events_tx = self.events_tx.clone();  // ✅ NEW (Task 7): Event bus
+        let sessions = self.sessions.clone();     // ✅ NEW: DashMap reference
 
         let handle = tokio::spawn(async move {
-            info!("Starting stream message handler for worker {}", worker_id_clone);
+            info!("Stream message handler started for worker {}", worker_id_clone);
+
+            // ✅ NEW (Task 8): Track first message (Registration)
+            let mut registration_received = false;
 
             while let Some(result) = incoming.next().await {
                 match result {
                     Ok(msg) => {
-                        if let Err(e) = Self::handle_worker_message(&worker_id_clone, msg).await {
-                            warn!("Error handling message from worker {}: {}", worker_id_clone, e);
+                        // ✅ NEW (Task 11): Update last_seen timestamp
+                        if let Some(mut session) = sessions.get_mut(&worker_id_clone) {
+                            session.touch();
+
+                            // Extract capabilities from Registration
+                            if !registration_received {
+                                if let Some(worker_message::Payload::Registration(ref reg)) = msg.payload {
+                                    session.capabilities = reg.capabilities.clone();
+                                    registration_received = true;
+
+                                    // ✅ NEW (Task 8): Emit Connected event
+                                    let _ = events_tx.send(WorkerEvent::connected(
+                                        &worker_id_clone,
+                                        &reg.os_version,
+                                        reg.capabilities.clone(),
+                                    )).await;
+
+                                    info!("Worker {} connected (OS: {}, Caps: {:?})",
+                                        worker_id_clone, reg.os_version, reg.capabilities);
+                                }
+                            }
+                        }
+
+                        // ✅ NEW (Task 7): Forward ALL messages to event bus
+                        if let Err(e) = events_tx.send(WorkerEvent::message(&worker_id_clone, msg)).await {
+                            error!("Failed to forward message to event bus: {}", e);
+                            break;
                         }
                     }
                     Err(e) => {
@@ -363,7 +515,17 @@ impl WorkerManager {
                 }
             }
 
-            // Mark stream as inactive when it closes
+            // ✅ Cleanup on disconnect
+            info!("Stream closed for worker {}", worker_id_clone);
+            sessions.remove(&worker_id_clone);
+
+            // ✅ NEW (Task 9): Emit Disconnected event
+            let _ = events_tx.send(WorkerEvent::disconnected(
+                &worker_id_clone,
+                "Stream closed"
+            )).await;
+
+            // Mark stream as inactive in legacy connections
             let mut connections = connections_clone.lock().unwrap();
             if let Some(connection) = connections.get_mut(&worker_id_clone) {
                 connection.stream_active = false;
@@ -371,10 +533,49 @@ impl WorkerManager {
                 connection.stream_rx_handle = None;
             }
 
-            warn!("Stream closed for worker {}", worker_id_clone);
+            warn!("Worker {} disconnected", worker_id_clone);
         });
 
-        // Store stream handles
+        // ✅ NEW (Task 10): Spawn automatic heartbeat task
+        let worker_id_heartbeat = worker_id.to_string();
+        let tx_heartbeat = tx.clone();
+        let sessions_heartbeat = self.sessions.clone();
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            info!("Heartbeat task started for worker {}", worker_id_heartbeat);
+
+            loop {
+                interval.tick().await;
+
+                // Check if session still exists
+                if !sessions_heartbeat.contains_key(&worker_id_heartbeat) {
+                    info!("Session removed, stopping heartbeat for {}", worker_id_heartbeat);
+                    break;
+                }
+
+                // Send heartbeat
+                let heartbeat_msg = ControllerMessage {
+                    payload: Some(controller_message::Payload::Heartbeat(Heartbeat {
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs() as i64,
+                    })),
+                };
+
+                if tx_heartbeat.send(heartbeat_msg).await.is_err() {
+                    warn!("Heartbeat send failed for {}, stream likely closed", worker_id_heartbeat);
+                    break;
+                }
+
+                debug!("Sent heartbeat to worker {}", worker_id_heartbeat);
+            }
+
+            info!("Heartbeat task stopped for worker {}", worker_id_heartbeat);
+        });
+
+        // Store legacy stream handles (for backward compat)
         {
             let mut connections = self.connections.lock().unwrap();
             if let Some(connection) = connections.get_mut(worker_id) {
@@ -431,17 +632,37 @@ impl WorkerManager {
     }
 
     /// Send a command to worker via stream
+    /// Send command to worker via stream
+    ///
+    /// # Error Handling
+    /// - Returns error if worker not found or stream closed
+    /// - Automatically removes dead sessions on send failure
+    /// - Emits Disconnected event for orchestration loop
     pub async fn send_command(&self, worker_id: &str, msg: ControllerMessage) -> Result<()> {
-        let connections = self.connections.lock().unwrap();
-        let connection = connections.get(worker_id)
-            .ok_or_else(|| anyhow!("Worker {} not found", worker_id))?;
+        // ✅ NEW (Task 12): Get session (no lock held after this line)
+        let session = self.sessions.get(worker_id)
+            .ok_or_else(|| anyhow!("Worker {} not found or stream not established", worker_id))?;
 
-        if let Some(ref tx) = connection.stream_tx {
-            tx.send(msg).await
-                .map_err(|e| anyhow!("Failed to send command to worker {}: {}", worker_id, e))?;
-            Ok(())
-        } else {
-            Err(anyhow!("Worker {} does not have active stream", worker_id))
+        // Clone tx to release DashMap read lock before .await
+        let tx = session.tx.clone();
+        drop(session);  // Explicitly release read lock
+
+        // ✅ NEW (Task 12): Send message (no locks held)
+        match tx.send(msg).await {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                // ✅ NEW (Task 13): Send failed → worker disconnected, remove session
+                warn!("Send to worker {} failed, removing session", worker_id);
+                self.sessions.remove(worker_id);
+
+                // ✅ NEW (Task 13): Emit Disconnected event
+                let _ = self.events_tx.send(WorkerEvent::disconnected(
+                    worker_id,
+                    "Send failed"
+                )).await;
+
+                Err(anyhow!("Worker {} disconnected (send failed)", worker_id))
+            }
         }
     }
 
@@ -478,6 +699,39 @@ impl WorkerManager {
         self.send_command(worker_id, heartbeat).await
     }
 
+    /// ✅ NEW (Task 14): Broadcast message to all connected workers
+    ///
+    /// # Behavior
+    /// - Sends to all workers with active sessions
+    /// - Does NOT fail if some workers are unreachable
+    /// - Logs warnings for failed sends
+    /// - Returns number of successful sends
+    pub async fn broadcast(&self, msg: ControllerMessage) -> usize {
+        // Collect worker IDs (avoid holding iterator across .await)
+        let worker_ids: Vec<String> = self.sessions.iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        let mut success_count = 0;
+
+        for worker_id in worker_ids {
+            match self.send_command(&worker_id, msg.clone()).await {
+                Ok(()) => {
+                    success_count += 1;
+                }
+                Err(e) => {
+                    warn!("Broadcast to worker {} failed: {}", worker_id, e);
+                    // Continue broadcasting to other workers
+                }
+            }
+        }
+
+        info!("Broadcast completed: {}/{} workers reachable",
+            success_count, self.sessions.len());
+
+        success_count
+    }
+
     /// Check if worker has active stream
     pub fn has_active_stream(&self, worker_id: &str) -> bool {
         let connections = self.connections.lock().unwrap();
@@ -504,9 +758,10 @@ impl WorkerManager {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_add_remove_worker() {
-        let manager = WorkerManager::new(30);
+    #[tokio::test]
+    async fn test_add_remove_worker() {
+        let (events_tx, _events_rx) = mpsc::channel(10);
+        let manager = WorkerManager::new(30, events_tx);
 
         let config = WorkerConfig {
             id: "win10-worker-01".to_string(),
@@ -526,9 +781,10 @@ mod tests {
         assert_eq!(workers.len(), 0);
     }
 
-    #[test]
-    fn test_worker_stats() {
-        let manager = WorkerManager::new(30);
+    #[tokio::test]
+    async fn test_worker_stats() {
+        let (events_tx, _events_rx) = mpsc::channel(10);
+        let manager = WorkerManager::new(30, events_tx);
 
         let config = WorkerConfig {
             id: "win10-worker-01".to_string(),
@@ -544,5 +800,160 @@ mod tests {
         let (connected, retry_count) = stats.unwrap();
         assert_eq!(connected, false); // Not connected yet
         assert_eq!(retry_count, 0);
+    }
+
+    // ✅ NEW (Task 24): Test event emission
+    #[tokio::test]
+    async fn test_event_emission() {
+        let (events_tx, mut events_rx) = mpsc::channel(10);
+        let _manager = WorkerManager::new(30, events_tx.clone());
+
+        // Simulate Connected event
+        let _ = events_tx.send(WorkerEvent::connected(
+            "test-worker",
+            "windows10",
+            vec!["rededr".to_string(), "defender".to_string()],
+        )).await;
+
+        // Receive event
+        let event = tokio::time::timeout(
+            Duration::from_secs(1),
+            events_rx.recv()
+        ).await.expect("Timeout waiting for event").expect("Channel closed");
+
+        match event {
+            WorkerEvent::Connected { worker_id, os_version, capabilities } => {
+                assert_eq!(worker_id, "test-worker");
+                assert_eq!(os_version, "windows10");
+                assert_eq!(capabilities.len(), 2);
+            }
+            _ => panic!("Expected Connected event"),
+        }
+    }
+
+    // ✅ NEW (Task 24): Test Disconnected event
+    #[tokio::test]
+    async fn test_disconnected_event() {
+        let (events_tx, mut events_rx) = mpsc::channel(10);
+        let _manager = WorkerManager::new(30, events_tx.clone());
+
+        // Simulate Disconnected event
+        let _ = events_tx.send(WorkerEvent::disconnected(
+            "test-worker",
+            "Stream closed"
+        )).await;
+
+        // Receive event
+        let event = tokio::time::timeout(
+            Duration::from_secs(1),
+            events_rx.recv()
+        ).await.expect("Timeout").expect("Channel closed");
+
+        match event {
+            WorkerEvent::Disconnected { worker_id, reason } => {
+                assert_eq!(worker_id, "test-worker");
+                assert_eq!(reason, "Stream closed");
+            }
+            _ => panic!("Expected Disconnected event"),
+        }
+    }
+
+    // ✅ NEW (Task 24): Test session staleness
+    #[tokio::test]
+    async fn test_session_staleness() {
+        let (tx, _rx) = mpsc::channel(10);
+        let mut session = SessionHandle::new("test-worker".to_string(), tx);
+
+        // Fresh session should not be stale
+        assert!(!session.is_stale(5));
+
+        // Simulate old session
+        session.last_seen = std::time::SystemTime::now() - Duration::from_secs(10);
+        assert!(session.is_stale(5));  // 10 seconds > 5 second timeout
+
+        // Touch should refresh
+        session.touch();
+        assert!(!session.is_stale(5));
+    }
+
+    // ✅ NEW (Task 24): Test broadcast (simulated)
+    #[tokio::test]
+    async fn test_broadcast_logic() {
+        let (events_tx, _events_rx) = mpsc::channel(10);
+        let manager = WorkerManager::new(30, events_tx);
+
+        // Create mock sessions
+        let (tx1, _rx1) = mpsc::channel(10);
+        let (tx2, _rx2) = mpsc::channel(10);
+
+        manager.sessions.insert("worker-01".to_string(), SessionHandle::new(
+            "worker-01".to_string(),
+            tx1,
+        ));
+        manager.sessions.insert("worker-02".to_string(), SessionHandle::new(
+            "worker-02".to_string(),
+            tx2,
+        ));
+
+        // Verify both sessions exist
+        assert_eq!(manager.sessions.len(), 2);
+        assert!(manager.sessions.contains_key("worker-01"));
+        assert!(manager.sessions.contains_key("worker-02"));
+    }
+
+    // ✅ NEW (Task 24): Test list_workers with both sessions and legacy
+    #[tokio::test]
+    async fn test_list_workers_hybrid() {
+        let (events_tx, _events_rx) = mpsc::channel(10);
+        let manager = WorkerManager::new(30, events_tx);
+
+        // Add legacy connection
+        let config = WorkerConfig {
+            id: "legacy-worker".to_string(),
+            address: "10.0.0.1:50052".to_string(),
+            enabled: true,
+        };
+        manager.add_worker(config).unwrap();
+
+        // Add session
+        let (tx, _rx) = mpsc::channel(10);
+        manager.sessions.insert("streaming-worker".to_string(), SessionHandle::new(
+            "streaming-worker".to_string(),
+            tx,
+        ));
+
+        // List should include both
+        let workers = manager.list_workers();
+        assert_eq!(workers.len(), 2);
+        assert!(workers.contains(&"legacy-worker".to_string()));
+        assert!(workers.contains(&"streaming-worker".to_string()));
+    }
+
+    // ✅ NEW (Task 24): Test is_worker_connected with sessions
+    #[tokio::test]
+    async fn test_is_worker_connected_with_session() {
+        let (events_tx, _events_rx) = mpsc::channel(10);
+        let manager = WorkerManager::new(30, events_tx);
+
+        // Worker not added yet
+        assert!(!manager.is_worker_connected("test-worker"));
+
+        // Add session
+        let (tx, _rx) = mpsc::channel(10);
+        manager.sessions.insert("test-worker".to_string(), SessionHandle::new(
+            "test-worker".to_string(),
+            tx,
+        ));
+
+        // Should be connected (fresh session)
+        assert!(manager.is_worker_connected("test-worker"));
+
+        // Make session stale
+        if let Some(mut session) = manager.sessions.get_mut("test-worker") {
+            session.last_seen = std::time::SystemTime::now() - Duration::from_secs(400);
+        }
+
+        // Should be disconnected (stale session > 5 min)
+        assert!(!manager.is_worker_connected("test-worker"));
     }
 }

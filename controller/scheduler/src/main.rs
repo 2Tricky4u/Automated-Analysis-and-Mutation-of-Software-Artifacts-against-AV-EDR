@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, transport::Server};
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, debug};
 
 mod job;
 mod queue;
@@ -1659,9 +1659,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Controller/Scheduler starting...");
 
-    // Initialize WorkerManager with workers from config
+    // ✅ NEW (Task 17): Create worker event bus
+    use tokio::sync::mpsc;
+    let (events_tx, mut events_rx) = mpsc::channel::<worker_manager::WorkerEvent>(1000);
+    info!("Created worker event bus (capacity: 1000 messages)");
+
+    // Initialize WorkerManager with workers from config and event bus
     info!("Initializing WorkerManager...");
-    let worker_manager = Arc::new(worker_manager::WorkerManager::new(30)); // 30s RPC timeout
+    // ✅ UPDATED (Task 18): Pass events_tx to WorkerManager::new()
+    let worker_manager = Arc::new(worker_manager::WorkerManager::new(30, events_tx.clone())); // 30s RPC timeout
 
     // Add workers from config
     for worker_config in &config.scheduler.workers {
@@ -1722,6 +1728,85 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Set worker manager in scheduler service
     scheduler.set_worker_manager(Arc::clone(&worker_manager));
     info!("WorkerManager initialized with {} workers", config.scheduler.workers.len());
+
+    // ✅ NEW (Tasks 19-22): Spawn orchestration loop to consume worker events
+    tokio::spawn(async move {
+        info!("🚀 Worker event orchestration loop started");
+
+        while let Some(event) = events_rx.recv().await {
+            match event {
+                // ✅ Task 20: Connected event handler
+                worker_manager::WorkerEvent::Connected { worker_id, os_version, capabilities } => {
+                    info!("✅ [WORKER-EVENT] Worker {} connected - OS: {}, Caps: {:?}",
+                        worker_id, os_version, capabilities);
+                    // TODO: Send initial configuration or sync state
+                    // TODO: Update WorkerPool state
+                }
+
+                // ✅ Task 21: Message event handler
+                worker_manager::WorkerEvent::Message { worker_id, msg } => {
+                    use crate::automutate::common::worker_message;
+
+                    match msg.payload {
+                        Some(worker_message::Payload::Registration(reg)) => {
+                            debug!("📝 [WORKER-EVENT] Worker {} registered", worker_id);
+                        }
+
+                        Some(worker_message::Payload::Status(status)) => {
+                            debug!("📊 [WORKER-EVENT] Worker {} status - CPU: {}%, Jobs: {}",
+                                worker_id, status.cpu_percent, status.active_jobs);
+                            // TODO: Update worker health metrics
+                        }
+
+                        Some(worker_message::Payload::Telemetry(batch)) => {
+                            info!("📡 [WORKER-EVENT] Worker {} telemetry - {} events (job: {}, final: {})",
+                                worker_id, batch.events.len(), batch.job_id, batch.is_final);
+                            // TODO: Forward to Elasticsearch asynchronously
+                            // let es = es_client_orch.clone();
+                            // tokio::spawn(async move {
+                            //     index_telemetry_batch(&es, &batch).await;
+                            // });
+                        }
+
+                        Some(worker_message::Payload::SampleResponse(response)) => {
+                            info!("✅ [WORKER-EVENT] Worker {} completed job {} - Success: {}, Exit code: {}",
+                                worker_id, response.job_id, response.success, response.exit_code);
+                            // TODO: Mark job as complete in scheduler
+                            // scheduler_core_orch.complete_job(&response.job_id, response);
+                        }
+
+                        Some(worker_message::Payload::Ack(ack)) => {
+                            debug!("✓ [WORKER-EVENT] Worker {} acked request {} - Success: {}",
+                                worker_id, ack.request_id, ack.success);
+                            // Optional: Update pending command tracking
+                        }
+
+                        None => {
+                            warn!("⚠️  [WORKER-EVENT] Worker {} sent empty message", worker_id);
+                        }
+                    }
+                }
+
+                // ✅ Task 22: Disconnected event handler
+                worker_manager::WorkerEvent::Disconnected { worker_id, reason } => {
+                    warn!("❌ [WORKER-EVENT] Worker {} disconnected: {}", worker_id, reason);
+                    // TODO: Reschedule jobs assigned to this worker
+                    // if let Some(scheduler) = scheduler_core_orch.as_ref() {
+                    //     scheduler.reschedule_worker_jobs(&worker_id);
+                    // }
+
+                    // TODO: Mark worker as offline in WorkerPool
+                    // if let Some(scheduler) = scheduler_core_orch.as_ref() {
+                    //     let _ = scheduler.pool().mark_worker_offline(&worker_id);
+                    // }
+                }
+            }
+        }
+
+        warn!("Worker event orchestration loop terminated (event channel closed)");
+    });
+
+    info!("Orchestration loop spawned successfully");
 
     // Create scheduler core configuration from controller config
     let scheduler_core_config = CoreSchedulerConfig {
