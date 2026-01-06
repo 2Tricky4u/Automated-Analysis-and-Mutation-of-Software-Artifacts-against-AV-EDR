@@ -13,9 +13,9 @@ use tracing::{debug, error, info, warn};
 
 // Import generated protobuf types
 use crate::automutate::common::{
-    controller_message, worker_message, Ack, ControllerMessage, HealthCheckRequest, Heartbeat,
-    RunSampleCommand, SampleResponse, StatusReport, TelemetryBatch, WorkerMessage,
-    WorkerRegistration,
+    controller_message, worker_message, Ack, ControllerMessage, ExecutionStatusReport,
+    HealthCheckRequest, Heartbeat, RunSampleCommand, SampleResponse, StatusReport,
+    TelemetryBatch, WorkerMessage, WorkerRegistration,
 };
 
 use crate::capabilities::WorkerState;
@@ -260,6 +260,54 @@ impl StreamHandler {
             }))
             .await
             .map_err(|e| anyhow!("Failed to send status update: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Send detailed execution status from ExecutionMonitor
+    /// This sends comprehensive execution metrics including job details, process state, and telemetry counts
+    pub async fn send_execution_status(
+        &self,
+        job_id: String,
+        run_id: String,
+        artifact_name: String,
+        pid: i32,
+        elapsed_seconds: i32,
+        process_alive: bool,
+        telemetry_events_count: i32,
+        event_type: String,
+        cpu_percent: i32,
+        memory_mb: i32,
+        details: String,
+    ) -> Result<()> {
+        let state = self.worker_state.read().await;
+
+        let execution_status = ExecutionStatusReport {
+            worker_id: state.worker_id.clone(),
+            worker_ip: state
+                .metadata
+                .get("ip_address")
+                .cloned()
+                .unwrap_or_default(),
+            job_id,
+            run_id,
+            artifact_name,
+            pid,
+            elapsed_seconds,
+            process_alive,
+            telemetry_events_count,
+            event_type,
+            cpu_percent,
+            memory_mb,
+            details,
+        };
+
+        self.tx
+            .send(Ok(WorkerMessage {
+                payload: Some(worker_message::Payload::ExecutionStatus(execution_status)),
+            }))
+            .await
+            .map_err(|e| anyhow!("Failed to send execution status: {}", e))?;
 
         Ok(())
     }

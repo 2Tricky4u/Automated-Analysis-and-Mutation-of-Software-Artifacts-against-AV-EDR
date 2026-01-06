@@ -6,10 +6,10 @@ use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, transport::Server};
 use tracing::{debug, error, info, warn};
 
-mod capabilities;  // NEW: Capability detection for dynamic registration
+mod capabilities;
 mod execution;
 mod telemetry;
-mod stream_handler;  // PHASE 2: Bidirectional stream handler
+mod stream_handler;
 
 pub mod automutate {
     pub mod common {
@@ -30,6 +30,7 @@ use automutate::worker::{
 };
 
 const DELAY: u64 = 10;
+const ARTIFACTS_PATH: &str = "C:\\temp\\artifacts";
 
 // ============================================================================
 // RAII Guards for Resource Cleanup
@@ -65,15 +66,14 @@ impl RedEdrGuard {
 impl Drop for RedEdrGuard {
     fn drop(&mut self) {
         if self.reset_on_drop {
-            // Best-effort cleanup on error path
-            // Spawn blocking task since Drop can't be async
+            // Spawn blocking task
             let base_url = self.collector.config().base_url.clone();
             std::thread::spawn(move || {
                 // Create minimal runtime for cleanup
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
                     let client = reqwest::Client::builder()
-                        .timeout(Duration::from_secs(10))
+                        .timeout(Duration::from_secs(DELAY))
                         .build()
                         .unwrap();
                     let url = format!("{}/api/trace/reset", base_url);
@@ -120,16 +120,15 @@ impl MonitorGuard {
             consumer.abort();
         }
 
-        // Now wait for monitor to finish (won't block on channel)
+        // Wait for monitor to finish
         if let Some(handle) = self.handle.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+            let _ = tokio::time::timeout(Duration::from_secs(DELAY), handle).await;
         }
     }
 }
 
 impl Drop for MonitorGuard {
     fn drop(&mut self) {
-        // Best-effort cleanup
         if let Some(tx) = self.stop_tx.take() {
             let _ = tx.send(true);
         }
@@ -158,7 +157,7 @@ impl ProcessGuard {
         self.child.as_mut().expect("Child already taken")
     }
 
-    /// Take child ownership and prevent kill on drop (for normal completion)
+    /// Take child ownership and prevent kill on drop
     fn disarm(mut self) -> tokio::process::Child {
         self.should_kill = false;
         self.child.take().expect("Child already taken")
@@ -190,14 +189,14 @@ impl Drop for ProcessGuard {
 // ============================================================================
 
 /// RAII guard for single execution lock
-/// Automatically releases lock on drop (success, error, or panic)
+/// Automatically releases lock on drop
 struct ExecutionLockGuard {
     lock: Arc<Mutex<ExecutionState>>,
 }
 
 impl Drop for ExecutionLockGuard {
     fn drop(&mut self) {
-        // Release lock by spawning task (Drop can't be async)
+        // Release lock by spawning task
         let lock = self.lock.clone();
         tokio::spawn(async move {
             let mut state = lock.lock().await;
@@ -229,9 +228,11 @@ pub struct WorkerAgentService {
     worker_id: String,
     config: WorkerConfig,
     system_info: Arc<Mutex<System>>,
-    /// Single execution lock - only ONE job can run at a time
+    /// Single execution lock needed for rededr
     /// This ensures clean telemetry collection with no cross-contamination
     execution_lock: Arc<Mutex<ExecutionState>>,
+    /// StreamHandler for bidirectional communication (set when establish_stream is called)
+    stream_handler: Arc<tokio::sync::RwLock<Option<Arc<stream_handler::StreamHandler>>>>,
 }
 
 impl WorkerAgentService {
@@ -245,6 +246,7 @@ impl WorkerAgentService {
                 current_job_id: None,
                 current_artifact: None,
             })),
+            stream_handler: Arc::new(Default::default()),
         }
     }
 
@@ -285,6 +287,23 @@ impl WorkerAgentService {
     async fn get_execution_state(&self) -> ExecutionState {
         self.execution_lock.lock().await.clone()
     }
+
+    fn truncate_middle_output(stdout_output: &String) -> String {
+        let formatted = if stdout_output.len() > 1000 {
+            // Show first 400 chars and last 400 chars, truncate middle
+            let first_part = &stdout_output[..400];
+            let last_part = &stdout_output[stdout_output.len() - 400..];
+            format!(
+                "{}\n\n... ({} bytes truncated) ...\n\n{}",
+                first_part,
+                stdout_output.len() - 800,
+                last_part
+            )
+        } else {
+            stdout_output.clone()
+        };
+        formatted
+    }
 }
 
 #[tonic::async_trait]
@@ -324,7 +343,7 @@ impl WorkerAgent for WorkerAgentService {
         );
 
         // ====================================================================
-        // Phase 0: Acquire single execution lock (FAIL FAST if busy)
+        // Phase 0: Acquire single execution lock
         // ====================================================================
 
         let _execution_lock = self
@@ -353,7 +372,7 @@ impl WorkerAgent for WorkerAgentService {
 
         // 1. Resolve artifact_id to local path
         let artifact_path =
-            std::path::Path::new("C:\\temp\\artifacts").join(format!("{}.exe", req.artifact_id));
+            std::path::Path::new(ARTIFACTS_PATH).join(format!("{}.exe", req.artifact_id));
 
         if !artifact_path.exists() {
             return Err(Status::not_found(format!(
@@ -373,10 +392,11 @@ impl WorkerAgent for WorkerAgentService {
                 run_id: run_id.clone(),
             },
         );
+        //TODO activate lock on rededr?
         //collector.acquire_lock().await.expect("TODO: panic message");
         let rededr_guard = RedEdrGuard::new(collector);
 
-        // 4. Sanity check: RedEDR should be clean (no leftover events from previous run)
+        // 4. Sanity check RedEDR should be clean (no leftover events from previous run)
         info!("Performing pre-run sanity check: RedEDR should be empty");
         let pre_run_events = match rededr_guard
             .collector()
@@ -401,7 +421,7 @@ impl WorkerAgent for WorkerAgentService {
             info!(
                 "Sanity check: Found 1 event (likely initialization noise), silently discarding and continuing"
             );
-            // Discard the single event - don't try to parse/send it (might be malformed)
+            // Discard the single event might be malformed
             // Just drop pre_run_events and proceed with execution
         } else if has_real_contamination {
             warn!(
@@ -432,31 +452,8 @@ impl WorkerAgent for WorkerAgentService {
                     event
                 })
                 .collect();
-
-            /* DEPRECATED: Phase 1 - workers don't push telemetry to controller
-               Controller will pull telemetry via GetTelemetry RPC
-            match tokio::time::timeout(
-                Duration::from_secs(DELAY),
-                self.send_telemetry_batch_to_controller(contaminated_events)
-            ).await {
-                Ok(Ok(())) => {
-                    info!(
-                        "Sent {} contaminated events to controller for debugging",
-                        leftover_count
-                    );
-                }
-                Ok(Err(e)) => {
-                    warn!("Failed to send contaminated events to controller: {}", e);
-                    warn!("Continuing with execution anyway (contamination handling is best-effort)");
-                }
-                Err(_) => {
-                    warn!("Timeout sending contaminated events to controller ({}s limit exceeded)", DELAY);
-                    warn!("Continuing with execution anyway (contamination handling is best-effort)");
-                }
-            }
-            */
             warn!(
-                "Phase 1: {} contaminated events detected but not sent (controller will pull via GetTelemetry)",
+                "{} contaminated events detected but not sent (controller will pull via GetTelemetry)",
                 leftover_count
             );
 
@@ -506,9 +503,9 @@ impl WorkerAgent for WorkerAgentService {
             info!("RedEDR tracing started for artifact: {}", artifact_name);
         }
 
-        // 4. Spawn process with guard (guard ensures kill if error occurs)
+        // 4. Spawn process with guard ensures kill if error occurs
         // Create artifact-specific telemetry directory to avoid cross-contamination
-        let artifacts_base = std::path::Path::new("C:\\temp\\artifacts");
+        let artifacts_base = std::path::Path::new(ARTIFACTS_PATH);
         let telemetry_dir = artifacts_base.join(format!("telemetry_{}", req.artifact_id));
 
         // Create telemetry directory (clean it if it already exists to avoid stale files)
@@ -522,37 +519,37 @@ impl WorkerAgent for WorkerAgentService {
 
         info!("Created artifact-specific telemetry directory: {:?}", telemetry_dir);
 
-        // 5b. Start line-level trace collector with streaming to file
-        // Stream events to file during execution (handles unlimited events, survives crashes)
+        // 5. Start line-level trace collector with streaming to file
+        // Stream events to file during execution
         let trace_events_file = telemetry_dir.join("trace_events.jsonl");
         let trace_events_file_clone = trace_events_file.clone();
 
-        let (trace_tx, mut trace_rx) = tokio::sync::mpsc::channel(100_000);  // Larger buffer for high-frequency tracing
+        let (trace_tx, mut trace_rx) = tokio::sync::mpsc::channel(100_000);
         let trace_collector = telemetry::collectors::trace::TraceCollector::new(trace_tx.clone());
 
-        // Spawn streaming writer (drains channel and writes to file during execution)
-        // Optimized: only include thread_id when it changes (reduces log size by ~10-15%)
+        // Spawn streaming writer
+        // Optimized: only include thread_id when it changes
         let streaming_handle = tokio::spawn(async move {
             use tokio::io::{AsyncWriteExt, BufWriter};
 
             match tokio::fs::File::create(&trace_events_file_clone).await {
                 Ok(file) => {
                     // Use buffered writer for better performance
-                    let mut writer = BufWriter::with_capacity(256 * 1024, file);  // 256KB buffer
+                    let mut writer = BufWriter::with_capacity(256 * 1024, file);
                     let mut event_count = 0u64;
-                    let mut json_buffer = String::with_capacity(512);  // Reusable buffer
+                    let mut json_buffer = String::with_capacity(512);
                     let mut last_thread_id: Option<u32> = None;
 
                     while let Some(mut event) = trace_rx.recv().await {
-                        // Optimization: omit thread_id if same as previous event
+                        // TODO: add thead id to feedback?
                         let include_thread_id = match last_thread_id {
                             None => {
-                                // First event - always include thread_id
+                                // First event, always include thread_id
                                 last_thread_id = Some(event.thread_id);
                                 true
                             }
                             Some(prev_tid) if prev_tid != event.thread_id => {
-                                // Thread changed - include it
+                                // Thread changed include it
                                 last_thread_id = Some(event.thread_id);
                                 true
                             }
@@ -563,7 +560,7 @@ impl WorkerAgent for WorkerAgentService {
                             }
                         };
 
-                        // Serialize event to JSON (reuse buffer)
+                        // Serialize event to JSON
                         json_buffer.clear();
                         match serde_json::to_writer(unsafe { json_buffer.as_mut_vec() }, &event) {
                             Ok(_) => {
@@ -668,6 +665,18 @@ impl WorkerAgent for WorkerAgentService {
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
 
+        // Retrieve StreamHandler if available (set by establish_stream)
+        let stream_handler = {
+            let handler_lock = self.stream_handler.read().await;
+            handler_lock.clone()
+        };
+
+        if stream_handler.is_some() {
+            info!("ExecutionMonitor will send status via StreamHandler");
+        } else {
+            info!("ExecutionMonitor running without StreamHandler (worker-only mode)");
+        }
+
         let monitor = execution::monitor::ExecutionMonitor::new(
             run_id.clone(),
             job_id.clone(),
@@ -676,9 +685,7 @@ impl WorkerAgent for WorkerAgentService {
             artifact_name.clone(),
             pid,
             self.config.telemetry.rededr.base_url.clone(),
-            self.config.controller.as_ref()
-                .map(|c| c.controller_address.clone())
-                .unwrap_or_default(), // Phase 1: controller address not needed
+            stream_handler, // Pass StreamHandler if available
             req.timeout_seconds,
         );
 
@@ -735,7 +742,7 @@ impl WorkerAgent for WorkerAgentService {
             Ok(Err(e)) => {
                 error!("Failed to wait for process: {}", e);
 
-                // Stop monitor immediately - process likely crashed/killed
+                // Stop monitor immediately, process likely crashed/killed
                 if let Some(guard) = monitor_guard.take() {
                     guard.stop().await;
                 }
@@ -743,7 +750,7 @@ impl WorkerAgent for WorkerAgentService {
                 (-1, false) // -1 = wait() failed
             }
             Err(_) => {
-                // Timeout triggered - but check if process already exited naturally (race condition)
+                // Timeout triggered, but check if process already exited naturally
                 let pid = process_guard.child_mut().id();
 
                 // Give the process a brief moment to report its exit status
@@ -762,7 +769,7 @@ impl WorkerAgent for WorkerAgentService {
                                 if let Some(guard) = monitor_guard.take() {
                                     guard.stop().await;
                                 }
-                                (code, false) // NOT a timeout - process completed
+                                (code, false)
                             }
                             None => {
                                 warn!("Process was terminated externally (likely by AV/EDR)");
@@ -774,10 +781,10 @@ impl WorkerAgent for WorkerAgentService {
                         }
                     }
                     Ok(None) | Err(_) => {
-                        // Process is still running or status unavailable - this is a real timeout
+                        // Process is still running or status unavailable, this is a real timeout
                         info!("Timeout: Process still running after {}s, forcefully killing", req.timeout_seconds);
 
-                        // On Windows, use taskkill /F /T to kill process tree forcefully
+                        // taskkill /F /T to kill process tree forcefully
                         #[cfg(target_os = "windows")]
                         if let Some(pid) = pid {
                             info!("Timeout: Forcefully killing process tree for PID {}", pid);
@@ -790,7 +797,7 @@ impl WorkerAgent for WorkerAgentService {
                             }
                         }
 
-                        // Also try Tokio's kill as backup
+                        // Tokio's kill as backup
                         let _ = process_guard.child_mut().kill().await;
 
                         // Wait a moment for process to die
@@ -839,38 +846,14 @@ impl WorkerAgent for WorkerAgentService {
         let stdout_output = stdout_handle.await.unwrap_or_default();
         let stderr_output = stderr_handle.await.unwrap_or_default();
 
-        // Log captured output (show beginning and end, truncate middle if too long)
+        // Log captured output
         if !stdout_output.is_empty() {
-            let formatted = if stdout_output.len() > 1000 {
-                // Show first 400 chars and last 400 chars, truncate middle
-                let first_part = &stdout_output[..400];
-                let last_part = &stdout_output[stdout_output.len() - 400..];
-                format!(
-                    "{}\n\n... ({} bytes truncated) ...\n\n{}",
-                    first_part,
-                    stdout_output.len() - 800,
-                    last_part
-                )
-            } else {
-                stdout_output.clone()
-            };
+            let formatted = Self::truncate_middle_output(&stdout_output);
             info!("Process stdout:\n{}", formatted);
         }
 
         if !stderr_output.is_empty() {
-            let formatted = if stderr_output.len() > 1000 {
-                // Show first 400 chars and last 400 chars, truncate middle
-                let first_part = &stderr_output[..400];
-                let last_part = &stderr_output[stderr_output.len() - 400..];
-                format!(
-                    "{}\n\n... ({} bytes truncated) ...\n\n{}",
-                    first_part,
-                    stderr_output.len() - 800,
-                    last_part
-                )
-            } else {
-                stderr_output.clone()
-            };
+            let formatted = Self::truncate_middle_output(&stderr_output);
             info!("Process stderr:\n{}", formatted);  // Changed to INFO so we always see it
         } else {
             info!("Process stderr: (empty)");
@@ -879,20 +862,16 @@ impl WorkerAgent for WorkerAgentService {
         // ====================================================================
         // Phase 6: Stop monitor and post-exit telemetry window (10 seconds)
         // ====================================================================
+
         // Stop monitor BEFORE telemetry window to prevent duplicate status reports
-        // (Monitor would send "terminated" event while main execution sends final status)
         if let Some(guard) = monitor_guard.take() {
             guard.stop().await;
         }
 
-        // Continue collecting telemetry for 10 seconds after process exit
-        // This captures any late-arriving events (kernel buffer flush, EDR alerts, etc.)
-        //info!("Process exited. Waiting 10 seconds for late telemetry events...");
-        //tokio::time::sleep(Duration::from_secs(10)).await;
-        //info!("Telemetry collection window closed.");
+
 
         // Give trace collector a moment to read any final events from the pipe
-        // (Don't abort immediately - SUCCESS/CHECKPOINT events may still be in pipe buffer)
+        // (Dont abort immediately SUCCESS/CHECKPOINT events may still be in pipe buffer)
         info!("Waiting for trace collector to finish reading pipe...");
         tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -901,7 +880,7 @@ impl WorkerAgent for WorkerAgentService {
         drop(trace_tx);  // Close channel sender, which will cause streaming_handle to finish
 
         // Wait for streaming writer to flush all events to disk
-        match tokio::time::timeout(Duration::from_secs(5), streaming_handle).await {
+        match tokio::time::timeout(Duration::from_secs(DELAY), streaming_handle).await {
             Ok(Ok(())) => {
                 info!("Streaming writer completed successfully");
             }
@@ -909,7 +888,7 @@ impl WorkerAgent for WorkerAgentService {
                 error!("Streaming writer panicked: {:?}", e);
             }
             Err(_) => {
-                warn!("Streaming writer timeout after 5 seconds");
+                warn!("Streaming writer timeout after {} seconds", DELAY);
             }
         }
 
@@ -917,14 +896,14 @@ impl WorkerAgent for WorkerAgentService {
         // Phase 7: Collect telemetry and reset RedEDR (BEFORE final status)
         // ====================================================================
 
-        // Collect full telemetry batch (best effort - don't fail job if collection fails)
+        // Collect full telemetry batch
         info!("Collecting telemetry events from RedEDR...");
         let mut telemetry_events = rededr_guard
             .collector()
             .collect_all(&job_id)
             .await.unwrap_or_else(|e| {
             error!("Failed to collect telemetry: {}", e);
-            error!("Continuing with empty telemetry - execution status will still be reported");
+            error!("Continuing with empty telemetry! Execution status will still be reported");
             Vec::new() // Continue with empty telemetry instead of failing entire job
         });
 
@@ -958,73 +937,28 @@ impl WorkerAgent for WorkerAgentService {
                             // Wrap in JSON: {"content": "trace content here"}
                             serde_json::json!({"content": contents}).to_string().into_bytes()
                         } else {
-                            info!("Trace log too large ({} bytes), applying CLP+MatrixProfile+Sequitur compression...", original_size);
-                            let compressed = telemetry::trace_compressor::compress_trace_log(&contents, 3);
+                        metadata.insert("compression".to_string(), "truncated_tail".to_string());
 
-                            metadata.insert(
-                                "compression_ratio".to_string(),
-                                format!("{:.2}x", compressed.compression_ratio),
-                            );
-                            metadata.insert(
-                                "compression_stats".to_string(),
-                                serde_json::to_string(&compressed.statistics).unwrap_or_default(),
-                            );
+                        let max_tail_bytes = MAX_PAYLOAD_SIZE.saturating_sub(1);
 
-                            if compressed.compressed_size <= MAX_PAYLOAD_SIZE {
-                                info!(
-                            "Loop compression successful: {} -> {} bytes ({:.1}x)",
-                            original_size, compressed.compressed_size, compressed.compression_ratio
-                        );
-                                metadata.insert("compression".to_string(), "loop_detection".to_string());
-                                // Wrap compressed content in JSON
-                                serde_json::json!({"content": compressed.content}).to_string().into_bytes()
-                            } else {
-                                info!("Still too large after loop compression, applying gzip...");
-                                match telemetry::trace_compressor::gzip_compress(compressed.content.as_bytes()) {
-                                    Ok(gzipped) if gzipped.len() <= MAX_PAYLOAD_SIZE => {
-                                        info!(
-                                    "Gzip compression successful: {} -> {} bytes",
-                                    compressed.compressed_size,
-                                    gzipped.len()
-                                );
-                                        metadata.insert("compression".to_string(), "loop+gzip".to_string());
-                                        // Store gzipped as base64 in JSON (can't put raw binary in JSON string)
-                                        use base64::{engine::general_purpose, Engine as _};
-                                        let gzipped_b64 = general_purpose::STANDARD.encode(&gzipped);
-                                        serde_json::json!({"content_b64": gzipped_b64, "encoding": "gzip+base64"}).to_string().into_bytes()
-                                    }
-                                    Ok(gzipped) => {
-                                        warn!(
-                                    "Trace log too large even after compression ({} bytes), sending metadata only",
-                                    gzipped.len()
-                                );
-                                        metadata.insert("compression".to_string(), "truncated".to_string());
-                                        metadata.insert(
-                                            "note".to_string(),
-                                            "Log too large for gRPC transmission, file stored on worker".to_string(),
-                                        );
+                        // Keep only the tail, but ensure we cut at a UTF-8 boundary.
+                        let tail = if contents.len() <= max_tail_bytes {
+                            contents.clone()
+                        } else {
+                            let start = contents.len() - max_tail_bytes;
 
-                                        let lines: Vec<&str> = contents.lines().collect();
-                                        let sample = if lines.len() > 200 {
-                                            format!(
-                                                "=== First 100 lines ===\n{}\n\n=== Last 100 lines ===\n{}",
-                                                lines[..100].join("\n"),
-                                                lines[lines.len() - 100..].join("\n")
-                                            )
-                                        } else {
-                                            contents.clone()
-                                        };
-                                        // Wrap truncated sample in JSON
-                                        serde_json::json!({"content": sample}).to_string().into_bytes()
-                                    }
-                                    Err(e) => {
-                                        error!("Gzip compression failed: {}", e);
-                                        metadata.insert("compression".to_string(), "error".to_string());
-                                        serde_json::json!({"error": "compression_failed"}).to_string().into_bytes()
-                                    }
-                                }
+                            // Move start forward until it's a valid char boundary
+                            let mut s = start;
+                            while s < contents.len() && !contents.is_char_boundary(s) {
+                                s += 1;
                             }
+                            contents[s..].to_string()
                         };
+
+                        serde_json::json!({ "content": tail })
+                            .to_string()
+                            .into_bytes()
+                    };
 
                         let final_size = payload.len();
                         metadata.insert("final_size_bytes".to_string(), final_size.to_string());
@@ -1046,7 +980,7 @@ impl WorkerAgent for WorkerAgentService {
 
                     // ========== CASE 2: LARGE TRACE (> 2MB) ==========
                     } else {
-                        // PHASE 1: send last 2MB immediately in main batch
+                        // send last 2MB immediately in main batch
                         // Extract complete JSON lines only (JSONL format - one JSON object per line)
                         let byte_offset = original_size.saturating_sub(MAX_IMMEDIATE_SIZE);
                         let mut last_2mb = contents[byte_offset..].to_string();
@@ -1089,13 +1023,13 @@ impl WorkerAgent for WorkerAgentService {
                     immediate_line_count, trace_events_count, original_size
                 );
 
-                        // PHASE 2: async compression of full trace
+                        //async compression of full trace
                         let job_id_clone = job_id.clone();
                         let trace_file_clone = trace_events_file.clone();
                         let contents_clone = contents.clone();
                         let controller_addr = self.config.controller.as_ref()
                             .map(|c| c.controller_address.clone())
-                            .unwrap_or_default(); // Phase 1: controller address not needed
+                            .unwrap_or_default();
 
                         info!(
                     "Spawning async compression task for full trace ({} bytes)...",
@@ -1210,23 +1144,8 @@ impl WorkerAgent for WorkerAgentService {
                                 typed_event: None,
                             };
 
-                            /* DEPRECATED: Phase 1 - workers don't push telemetry
-                            if let Err(e) = Self::send_reduced_trace_to_controller(
-                                &controller_addr,
-                                reduced_telemetry,
-                            )
-                                .await
-                            {
-                                error!("Failed to send reduced trace to controller: {}", e);
-                            } else {
-                                info!(
-                            "[OK] Successfully sent reduced trace ({} -> {} bytes)",
-                            original_size, final_size
-                        );
-                            }
-                            */
                             info!(
-                                "[PHASE1] Reduced trace prepared ({} -> {} bytes) - available for controller pull",
+                                "Reduced trace prepared ({} -> {} bytes) - available for controller pull",
                                 original_size, final_size
                             );
                         });
@@ -1310,7 +1229,7 @@ impl WorkerAgent for WorkerAgentService {
                             3 => {
                                 // SUCCESS
                                 if let Ok(success_msg) = std::str::from_utf8(payload) {
-                                    info!("🎉 ARTIFACT SUCCESS from file: '{}'", success_msg);
+                                    info!("[OK] ARTIFACT SUCCESS from file: '{}'", success_msg);
                                     success_count += 1;
                                 }
                             }
@@ -1339,7 +1258,7 @@ impl WorkerAgent for WorkerAgentService {
             }
         }
 
-        // Collect BB coverage from disk (if instrumented with --trace=bb or --trace=api+bb)
+        // Collect BB coverage from disk
         // Look in artifact-specific telemetry directory where process ran
         let coverage_bin_path = telemetry_dir.join("coverage.bin");
         let coverage_bbs_path = telemetry_dir.join("coverage_bbs.txt");
@@ -1377,7 +1296,7 @@ impl WorkerAgent for WorkerAgentService {
             warn!("  Artifact may not be instrumented for BB coverage, or runtime did not flush files");
         }
 
-        // Collect API checkpoints from disk (if instrumented with --trace=api or --trace=api+bb)
+        // Collect API checkpoints from disk
         let checkpoints_path = telemetry_dir.join("checkpoints.log");
         if checkpoints_path.exists() {
             info!("Found API checkpoints file: {:?}", checkpoints_path);
@@ -1480,66 +1399,12 @@ impl WorkerAgent for WorkerAgentService {
             warn!("ERROR: {} - {}", artifact_name, final_details);
         }
 
-        /* DEPRECATED: Phase 1 - workers don't push status to controller
-        match tokio::time::timeout(
-            Duration::from_secs(DELAY),
-            self.send_final_status_to_controller(
-                &job_id,
-                &run_id,
-                &artifact_name,
-                pid,
-                final_status_type,
-                exit_code,
-                &final_details,
-                elapsed.as_secs() as i32,
-                telemetry_count,
-            )
-        ).await {
-            Ok(()) => { /* status sent successfully or logged error */ }
-            Err(_) => {
-                warn!("Timeout sending final status to controller ({}s limit exceeded)", DELAY);
-                warn!("Controller may be slow or unreachable");
-            }
-        }
-        */
-        info!("[PHASE1] Execution completed: {} telemetry events available for pull", telemetry_count);
+        info!("Execution completed: {} telemetry events available for pull", telemetry_count);
 
-        /* DEPRECATED: Phase 1 - workers don't push telemetry to controller
-           Controller will pull telemetry via GetTelemetry RPC
-        if !telemetry_events.is_empty() {
-            info!("[TRANSMIT]Preparing to send {} telemetry events to controller...", telemetry_count);
-            match tokio::time::timeout(
-                Duration::from_secs(DELAY),
-                self.send_telemetry_batch_to_controller(telemetry_events)
-            ).await {
-                Ok(Ok(())) => {
-                    info!("[OK] Successfully sent {} telemetry events to controller", telemetry_count);
-                }
-                Ok(Err(e)) => {
-                    error!("[ERROR] TELEMETRY TRANSMISSION ERROR: Failed to send telemetry to controller");
-                    error!("   Job: {}, Run: {}, Events: {}", job_id, run_id, telemetry_count);
-                    error!("   Error: {}", e);
-                    warn!("   [WARN]  Telemetry collected ({} events) but NOT SENT - controller may be unavailable", telemetry_count);
-                    warn!("   Data is LOST - these telemetry events will not be indexed");
-                    // Don't fail the RPC - execution completed successfully
-                }
-                Err(_) => {
-                    error!("[TIMEOUT]  TELEMETRY TIMEOUT: Sending {} events exceeded {}s limit", telemetry_count, DELAY);
-                    error!("   Job: {}, Run: {}", job_id, run_id);
-                    warn!("   Controller may not implement StreamTelemetry RPC or is unreachable/slow");
-                    warn!("   [WARN]  Telemetry collected ({} events) but NOT SENT - data is LOST", telemetry_count);
-                    // Don't fail the RPC - execution completed successfully
-                }
-            }
-        } else {
-            warn!("[WARN]  No telemetry events collected [job: {}, run: {}]", job_id, run_id);
-            warn!("   This may indicate: RedEDR collection failed, no events generated, or collection error");
-        }
-        */
 
         // Phase 1: Telemetry stored locally, controller pulls via GetTelemetry RPC
         if !telemetry_events.is_empty() {
-            info!("[PHASE1] Collected {} telemetry events - available for controller pull via GetTelemetry", telemetry_count);
+            info!("Collected {} telemetry events - available for controller pull via GetTelemetry", telemetry_count);
         } else {
             warn!("[WARN] No telemetry events collected [job: {}, run: {}]", job_id, run_id);
         }
@@ -1550,7 +1415,7 @@ impl WorkerAgent for WorkerAgentService {
                 "Failed to reset RedEDR: {} - Next execution may have contaminated events!",
                 e
             );
-            // Error is logged but we don't fail the RPC - telemetry was already collected
+            // Error is logged but we don't fail the RPC
         }
 
         // 10. Prepare output (include stderr if error occurred)
@@ -1568,7 +1433,7 @@ impl WorkerAgent for WorkerAgentService {
                 format!("Execution completed in {:.2}s", elapsed.as_secs_f64())
             }
         } else {
-            // Error - include both stdout and stderr
+            // Error
             let mut error_output = format!("Execution failed with exit code {}\n", exit_code);
 
             if !stderr_output.is_empty() {
@@ -1582,6 +1447,7 @@ impl WorkerAgent for WorkerAgentService {
             error_output
         };
 
+        //TODO needed for lock
         //collector.release_lock().await.expect("Error");
 
         // 11. Return response
@@ -1708,7 +1574,7 @@ impl WorkerAgent for WorkerAgentService {
         }
 
         // Write to disk (artifacts directory)
-        let artifacts_dir = std::path::Path::new("C:\\temp\\artifacts");
+        let artifacts_dir = std::path::Path::new(ARTIFACTS_PATH);
         std::fs::create_dir_all(artifacts_dir).map_err(|e| {
             Status::internal(format!("Failed to create artifacts directory: {}", e))
         })?;
@@ -1879,7 +1745,7 @@ impl WorkerAgent for WorkerAgentService {
         Ok(Response::new(Box::pin(stream) as Self::GetTelemetryStream))
     }
 
-    /// PHASE 2: Bidirectional stream for real-time communication
+    /// Bidirectional stream for real-time communication
     /// Controller initiates the stream, both sides can send messages
     type EstablishStreamStream = tokio_stream::wrappers::ReceiverStream<Result<automutate::common::WorkerMessage, Status>>;
 
@@ -1908,6 +1774,13 @@ impl WorkerAgent for WorkerAgentService {
         // Create stream handler
         let (handler, rx) = StreamHandler::new(worker_state.clone());
         let handler = Arc::new(handler);
+
+        // Store handler in service for use by run_sample()
+        {
+            let mut stream_handler_lock = self.stream_handler.write().await;
+            *stream_handler_lock = Some(handler.clone());
+        }
+        info!("StreamHandler stored in service - available for ExecutionMonitor");
 
         // Send registration immediately
         if let Err(e) = handler.send_registration().await {
@@ -1941,275 +1814,6 @@ impl WorkerAgent for WorkerAgentService {
     }
 }
 
-// Helper methods for WorkerAgentService
-impl WorkerAgentService {
-    /* DEPRECATED: Phase 1 - workers don't push telemetry, controller pulls via GetTelemetry
-    async fn send_telemetry_batch_to_controller(
-        &self,
-        telemetry_events: Vec<automutate::common::TelemetryData>,
-    ) -> Result<(), Status> {
-        use automutate::controller::controller_client::ControllerClient;
-        use futures::stream;
-
-        let event_count = telemetry_events.len();
-        let first_job_id = telemetry_events.first().map(|e| e.job_id.clone()).unwrap_or_else(|| "unknown".to_string());
-
-        info!(
-            "[SEND]  Sending {} telemetry events to controller [job: {}]",
-            event_count, first_job_id
-        );
-
-        // Ensure controller address has http:// scheme
-        let controller_addr = if self
-            .config
-            .controller
-            .controller_address
-            .starts_with("http://")
-            || self
-                .config
-                .controller
-                .controller_address
-                .starts_with("https://")
-        {
-            self.config.controller.controller_address.clone()
-        } else {
-            format!("http://{}", self.config.controller.controller_address)
-        };
-
-        info!("Connecting to controller at: {}", controller_addr);
-
-        // Connect to controller
-        let mut client = ControllerClient::connect(controller_addr.clone())
-            .await
-            .map_err(|e| {
-                error!("[ERROR] CONNECTION ERROR: Failed to connect to controller");
-                error!("   Controller address: {}", controller_addr);
-                error!("   Job: {}, Events: {}", first_job_id, event_count);
-                error!("   Error type: {}", std::any::type_name_of_val(&e));
-                error!("   Error details: {}", e);
-                error!("   Debug: {:?}", e);
-                warn!("   Possible causes: controller down, network unreachable, firewall blocking, DNS resolution failure");
-                Status::unavailable(format!("Controller unavailable: {}", e))
-            })?;
-
-        info!("[OK] Connected to controller successfully");
-
-        // Create stream from telemetry events
-        let stream = stream::iter(telemetry_events);
-
-        info!("[TRANSMIT]Starting telemetry stream...");
-
-        // Send batch via streaming RPC
-        let response = client.stream_telemetry(stream).await.map_err(|e| {
-            error!("[ERROR] STREAM ERROR: Failed to stream telemetry to controller");
-            error!("   Controller address: {}", controller_addr);
-            error!("   Job: {}, Events: {}", first_job_id, event_count);
-            error!("   Status code: {}", e.code());
-            error!("   Error message: {}", e.message());
-            error!("   Error details: {:?}", e);
-            warn!("   Possible causes: network failure mid-stream, controller crashed, timeout, payload too large");
-            Status::internal(format!("Telemetry streaming failed: {}", e))
-        })?;
-
-        let ack = response.into_inner();
-
-        if ack.received {
-            info!(
-                "[OK] Telemetry sent successfully: {} events acknowledged by controller [job: {}]",
-                ack.events_count, first_job_id
-            );
-
-            if ack.events_count != event_count as i32 {
-                warn!(
-                    "[WARN]  EVENT COUNT MISMATCH: Sent {} events but controller acknowledged {}",
-                    event_count, ack.events_count
-                );
-                warn!("   This may indicate events were dropped or partially received");
-            }
-        } else {
-            warn!(
-                "[WARN]  Controller acknowledged but received=false [job: {}, events: {}]",
-                first_job_id, event_count
-            );
-        }
-
-        Ok(())
-    }
-    */ // End DEPRECATED send_telemetry_batch_to_controller
-
-    /* DEPRECATED: Phase 1 - workers don't push telemetry
-    /// Send reduced trace to controller via StreamTelemetry RPC (static method for async task)
-    async fn send_reduced_trace_to_controller(
-        controller_address: &str,
-        telemetry_data: automutate::common::TelemetryData,
-    ) -> Result<(), Status> {
-        use automutate::controller::controller_client::ControllerClient;
-        use futures::stream;
-
-        let job_id = telemetry_data.job_id.clone();
-        let payload_size = telemetry_data.payload.len();
-
-        info!(
-            "[SEND]  Sending reduced trace to controller [job: {}, event_type: {}, payload_size: {} bytes]",
-            job_id, telemetry_data.event_type, payload_size
-        );
-
-        // Ensure controller address has http:// scheme
-        let controller_addr = if controller_address.starts_with("http://")
-            || controller_address.starts_with("https://")
-        {
-            controller_address.to_string()
-        } else {
-            format!("http://{}", controller_address)
-        };
-
-        info!("Connecting to controller at: {} [async compression task]", controller_addr);
-
-        // Connect to controller
-        let mut client = ControllerClient::connect(controller_addr.clone())
-            .await
-            .map_err(|e| {
-                error!("[ERROR] CONNECTION ERROR: Failed to connect to controller [async trace compression task]");
-                error!("   Controller address: {}", controller_addr);
-                error!("   Job: {}, Payload size: {} bytes", job_id, payload_size);
-                error!("   Error type: {}", std::any::type_name_of_val(&e));
-                error!("   Error details: {}", e);
-                error!("   Debug: {:?}", e);
-                warn!("   Possible causes: controller down, network unreachable, firewall blocking");
-                warn!("   [WARN]  COMPRESSED TRACE LOST - this large trace will NOT be indexed");
-                Status::unavailable(format!("Controller unavailable: {}", e))
-            })?;
-
-        info!("[OK] Connected to controller successfully [async trace task]");
-
-        // Create stream with single event
-        let stream = stream::iter(vec![telemetry_data]);
-
-        info!("[TRANSMIT]Streaming compressed trace...");
-
-        // Send via streaming RPC
-        let response = client.stream_telemetry(stream).await.map_err(|e| {
-            error!("[ERROR] STREAM ERROR: Failed to stream reduced trace to controller");
-            error!("   Controller address: {}", controller_addr);
-            error!("   Job: {}, Payload size: {} bytes", job_id, payload_size);
-            error!("   Status code: {}", e.code());
-            error!("   Error message: {}", e.message());
-            error!("   Error details: {:?}", e);
-            warn!("   Possible causes: network failure mid-stream, controller timeout, payload too large");
-            warn!("   [WARN]  COMPRESSED TRACE LOST - this large trace will NOT be indexed");
-            Status::internal(format!("Reduced trace streaming failed: {}", e))
-        })?;
-
-        let ack = response.into_inner();
-        info!(
-            "[OK] Reduced trace sent successfully: {} events acknowledged by controller [job: {}]",
-            ack.events_count, job_id
-        );
-
-        Ok(())
-    }
-
-    /// Send final status report to controller with exit code information
-    async fn send_final_status_to_controller(
-        &self,
-        job_id: &str,
-        run_id: &str,
-        artifact_name: &str,
-        pid: u32,
-        status_type: &str,
-        _exit_code: i32,
-        details: &str,
-        elapsed_seconds: i32,
-        telemetry_events_count: i32,
-    ) {
-        use automutate::controller::{StatusReport, controller_client::ControllerClient};
-
-        info!(
-            "[STATUS] Sending final status report to controller [job: {}, run: {}, status: {}, elapsed: {}s]",
-            job_id, run_id, status_type, elapsed_seconds
-        );
-
-        // Ensure controller address has http:// scheme
-        let controller_addr = if self
-            .config
-            .controller
-            .controller_address
-            .starts_with("http://")
-            || self
-                .config
-                .controller
-                .controller_address
-                .starts_with("https://")
-        {
-            self.config.controller.controller_address.clone()
-        } else {
-            format!("http://{}", self.config.controller.controller_address)
-        };
-
-        let status_report = StatusReport {
-            worker_id: self.worker_id.clone(),
-            worker_ip: self.config.worker.ip_address.clone(),
-            job_id: job_id.to_string(),
-            run_id: run_id.to_string(),
-            artifact_name: artifact_name.to_string(),
-            pid: pid as i32,
-            elapsed_seconds,
-            process_alive: false,
-            telemetry_events_count,
-            event_type: status_type.to_string(),
-            cpu_percent: 0,
-            memory_mb: 0,
-            details: details.to_string(),
-        };
-
-        info!("Connecting to controller at: {} [final status]", controller_addr);
-
-        // Try to connect and send final status report
-        match ControllerClient::connect(controller_addr.clone()).await {
-            Ok(mut client) => {
-                info!("[OK] Connected to controller [final status]");
-                match client.report_status(Request::new(status_report)).await {
-                    Ok(response) => {
-                        let ack = response.into_inner();
-                        if ack.received {
-                            info!(
-                                "[OK] Final status report acknowledged by controller [job: {}, status: {}]",
-                                job_id, status_type
-                            );
-                        } else {
-                            warn!(
-                                "[WARN]  Controller responded but received=false [job: {}, status: {}]",
-                                job_id, status_type
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        error!("[ERROR] RPC ERROR: Failed to send final status report to controller");
-                        error!("   Controller address: {}", controller_addr);
-                        error!("   Job: {}, Run: {}, Status: {}", job_id, run_id, status_type);
-                        error!("   Status code: {}", e.code());
-                        error!("   Error message: {}", e.message());
-                        error!("   Error details: {:?}", e);
-                        warn!("   Possible causes: controller RPC handler failed, network timeout, RPC version mismatch");
-                        warn!("   [WARN]  FINAL STATUS NOT RECORDED - this run may appear incomplete in dashboard");
-                    }
-                }
-            }
-            Err(e) => {
-                error!("[ERROR] CONNECTION ERROR: Failed to connect to controller [final status]");
-                error!("   Controller address: {}", controller_addr);
-                error!("   Job: {}, Run: {}, Status: {}", job_id, run_id, status_type);
-                error!("   Error type: {}", std::any::type_name_of_val(&e));
-                error!("   Error details: {}", e);
-                error!("   Debug: {:?}", e);
-                warn!("   Possible causes: controller down, network unreachable, firewall blocking, DNS failure");
-                warn!("   [WARN]  FINAL STATUS NOT RECORDED - this run may appear incomplete in dashboard");
-            }
-        }
-    }
-    */ // End DEPRECATED helper methods
-}
-
 /// Extract filename from path (cross-platform)
 fn extract_filename(path: &str) -> String {
     std::path::Path::new(path)
@@ -2217,116 +1821,6 @@ fn extract_filename(path: &str) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or(path)
         .to_string()
-}
-
-/// Attempt to register with controller
-/// Retries with exponential backoff if controller not reachable
-async fn register_with_controller(
-    worker_id: &str,
-    ip_address: &str,
-    os_version: &str,
-    controller_address: &str,
-    capabilities_data: capabilities::WorkerCapabilities,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use std::time::Duration;
-    use crate::automutate::common::{WorkerRegistration, ToolVersions};
-    use crate::automutate::controller::controller_client::ControllerClient;
-
-    let max_retries = 5;
-    let mut retry_delay = Duration::from_secs(1);
-
-    for attempt in 1..=max_retries {
-        info!("Attempting to register with controller (attempt {}/{})", attempt, max_retries);
-
-        // Try to connect to controller
-        match ControllerClient::connect(controller_address.to_string()).await {
-            Ok(mut client) => {
-                // Build registration request
-                let tools = ToolVersions {
-                    rededr_version: capabilities_data.tools.get("rededr_version")
-                        .cloned().unwrap_or_default(),
-                    defender_version: capabilities_data.tools.get("defender_version")
-                        .cloned().unwrap_or_default(),
-                    etw_version: capabilities_data.tools.get("etw_version")
-                        .cloned().unwrap_or_default(),
-                    llvm_version: capabilities_data.tools.get("llvm_version")
-                        .cloned().unwrap_or_default(),
-                };
-
-                let registration = WorkerRegistration {
-                    worker_id: worker_id.to_string(),
-                    ip_address: ip_address.to_string(),
-                    os_version: os_version.to_string(),
-                    capabilities: capabilities_data.capabilities.clone(),
-                    metadata: capabilities_data.metadata.clone(),
-                    tools: Some(tools),
-                };
-
-                // Send registration
-                match client.register_worker(tonic::Request::new(registration)).await {
-                    Ok(response) => {
-                        let ack = response.into_inner();
-                        if ack.accepted {
-                            info!("✓ Successfully registered with controller");
-                            info!("  Message: {}", ack.message);
-                            info!("  Heartbeat interval: {}s", ack.heartbeat_interval_seconds);
-                            return Ok(());
-                        } else {
-                            warn!("Registration rejected: {}", ack.message);
-                            return Err(format!("Registration rejected: {}", ack.message).into());
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Registration RPC failed (attempt {}): {}", attempt, e);
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to connect to controller (attempt {}): {}", attempt, e);
-            }
-        }
-
-        // Wait before retry (exponential backoff)
-        if attempt < max_retries {
-            info!("Retrying in {:?}...", retry_delay);
-            tokio::time::sleep(retry_delay).await;
-            retry_delay *= 2; // Exponential backoff
-        }
-    }
-
-    Err("Failed to register with controller after retries".into())
-}
-
-/// Deregister from controller on shutdown
-async fn deregister_from_controller(
-    worker_id: &str,
-    controller_address: &str,
-    reason: &str,
-) {
-    use crate::automutate::controller::{WorkerDeregistration, controller_client::ControllerClient};
-
-    info!("Deregistering from controller (reason: {})", reason);
-
-    match ControllerClient::connect(controller_address.to_string()).await {
-        Ok(mut client) => {
-            let deregistration = WorkerDeregistration {
-                worker_id: worker_id.to_string(),
-                reason: reason.to_string(),
-            };
-
-            match client.deregister_worker(tonic::Request::new(deregistration)).await {
-                Ok(_) => {
-                    info!("✓ Successfully deregistered from controller");
-                }
-                Err(e) => {
-                    warn!("Failed to deregister: {}", e);
-                }
-            }
-        }
-        Err(e) => {
-            warn!("Failed to connect to controller for deregistration: {}", e);
-        }
-    }
 }
 
 #[tokio::main]
@@ -2366,21 +1860,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let worker_id = config.worker.worker_id.clone();
 
-    // PHASE 1: Worker no longer dials controller - controller dials worker
-    // Controller address is now optional and deprecated
-    /* DEPRECATED: Phase 1 removes worker->controller connections
-    let controller_addr = if let Some(ref controller_cfg) = config.controller {
-        let addr = controller_cfg.controller_address.clone();
-        if addr.starts_with("http://") || addr.starts_with("https://") {
-            addr
-        } else {
-            format!("http://{}", addr)
-        }
-    } else {
-        // No controller configured - Phase 1 mode
-        String::new()
-    };
-    */
 
     // Worker listen port from config or env var
     let worker_port = std::env::var("WORKER_PORT")
@@ -2406,39 +1885,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Capabilities: {:?}", capabilities.capabilities);
     info!("Tools: {:?}", capabilities.tools);
 
-    /* DEPRECATED: Phase 1 removes worker->controller registration
-       Controller now queries worker metadata via GetWorkerInfo RPC
-    info!("Registering with controller at {}", controller_addr);
-    if let Err(e) = register_with_controller(
-        &worker_id,
-        &config.worker.ip_address,
-        &config.worker.os_version,
-        &controller_addr,
-        capabilities,
-    )
-    .await
-    {
-        error!("Failed to register with controller: {}", e);
-        error!("Worker will start anyway (controller may register later via health check)");
-    }
-    */
-
-    /* DEPRECATED: Phase 1 removes worker->controller deregistration
-       Controller detects worker unavailability via failed health checks
-    let shutdown_controller_addr = controller_addr.clone();
-    let shutdown_worker_id = worker_id.clone();
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("Failed to listen for Ctrl+C");
-        info!("Received Ctrl+C, shutting down gracefully...");
-        deregister_from_controller(&shutdown_worker_id, &shutdown_controller_addr, "shutdown")
-            .await;
-        std::process::exit(0);
-    });
-    */
-
-    // Setup graceful shutdown handler (Phase 1: no deregistration needed)
+    // Setup graceful shutdown handler, stream closes automatically on exit
     tokio::spawn(async move {
         tokio::signal::ctrl_c()
             .await

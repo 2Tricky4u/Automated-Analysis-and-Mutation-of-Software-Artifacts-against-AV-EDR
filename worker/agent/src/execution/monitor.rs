@@ -5,11 +5,14 @@
 /// - Event count (detect stuck: no growth)
 /// - Process status (alive/dead)
 /// - Resource usage (CPU, memory)
-use crate::automutate::controller::{StatusReport, controller_client::ControllerClient};
+///
+/// Sends status updates via StreamHandler if available (new architecture),
+/// otherwise skips remote reporting (worker-only mode).
 use crate::automutate::worker::{ExecutionStatus, MonitorEvent};
+use crate::stream_handler::StreamHandler;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
-use tonic::Request;
 use tracing::{debug, error, info, warn};
 
 pub struct ExecutionMonitor {
@@ -20,7 +23,7 @@ pub struct ExecutionMonitor {
     pub artifact_name: String,
     pub pid: u32,
     pub rededr_base_url: String,
-    pub controller_address: String,
+    pub stream_handler: Option<Arc<StreamHandler>>,
     pub start_time: Instant,
     pub timeout_seconds: i32,
     client: reqwest::Client,
@@ -36,7 +39,7 @@ impl ExecutionMonitor {
         artifact_name: String,
         pid: u32,
         rededr_base_url: String,
-        controller_address: String,
+        stream_handler: Option<Arc<StreamHandler>>,
         timeout_seconds: i32,
     ) -> Self {
         use sysinfo::System;
@@ -49,7 +52,7 @@ impl ExecutionMonitor {
             artifact_name,
             pid,
             rededr_base_url,
-            controller_address,
+            stream_handler,
             start_time: Instant::now(),
             timeout_seconds,
             client: reqwest::Client::builder()
@@ -252,73 +255,51 @@ impl ExecutionMonitor {
         })
     }
 
-    /// Send status report to controller (with timeout to prevent blocking)
+    /// Send execution status via StreamHandler if available
+    /// Sends all execution details: job_id, run_id, artifact, pid, metrics, etc.
     async fn send_status_to_controller(
         &self,
         event_type: &str,
         status: &ExecutionStatus,
         details: &str,
     ) {
-        // Ensure controller address has http:// scheme
-        let controller_addr = if self.controller_address.starts_with("http://")
-            || self.controller_address.starts_with("https://")
-        {
-            self.controller_address.clone()
-        } else {
-            format!("http://{}", self.controller_address)
-        };
+        if let Some(handler) = &self.stream_handler {
+            // Send comprehensive execution status via bidirectional stream
+            let send_future = handler.send_execution_status(
+                self.job_id.clone(),
+                self.run_id.clone(),
+                self.artifact_name.clone(),
+                status.pid,
+                status.elapsed_seconds,
+                status.process_alive,
+                status.telemetry_events_count,
+                event_type.to_string(),
+                status.cpu_percent,
+                status.memory_mb,
+                details.to_string(),
+            );
 
-        let status_report = StatusReport {
-            worker_id: self.worker_id.clone(),
-            worker_ip: self.worker_ip.clone(),
-            job_id: self.job_id.clone(),
-            run_id: self.run_id.clone(),
-            artifact_name: self.artifact_name.clone(),
-            pid: status.pid,
-            elapsed_seconds: status.elapsed_seconds,
-            process_alive: status.process_alive,
-            telemetry_events_count: status.telemetry_events_count,
-            event_type: event_type.to_string(),
-            cpu_percent: status.cpu_percent,
-            memory_mb: status.memory_mb,
-            details: details.to_string(),
-        };
-
-        // Wrap in timeout to prevent monitor from blocking indefinitely
-        let send_future = async {
-            match ControllerClient::connect(controller_addr.clone()).await {
-                Ok(mut client) => {
-                    match client.report_status(Request::new(status_report)).await {
-                        Ok(response) => {
-                            let ack = response.into_inner();
-                            if !ack.received {
-                                warn!(
-                                    "[!] Monitor: Controller responded but received=false [event: {}, job: {}]",
-                                    event_type, self.job_id
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            warn!("[!] Monitor RPC ERROR: Failed to send status [event: {}, job: {}]", event_type, self.job_id);
-                            warn!("   Controller: {}, Status code: {}, Message: {}", controller_addr, e.code(), e.message());
-                        }
-                    }
+            // Wrap in timeout to prevent monitor from blocking indefinitely
+            match tokio::time::timeout(Duration::from_secs(1), send_future).await {
+                Ok(Ok(())) => {
+                    // Success - status sent via stream
+                    debug!("Monitor: Execution status sent via stream [event: {}, job: {}]", event_type, self.job_id);
                 }
-                Err(e) => {
-                    warn!("[!] Monitor CONNECTION ERROR: Failed to connect to controller");
-                    warn!("   Controller: {}, Event: {}, Job: {}", controller_addr, event_type, self.job_id);
-                    warn!("   Error: {}", e);
+                Ok(Err(e)) => {
+                    warn!("[!] Monitor: Failed to send execution status via stream [event: {}, job: {}]: {}",
+                          event_type, self.job_id, e);
+                }
+                Err(_) => {
+                    warn!("[!] Monitor: Execution status send timeout (>1s) [event: {}, job: {}]",
+                          event_type, self.job_id);
+                    warn!("   Stream may be blocked - monitoring will continue");
                 }
             }
-        };
-
-        // 1-second timeout for monitor heartbeats (shouldn't block monitoring loop)
-        if let Err(_) = tokio::time::timeout(Duration::from_secs(1), send_future).await {
-            warn!(
-                "[!] Monitor TIMEOUT: Status report exceeded 1s limit [event: {}, job: {}]",
-                event_type, self.job_id
-            );
-            warn!("   Controller may be slow/unavailable - monitoring will continue");
+        } else {
+            // No StreamHandler available - worker-only mode
+            // Status is still available via local event channel for logging
+            debug!("Monitor: No StreamHandler, execution status available locally only [event: {}, job: {}, elapsed: {}s]",
+                   event_type, self.job_id, status.elapsed_seconds);
         }
     }
 
@@ -391,8 +372,8 @@ mod tests {
             "test-artifact.exe".to_string(),
             1234,
             "http://localhost:8081".to_string(),
-            "http://10.200.200.1:50051".to_string(),
-            30, // timeout_seconds
+            None, // No StreamHandler in test
+            30,   // timeout_seconds
         );
 
         assert_eq!(monitor.run_id, "run-test-001");
@@ -402,7 +383,7 @@ mod tests {
         assert_eq!(monitor.artifact_name, "test-artifact.exe");
         assert_eq!(monitor.pid, 1234);
         assert_eq!(monitor.rededr_base_url, "http://localhost:8081");
-        assert_eq!(monitor.controller_address, "http://10.200.200.1:50051");
+        assert!(monitor.stream_handler.is_none());
         assert_eq!(monitor.timeout_seconds, 30);
     }
 }

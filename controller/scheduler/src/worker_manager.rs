@@ -31,6 +31,7 @@ use crate::automutate::common::{
     Heartbeat,
     SampleRequest,
 };
+use crate::automutate::common::worker_message::Payload;
 
 /// Events emitted by WorkerManager to central orchestration loop
 /// Mirror of worker's outgoing message types
@@ -626,6 +627,7 @@ impl WorkerManager {
             None => {
                 warn!("Received empty message from worker {}", worker_id);
             }
+            _ => {}
         }
 
         Ok(())

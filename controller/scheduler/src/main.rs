@@ -45,6 +45,7 @@ use automutate::controller::{
     WorkerMetadataUpdate, MetadataAck,
     controller_server::{Controller, ControllerServer},
 };
+use crate::automutate::common::worker_message::Payload;
 
 const DELAY: u64 = 20;
 
@@ -1784,6 +1785,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         None => {
                             warn!("⚠️  [WORKER-EVENT] Worker {} sent empty message", worker_id);
                         }
+                        _ => {}
                     }
                 }
 

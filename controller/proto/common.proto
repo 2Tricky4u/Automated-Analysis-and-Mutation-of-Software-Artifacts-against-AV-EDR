@@ -178,11 +178,12 @@ message ControllerMessage {
 // Messages sent from worker to controller via bidirectional stream
 message WorkerMessage {
   oneof payload {
-    WorkerRegistration registration = 1;  // Sent once on connect
-    StatusReport status = 2;               // Periodic heartbeats
-    TelemetryBatch telemetry = 3;         // Stream telemetry events
-    SampleResponse sample_response = 4;    // Execution results
+    WorkerRegistration registration = 1;       // Sent once on connect
+    StatusReport status = 2;                   // Periodic heartbeats
+    TelemetryBatch telemetry = 3;             // Stream telemetry events
+    SampleResponse sample_response = 4;        // Execution results
     Ack ack = 5;
+    ExecutionStatusReport execution_status = 6; // Detailed execution monitoring
   }
 }
 
@@ -224,6 +225,23 @@ message StatusReport {
   int32 active_jobs = 5;
   string event_type = 6;  // "heartbeat", "job_start", "job_complete"
   string current_job_id = 7;
+}
+
+// Detailed execution status report (from ExecutionMonitor during sample execution)
+message ExecutionStatusReport {
+  string worker_id = 1;
+  string worker_ip = 2;
+  string job_id = 3;
+  string run_id = 4;
+  string artifact_name = 5;
+  int32 pid = 6;
+  int32 elapsed_seconds = 7;
+  bool process_alive = 8;
+  int32 telemetry_events_count = 9;
+  string event_type = 10;  // "started", "heartbeat", "stuck", "approaching_timeout", "terminated"
+  int32 cpu_percent = 11;
+  int32 memory_mb = 12;
+  string details = 13;
 }
 
 // Batch of telemetry events
