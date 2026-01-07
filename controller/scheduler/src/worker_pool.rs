@@ -6,6 +6,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, Duration};
+use tracing::{info, warn};
+
+// ✅ Phase 5: Removed WorkerPoolEvent enum
+// WorkerManager already has WorkerEvent for connectivity
+// WorkerPool focuses only on job scheduling state
 
 /// Worker status states
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -76,6 +81,10 @@ pub struct WorkerState {
 
     /// How worker was registered (Static TOML or Dynamic RPC)
     pub registration_type: RegistrationType,
+
+    /// ✅ Phase 4.1: Network connectivity status from WorkerManager
+    /// true = WorkerManager has active gRPC stream, false = no connection
+    pub connected: bool,
 }
 
 /// Worker pool managing multiple workers
@@ -85,6 +94,8 @@ pub struct WorkerPool {
     state: Arc<Mutex<PoolState>>,
     /// Health check timeout (seconds)
     health_timeout: Duration,
+    // ✅ Phase 5: Removed events_tx
+    // WorkerManager handles connectivity events instead
 }
 
 struct PoolState {
@@ -94,6 +105,7 @@ struct PoolState {
 
 impl WorkerPool {
     /// Create a new worker pool
+    /// ✅ Phase 5: Removed events_tx parameter (WorkerManager handles connectivity)
     pub fn new(health_timeout_secs: u64) -> Self {
         WorkerPool {
             state: Arc::new(Mutex::new(PoolState {
@@ -175,6 +187,7 @@ impl WorkerPool {
             tools,
             registered_at: SystemTime::now(),
             registration_type: registration_type.clone(),
+            connected: false,  // ✅ Phase 4.1: Initially disconnected, will be set by WorkerManager
         };
 
         state.workers.insert(id.clone(), worker);
@@ -201,7 +214,8 @@ impl WorkerPool {
         state
             .workers
             .values()
-            .filter(|w| w.status == WorkerStatus::Available && w.enabled)
+            // ✅ Phase 4.3: Only return workers that are available, enabled, AND connected
+            .filter(|w| w.status == WorkerStatus::Available && w.enabled && w.connected)
             .map(|w| w.id.clone())
             .collect()
     }
@@ -218,7 +232,8 @@ impl WorkerPool {
         let mut by_os: HashMap<String, Vec<String>> = HashMap::new();
 
         for worker in state.workers.values() {
-            if worker.status == WorkerStatus::Available && worker.enabled {
+            // ✅ Phase 4.3: Only return workers that are available, enabled, AND connected
+            if worker.status == WorkerStatus::Available && worker.enabled && worker.connected {
                 // Extract OS from worker ID (e.g., "win10" from "win10-worker-01")
                 let os = Self::extract_os_from_worker_id(&worker.id);
                 by_os.entry(os).or_insert_with(Vec::new).push(worker.id.clone());
@@ -254,8 +269,8 @@ impl WorkerPool {
 
         state.workers.values()
             .filter(|w| {
-                // Worker must be available and enabled
-                if w.status != WorkerStatus::Available || !w.enabled {
+                // ✅ Phase 4.3: Worker must be available, enabled, AND connected
+                if w.status != WorkerStatus::Available || !w.enabled || !w.connected {
                     return false;
                 }
 
@@ -279,8 +294,10 @@ impl WorkerPool {
 
         state.workers.values()
             .filter(|w| {
+                // ✅ Phase 4.3: Worker must be available, enabled, connected, AND match OS
                 w.status == WorkerStatus::Available
                     && w.enabled
+                    && w.connected
                     && w.os_version == os
             })
             .map(|w| w.id.clone())
@@ -351,6 +368,34 @@ impl WorkerPool {
         Ok(())
     }
 
+    /// ✅ Phase 4.2: Mark worker as connected (WorkerManager has active gRPC stream)
+    pub fn mark_connected(&self, worker_id: &str) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+
+        let worker = state
+            .workers
+            .get_mut(worker_id)
+            .ok_or_else(|| anyhow!("Worker not found: {}", worker_id))?;
+
+        worker.connected = true;
+        info!("Worker {} marked connected", worker_id);
+        Ok(())
+    }
+
+    /// ✅ Phase 4.2: Mark worker as disconnected (WorkerManager lost gRPC stream)
+    pub fn mark_disconnected(&self, worker_id: &str) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+
+        let worker = state
+            .workers
+            .get_mut(worker_id)
+            .ok_or_else(|| anyhow!("Worker not found: {}", worker_id))?;
+
+        worker.connected = false;
+        info!("Worker {} marked disconnected", worker_id);
+        Ok(())
+    }
+
     /// Update worker health check timestamp
     pub fn update_health(&self, worker_id: &str) -> Result<()> {
         let mut state = self.state.lock().unwrap();
@@ -387,10 +432,11 @@ impl WorkerPool {
         // Check each worker concurrently
         let health_timeout = self.health_timeout;
         let state_clone = self.state.clone();
+        // ✅ Phase 5: Removed events_tx (no more event emissions)
 
         for (worker_id, worker_address) in workers_to_check {
             let state = state_clone.clone();
-            let timeout = health_timeout;
+            let timeout = health_timeout + Duration::from_secs(1);
 
             tokio::spawn(async move {
                 // Try to call HealthCheck RPC with timeout
@@ -412,42 +458,75 @@ impl WorkerPool {
                 ).await {
                     Ok(Ok(_response)) => {
                         // Health check succeeded - update last_ping
-                        let mut state = state.lock().unwrap();
-                        if let Some(worker) = state.workers.get_mut(&worker_id) {
-                            worker.last_ping = SystemTime::now();
-                            // If worker was offline, mark as available
-                            if worker.status == WorkerStatus::Offline && worker.enabled {
-                                worker.status = WorkerStatus::Available;
-                                eprintln!("[INFO] Worker {} is back online", worker_id);
+                        let came_back_online = {
+                            let mut state = state.lock().unwrap();
+                            let mut status_changed = false;
+                            if let Some(worker) = state.workers.get_mut(&worker_id) {
+                                worker.last_ping = SystemTime::now();
+                                // If worker was offline, mark as available
+                                if worker.status == WorkerStatus::Offline && worker.enabled {
+                                    worker.status = WorkerStatus::Available;
+                                    status_changed = true;
+                                    info!("Worker {} is back online", worker_id);
+                                }
                             }
+                            status_changed
+                        };
+
+                        // ✅ Phase 5: Removed BackOnline event emission
+                        // WorkerManager handles connectivity via WorkerEvent instead
+                        if came_back_online {
+                            info!("Worker {} came back online", worker_id);
                         }
                     }
                     Ok(Err(e)) => {
                         // RPC error - mark worker as offline
-                        let mut state = state.lock().unwrap();
-                        if let Some(worker) = state.workers.get_mut(&worker_id) {
-                            if worker.status != WorkerStatus::Offline {
-                                eprintln!(
-                                    "[WARN] Worker {} health check failed: {} - marking offline",
-                                    worker_id, e
-                                );
-                                worker.status = WorkerStatus::Offline;
-                                worker.current_job = None;
+                        let went_offline = {
+                            let mut state = state.lock().unwrap();
+                            let mut status_changed = false;
+                            if let Some(worker) = state.workers.get_mut(&worker_id) {
+                                if worker.status != WorkerStatus::Offline {
+                                    warn!(
+                                        "Worker {} health check failed: {} - marking offline",
+                                        worker_id, e
+                                    );
+                                    worker.status = WorkerStatus::Offline;
+                                    worker.current_job = None;
+                                    status_changed = true;
+                                }
                             }
+                            status_changed
+                        };
+
+                        // ✅ Phase 5: Removed WentOffline event emission
+                        // WorkerManager handles connectivity via WorkerEvent instead
+                        if went_offline {
+                            info!("Worker {} went offline", worker_id);
                         }
                     }
                     Err(_) => {
                         // Timeout - mark worker as offline
-                        let mut state = state.lock().unwrap();
-                        if let Some(worker) = state.workers.get_mut(&worker_id) {
-                            if worker.status != WorkerStatus::Offline {
-                                eprintln!(
-                                    "[WARN] Worker {} health check timeout (>{:?}) - marking offline",
-                                    worker_id, timeout
-                                );
-                                worker.status = WorkerStatus::Offline;
-                                worker.current_job = None;
+                        let went_offline = {
+                            let mut state = state.lock().unwrap();
+                            let mut status_changed = false;
+                            if let Some(worker) = state.workers.get_mut(&worker_id) {
+                                if worker.status != WorkerStatus::Offline {
+                                    warn!(
+                                        "Worker {} health check timeout (>{:?}) - marking offline",
+                                        worker_id, timeout
+                                    );
+                                    worker.status = WorkerStatus::Offline;
+                                    worker.current_job = None;
+                                    status_changed = true;
+                                }
                             }
+                            status_changed
+                        };
+
+                        // ✅ Phase 5: Removed WentOffline event emission
+                        // WorkerManager handles connectivity via WorkerEvent instead
+                        if went_offline {
+                            info!("Worker {} went offline", worker_id);
                         }
                     }
                 }
@@ -489,7 +568,7 @@ mod tests {
 
     #[test]
     fn test_worker_registration() {
-        let pool = WorkerPool::new(30);
+        let pool = WorkerPool::new(30);  // ✅ Phase 5: No events_tx needed
 
         pool.register_worker(
             "worker-01".to_string(),
@@ -506,7 +585,7 @@ mod tests {
 
     #[test]
     fn test_worker_assignment() {
-        let pool = WorkerPool::new(30);
+        let pool = WorkerPool::new(30);  // ✅ Phase 5: No events_tx needed
 
         pool.register_worker(
             "worker-01".to_string(),
@@ -536,7 +615,7 @@ mod tests {
 
     #[test]
     fn test_available_workers() {
-        let pool = WorkerPool::new(30);
+        let pool = WorkerPool::new(30);  // ✅ Phase 5: No events_tx needed
 
         pool.register_worker(
             "worker-01".to_string(),
@@ -572,7 +651,7 @@ mod tests {
 
     #[test]
     fn test_health_check() {
-        let pool = WorkerPool::new(2); // 2 second timeout
+        let pool = WorkerPool::new(2); // 2 second timeout, ✅ Phase 5: No events_tx needed
 
         pool.register_worker(
             "worker-01".to_string(),

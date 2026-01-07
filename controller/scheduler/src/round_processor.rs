@@ -41,6 +41,7 @@ impl RoundProcessor {
         round: &mut Round,
         job: &Job,
         pool: &WorkerPool,
+        worker_manager: &std::sync::Arc<crate::worker_manager::WorkerManager>,
     ) -> Result<RoundSummary> {
         info!("[{}][{}] Starting round processor", job.id, round.round_id);
 
@@ -111,6 +112,7 @@ impl RoundProcessor {
                 &round.mutations,
                 "off",  // No tracing for baseline
                 pool,
+                worker_manager,
                 Some(&baseline_worker_id),
             ).await?;
 
@@ -125,6 +127,7 @@ impl RoundProcessor {
                 &round.mutations,
                 "lines",  // Full tracing for instrumented
                 pool,
+                worker_manager,
                 Some(&instrumented_worker_id),
             ).await?;
 
@@ -143,6 +146,7 @@ impl RoundProcessor {
                     &round.mutations,
                     "off",  // No tracing for baseline
                     pool,
+                    worker_manager,
                     Some(&baseline_worker_id),
                 ),
                 self.execute_run(
@@ -154,6 +158,7 @@ impl RoundProcessor {
                     &round.mutations,
                     "lines",  // Full tracing for instrumented
                     pool,
+                    worker_manager,
                     Some(&instrumented_worker_id),
                 )
             )?
@@ -272,11 +277,11 @@ impl RoundProcessor {
         mutations: &[MutationSpec],
         trace_mode: &str,
         pool: &WorkerPool,
+        worker_manager: &std::sync::Arc<crate::worker_manager::WorkerManager>,
         specific_worker_id: Option<&str>,  // NEW: specific worker for OS-matching
     ) -> Result<RunResult> {
-        use crate::automutate::common::{ArtifactChunk, SampleRequest};
+        use crate::automutate::common::SampleRequest;
         use crate::automutate::worker::worker_agent_client::WorkerAgentClient;
-        use futures::stream;
         use std::time::Instant;
 
         let run_id = format!("{}/{}/{}", job_id, round_id, run_type.as_str());
@@ -334,46 +339,26 @@ impl RoundProcessor {
         let worker_address = worker.address.clone();
         info!("[{}] Using worker: {} at {}", run_id, worker.id, worker_address);
 
-        // Step 3: Deploy artifact to worker
+        // Step 3: Deploy artifact to worker via WorkerManager
         info!("[{}] Deploying artifact to worker...", run_id);
         let artifact_path = builder_config.output_dir.join(format!("{}.exe", artifact_id));
-        let artifact_data = tokio::fs::read(&artifact_path).await?;
 
-        let worker_url = format!("http://{}", worker_address);
-        let endpoint = tonic::transport::Endpoint::try_from(worker_url.clone())?;
-        let mut client = WorkerAgentClient::connect(endpoint.clone()).await?;
-
-        // Stream artifact in chunks (4MB each)
-        let chunk_size = 4 * 1024 * 1024;
-        let total_chunks = ((artifact_data.len() + chunk_size - 1) / chunk_size) as u32;
-        let chunks: Vec<ArtifactChunk> = artifact_data
-            .chunks(chunk_size)
-            .enumerate()
-            .map(|(i, chunk)| ArtifactChunk {
-                artifact_id: artifact_id.clone(),
-                data: chunk.to_vec(),
-                chunk_index: i as u32,
-                total_chunks,
-                sha256: artifact_id.clone(),
-            })
-            .collect();
-
-        client.send_artifact(stream::iter(chunks)).await?;
+        // ✅ Phase 3: Route artifact transfer through WorkerManager (reuses existing connection)
+        worker_manager.send_artifact(&worker_id_to_use, &artifact_id, &artifact_path).await?;
         info!("[{}] Deployment complete", run_id);
 
-        // Step 4: Execute artifact (BLOCKING - wait for completion)
+        // Step 4: Execute artifact via WorkerManager (BLOCKING - wait for completion)
         info!("[{}] Executing artifact on worker...", run_id);
-        let mut exec_client = WorkerAgentClient::connect(endpoint).await?;
 
-        let request = tonic::Request::new(SampleRequest {
+        let request = SampleRequest {
             job_id: run_id.clone(),
             artifact_id: artifact_id.clone(),
             timeout_seconds: 60,
             enable_etw: trace_mode != "off",
-        });
+        };
 
-        let response = exec_client.run_sample(request).await?;
-        let exec_result = response.into_inner();
+        // ✅ Phase 3: Route execution through WorkerManager (reuses existing connection)
+        let exec_result = worker_manager.execute_artifact(&worker_id_to_use, request).await?;
 
         let elapsed = start_time.elapsed().as_secs();
 
@@ -411,7 +396,12 @@ impl RoundProcessor {
         if result.telemetry_events_count > 0 {
             info!("[{}] Pulling {} telemetry events from worker...", run_id, result.telemetry_events_count);
 
-            match Self::pull_and_forward_telemetry(&mut exec_client, &run_id, &worker).await {
+            // Create client for telemetry pulling (separate operation from execution)
+            let worker_url = format!("http://{}", worker_address);
+            let endpoint = tonic::transport::Endpoint::try_from(worker_url)?;
+            let mut telemetry_client = WorkerAgentClient::connect(endpoint).await?;
+
+            match Self::pull_and_forward_telemetry(&mut telemetry_client, &run_id, &worker).await {
                 Ok(actual_count) => {
                     info!("[{}] Successfully pulled and indexed {} telemetry events", run_id, actual_count);
                     result.telemetry_events_count = actual_count as u64;

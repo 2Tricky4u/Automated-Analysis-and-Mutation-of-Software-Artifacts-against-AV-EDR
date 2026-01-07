@@ -1660,30 +1660,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Controller/Scheduler starting...");
 
-    // ✅ NEW (Task 17): Create worker event bus
+    // ✅ Phase 1.5: Reorganized order - WorkerManager must be created BEFORE SchedulerCore
+    // (because SchedulerCore now needs WorkerManager for worker registration sync)
+
+    // Step 1: Create worker event bus
     use tokio::sync::mpsc;
     let (events_tx, mut events_rx) = mpsc::channel::<worker_manager::WorkerEvent>(1000);
     info!("Created worker event bus (capacity: 1000 messages)");
 
-    // Initialize WorkerManager with workers from config and event bus
+    // Step 2: Initialize WorkerManager
     info!("Initializing WorkerManager...");
-    // ✅ UPDATED (Task 18): Pass events_tx to WorkerManager::new()
     let worker_manager = Arc::new(worker_manager::WorkerManager::new(30, events_tx.clone())); // 30s RPC timeout
 
-    // Add workers from config
-    for worker_config in &config.scheduler.workers {
-        if worker_config.enabled {
-            info!("Adding worker: {} at {}", worker_config.id, worker_config.address);
-            let worker_cfg = worker_manager::WorkerConfig {
-                id: worker_config.id.clone(),
-                address: worker_config.address.clone(),
-                enabled: worker_config.enabled,
-            };
-            if let Err(e) = worker_manager.add_worker(worker_cfg) {
-                warn!("Failed to add worker {}: {}", worker_config.id, e);
-            }
-        } else {
-            info!("Skipping disabled worker: {}", worker_config.id);
+    // ✅ Phase 1.1: Workers will be registered from automation/generated/*.toml by SchedulerCore
+    // This ensures single source of truth for worker registration
+
+    // ✅ Phase 5: Removed WorkerPool event bus (WorkerManager handles connectivity)
+
+    // Step 3: Create scheduler core configuration
+    let scheduler_core_config = CoreSchedulerConfig {
+        poll_interval_seconds: 5,
+        max_concurrent_jobs: config.scheduler.max_concurrent_runs_per_worker as usize,
+        default_timeout_seconds: config.scheduler.run_timeout_secs,
+        health_timeout_seconds: 30, // Default health check timeout
+    };
+
+    // Step 4: Create and spawn scheduler core (passing WorkerManager)
+    match create_scheduler_core(scheduler_core_config, Arc::clone(&worker_manager)) {
+        Ok(scheduler_core) => {
+            info!("Scheduler core initialized successfully");
+
+            // Set scheduler core in service (for gRPC methods)
+            scheduler.set_scheduler_core(Arc::clone(&scheduler_core));
+
+            // Spawn scheduler core in background task
+            tokio::spawn(async move {
+                scheduler_core.run().await;
+            });
+        }
+        Err(e) => {
+            warn!("Failed to initialize scheduler core: {}", e);
+            warn!("gRPC server will still start, but job scheduling will not be available");
         }
     }
 
@@ -1810,32 +1827,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Orchestration loop spawned successfully");
 
-    // Create scheduler core configuration from controller config
-    let scheduler_core_config = CoreSchedulerConfig {
-        poll_interval_seconds: 5,
-        max_concurrent_jobs: config.scheduler.max_concurrent_runs_per_worker as usize,
-        default_timeout_seconds: config.scheduler.run_timeout_secs,
-        health_timeout_seconds: 30, // Default health check timeout
-    };
-
-    // Create and spawn scheduler core
-    match create_scheduler_core(scheduler_core_config) {
-        Ok(scheduler_core) => {
-            info!("Scheduler core initialized successfully");
-
-            // Set scheduler core in service (for gRPC methods)
-            scheduler.set_scheduler_core(Arc::clone(&scheduler_core));
-
-            // Spawn scheduler core in background task
-            tokio::spawn(async move {
-                scheduler_core.run().await;
-            });
-        }
-        Err(e) => {
-            warn!("Failed to initialize scheduler core: {}", e);
-            warn!("gRPC server will still start, but job scheduling will not be available");
-        }
-    }
+    // ✅ Phase 5: Removed WorkerPool event loop
+    // WorkerManager's WorkerEvent bus handles connectivity instead
 
     // gRPC reflection for grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()

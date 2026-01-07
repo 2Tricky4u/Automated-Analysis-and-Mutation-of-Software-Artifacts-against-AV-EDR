@@ -64,6 +64,8 @@ pub struct SchedulerCore {
     run_queue: RunQueue,
     /// Worker pool
     pool: WorkerPool,
+    /// ✅ Phase 1.4: Worker manager for communication
+    worker_manager: Arc<crate::worker_manager::WorkerManager>,
     /// Round processor for iterative mutation
     round_processor: RoundProcessor,
     /// Scheduler configuration
@@ -73,7 +75,12 @@ pub struct SchedulerCore {
 impl SchedulerCore {
     /// Create a new scheduler core
     /// Automatically discovers workers from automation/generated/win*-worker-*.toml files
-    pub fn new(config: SchedulerConfig) -> Result<Self> {
+    /// ✅ Phase 1.3: Now accepts WorkerManager to sync worker registration
+    /// ✅ Phase 5: Removed pool_events_tx (WorkerManager handles connectivity)
+    pub fn new(
+        config: SchedulerConfig,
+        worker_manager: Arc<crate::worker_manager::WorkerManager>,
+    ) -> Result<Self> {
         info!("Initializing scheduler core");
         info!("  Poll interval: {}s", config.poll_interval_seconds);
         info!("  Max concurrent jobs: {}", config.max_concurrent_jobs);
@@ -81,37 +88,45 @@ impl SchedulerCore {
 
         // Create queues and pool
         let queue = JobQueue::new();
-        let run_queue = RunQueue::new();  // NEW: Run queue for async execution
+        let run_queue = RunQueue::new();
         let pool = WorkerPool::new(config.health_timeout_seconds);
 
         // Create round processor
         let round_processor = RoundProcessor::new();
 
-        // Discover and register workers from automation/generated/*.toml
-        Self::discover_and_register_workers(&pool)?;
+        // ✅ Phase 1.3: Discover and register workers from automation/generated/*.toml
+        // Returns list of discovered workers for syncing with WorkerManager
+        let discovered_workers = Self::discover_and_register_workers(&pool)?;
+
+        // ✅ Phase 1.3: Register same workers in WorkerManager (single source of truth)
+        worker_manager.register_from_pool(discovered_workers)?;
+        info!("Worker registration synchronized between WorkerPool and WorkerManager");
 
         Ok(SchedulerCore {
             queue,
-            run_queue,  // NEW
+            run_queue,
             pool,
+            worker_manager: Arc::clone(&worker_manager),
             round_processor,
             config,
         })
     }
 
     /// Discover workers from automation/generated/win*-worker-*.toml files
-    fn discover_and_register_workers(pool: &WorkerPool) -> Result<()> {
+    /// ✅ Phase 1.3: Now returns Vec<WorkerConfig> for syncing with WorkerManager
+    fn discover_and_register_workers(pool: &WorkerPool) -> Result<Vec<crate::worker_manager::WorkerConfig>> {
         let generated_dir = Path::new("automation/generated");
 
         if !generated_dir.exists() {
             warn!("automation/generated directory not found, no workers registered");
             warn!("Run 'automation/scripts/generate-configs.ps1' to create worker configs");
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         // Find all win*-worker-*.toml files
         let entries = std::fs::read_dir(generated_dir)?;
         let mut worker_count = 0;
+        let mut discovered_workers = Vec::new();
 
         for entry in entries {
             let entry = entry?;
@@ -122,8 +137,17 @@ impl SchedulerCore {
                 if filename.starts_with("win") && filename.contains("-worker-") && filename.ends_with(".toml") {
                     match Self::load_worker_config(&path) {
                         Ok((worker_id, address)) => {
+                            // Register in WorkerPool
                             pool.register_worker(worker_id.clone(), address.clone(), true)?;
                             info!("  Registered worker: {} at {}", worker_id, address);
+
+                            // ✅ Phase 1.3: Add to discovered list for WorkerManager sync
+                            discovered_workers.push(crate::worker_manager::WorkerConfig {
+                                id: worker_id,
+                                address,
+                                enabled: true,
+                            });
+
                             worker_count += 1;
                         }
                         Err(e) => {
@@ -141,7 +165,7 @@ impl SchedulerCore {
             info!("Worker pool initialized with {} workers", worker_count);
         }
 
-        Ok(())
+        Ok(discovered_workers)
     }
 
     /// Load worker configuration from individual worker TOML file
@@ -164,6 +188,11 @@ impl SchedulerCore {
     /// Get reference to worker pool (for health checks)
     pub fn pool(&self) -> &WorkerPool {
         &self.pool
+    }
+
+    /// ✅ Phase 1.4: Get reference to worker manager (for job execution)
+    pub fn worker_manager(&self) -> &Arc<crate::worker_manager::WorkerManager> {
+        &self.worker_manager
     }
 
     /// Main scheduling loop
@@ -211,11 +240,12 @@ impl SchedulerCore {
             let queue = self.queue.clone();
             let pool = self.pool.clone();
             let round_processor = self.round_processor.clone();
+            let worker_manager = Arc::clone(&self.worker_manager);
             let config = self.config.clone();
 
             // Spawn async task to process job
             tokio::spawn(async move {
-                if let Err(e) = Self::process_job(job, queue, pool, round_processor, config).await {
+                if let Err(e) = Self::process_job(job, queue, pool, round_processor, worker_manager, config).await {
                     error!("Job {} failed: {}", job_id, e);
                 }
             });
@@ -240,6 +270,7 @@ impl SchedulerCore {
         queue: JobQueue,
         pool: WorkerPool,
         round_processor: RoundProcessor,
+        worker_manager: std::sync::Arc<crate::worker_manager::WorkerManager>,
         _config: SchedulerConfig,
     ) -> Result<()> {
         info!("[{}] Starting job (max_rounds: {})", job.id, job.max_rounds);
@@ -264,7 +295,8 @@ impl SchedulerCore {
             queue.update_job(&job)?;
 
             // Process round (dual-run protocol)
-            match round_processor.process_round(&mut round, &job, &pool).await {
+            // ✅ Phase 3: Pass WorkerManager for artifact deployment and execution
+            match round_processor.process_round(&mut round, &job, &pool, &worker_manager).await {
                 Ok(summary) => {
                     info!("[{}][{}] Round complete: detected={}, behavior_match={}, evasion_score={:.2}",
                         job.id, round_id, summary.detected, summary.behavior_match, summary.evasion_score);
@@ -453,7 +485,12 @@ impl SchedulerCore {
 }
 
 /// Helper to create a shared scheduler core instance
-pub fn create_scheduler_core(config: SchedulerConfig) -> Result<Arc<SchedulerCore>> {
-    let core = SchedulerCore::new(config)?;
+/// ✅ Phase 1.5: Now accepts WorkerManager for registration sync
+/// ✅ Phase 5: Removed pool_events_tx (WorkerManager handles connectivity)
+pub fn create_scheduler_core(
+    config: SchedulerConfig,
+    worker_manager: Arc<crate::worker_manager::WorkerManager>,
+) -> Result<Arc<SchedulerCore>> {
+    let core = SchedulerCore::new(config, worker_manager)?;
     Ok(Arc::new(core))
 }

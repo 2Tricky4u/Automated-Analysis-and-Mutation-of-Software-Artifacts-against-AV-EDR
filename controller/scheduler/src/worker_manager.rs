@@ -1,18 +1,19 @@
 // Worker Manager for Phase 1 & 2: Controller-initiated connections with bidirectional streaming
 // Manages outbound gRPC connections from controller to workers
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, Error};
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
+use std::path::Path;
 use tokio::time::{Duration, timeout};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tonic::transport::{Channel, Endpoint};
 use tonic::{Request, Streaming};
 use tracing::{info, warn, error, debug};
-use futures::stream::StreamExt;
+use futures::stream::{self, StreamExt};
 
 // Import generated protobuf types
 use crate::automutate::worker::{
@@ -30,6 +31,8 @@ use crate::automutate::common::{
     RunSampleCommand,
     Heartbeat,
     SampleRequest,
+    SampleResponse,
+    ArtifactChunk,
 };
 use crate::automutate::common::worker_message::Payload;
 
@@ -252,6 +255,28 @@ impl WorkerManager {
         }
     }
 
+    /// ✅ Phase 1.2: Register workers from SchedulerCore discovery
+    /// Called by SchedulerCore after discovering workers from automation/generated/*.toml
+    /// This ensures single source of truth for worker registration
+    pub fn register_from_pool(&self, workers: Vec<WorkerConfig>) -> Result<()> {
+        info!("Registering {} workers from SchedulerCore discovery", workers.len());
+
+        for worker in workers {
+            self.add_worker(worker)?;
+        }
+
+        Ok(())
+    }
+
+    /// ✅ Phase 1.2: Get list of registered worker addresses for discovery sync
+    /// Returns (worker_id, address) pairs
+    pub fn get_worker_addresses(&self) -> Vec<(String, String)> {
+        let connections = self.connections.lock().unwrap();
+        connections.iter()
+            .map(|(id, conn)| (id.clone(), conn.address.clone()))
+            .collect()
+    }
+
     /// Get worker metadata by calling GetWorkerInfo RPC
     pub async fn get_worker_info(&self, worker_id: &str) -> Result<WorkerInfoResponse> {
         // Get or create channel
@@ -433,13 +458,51 @@ impl WorkerManager {
     pub async fn establish_stream(&self, worker_id: &str) -> Result<()> {
         info!("Establishing bidirectional stream with worker: {}", worker_id);
 
-        // Get channel
+        // Get channel - split lock acquisition from async operation
         let channel = {
-            let mut connections = self.connections.lock().unwrap();
-            let connection = connections.get_mut(worker_id)
-                .ok_or_else(|| anyhow!("Worker {} not found in manager", worker_id))?;
+            // Step 1: Get worker address from lock (no await)
+            let worker_address = {
+                let connections = self.connections.lock().unwrap();
+                let connection = connections.get(worker_id)
+                    .ok_or_else(|| anyhow!("Worker {} not found in manager", worker_id))?;
+                connection.address.clone()
+            };  // Lock dropped here
 
-            connection.get_channel().await?
+            // Step 2: Check if channel exists, or create new one (with await, no lock held)
+            let existing_channel = {
+                let connections = self.connections.lock().unwrap();
+                connections.get(worker_id).and_then(|c| c.channel.clone())
+            };  // Lock dropped here
+
+            if let Some(ch) = existing_channel {
+                ch
+            } else {
+                // Create new connection (async operation, no lock held)
+                let worker_url = format!("http://{}", worker_address);
+                info!("Connecting to worker {} at {}", worker_id, worker_url);
+
+                let endpoint = Endpoint::try_from(worker_url)
+                    .map_err(|e| anyhow!("Invalid endpoint for worker {}: {}", worker_id, e))?
+                    .timeout(Duration::from_secs(10))
+                    .connect_timeout(Duration::from_secs(5))
+                    .tcp_keepalive(Some(Duration::from_secs(30)));
+
+                let channel = endpoint.connect().await
+                    .map_err(|e| anyhow!("Failed to connect to worker {}: {}", worker_id, e))?;
+
+                // Store channel (brief lock, no await)
+                {
+                    let mut connections = self.connections.lock().unwrap();
+                    if let Some(connection) = connections.get_mut(worker_id) {
+                        connection.channel = Some(channel.clone());
+                        connection.last_connected = Some(std::time::SystemTime::now());
+                        connection.retry_count = 0;
+                    }
+                }  // Lock dropped here
+
+                info!("Successfully connected to worker {}", worker_id);
+                channel
+            }
         };
 
         // Create client
@@ -753,6 +816,131 @@ impl WorkerManager {
         }
 
         results
+    }
+
+    /// ✅ Phase 2: Send artifact to worker via gRPC streaming
+    ///
+    /// Reuses existing connection (no new client creation).
+    /// Chunks artifact into 4MB pieces for efficient transfer.
+    ///
+    /// # Arguments
+    /// * `worker_id` - Target worker ID
+    /// * `artifact_id` - SHA256 hash of the artifact
+    /// * `artifact_path` - Path to artifact binary on controller filesystem
+    ///
+    /// # Returns
+    /// * `Ok(())` - Artifact successfully transferred
+    /// * `Err(_)` - Transfer failed (network, file read, or worker error)
+    pub async fn send_artifact(&self, worker_id: &str, artifact_id: &str, artifact_path: &Path) -> Result<()> {
+        info!("[{}] Sending artifact {} to worker...", artifact_id, worker_id);
+
+        // Step 1: Read artifact file
+        let artifact_data = tokio::fs::read(artifact_path).await
+            .map_err(|e| anyhow!("Failed to read artifact file {:?}: {}", artifact_path, e))?;
+
+        info!("[{}] Artifact size: {} bytes", artifact_id, artifact_data.len());
+
+        // Step 2: Get worker channel (reuse existing connection)
+        // ✅ Split lock acquisition from async operations to avoid Send bound issues
+        let channel = self.get_channel_from_worker(worker_id).await?;
+
+        // Step 3: Create client from existing channel
+        let mut client = WorkerAgentClient::new(channel.clone());
+
+        // Step 4: Chunk artifact into 4MB pieces
+        let chunk_size = 4 * 1024 * 1024;
+        let total_chunks = ((artifact_data.len() + chunk_size - 1) / chunk_size) as u32;
+
+        let chunks: Vec<ArtifactChunk> = artifact_data
+            .chunks(chunk_size)
+            .enumerate()
+            .map(|(i, chunk)| ArtifactChunk {
+                artifact_id: artifact_id.to_string(),
+                data: chunk.to_vec(),
+                chunk_index: i as u32,
+                total_chunks,
+                sha256: artifact_id.to_string(),
+            })
+            .collect();
+
+        info!("[{}] Sending {} chunks to worker {}", artifact_id, total_chunks, worker_id);
+
+        // Step 5: Send chunks via streaming RPC
+        client.send_artifact(stream::iter(chunks)).await
+            .map_err(|e| anyhow!("Artifact transfer to worker {} failed: {}", worker_id, e))?;
+
+        info!("[{}] Artifact successfully deployed to worker {}", artifact_id, worker_id);
+        Ok(())
+    }
+
+    async fn get_channel_from_worker(&self, worker_id: &str) -> Result<Channel, Error> {
+        // Get worker address (brief lock, no await)
+        let worker_address = {
+            let connections = self.connections.lock().unwrap();
+            connections.get(worker_id)
+                .ok_or_else(|| anyhow!("Worker {} not found in manager", worker_id))?
+                .address.clone()
+        };  // Lock dropped
+
+        // Check for existing channel (brief lock, no await)
+        let existing_channel = {
+            let connections = self.connections.lock().unwrap();
+            connections.get(worker_id).and_then(|c| c.channel.clone())
+        };  // Lock dropped
+
+        // Create channel if needed (async, no lock held)
+        Ok(if let Some(ch) = existing_channel {
+            ch
+        } else {
+            let endpoint = Endpoint::try_from(format!("http://{}", worker_address))
+                .map_err(|e| anyhow!("Invalid endpoint for worker {}: {}", worker_id, e))?;
+            let channel = endpoint.connect().await?;
+
+            // Store channel (brief lock, no await)
+            {
+                let mut connections = self.connections.lock().unwrap();
+                if let Some(conn) = connections.get_mut(worker_id) {
+                    conn.channel = Some(channel.clone());
+                }
+            }  // Lock dropped
+
+            channel
+        })
+    }
+
+    /// ✅ Phase 3: Execute artifact on worker and return execution result
+    ///
+    /// Makes a blocking RPC call (waits for execution to complete).
+    /// Reuses existing connection (no new client creation).
+    ///
+    /// # Arguments
+    /// * `worker_id` - Target worker ID
+    /// * `request` - SampleRequest containing job_id, artifact_id, timeout, etc.
+    ///
+    /// # Returns
+    /// * `Ok(SampleResponse)` - Execution result with success, exit_code, telemetry_ids
+    /// * `Err(_)` - Execution failed (network, timeout, or worker error)
+    pub async fn execute_artifact(&self, worker_id: &str, request: SampleRequest) -> Result<SampleResponse> {
+        info!("[{}] Executing artifact {} on worker {}...",
+            request.job_id, request.artifact_id, worker_id);
+
+        // Get worker channel (reuse existing connection)
+        // ✅ Split lock acquisition from async operations to avoid Send bound issues
+        let channel = self.get_channel_from_worker(worker_id).await?;
+
+        // Create client from existing channel
+        let mut client = WorkerAgentClient::new(channel.clone());
+
+        // Make blocking RPC call (waits for execution to complete)
+        let response = client.run_sample(tonic::Request::new(request.clone())).await
+            .map_err(|e| anyhow!("Execution RPC to worker {} failed: {}", worker_id, e))?;
+
+        let exec_result = response.into_inner();
+
+        info!("[{}] Execution complete on worker {}: success={}, exit_code={}, telemetry_events={}",
+            request.job_id, worker_id, exec_result.success, exec_result.exit_code, exec_result.telemetry_ids.len());
+
+        Ok(exec_result)
     }
 }
 
