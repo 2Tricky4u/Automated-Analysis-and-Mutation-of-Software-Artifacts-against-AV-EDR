@@ -465,7 +465,7 @@ impl WorkerPool {
                             }
                             status_changed
                         };
-                        
+
                         if came_back_online {
                             info!("Worker {} came back online", worker_id);
                         }
@@ -488,7 +488,7 @@ impl WorkerPool {
                             }
                             status_changed
                         };
-                        
+
                         if went_offline {
                             info!("Worker {} went offline", worker_id);
                         }
@@ -511,7 +511,7 @@ impl WorkerPool {
                             }
                             status_changed
                         };
-                        
+
                         if went_offline {
                             info!("Worker {} went offline", worker_id);
                         }
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn test_worker_assignment() {
-        let pool = WorkerPool::new(30); 
+        let pool = WorkerPool::new(30);
 
         pool.register_worker(
             "worker-01".to_string(),
@@ -602,7 +602,7 @@ mod tests {
 
     #[test]
     fn test_available_workers() {
-        let pool = WorkerPool::new(30); 
+        let pool = WorkerPool::new(30);
 
         pool.register_worker(
             "worker-01".to_string(),
@@ -622,6 +622,11 @@ mod tests {
             false, // disabled
         )
         .unwrap();
+
+        // Mark workers as connected (Phase 4: required for availability)
+        pool.mark_connected("worker-01").unwrap();
+        pool.mark_connected("worker-02").unwrap();
+        // worker-03 is disabled, so doesn't matter if connected
 
         let available = pool.get_available_workers();
         assert_eq!(available.len(), 2);

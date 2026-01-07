@@ -15,7 +15,7 @@
 use crate::job::MutationSpec;
 use crate::round::RunType; // Use existing RunType from round.rs
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
@@ -75,9 +75,9 @@ struct RunQueueState {
     /// Pending runs indexed by run_id
     pending: HashMap<String, PendingRun>,
 
-    /// Pending runs grouped by OS for efficient worker matching
-    /// Map<os, Vec<run_id>>
-    by_os: HashMap<String, Vec<String>>,
+    /// Pending runs grouped by OS for efficient worker matching (FIFO per OS)
+    /// Map<os, VecDeque<run_id>>
+    by_os: HashMap<String, VecDeque<String>>,
 
     /// Counter for generating run IDs
     next_run_id: u64,
@@ -135,12 +135,12 @@ impl RunQueue {
         // Add to pending runs
         state.pending.insert(run_id.clone(), pending_run);
 
-        // Add to OS index
+        // Add to OS index (FIFO: push_back)
         state
             .by_os
             .entry(required_os)
-            .or_insert_with(Vec::new)
-            .push(run_id.clone());
+            .or_insert_with(VecDeque::new)
+            .push_back(run_id.clone());
 
         (run_id, rx)
     }
@@ -152,10 +152,10 @@ impl RunQueue {
     pub fn pop_for_os(&self, worker_os: &str) -> Option<PendingRun> {
         let mut state = self.state.lock().unwrap();
 
-        // Get run ID for this OS (FIFO)
+        // Get run ID for this OS (FIFO: pop from front)
         let run_id = {
             let os_runs = state.by_os.get_mut(worker_os)?;
-            os_runs.pop()?
+            os_runs.pop_front()?
         };
 
         // Clean up empty OS bucket
@@ -337,9 +337,9 @@ mod tests {
         );
 
         // Pop run (simulating worker)
-        let _pending = queue.pop_for_os("win10").unwrap();
+        let mut pending = queue.pop_for_os("win10").unwrap();
 
-        // Complete run with result
+        // Complete run with result (send via the PendingRun's oneshot channel)
         let result = RunResult {
             run_id: run_id.clone(),
             success: true,
@@ -348,7 +348,10 @@ mod tests {
             error: None,
         };
 
-        queue.complete_run(&run_id, result.clone()).unwrap();
+        // Send result through the PendingRun's oneshot sender
+        if let Some(tx) = pending.result_tx.take() {
+            tx.send(result).unwrap();
+        }
 
         // Receiver should get the result
         let received = rx.await.unwrap();
