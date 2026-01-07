@@ -47,7 +47,7 @@ pub struct RedEdrEvent {
     #[serde(default)]
     pub event_id: Option<u32>,
     #[serde(default)]
-    pub callstack: Option<serde_json::Value>,  // Can be Vec<String> or Vec<Object>, let it be flexible
+    pub callstack: Option<serde_json::Value>, // Can be Vec<String> or Vec<Object>, let it be flexible
     // Complex fields that need explicit typing
     #[serde(default)]
     pub stack_trace: Option<Vec<StackTraceEntry>>,
@@ -228,8 +228,10 @@ impl RedEdrCollector {
     pub async fn collect_all(
         &self,
         job_id: &str,
-    ) -> Result<Vec<crate::automutate::common::TelemetryData>, Box<dyn std::error::Error + Send + Sync>>
-    {
+    ) -> Result<
+        Vec<crate::automutate::common::TelemetryData>,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
         info!("Collecting all RedEDR events for job_id={}", job_id);
 
         let events = self.fetch_events().await?;
@@ -362,7 +364,7 @@ impl RedEdrCollector {
             timestamp: chrono::Utc::now().timestamp_millis(),
             payload,
             metadata,
-            typed_event: None,  // RedEDR events use generic payload, not typed events
+            typed_event: None, // RedEDR events use generic payload, not typed events
         }
     }
 }

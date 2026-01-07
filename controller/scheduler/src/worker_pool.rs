@@ -1,5 +1,4 @@
 // Worker pool management for scheduler
-// Phase 1: Static worker list from config file with health checking
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -8,9 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, Duration};
 use tracing::{info, warn};
 
-// ✅ Phase 5: Removed WorkerPoolEvent enum
-// WorkerManager already has WorkerEvent for connectivity
-// WorkerPool focuses only on job scheduling state
 
 /// Worker status states
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -82,7 +78,7 @@ pub struct WorkerState {
     /// How worker was registered (Static TOML or Dynamic RPC)
     pub registration_type: RegistrationType,
 
-    /// ✅ Phase 4.1: Network connectivity status from WorkerManager
+    /// Network connectivity status from WorkerManager
     /// true = WorkerManager has active gRPC stream, false = no connection
     pub connected: bool,
 }
@@ -94,7 +90,6 @@ pub struct WorkerPool {
     state: Arc<Mutex<PoolState>>,
     /// Health check timeout (seconds)
     health_timeout: Duration,
-    // ✅ Phase 5: Removed events_tx
     // WorkerManager handles connectivity events instead
 }
 
@@ -105,7 +100,6 @@ struct PoolState {
 
 impl WorkerPool {
     /// Create a new worker pool
-    /// ✅ Phase 5: Removed events_tx parameter (WorkerManager handles connectivity)
     pub fn new(health_timeout_secs: u64) -> Self {
         WorkerPool {
             state: Arc::new(Mutex::new(PoolState {
@@ -187,7 +181,7 @@ impl WorkerPool {
             tools,
             registered_at: SystemTime::now(),
             registration_type: registration_type.clone(),
-            connected: false,  // ✅ Phase 4.1: Initially disconnected, will be set by WorkerManager
+            connected: false,  // Initially disconnected, will be set by WorkerManager
         };
 
         state.workers.insert(id.clone(), worker);
@@ -214,7 +208,7 @@ impl WorkerPool {
         state
             .workers
             .values()
-            // ✅ Phase 4.3: Only return workers that are available, enabled, AND connected
+            // Only return workers that are available, enabled, AND connected
             .filter(|w| w.status == WorkerStatus::Available && w.enabled && w.connected)
             .map(|w| w.id.clone())
             .collect()
@@ -232,7 +226,7 @@ impl WorkerPool {
         let mut by_os: HashMap<String, Vec<String>> = HashMap::new();
 
         for worker in state.workers.values() {
-            // ✅ Phase 4.3: Only return workers that are available, enabled, AND connected
+            // Only return workers that are available, enabled, AND connected
             if worker.status == WorkerStatus::Available && worker.enabled && worker.connected {
                 // Extract OS from worker ID (e.g., "win10" from "win10-worker-01")
                 let os = Self::extract_os_from_worker_id(&worker.id);
@@ -269,7 +263,7 @@ impl WorkerPool {
 
         state.workers.values()
             .filter(|w| {
-                // ✅ Phase 4.3: Worker must be available, enabled, AND connected
+                // Worker must be available, enabled, AND connected
                 if w.status != WorkerStatus::Available || !w.enabled || !w.connected {
                     return false;
                 }
@@ -294,7 +288,7 @@ impl WorkerPool {
 
         state.workers.values()
             .filter(|w| {
-                // ✅ Phase 4.3: Worker must be available, enabled, connected, AND match OS
+                // Worker must be available, enabled, connected, AND match OS
                 w.status == WorkerStatus::Available
                     && w.enabled
                     && w.connected
@@ -368,7 +362,7 @@ impl WorkerPool {
         Ok(())
     }
 
-    /// ✅ Phase 4.2: Mark worker as connected (WorkerManager has active gRPC stream)
+    /// Mark worker as connected (WorkerManager has active gRPC stream)
     pub fn mark_connected(&self, worker_id: &str) -> Result<()> {
         let mut state = self.state.lock().unwrap();
 
@@ -382,7 +376,7 @@ impl WorkerPool {
         Ok(())
     }
 
-    /// ✅ Phase 4.2: Mark worker as disconnected (WorkerManager lost gRPC stream)
+    /// Mark worker as disconnected (WorkerManager lost gRPC stream)
     pub fn mark_disconnected(&self, worker_id: &str) -> Result<()> {
         let mut state = self.state.lock().unwrap();
 
@@ -432,7 +426,6 @@ impl WorkerPool {
         // Check each worker concurrently
         let health_timeout = self.health_timeout;
         let state_clone = self.state.clone();
-        // ✅ Phase 5: Removed events_tx (no more event emissions)
 
         for (worker_id, worker_address) in workers_to_check {
             let state = state_clone.clone();
@@ -472,9 +465,7 @@ impl WorkerPool {
                             }
                             status_changed
                         };
-
-                        // ✅ Phase 5: Removed BackOnline event emission
-                        // WorkerManager handles connectivity via WorkerEvent instead
+                        
                         if came_back_online {
                             info!("Worker {} came back online", worker_id);
                         }
@@ -497,9 +488,7 @@ impl WorkerPool {
                             }
                             status_changed
                         };
-
-                        // ✅ Phase 5: Removed WentOffline event emission
-                        // WorkerManager handles connectivity via WorkerEvent instead
+                        
                         if went_offline {
                             info!("Worker {} went offline", worker_id);
                         }
@@ -522,9 +511,7 @@ impl WorkerPool {
                             }
                             status_changed
                         };
-
-                        // ✅ Phase 5: Removed WentOffline event emission
-                        // WorkerManager handles connectivity via WorkerEvent instead
+                        
                         if went_offline {
                             info!("Worker {} went offline", worker_id);
                         }
@@ -568,7 +555,7 @@ mod tests {
 
     #[test]
     fn test_worker_registration() {
-        let pool = WorkerPool::new(30);  // ✅ Phase 5: No events_tx needed
+        let pool = WorkerPool::new(30);
 
         pool.register_worker(
             "worker-01".to_string(),
@@ -585,7 +572,7 @@ mod tests {
 
     #[test]
     fn test_worker_assignment() {
-        let pool = WorkerPool::new(30);  // ✅ Phase 5: No events_tx needed
+        let pool = WorkerPool::new(30); 
 
         pool.register_worker(
             "worker-01".to_string(),
@@ -615,7 +602,7 @@ mod tests {
 
     #[test]
     fn test_available_workers() {
-        let pool = WorkerPool::new(30);  // ✅ Phase 5: No events_tx needed
+        let pool = WorkerPool::new(30); 
 
         pool.register_worker(
             "worker-01".to_string(),
@@ -651,7 +638,7 @@ mod tests {
 
     #[test]
     fn test_health_check() {
-        let pool = WorkerPool::new(2); // 2 second timeout, ✅ Phase 5: No events_tx needed
+        let pool = WorkerPool::new(2);
 
         pool.register_worker(
             "worker-01".to_string(),

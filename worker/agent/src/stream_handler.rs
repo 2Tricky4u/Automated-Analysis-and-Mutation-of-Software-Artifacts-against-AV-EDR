@@ -5,17 +5,17 @@
 //! - Controller → Worker: commands (run sample, health checks, heartbeats)
 //! - Worker → Controller: registration, status updates, telemetry, results
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tonic::{Status, Streaming};
 use tracing::{debug, error, info, warn};
 
 // Import generated protobuf types
 use crate::automutate::common::{
-    controller_message, worker_message, Ack, ControllerMessage, ExecutionStatusReport,
-    HealthCheckRequest, Heartbeat, RunSampleCommand, SampleResponse, StatusReport,
-    TelemetryBatch, WorkerMessage, WorkerRegistration,
+    Ack, ControllerMessage, ExecutionStatusReport, HealthCheckRequest, Heartbeat, RunSampleCommand,
+    SampleResponse, StatusReport, TelemetryBatch, WorkerMessage, WorkerRegistration,
+    controller_message, worker_message,
 };
 
 use crate::capabilities::WorkerState;
@@ -38,10 +38,7 @@ impl StreamHandler {
     ) -> (Self, mpsc::Receiver<Result<WorkerMessage, Status>>) {
         let (tx, rx) = mpsc::channel(100);
 
-        let handler = StreamHandler {
-            worker_state,
-            tx,
-        };
+        let handler = StreamHandler { worker_state, tx };
 
         (handler, rx)
     }
@@ -189,7 +186,10 @@ impl StreamHandler {
 
     /// Handle heartbeat from controller
     async fn handle_heartbeat(&self, hb: Heartbeat) -> Result<()> {
-        debug!("Received heartbeat from controller at timestamp: {}", hb.timestamp);
+        debug!(
+            "Received heartbeat from controller at timestamp: {}",
+            hb.timestamp
+        );
 
         // Update last heartbeat time in worker state
         {

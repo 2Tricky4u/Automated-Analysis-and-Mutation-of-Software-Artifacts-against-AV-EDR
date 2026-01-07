@@ -15,7 +15,7 @@ pub mod automutate {
     }
 }
 
-pub mod telemetry;
-pub mod execution;
 pub mod capabilities;
+pub mod execution;
 pub mod stream_handler;
+pub mod telemetry;

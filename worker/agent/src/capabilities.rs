@@ -37,15 +37,28 @@ pub struct HealthMetrics {
 
 impl WorkerState {
     /// Create new worker state from config and detected capabilities
-    pub fn new(
-        worker_id: String,
-        capabilities: WorkerCapabilities,
-    ) -> Self {
+    pub fn new(worker_id: String, capabilities: WorkerCapabilities) -> Self {
         let tools = Some(ToolVersions {
-            rededr_version: capabilities.tools.get("rededr_version").cloned().unwrap_or_default(),
-            defender_version: capabilities.tools.get("defender_version").cloned().unwrap_or_default(),
-            etw_version: capabilities.tools.get("etw_version").cloned().unwrap_or_default(),
-            llvm_version: capabilities.tools.get("llvm_version").cloned().unwrap_or_default(),
+            rededr_version: capabilities
+                .tools
+                .get("rededr_version")
+                .cloned()
+                .unwrap_or_default(),
+            defender_version: capabilities
+                .tools
+                .get("defender_version")
+                .cloned()
+                .unwrap_or_default(),
+            etw_version: capabilities
+                .tools
+                .get("etw_version")
+                .cloned()
+                .unwrap_or_default(),
+            llvm_version: capabilities
+                .tools
+                .get("llvm_version")
+                .cloned()
+                .unwrap_or_default(),
         });
 
         WorkerState {
@@ -73,7 +86,8 @@ impl WorkerState {
         };
 
         self.health.cpu_percent = cpu_percent as i32;
-        self.health.memory_percent = ((sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0) as i32;
+        self.health.memory_percent =
+            ((sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0) as i32;
         // Note: disk_percent would require filesystem-specific checks, leaving as 0 for now
         self.health.active_jobs = if self.current_job_id.is_some() { 1 } else { 0 };
         // Uptime tracking would require storing start time, leaving as 0 for now
@@ -162,10 +176,7 @@ fn check_defender_available() -> bool {
     #[cfg(windows)]
     {
         use std::process::Command;
-        match Command::new("sc")
-            .args(&["query", "WinDefend"])
-            .output()
-        {
+        match Command::new("sc").args(&["query", "WinDefend"]).output() {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 stdout.contains("RUNNING")

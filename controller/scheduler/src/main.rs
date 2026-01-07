@@ -4,17 +4,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, transport::Server};
-use tracing::{error, info, warn, debug};
+use tracing::{debug, error, info, warn};
 
 mod job;
 mod queue;
-mod run_queue;
-mod worker_pool;
-mod worker_manager;  // Controller-initiated connections with bidirectional streaming
-mod scheduler_core;
 mod round;
-mod run_result;
 mod round_processor;
+mod run_queue;
+mod run_result;
+mod scheduler_core;
+mod worker_manager;
+mod worker_pool;
 
 use scheduler_core::{SchedulerConfig as CoreSchedulerConfig, create_scheduler_core};
 
@@ -30,22 +30,18 @@ pub mod automutate {
     }
 }
 
-use automutate::common::{JobId, TelemetryAck, TelemetryData, WorkerRegistration, ToolVersions};
+use crate::automutate::common::worker_message::Payload;
+use automutate::common::{JobId, TelemetryAck, TelemetryData, ToolVersions, WorkerRegistration};
 use automutate::controller::{
-    BuildRequest, BuildResponse, DeployRequest, DeployResponse, JobRequest, JobResponse,
-    JobStatusRequest, JobStatusResponse, ListWorkersRequest, ListWorkersResponse,
-    PingRequest, PingResponse, QueryRequest, QueryResponse,
-    StatusAck, StatusReport, TriageRequest, TriageResponse, WorkerInfo,
-    // NEW: Iterative loop types
-    JobProgressRequest, JobProgressResponse, StopJobRequest, StopJobResponse,
-    GetRoundRequest, GetRoundResponse, CompareRunsRequest, CompareRunsResponse,
-    RoundSummaryProto, RoundProto, BehaviorComparisonProto,
-    // NEW: Dynamic worker registration types
-    RegistrationAck, WorkerDeregistration, DeregistrationAck,
-    WorkerMetadataUpdate, MetadataAck,
+    BehaviorComparisonProto, BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse,
+    DeployRequest, DeployResponse, DeregistrationAck, GetRoundRequest, GetRoundResponse,
+    JobProgressRequest, JobProgressResponse, JobRequest, JobResponse, JobStatusRequest,
+    JobStatusResponse, ListWorkersRequest, ListWorkersResponse, MetadataAck, PingRequest,
+    PingResponse, QueryRequest, QueryResponse, RegistrationAck, RoundProto, RoundSummaryProto,
+    StatusAck, StatusReport, StopJobRequest, StopJobResponse, TriageRequest, TriageResponse,
+    WorkerDeregistration, WorkerInfo, WorkerMetadataUpdate,
     controller_server::{Controller, ControllerServer},
 };
-use crate::automutate::common::worker_message::Payload;
 
 const DELAY: u64 = 20;
 
@@ -72,7 +68,7 @@ pub struct SchedulerService {
     es_client: Elasticsearch,
     controller_ip: String,
     scheduler_core: Option<Arc<scheduler_core::SchedulerCore>>,
-    worker_manager: Option<Arc<worker_manager::WorkerManager>>,  // Manages worker connections
+    worker_manager: Option<Arc<worker_manager::WorkerManager>>,
 }
 
 impl SchedulerService {
@@ -135,10 +131,14 @@ impl Controller for SchedulerService {
         };
 
         // Mutations are now selected per-round by Selector service
-        let mutations: Vec<job::MutationSpec> = vec![];  // Empty for now
+        let mutations: Vec<job::MutationSpec> = vec![]; // Empty for now
 
         // Get max_rounds from request (default to 10 if not specified)
-        let max_rounds = if req.max_rounds == 0 { 10 } else { req.max_rounds };
+        let max_rounds = if req.max_rounds == 0 {
+            10
+        } else {
+            req.max_rounds
+        };
 
         // Get stopping conditions from request (default to false)
         let stop_on_evasion = req.stop_on_evasion;
@@ -146,10 +146,10 @@ impl Controller for SchedulerService {
 
         // Submit job to scheduler queue
         match scheduler_core.queue().submit_job(
-            req.artifact_type.clone(),  // template_name
-            req.source.clone(),          // source_file
+            req.artifact_type.clone(), // template_name
+            req.source.clone(),        // source_file
             mutations,
-            "lines".to_string(),        // Default trace mode (Phase 1) //TODO make modular
+            "lines".to_string(), // Default trace mode //TODO make modular
             req.priority,
             max_rounds,
             stop_on_evasion,
@@ -174,7 +174,7 @@ impl Controller for SchedulerService {
                     }),
                     accepted: true,
                     message: format!("Job {} queued for execution", job_id),
-                    estimated_duration_seconds: 60, // Estimated from config timeout
+                    estimated_duration_seconds: 1, // Estimated from config timeout
                     max_rounds,
                 }))
             }
@@ -267,10 +267,13 @@ impl Controller for SchedulerService {
         &self,
         request: Request<tonic::Streaming<TelemetryData>>,
     ) -> Result<Response<TelemetryAck>, Status> {
-        use tokio::time::{timeout, Duration};
+        use tokio::time::{Duration, timeout};
 
         // Get remote_addr BEFORE into_inner() consumes the request
-        let remote_addr = request.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string());
+        let remote_addr = request
+            .remote_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
 
         let mut stream = request.into_inner();
         let mut events_count = 0;
@@ -278,7 +281,10 @@ impl Controller for SchedulerService {
         let mut batch = Vec::new();
         const MAX_BATCH_SIZE: usize = 10000; // Prevent memory exhaustion
 
-        info!("[RECV]  Telemetry stream opened from worker: {}", remote_addr);
+        info!(
+            "[RECV]  Telemetry stream opened from worker: {}",
+            remote_addr
+        );
 
         // Collect all events from stream with timeout
         let collection_result = timeout(Duration::from_secs(30), async {
@@ -311,7 +317,10 @@ impl Controller for SchedulerService {
                 );
             }
             Ok(Err(e)) => {
-                error!("[ERROR] STREAM ERROR: Failed to collect telemetry from worker: {}", remote_addr);
+                error!(
+                    "[ERROR] STREAM ERROR: Failed to collect telemetry from worker: {}",
+                    remote_addr
+                );
                 error!("   Error details: {:?}", e);
                 error!("   Status code: {}, Message: {}", e.code(), e.message());
                 return Err(e);
@@ -321,7 +330,10 @@ impl Controller for SchedulerService {
                     "[TIMEOUT]  TIMEOUT: Telemetry stream collection exceeded 30s limit [worker: {}]",
                     remote_addr
                 );
-                error!("   Collected {} events before timeout (partial batch)", events_count);
+                error!(
+                    "   Collected {} events before timeout (partial batch)",
+                    events_count
+                );
                 warn!("   Possible causes: slow network, large payload, worker stalled");
                 // Continue with partial batch rather than failing
             }
@@ -329,13 +341,11 @@ impl Controller for SchedulerService {
 
         // Index batch to Elasticsearch with timeout
         if !batch.is_empty() {
-            info!("[UPLOAD]Indexing {} events to Elasticsearch [job: {}]", events_count, first_job_id);
-            match timeout(
-                Duration::from_secs(10),
-                self.index_telemetry_batch(&batch)
-            )
-            .await
-            {
+            info!(
+                "[UPLOAD]Indexing {} events to Elasticsearch [job: {}]",
+                events_count, first_job_id
+            );
+            match timeout(Duration::from_secs(10), self.index_telemetry_batch(&batch)).await {
                 Ok(Ok(())) => {
                     info!(
                         "[OK] Successfully indexed {} telemetry events to Elasticsearch [job: {}]",
@@ -344,10 +354,17 @@ impl Controller for SchedulerService {
                 }
                 Ok(Err(e)) => {
                     error!("[ERROR] ELASTICSEARCH ERROR: Failed to index telemetry batch");
-                    error!("   Job: {}, Events: {}, Worker: {}", first_job_id, events_count, remote_addr);
+                    error!(
+                        "   Job: {}, Events: {}, Worker: {}",
+                        first_job_id, events_count, remote_addr
+                    );
                     error!("   Error details: {}", e);
-                    error!("   [WARN]  Telemetry received but NOT INDEXED (Elasticsearch may be down/unreachable)");
-                    warn!("   Possible causes: Elasticsearch down, network issue, mapping conflict, disk full");
+                    error!(
+                        "   [WARN]  Telemetry received but NOT INDEXED (Elasticsearch may be down/unreachable)"
+                    );
+                    warn!(
+                        "   Possible causes: Elasticsearch down, network issue, mapping conflict, disk full"
+                    );
                     // Don't fail the RPC - telemetry was received, just not indexed
                 }
                 Err(_) => {
@@ -355,18 +372,21 @@ impl Controller for SchedulerService {
                         "[TIMEOUT]  ELASTICSEARCH TIMEOUT: Indexing exceeded 10s limit [job: {}]",
                         first_job_id
                     );
-                    error!(
-                        "   Events: {}, Worker: {}", events_count, remote_addr
-                    );
+                    error!("   Events: {}, Worker: {}", events_count, remote_addr);
                     error!(
                         "   [WARN]  Telemetry received but NOT INDEXED (Elasticsearch is slow/unavailable)"
                     );
-                    warn!("   Possible causes: Elasticsearch overloaded, slow disk I/O, large batch size");
+                    warn!(
+                        "   Possible causes: Elasticsearch overloaded, slow disk I/O, large batch size"
+                    );
                     // Don't fail the RPC - telemetry was received, just not indexed
                 }
             }
         } else {
-            warn!("[WARN]  Telemetry stream closed with ZERO events [worker: {}]", remote_addr);
+            warn!(
+                "[WARN]  Telemetry stream closed with ZERO events [worker: {}]",
+                remote_addr
+            );
             warn!("   This may indicate: worker had no telemetry to send, or stream failed early");
         }
 
@@ -382,14 +402,20 @@ impl Controller for SchedulerService {
     ) -> Result<Response<StatusAck>, Status> {
         use tokio::time::Duration;
 
-        let remote_addr = request.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string());
+        let remote_addr = request
+            .remote_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
         let report = request.into_inner();
 
         // Update worker health and job status in scheduler core (if available)
         if let Some(ref scheduler_core) = self.scheduler_core {
             // Update worker health timestamp
             if let Err(e) = scheduler_core.pool().update_health(&report.worker_id) {
-                warn!("Failed to update worker health for {}: {}", report.worker_id, e);
+                warn!(
+                    "Failed to update worker health for {}: {}",
+                    report.worker_id, e
+                );
             }
 
             // Update job status based on status report
@@ -447,31 +473,49 @@ impl Controller for SchedulerService {
         // Store RunResult to Elasticsearch when final status received
         // Use timeout to prevent blocking RPC if Elasticsearch is slow/unreachable
         if matches!(report.event_type.as_str(), "success" | "error" | "timeout") {
-            info!("[SAVE]Storing final run result for job: {} [worker: {}]", report.job_id, remote_addr);
-            match tokio::time::timeout(
-                Duration::from_secs(DELAY),
-                self.store_run_result(&report)
-            ).await {
+            info!(
+                "[SAVE]Storing final run result for job: {} [worker: {}]",
+                report.job_id, remote_addr
+            );
+            match tokio::time::timeout(Duration::from_secs(DELAY), self.store_run_result(&report))
+                .await
+            {
                 Ok(Ok(())) => {
-                    info!("[OK] Run result stored successfully [job: {}, run: {}]", report.job_id, report.run_id);
+                    info!(
+                        "[OK] Run result stored successfully [job: {}, run: {}]",
+                        report.job_id, report.run_id
+                    );
                 }
                 Ok(Err(e)) => {
                     error!("[ERROR] ELASTICSEARCH ERROR: Failed to store run result");
-                    error!("   Job: {}, Run: {}, Worker: {}", report.job_id, report.run_id, remote_addr);
+                    error!(
+                        "   Job: {}, Run: {}, Worker: {}",
+                        report.job_id, report.run_id, remote_addr
+                    );
                     error!("   Error details: {}", e);
-                    error!("   [WARN]  Status report received but NOT INDEXED (Elasticsearch may be down/unreachable)");
-                    warn!("   Possible causes: Elasticsearch down, network issue, mapping conflict, disk full");
+                    error!(
+                        "   [WARN]  Status report received but NOT INDEXED (Elasticsearch may be down/unreachable)"
+                    );
+                    warn!(
+                        "   Possible causes: Elasticsearch down, network issue, mapping conflict, disk full"
+                    );
                     // Don't fail the RPC - status was received, just not indexed
                 }
                 Err(_) => {
                     error!(
-                        "[TIMEOUT]  ELASTICSEARCH TIMEOUT: Storing run result exceeded {}s limit", DELAY
+                        "[TIMEOUT]  ELASTICSEARCH TIMEOUT: Storing run result exceeded {}s limit",
+                        DELAY
                     );
-                    error!("   Job: {}, Run: {}, Worker: {}", report.job_id, report.run_id, remote_addr);
+                    error!(
+                        "   Job: {}, Run: {}, Worker: {}",
+                        report.job_id, report.run_id, remote_addr
+                    );
                     error!(
                         "   [WARN]  Status report received but NOT INDEXED (Elasticsearch is slow/unavailable)"
                     );
-                    warn!("   Possible causes: Elasticsearch overloaded, slow disk I/O, query queue backlog");
+                    warn!(
+                        "   Possible causes: Elasticsearch overloaded, slow disk I/O, query queue backlog"
+                    );
                     // Don't fail the RPC - status was received, just not indexed
                 }
             }
@@ -545,7 +589,7 @@ impl Controller for SchedulerService {
             built.artifact_id, built.size_bytes, built.mutations_applied, trace_mode
         );
 
-        // TODO (Phase 3): Index artifact metadata to Elasticsearch
+        // TODO Index artifact metadata to Elasticsearch
 
         Ok(Response::new(BuildResponse {
             artifact_id: built.artifact_id,
@@ -555,7 +599,7 @@ impl Controller for SchedulerService {
             storage_path: built.output_path.to_string_lossy().to_string(),
             build_timestamp: built.build_timestamp.timestamp(),
             mutations_applied: built.mutations_applied,
-            trace_mode,  // Echo back the trace_mode that was used
+            trace_mode, // Echo back the trace_mode that was used
         }))
     }
 
@@ -742,7 +786,11 @@ impl Controller for SchedulerService {
                     metadata: w.metadata.clone(),
                     tools: Some(ToolVersions {
                         rededr_version: w.tools.get("rededr_version").cloned().unwrap_or_default(),
-                        defender_version: w.tools.get("defender_version").cloned().unwrap_or_default(),
+                        defender_version: w
+                            .tools
+                            .get("defender_version")
+                            .cloned()
+                            .unwrap_or_default(),
                         etw_version: w.tools.get("etw_version").cloned().unwrap_or_default(),
                         llvm_version: w.tools.get("llvm_version").cloned().unwrap_or_default(),
                     }),
@@ -786,9 +834,12 @@ impl Controller for SchedulerService {
             && !reg.worker_id.starts_with("linux")
             && !reg.worker_id.starts_with("ubuntu")
         {
-            warn!("Registration rejected: invalid worker_id format: {}", reg.worker_id);
+            warn!(
+                "Registration rejected: invalid worker_id format: {}",
+                reg.worker_id
+            );
             return Err(Status::invalid_argument(
-                "worker_id must start with OS prefix (win*, linux*, ubuntu*)"
+                "worker_id must start with OS prefix (win*, linux*, ubuntu*)",
             ));
         }
 
@@ -801,7 +852,10 @@ impl Controller for SchedulerService {
         let tools: HashMap<String, String> = if let Some(tool_versions) = reg.tools {
             vec![
                 ("rededr_version".to_string(), tool_versions.rededr_version),
-                ("defender_version".to_string(), tool_versions.defender_version),
+                (
+                    "defender_version".to_string(),
+                    tool_versions.defender_version,
+                ),
                 ("etw_version".to_string(), tool_versions.etw_version),
                 ("llvm_version".to_string(), tool_versions.llvm_version),
             ]
@@ -816,7 +870,7 @@ impl Controller for SchedulerService {
         match scheduler_core.pool().register_worker_with_metadata(
             reg.worker_id.clone(),
             format!("{}:50052", reg.ip_address), // Add standard worker port
-            true, // enabled
+            true,                                // enabled
             reg.os_version.clone(),
             reg.capabilities.clone(),
             reg.metadata.clone(),
@@ -866,7 +920,10 @@ impl Controller for SchedulerService {
     ) -> Result<Response<DeregistrationAck>, Status> {
         let dereg = request.into_inner();
 
-        info!("Worker {} deregistering (reason: {})", dereg.worker_id, dereg.reason);
+        info!(
+            "Worker {} deregistering (reason: {})",
+            dereg.worker_id, dereg.reason
+        );
 
         // Get scheduler core
         let scheduler_core = match &self.scheduler_core {
@@ -923,8 +980,6 @@ impl Controller for SchedulerService {
         Ok(Response::new(MetadataAck { success: true }))
     }
 
-    // NEW METHODS (Phase 3 implementation - stubs for now)
-
     async fn get_job_progress(
         &self,
         request: Request<JobProgressRequest>,
@@ -934,16 +989,21 @@ impl Controller for SchedulerService {
         info!("[RPC] GetJobProgress: job_id={}", job_id);
 
         // Get job from queue
-        let scheduler = self.scheduler_core.as_ref()
+        let scheduler = self
+            .scheduler_core
+            .as_ref()
             .ok_or_else(|| Status::internal("Scheduler not initialized"))?;
-        let job = scheduler.queue().get_job(job_id)
+        let job = scheduler
+            .queue()
+            .get_job(job_id)
             .ok_or_else(|| Status::not_found(format!("Job not found: {}", job_id)))?;
 
         // Calculate progress percentage
         let progress_percent = job.progress_percent();
 
         // Convert rounds to protobuf format
-        let rounds: Vec<RoundSummaryProto> = job.rounds
+        let rounds: Vec<RoundSummaryProto> = job
+            .rounds
             .iter()
             .map(|r| RoundSummaryProto {
                 round_id: r.round_id.clone(),
@@ -952,8 +1012,13 @@ impl Controller for SchedulerService {
                 detected: r.detected,
                 behavior_match: r.behavior_match,
                 evasion_score: r.evasion_score,
-                status: if r.behavior_match { "completed".to_string() } else { "behavior_mismatch".to_string() },
-                completed_at: r.completed_at
+                status: if r.behavior_match {
+                    "completed".to_string()
+                } else {
+                    "behavior_mismatch".to_string()
+                },
+                completed_at: r
+                    .completed_at
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs() as i64,
@@ -981,11 +1046,15 @@ impl Controller for SchedulerService {
         info!("[RPC] StopJob: job_id={}", job_id);
 
         // Get scheduler
-        let scheduler = self.scheduler_core.as_ref()
+        let scheduler = self
+            .scheduler_core
+            .as_ref()
             .ok_or_else(|| Status::internal("Scheduler not initialized"))?;
 
         // Get job from queue
-        let mut job = scheduler.queue().get_job(job_id)
+        let mut job = scheduler
+            .queue()
+            .get_job(job_id)
             .ok_or_else(|| Status::not_found(format!("Job not found: {}", job_id)))?;
 
         // Check if job can be stopped (only stop running jobs)
@@ -1006,7 +1075,9 @@ impl Controller for SchedulerService {
         job.mark_stopped();
 
         // Update job in queue
-        scheduler.queue().update_job(&job)
+        scheduler
+            .queue()
+            .update_job(&job)
             .map_err(|e| Status::internal(format!("Failed to update job: {}", e)))?;
 
         info!("[RPC] Job {} stopped successfully", job_id);
@@ -1030,20 +1101,24 @@ impl Controller for SchedulerService {
         info!("[RPC] GetRound: job_id={}, round_id={}", job_id, round_id);
 
         // Get job from queue
-        let scheduler = self.scheduler_core.as_ref()
+        let scheduler = self
+            .scheduler_core
+            .as_ref()
             .ok_or_else(|| Status::internal("Scheduler not initialized"))?;
-        let job = scheduler.queue().get_job(job_id)
+        let job = scheduler
+            .queue()
+            .get_job(job_id)
             .ok_or_else(|| Status::not_found(format!("Job not found: {}", job_id)))?;
 
         // Find the round
-        let round_summary = job.rounds
+        let round_summary = job
+            .rounds
             .iter()
             .find(|r| r.round_id == *round_id)
             .ok_or_else(|| Status::not_found(format!("Round not found: {}", round_id)))?;
 
         // Convert to RoundProto (detailed format)
-        // Note: For Phase 2, we don't have full RunResult details yet
-        // Phase 3/4 will add baseline_run and instrumented_run data
+        // we don't have full RunResult details yet
 
         // Infer status from RoundSummary fields
         let status = if round_summary.behavior_match {
@@ -1056,18 +1131,18 @@ impl Controller for SchedulerService {
             round_id: round_summary.round_id.clone(),
             job_id: job.id.clone(),
             round_number: round_summary.round_number,
-            mutations: vec![], // TODO Phase 3: Convert mutations to protobuf format
-            baseline_run: None,      // TODO Phase 3: Add RunResult data
-            instrumented_run: None,  // TODO Phase 3: Add RunResult data
+            mutations: vec![],      // TODO Convert mutations to protobuf format
+            baseline_run: None,     // TODO Add RunResult data
+            instrumented_run: None, // TODO Add RunResult data
             status: status.to_string(),
             behavior_match: Some(BehaviorComparisonProto {
                 outcome_match: round_summary.behavior_match,
                 baseline_detected: round_summary.detected,
-                baseline_exit_code: 0,  // TODO Phase 3: Add from RunResult
+                baseline_exit_code: 0, // TODO Add from RunResult
                 instrumented_detected: round_summary.detected,
-                instrumented_exit_code: 0,  // TODO Phase 3: Add from RunResult
-                differences: vec![],  // TODO Phase 3: Add from BehaviorComparison
-                confidence: 1.0,  // TODO Phase 3: Add from BehaviorComparison
+                instrumented_exit_code: 0, // TODO Add from RunResult
+                differences: vec![],       // TODO Add from BehaviorComparison
+                confidence: 1.0,           // TODO  Add from BehaviorComparison
             }),
         };
 
@@ -1086,8 +1161,10 @@ impl Controller for SchedulerService {
         let baseline_run_id = &req.baseline_run_id;
         let instrumented_run_id = &req.instrumented_run_id;
 
-        info!("[RPC] CompareRuns: baseline={}, instrumented={}",
-            baseline_run_id, instrumented_run_id);
+        info!(
+            "[RPC] CompareRuns: baseline={}, instrumented={}",
+            baseline_run_id, instrumented_run_id
+        );
 
         // Parse run IDs (format: job_id/round_id/run_type)
         let baseline_parts: Vec<&str> = baseline_run_id.split('/').collect();
@@ -1095,7 +1172,7 @@ impl Controller for SchedulerService {
 
         if baseline_parts.len() != 3 || instrumented_parts.len() != 3 {
             return Err(Status::invalid_argument(
-                "Invalid run ID format. Expected: job_id/round_id/run_type"
+                "Invalid run ID format. Expected: job_id/round_id/run_type",
             ));
         }
 
@@ -1103,40 +1180,50 @@ impl Controller for SchedulerService {
         let round_id = baseline_parts[1];
 
         // Verify both runs are from same job and round
-        if baseline_parts[0] != instrumented_parts[0] || baseline_parts[1] != instrumented_parts[1] {
+        if baseline_parts[0] != instrumented_parts[0] || baseline_parts[1] != instrumented_parts[1]
+        {
             return Err(Status::invalid_argument(
-                "Baseline and instrumented runs must be from same job and round"
+                "Baseline and instrumented runs must be from same job and round",
             ));
         }
 
         // Get scheduler
-        let scheduler = self.scheduler_core.as_ref()
+        let scheduler = self
+            .scheduler_core
+            .as_ref()
             .ok_or_else(|| Status::internal("Scheduler not initialized"))?;
 
         // Get job
-        let job = scheduler.queue().get_job(job_id)
+        let job = scheduler
+            .queue()
+            .get_job(job_id)
             .ok_or_else(|| Status::not_found(format!("Job not found: {}", job_id)))?;
 
         // Find the round
-        let round_summary = job.rounds
+        let round_summary = job
+            .rounds
             .iter()
             .find(|r| r.round_id == round_id)
             .ok_or_else(|| Status::not_found(format!("Round not found: {}", round_id)))?;
 
         // Create comparison response from round summary
-        // Note: Phase 2 stores simplified data; Phase 4 will add full RunResult details
+        // should add full RunResult details
         let comparison = BehaviorComparisonProto {
             outcome_match: round_summary.behavior_match,
             baseline_detected: round_summary.detected,
-            baseline_exit_code: 0,  // TODO Phase 4: Get from stored RunResult
+            baseline_exit_code: 0, // TODO Get from stored RunResult
             instrumented_detected: round_summary.detected,
-            instrumented_exit_code: 0,  // TODO Phase 4: Get from stored RunResult
+            instrumented_exit_code: 0, // TODO Get from stored RunResult
             differences: if round_summary.behavior_match {
                 vec![]
             } else {
                 vec!["Behavior mismatch detected".to_string()]
             },
-            confidence: if round_summary.behavior_match { 1.0 } else { 0.5 },
+            confidence: if round_summary.behavior_match {
+                1.0
+            } else {
+                0.5
+            },
         };
 
         let response = CompareRunsResponse {
@@ -1190,7 +1277,7 @@ impl SchedulerService {
                         payload_fields.insert("bitmap_size".to_string(), json!(cov.bitmap.len()));
 
                         // Store bitmap as Base64 for Elasticsearch (more efficient than raw bytes)
-                        use base64::{engine::general_purpose, Engine as _};
+                        use base64::{Engine as _, engine::general_purpose};
                         let bitmap_b64 = general_purpose::STANDARD.encode(&cov.bitmap);
                         payload_fields.insert("bitmap_b64".to_string(), json!(bitmap_b64));
                     }
@@ -1268,7 +1355,9 @@ impl SchedulerService {
                         serde_json::Value::String(s) => {
                             // If field should be numeric but contains "unsupported" or other non-numeric string,
                             // convert to null to avoid Elasticsearch type conflicts
-                            if should_be_numeric && (s == "unsupported" || s.parse::<i64>().is_err()) {
+                            if should_be_numeric
+                                && (s == "unsupported" || s.parse::<i64>().is_err())
+                            {
                                 json!(null)
                             } else {
                                 json!(s)
@@ -1353,8 +1442,14 @@ impl SchedulerService {
         let controller_es_url = format!("http://{}:9200", self.controller_ip);
 
         // Try controller IP first (as seen from worker's network perspective)
-        info!("Attempting to store run result to Elasticsearch at controller IP: {}", controller_es_url);
-        match self.try_index_to_es(&controller_es_url, &index_name, &report.run_id, &doc).await {
+        info!(
+            "Attempting to store run result to Elasticsearch at controller IP: {}",
+            controller_es_url
+        );
+        match self
+            .try_index_to_es(&controller_es_url, &index_name, &report.run_id, &doc)
+            .await
+        {
             Ok(()) => {
                 info!(
                     "[OK] Stored run result to controller ES ({}): {} (status: {})",
@@ -1455,7 +1550,9 @@ impl SchedulerService {
 
         self.es_client
             .indices()
-            .put_index_template(elasticsearch::indices::IndicesPutIndexTemplateParts::Name("jobs-template"))
+            .put_index_template(elasticsearch::indices::IndicesPutIndexTemplateParts::Name(
+                "jobs-template",
+            ))
             .body(template)
             .send()
             .await?;
@@ -1492,7 +1589,9 @@ impl SchedulerService {
 
         self.es_client
             .indices()
-            .put_index_template(elasticsearch::indices::IndicesPutIndexTemplateParts::Name("rounds-template"))
+            .put_index_template(elasticsearch::indices::IndicesPutIndexTemplateParts::Name(
+                "rounds-template",
+            ))
             .body(template)
             .send()
             .await?;
@@ -1532,7 +1631,11 @@ impl SchedulerService {
     }
 
     /// Index round document to Elasticsearch
-    async fn index_round(&self, job_id: &str, round: &round::RoundSummary) -> Result<(), Box<dyn std::error::Error>> {
+    async fn index_round(
+        &self,
+        job_id: &str,
+        round: &round::RoundSummary,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use serde_json::json;
 
         let index_name = format!("rounds-{}", chrono::Utc::now().format("%Y.%m"));
@@ -1613,7 +1716,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Loaded controller config successfully from {}",
         ControllerConfig::find_config_path()
     );
-    info!("Bind address: {}", config.server.bind_address);
+    debug!("Bind address: {}", config.server.bind_address);
     info!("Elasticsearch: {}", config.elasticsearch.url);
     info!(
         "Triage model: {} (threshold: {})",
@@ -1624,7 +1727,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let es_transport = Transport::single_node(&config.elasticsearch.url)?;
     let es_client = Elasticsearch::new(es_transport);
 
-    info!(
+    debug!(
         "Elasticsearch client initialized: {}",
         config.elasticsearch.url
     );
@@ -1638,14 +1741,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         detect_controller_ip().unwrap_or_else(|| "127.0.0.1".to_string())
     } else {
         // Extract IP from bind address
-        config.server.bind_address
+        config
+            .server
+            .bind_address
             .split(':')
             .next()
             .unwrap_or("127.0.0.1")
             .to_string()
     };
 
-    info!("Controller IP for Elasticsearch access: {}", controller_ip);
+    debug!("Controller IP for Elasticsearch access: {}", controller_ip);
 
     let mut scheduler = SchedulerService::new(es_client, controller_ip);
 
@@ -1660,22 +1765,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Controller/Scheduler starting...");
 
-    // ✅ Phase 1.5: Reorganized order - WorkerManager must be created BEFORE SchedulerCore
-    // (because SchedulerCore now needs WorkerManager for worker registration sync)
-
-    // Step 1: Create worker event bus
+    // Create worker event bus
     use tokio::sync::mpsc;
     let (events_tx, mut events_rx) = mpsc::channel::<worker_manager::WorkerEvent>(1000);
-    info!("Created worker event bus (capacity: 1000 messages)");
+    debug!("Created worker event bus");
 
     // Step 2: Initialize WorkerManager
     info!("Initializing WorkerManager...");
     let worker_manager = Arc::new(worker_manager::WorkerManager::new(30, events_tx.clone())); // 30s RPC timeout
-
-    // ✅ Phase 1.1: Workers will be registered from automation/generated/*.toml by SchedulerCore
-    // This ensures single source of truth for worker registration
-
-    // ✅ Phase 5: Removed WorkerPool event bus (WorkerManager handles connectivity)
 
     // Step 3: Create scheduler core configuration
     let scheduler_core_config = CoreSchedulerConfig {
@@ -1728,7 +1825,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 streams_established += 1;
             }
             Err(e) => {
-                warn!("Failed to establish stream with worker {}: {}", worker_id, e);
+                warn!(
+                    "Failed to establish stream with worker {}: {}",
+                    worker_id, e
+                );
                 streams_failed += 1;
             }
         }
@@ -1740,45 +1840,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     if streams_established > 0 {
-        info!("Workers connected - real-time communication active");
+        debug!("Workers connected - real-time communication active");
     }
 
     // Set worker manager in scheduler service
     scheduler.set_worker_manager(Arc::clone(&worker_manager));
-    info!("WorkerManager initialized with {} workers", config.scheduler.workers.len());
+    info!(
+        "WorkerManager initialized with {} workers",
+        config.scheduler.workers.len()
+    );
 
-    // ✅ NEW (Tasks 19-22): Spawn orchestration loop to consume worker events
+    // Spawn orchestration loop to consume worker events
     tokio::spawn(async move {
-        info!("🚀 Worker event orchestration loop started");
+        info!("Worker event orchestration loop started");
 
         while let Some(event) = events_rx.recv().await {
             match event {
-                // ✅ Task 20: Connected event handler
-                worker_manager::WorkerEvent::Connected { worker_id, os_version, capabilities } => {
-                    info!("✅ [WORKER-EVENT] Worker {} connected - OS: {}, Caps: {:?}",
-                        worker_id, os_version, capabilities);
+                // Connected event handler
+                worker_manager::WorkerEvent::Connected {
+                    worker_id,
+                    os_version,
+                    capabilities,
+                } => {
+                    debug!(
+                        "[WORKER-EVENT] Worker {} connected - OS: {}, Caps: {:?}",
+                        worker_id, os_version, capabilities
+                    );
                     // TODO: Send initial configuration or sync state
                     // TODO: Update WorkerPool state
                 }
 
-                // ✅ Task 21: Message event handler
+                // Message event handler
                 worker_manager::WorkerEvent::Message { worker_id, msg } => {
                     use crate::automutate::common::worker_message;
 
                     match msg.payload {
                         Some(worker_message::Payload::Registration(reg)) => {
-                            debug!("📝 [WORKER-EVENT] Worker {} registered", worker_id);
+                            debug!("[WORKER-EVENT] Worker {} registered", worker_id);
                         }
 
                         Some(worker_message::Payload::Status(status)) => {
-                            debug!("📊 [WORKER-EVENT] Worker {} status - CPU: {}%, Jobs: {}",
-                                worker_id, status.cpu_percent, status.active_jobs);
+                            debug!(
+                                "[WORKER-EVENT] Worker {} status - CPU: {}%, Jobs: {}",
+                                worker_id, status.cpu_percent, status.active_jobs
+                            );
                             // TODO: Update worker health metrics
                         }
 
                         Some(worker_message::Payload::Telemetry(batch)) => {
-                            info!("📡 [WORKER-EVENT] Worker {} telemetry - {} events (job: {}, final: {})",
-                                worker_id, batch.events.len(), batch.job_id, batch.is_final);
+                            info!(
+                                "[WORKER-EVENT] Worker {} telemetry - {} events (job: {}, final: {})",
+                                worker_id,
+                                batch.events.len(),
+                                batch.job_id,
+                                batch.is_final
+                            );
                             // TODO: Forward to Elasticsearch asynchronously
                             // let es = es_client_orch.clone();
                             // tokio::spawn(async move {
@@ -1787,28 +1903,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         Some(worker_message::Payload::SampleResponse(response)) => {
-                            info!("✅ [WORKER-EVENT] Worker {} completed job {} - Success: {}, Exit code: {}",
-                                worker_id, response.job_id, response.success, response.exit_code);
+                            info!(
+                                "[WORKER-EVENT] Worker {} completed job {} - Success: {}, Exit code: {}",
+                                worker_id, response.job_id, response.success, response.exit_code
+                            );
                             // TODO: Mark job as complete in scheduler
                             // scheduler_core_orch.complete_job(&response.job_id, response);
                         }
 
                         Some(worker_message::Payload::Ack(ack)) => {
-                            debug!("✓ [WORKER-EVENT] Worker {} acked request {} - Success: {}",
-                                worker_id, ack.request_id, ack.success);
+                            debug!(
+                                "[WORKER-EVENT] Worker {} acked request {} - Success: {}",
+                                worker_id, ack.request_id, ack.success
+                            );
                             // Optional: Update pending command tracking
                         }
 
                         None => {
-                            warn!("⚠️  [WORKER-EVENT] Worker {} sent empty message", worker_id);
+                            warn!("[WORKER-EVENT] Worker {} sent empty message", worker_id);
                         }
                         _ => {}
                     }
                 }
 
-                // ✅ Task 22: Disconnected event handler
+                // Disconnected event handler
                 worker_manager::WorkerEvent::Disconnected { worker_id, reason } => {
-                    warn!("❌ [WORKER-EVENT] Worker {} disconnected: {}", worker_id, reason);
+                    warn!(
+                        "[WORKER-EVENT] Worker {} disconnected: {}",
+                        worker_id, reason
+                    );
                     // TODO: Reschedule jobs assigned to this worker
                     // if let Some(scheduler) = scheduler_core_orch.as_ref() {
                     //     scheduler.reschedule_worker_jobs(&worker_id);
@@ -1827,12 +1950,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Orchestration loop spawned successfully");
 
-    // ✅ Phase 5: Removed WorkerPool event loop
-    // WorkerManager's WorkerEvent bus handles connectivity instead
-
     // gRPC reflection for grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!("automutate_descriptor"))
+        .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!(
+            "automutate_descriptor"
+        ))
         .build_v1()?;
 
     Server::builder()

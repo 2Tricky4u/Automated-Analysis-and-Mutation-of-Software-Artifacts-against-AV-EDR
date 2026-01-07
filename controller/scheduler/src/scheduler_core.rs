@@ -12,7 +12,7 @@ use serde::Deserialize;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::time::{Duration, sleep};
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, debug};
 
 /// Scheduler configuration
 #[derive(Debug, Clone, Deserialize)]
@@ -75,16 +75,14 @@ pub struct SchedulerCore {
 impl SchedulerCore {
     /// Create a new scheduler core
     /// Automatically discovers workers from automation/generated/win*-worker-*.toml files
-    /// ✅ Phase 1.3: Now accepts WorkerManager to sync worker registration
-    /// ✅ Phase 5: Removed pool_events_tx (WorkerManager handles connectivity)
     pub fn new(
         config: SchedulerConfig,
         worker_manager: Arc<crate::worker_manager::WorkerManager>,
     ) -> Result<Self> {
         info!("Initializing scheduler core");
-        info!("  Poll interval: {}s", config.poll_interval_seconds);
-        info!("  Max concurrent jobs: {}", config.max_concurrent_jobs);
-        info!("  Default timeout: {}s", config.default_timeout_seconds);
+        debug!("  Poll interval: {}s", config.poll_interval_seconds);
+        debug!("  Max concurrent jobs: {}", config.max_concurrent_jobs);
+        debug!("  Default timeout: {}s", config.default_timeout_seconds);
 
         // Create queues and pool
         let queue = JobQueue::new();
@@ -94,11 +92,11 @@ impl SchedulerCore {
         // Create round processor
         let round_processor = RoundProcessor::new();
 
-        // ✅ Phase 1.3: Discover and register workers from automation/generated/*.toml
+        //Discover and register workers from automation/generated/*.toml
         // Returns list of discovered workers for syncing with WorkerManager
         let discovered_workers = Self::discover_and_register_workers(&pool)?;
 
-        // ✅ Phase 1.3: Register same workers in WorkerManager (single source of truth)
+        // Register same workers in WorkerManager (single source of truth)
         worker_manager.register_from_pool(discovered_workers)?;
         info!("Worker registration synchronized between WorkerPool and WorkerManager");
 
@@ -113,7 +111,7 @@ impl SchedulerCore {
     }
 
     /// Discover workers from automation/generated/win*-worker-*.toml files
-    /// ✅ Phase 1.3: Now returns Vec<WorkerConfig> for syncing with WorkerManager
+    /// returns Vec<WorkerConfig> for syncing with WorkerManager
     fn discover_and_register_workers(pool: &WorkerPool) -> Result<Vec<crate::worker_manager::WorkerConfig>> {
         let generated_dir = Path::new("automation/generated");
 

@@ -13,7 +13,7 @@
 // - Better worker utilization (workers pull work when ready)
 
 use crate::job::MutationSpec;
-use crate::round::RunType;  // Use existing RunType from round.rs
+use crate::round::RunType; // Use existing RunType from round.rs
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

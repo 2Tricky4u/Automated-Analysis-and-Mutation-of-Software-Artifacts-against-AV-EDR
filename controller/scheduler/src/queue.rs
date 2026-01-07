@@ -3,8 +3,8 @@
 // Phase 2: Will upgrade to BinaryHeap for priority scheduling
 
 use crate::job::{Job, JobStatus};
-use std::sync::{Arc, Mutex};
 use anyhow::{Result, anyhow};
+use std::sync::{Arc, Mutex};
 
 /// Job queue that manages pending and active jobs
 /// Phase 1: Simple FIFO queue using Vec
@@ -79,7 +79,10 @@ impl JobQueue {
 
         // Find first queued job (FIFO)
         // Phase 2: Will use BinaryHeap for priority ordering
-        let position = state.jobs.iter().position(|j| j.status == JobStatus::Queued)?;
+        let position = state
+            .jobs
+            .iter()
+            .position(|j| j.status == JobStatus::Queued)?;
 
         Some(state.jobs[position].clone())
     }
@@ -123,13 +126,21 @@ impl JobQueue {
     /// Get count of queued jobs
     pub fn queued_count(&self) -> usize {
         let state = self.state.lock().unwrap();
-        state.jobs.iter().filter(|j| j.status == JobStatus::Queued).count()
+        state
+            .jobs
+            .iter()
+            .filter(|j| j.status == JobStatus::Queued)
+            .count()
     }
 
     /// Get count of running jobs
     pub fn running_count(&self) -> usize {
         let state = self.state.lock().unwrap();
-        state.jobs.iter().filter(|j| j.status == JobStatus::Running).count()
+        state
+            .jobs
+            .iter()
+            .filter(|j| j.status == JobStatus::Running)
+            .count()
     }
 
     /// Get count of completed jobs (completed + failed + timeout)
@@ -166,9 +177,9 @@ mod tests {
                 vec![],
                 "api+bb".to_string(),
                 0,
-                10,  // max_rounds
-                false,  // stop_on_evasion
-                false,  // stop_on_detection
+                10,    // max_rounds
+                false, // stop_on_evasion
+                false, // stop_on_detection
             )
             .unwrap();
 
@@ -183,13 +194,40 @@ mod tests {
 
         // Submit 3 jobs
         queue
-            .submit_job("test1".to_string(), "test1.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
+            .submit_job(
+                "test1".to_string(),
+                "test1.c".to_string(),
+                vec![],
+                "api+bb".to_string(),
+                0,
+                10,
+                false,
+                false,
+            )
             .unwrap();
         queue
-            .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
+            .submit_job(
+                "test2".to_string(),
+                "test2.c".to_string(),
+                vec![],
+                "api+bb".to_string(),
+                0,
+                10,
+                false,
+                false,
+            )
             .unwrap();
         queue
-            .submit_job("test3".to_string(), "test3.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
+            .submit_job(
+                "test3".to_string(),
+                "test3.c".to_string(),
+                vec![],
+                "api+bb".to_string(),
+                0,
+                10,
+                false,
+                false,
+            )
             .unwrap();
 
         // Pop should return first job (FIFO)
@@ -203,7 +241,16 @@ mod tests {
         let queue = JobQueue::new();
 
         let job_id = queue
-            .submit_job("test".to_string(), "test.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
+            .submit_job(
+                "test".to_string(),
+                "test.c".to_string(),
+                vec![],
+                "api+bb".to_string(),
+                0,
+                10,
+                false,
+                false,
+            )
             .unwrap();
 
         let mut job = queue.get_job(&job_id).unwrap();
@@ -221,10 +268,28 @@ mod tests {
 
         // Submit jobs
         let job_id1 = queue
-            .submit_job("test1".to_string(), "test1.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
+            .submit_job(
+                "test1".to_string(),
+                "test1.c".to_string(),
+                vec![],
+                "api+bb".to_string(),
+                0,
+                10,
+                false,
+                false,
+            )
             .unwrap();
         let job_id2 = queue
-            .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
+            .submit_job(
+                "test2".to_string(),
+                "test2.c".to_string(),
+                vec![],
+                "api+bb".to_string(),
+                0,
+                10,
+                false,
+                false,
+            )
             .unwrap();
 
         // Mark one as running

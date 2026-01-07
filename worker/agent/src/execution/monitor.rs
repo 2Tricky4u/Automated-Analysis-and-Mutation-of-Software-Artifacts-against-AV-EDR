@@ -207,30 +207,30 @@ impl ExecutionMonitor {
         // 3. Query RedEDR for event count (lightweight, best effort)
         let stats_url = format!("{}/api/stats", self.rededr_base_url);
         let events_count = match self.client.get(&stats_url).send().await {
-            Ok(response) => {
-                match response.text().await {
-                    Ok(body_text) => {
-                        if body_text.is_empty() {
-                            debug!("RedEDR /api/stats returned empty response");
-                            0
-                        } else {
-                            match serde_json::from_str::<serde_json::Value>(&body_text) {
-                                Ok(stats) => stats["events_count"].as_i64().unwrap_or(0) as i32,
-                                Err(e) => {
-                                    warn!("Failed to parse RedEDR /api/stats JSON: {} | Body: {}",
-                                          e,
-                                          &body_text.chars().take(200).collect::<String>());
-                                    0
-                                }
+            Ok(response) => match response.text().await {
+                Ok(body_text) => {
+                    if body_text.is_empty() {
+                        debug!("RedEDR /api/stats returned empty response");
+                        0
+                    } else {
+                        match serde_json::from_str::<serde_json::Value>(&body_text) {
+                            Ok(stats) => stats["events_count"].as_i64().unwrap_or(0) as i32,
+                            Err(e) => {
+                                warn!(
+                                    "Failed to parse RedEDR /api/stats JSON: {} | Body: {}",
+                                    e,
+                                    &body_text.chars().take(200).collect::<String>()
+                                );
+                                0
                             }
                         }
                     }
-                    Err(e) => {
-                        warn!("Failed to read RedEDR /api/stats response body: {}", e);
-                        0
-                    }
                 }
-            }
+                Err(e) => {
+                    warn!("Failed to read RedEDR /api/stats response body: {}", e);
+                    0
+                }
+            },
             Err(e) => {
                 warn!("Failed to fetch RedEDR /api/stats: {}", e);
                 0
@@ -283,30 +283,39 @@ impl ExecutionMonitor {
             match tokio::time::timeout(Duration::from_secs(1), send_future).await {
                 Ok(Ok(())) => {
                     // Success - status sent via stream
-                    debug!("Monitor: Execution status sent via stream [event: {}, job: {}]", event_type, self.job_id);
+                    debug!(
+                        "Monitor: Execution status sent via stream [event: {}, job: {}]",
+                        event_type, self.job_id
+                    );
                 }
                 Ok(Err(e)) => {
-                    warn!("[!] Monitor: Failed to send execution status via stream [event: {}, job: {}]: {}",
-                          event_type, self.job_id, e);
+                    warn!(
+                        "[!] Monitor: Failed to send execution status via stream [event: {}, job: {}]: {}",
+                        event_type, self.job_id, e
+                    );
                 }
                 Err(_) => {
-                    warn!("[!] Monitor: Execution status send timeout (>1s) [event: {}, job: {}]",
-                          event_type, self.job_id);
+                    warn!(
+                        "[!] Monitor: Execution status send timeout (>1s) [event: {}, job: {}]",
+                        event_type, self.job_id
+                    );
                     warn!("   Stream may be blocked - monitoring will continue");
                 }
             }
         } else {
             // No StreamHandler available - worker-only mode
             // Status is still available via local event channel for logging
-            debug!("Monitor: No StreamHandler, execution status available locally only [event: {}, job: {}, elapsed: {}s]",
-                   event_type, self.job_id, status.elapsed_seconds);
+            debug!(
+                "Monitor: No StreamHandler, execution status available locally only [event: {}, job: {}, elapsed: {}s]",
+                event_type, self.job_id, status.elapsed_seconds
+            );
         }
     }
 
     fn is_process_alive(&self, pid: u32) -> bool {
         #[cfg(target_os = "windows")]
         {
-            use windows::Win32::Foundation::{CloseHandle};
+            use windows::Win32::Foundation::CloseHandle;
             use windows::Win32::System::Threading::{
                 OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
             };

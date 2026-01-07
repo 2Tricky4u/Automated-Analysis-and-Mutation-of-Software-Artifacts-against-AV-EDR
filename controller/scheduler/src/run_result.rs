@@ -1,6 +1,6 @@
+use crate::round::RunType;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
-use crate::round::RunType;
 
 /// Run outcome
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -48,7 +48,7 @@ impl RunOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunResult {
     /// Full run ID: {job_id}/{round_id}/{run_type}
-    pub run_id: String,  // e.g., "job-000001/round-3/baseline"
+    pub run_id: String, // e.g., "job-000001/round-3/baseline"
 
     /// Parent job ID
     pub job_id: String,

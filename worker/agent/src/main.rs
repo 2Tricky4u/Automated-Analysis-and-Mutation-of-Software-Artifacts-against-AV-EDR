@@ -8,8 +8,8 @@ use tracing::{debug, error, info, warn};
 
 mod capabilities;
 mod execution;
-mod telemetry;
 mod stream_handler;
+mod telemetry;
 
 pub mod automutate {
     pub mod common {
@@ -200,8 +200,14 @@ impl Drop for ExecutionLockGuard {
         let lock = self.lock.clone();
         tokio::spawn(async move {
             let mut state = lock.lock().await;
-            let job_id = state.current_job_id.take().unwrap_or_else(|| "unknown".to_string());
-            let artifact = state.current_artifact.take().unwrap_or_else(|| "unknown".to_string());
+            let job_id = state
+                .current_job_id
+                .take()
+                .unwrap_or_else(|| "unknown".to_string());
+            let artifact = state
+                .current_artifact
+                .take()
+                .unwrap_or_else(|| "unknown".to_string());
             state.busy = false;
             info!(
                 "Execution lock RELEASED: job_id={}, artifact={}",
@@ -309,7 +315,10 @@ impl WorkerAgentService {
 #[tonic::async_trait]
 impl WorkerAgent for WorkerAgentService {
     type GetTelemetryStream = std::pin::Pin<
-        Box<dyn tokio_stream::Stream<Item = Result<automutate::common::TelemetryData, Status>> + Send>
+        Box<
+            dyn tokio_stream::Stream<Item = Result<automutate::common::TelemetryData, Status>>
+                + Send,
+        >,
     >;
 
     async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PingResponse>, Status> {
@@ -343,7 +352,7 @@ impl WorkerAgent for WorkerAgentService {
         );
 
         // ====================================================================
-        // Phase 0: Acquire single execution lock
+        // Acquire single execution lock
         // ====================================================================
 
         let _execution_lock = self
@@ -367,7 +376,7 @@ impl WorkerAgent for WorkerAgentService {
         }
 
         // ====================================================================
-        // Phase 1: Setup with RAII guards for automatic cleanup
+        // Setup with RAII guards for automatic cleanup
         // ====================================================================
 
         // 1. Resolve artifact_id to local path
@@ -398,15 +407,16 @@ impl WorkerAgent for WorkerAgentService {
 
         // 4. Sanity check RedEDR should be clean (no leftover events from previous run)
         info!("Performing pre-run sanity check: RedEDR should be empty");
-        let pre_run_events = match rededr_guard
-            .collector()
-            .collect_all("sanity-check")
-            .await
-        {
+        let pre_run_events = match rededr_guard.collector().collect_all("sanity-check").await {
             Ok(events) => events,
             Err(e) => {
-                warn!("Failed to collect pre-run events during sanity check: {}", e);
-                warn!("This might be due to malformed initialization event - treating as empty and continuing");
+                warn!(
+                    "Failed to collect pre-run events during sanity check: {}",
+                    e
+                );
+                warn!(
+                    "This might be due to malformed initialization event - treating as empty and continuing"
+                );
                 Vec::new() // Treat collection failure as empty (no contamination)
             }
         };
@@ -476,7 +486,9 @@ impl WorkerAgent for WorkerAgentService {
             }
 
             // Force reset RedEDR to clear contamination (trace target already set above)
-            warn!("Force-resetting RedEDR to clear contaminated state (trace target already set)...");
+            warn!(
+                "Force-resetting RedEDR to clear contaminated state (trace target already set)..."
+            );
             if let Err(e) = rededr_guard.collector().reset().await {
                 error!("Failed to force-reset RedEDR: {}", e);
                 return Err(Status::internal(format!(
@@ -484,7 +496,10 @@ impl WorkerAgent for WorkerAgentService {
                     e
                 )));
             }
-            info!("RedEDR force-reset completed. Now watching: {}", artifact_name);
+            info!(
+                "RedEDR force-reset completed. Now watching: {}",
+                artifact_name
+            );
         } else {
             info!("[+] Pre-run sanity check passed: RedEDR is clean");
         }
@@ -517,7 +532,10 @@ impl WorkerAgent for WorkerAgentService {
             Status::internal(format!("Failed to create telemetry directory: {}", e))
         })?;
 
-        info!("Created artifact-specific telemetry directory: {:?}", telemetry_dir);
+        info!(
+            "Created artifact-specific telemetry directory: {:?}",
+            telemetry_dir
+        );
 
         // 5. Start line-level trace collector with streaming to file
         // Stream events to file during execution
@@ -588,7 +606,10 @@ impl WorkerAgent for WorkerAgentService {
 
                     // Final flush
                     let _ = writer.flush().await;
-                    info!("[OK] Streaming writer closed, wrote {} trace events to file", event_count);
+                    info!(
+                        "[OK] Streaming writer closed, wrote {} trace events to file",
+                        event_count
+                    );
                 }
                 Err(e) => {
                     error!("Failed to create trace events file: {}", e);
@@ -603,10 +624,12 @@ impl WorkerAgent for WorkerAgentService {
             }
         });
 
-        info!("Async trace collector started on named pipe: \\\\.\\pipe\\rededr_trace (streaming to file)");
+        info!(
+            "Async trace collector started on named pipe: \\\\.\\pipe\\rededr_trace (streaming to file)"
+        );
 
         let child = tokio::process::Command::new(&artifact_path)
-            .current_dir(&telemetry_dir)  // Runtime will write coverage.bin, checkpoints.log here
+            .current_dir(&telemetry_dir) // Runtime will write coverage.bin, checkpoints.log here
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -626,7 +649,7 @@ impl WorkerAgent for WorkerAgentService {
         info!("Artifact process spawned: pid={}", pid);
 
         // ====================================================================
-        // Phase 2: Capture output streams
+        // Capture output streams
         // ====================================================================
 
         // Capture stdout and stderr for error reporting
@@ -659,7 +682,7 @@ impl WorkerAgent for WorkerAgentService {
         });
 
         // ====================================================================
-        // Phase 3: Start monitoring with guard
+        // Start monitoring with guard
         // ====================================================================
 
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
@@ -711,7 +734,7 @@ impl WorkerAgent for WorkerAgentService {
         let mut monitor_guard = Some(MonitorGuard::new(stop_tx, monitor_handle, event_consumer));
 
         // ====================================================================
-        // Phase 4: Wait for process completion or timeout
+        // Wait for process completion or timeout
         // ====================================================================
 
         let timeout_duration = Duration::from_secs(req.timeout_seconds as u64);
@@ -782,7 +805,10 @@ impl WorkerAgent for WorkerAgentService {
                     }
                     Ok(None) | Err(_) => {
                         // Process is still running or status unavailable, this is a real timeout
-                        info!("Timeout: Process still running after {}s, forcefully killing", req.timeout_seconds);
+                        info!(
+                            "Timeout: Process still running after {}s, forcefully killing",
+                            req.timeout_seconds
+                        );
 
                         // taskkill /F /T to kill process tree forcefully
                         #[cfg(target_os = "windows")]
@@ -839,7 +865,7 @@ impl WorkerAgent for WorkerAgentService {
         let elapsed = start_time.elapsed();
 
         // ====================================================================
-        // Phase 5: Collect output and cleanup monitoring
+        // Collect output and cleanup monitoring
         // ====================================================================
 
         // Collect stdout and stderr
@@ -854,13 +880,13 @@ impl WorkerAgent for WorkerAgentService {
 
         if !stderr_output.is_empty() {
             let formatted = Self::truncate_middle_output(&stderr_output);
-            info!("Process stderr:\n{}", formatted);  // Changed to INFO so we always see it
+            info!("Process stderr:\n{}", formatted); // Changed to INFO so we always see it
         } else {
             info!("Process stderr: (empty)");
         }
 
         // ====================================================================
-        // Phase 6: Stop monitor and post-exit telemetry window (10 seconds)
+        // Stop monitor and post-exit telemetry window (10 seconds)
         // ====================================================================
 
         // Stop monitor BEFORE telemetry window to prevent duplicate status reports
@@ -868,16 +894,14 @@ impl WorkerAgent for WorkerAgentService {
             guard.stop().await;
         }
 
-
-
         // Give trace collector a moment to read any final events from the pipe
         // (Dont abort immediately SUCCESS/CHECKPOINT events may still be in pipe buffer)
         info!("Waiting for trace collector to finish reading pipe...");
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Now stop trace collector and streaming writer
-        trace_handle.abort();  // Stop named pipe collector
-        drop(trace_tx);  // Close channel sender, which will cause streaming_handle to finish
+        trace_handle.abort(); // Stop named pipe collector
+        drop(trace_tx); // Close channel sender, which will cause streaming_handle to finish
 
         // Wait for streaming writer to flush all events to disk
         match tokio::time::timeout(Duration::from_secs(DELAY), streaming_handle).await {
@@ -893,7 +917,7 @@ impl WorkerAgent for WorkerAgentService {
         }
 
         // ====================================================================
-        // Phase 7: Collect telemetry and reset RedEDR (BEFORE final status)
+        // Collect telemetry and reset RedEDR (BEFORE final status)
         // ====================================================================
 
         // Collect full telemetry batch
@@ -901,11 +925,12 @@ impl WorkerAgent for WorkerAgentService {
         let mut telemetry_events = rededr_guard
             .collector()
             .collect_all(&job_id)
-            .await.unwrap_or_else(|e| {
-            error!("Failed to collect telemetry: {}", e);
-            error!("Continuing with empty telemetry! Execution status will still be reported");
-            Vec::new() // Continue with empty telemetry instead of failing entire job
-        });
+            .await
+            .unwrap_or_else(|e| {
+                error!("Failed to collect telemetry: {}", e);
+                error!("Continuing with empty telemetry! Execution status will still be reported");
+                Vec::new() // Continue with empty telemetry instead of failing entire job
+            });
 
         info!("Collected {} RedEDR events", telemetry_events.len());
 
@@ -920,45 +945,52 @@ impl WorkerAgent for WorkerAgentService {
                     let original_size = contents.len();
                     let trace_events_count = contents.lines().count();
 
-                    const MAX_IMMEDIATE_SIZE: usize = 2_097_152;  // 2MB threshold
-                    const MAX_PAYLOAD_SIZE: usize = 4_000_000;   // 4MB gRPC limit (slightly under)
+                    const MAX_IMMEDIATE_SIZE: usize = 2_097_152; // 2MB threshold
+                    const MAX_PAYLOAD_SIZE: usize = 4_000_000; // 4MB gRPC limit (slightly under)
 
                     // ========== CASE 1: SMALL TRACE (≤ 2MB) ==========
                     // Send entire trace immediately, no async task
                     if original_size <= MAX_IMMEDIATE_SIZE {
                         let mut metadata = std::collections::HashMap::new();
-                        metadata.insert("trace_file".to_string(), trace_events_file.to_string_lossy().to_string());
+                        metadata.insert(
+                            "trace_file".to_string(),
+                            trace_events_file.to_string_lossy().to_string(),
+                        );
                         metadata.insert("event_count".to_string(), trace_events_count.to_string());
-                        metadata.insert("original_size_bytes".to_string(), original_size.to_string());
+                        metadata
+                            .insert("original_size_bytes".to_string(), original_size.to_string());
 
                         // Wrap payload in JSON so controller can parse it
                         let payload = if original_size <= MAX_PAYLOAD_SIZE {
                             metadata.insert("compression".to_string(), "none".to_string());
                             // Wrap in JSON: {"content": "trace content here"}
-                            serde_json::json!({"content": contents}).to_string().into_bytes()
+                            serde_json::json!({"content": contents})
+                                .to_string()
+                                .into_bytes()
                         } else {
-                        metadata.insert("compression".to_string(), "truncated_tail".to_string());
+                            metadata
+                                .insert("compression".to_string(), "truncated_tail".to_string());
 
-                        let max_tail_bytes = MAX_PAYLOAD_SIZE.saturating_sub(1);
+                            let max_tail_bytes = MAX_PAYLOAD_SIZE.saturating_sub(1);
 
-                        // Keep only the tail, but ensure we cut at a UTF-8 boundary.
-                        let tail = if contents.len() <= max_tail_bytes {
-                            contents.clone()
-                        } else {
-                            let start = contents.len() - max_tail_bytes;
+                            // Keep only the tail, but ensure we cut at a UTF-8 boundary.
+                            let tail = if contents.len() <= max_tail_bytes {
+                                contents.clone()
+                            } else {
+                                let start = contents.len() - max_tail_bytes;
 
-                            // Move start forward until it's a valid char boundary
-                            let mut s = start;
-                            while s < contents.len() && !contents.is_char_boundary(s) {
-                                s += 1;
-                            }
-                            contents[s..].to_string()
+                                // Move start forward until it's a valid char boundary
+                                let mut s = start;
+                                while s < contents.len() && !contents.is_char_boundary(s) {
+                                    s += 1;
+                                }
+                                contents[s..].to_string()
+                            };
+
+                            serde_json::json!({ "content": tail })
+                                .to_string()
+                                .into_bytes()
                         };
-
-                        serde_json::json!({ "content": tail })
-                            .to_string()
-                            .into_bytes()
-                    };
 
                         let final_size = payload.len();
                         metadata.insert("final_size_bytes".to_string(), final_size.to_string());
@@ -974,9 +1006,9 @@ impl WorkerAgent for WorkerAgentService {
                         telemetry_events.push(telemetry_data);
 
                         info!(
-                    "[OK] Collected trace log as single event ({} line traces, {} -> {} bytes)",
-                    trace_events_count, original_size, final_size
-                );
+                            "[OK] Collected trace log as single event ({} line traces, {} -> {} bytes)",
+                            trace_events_count, original_size, final_size
+                        );
 
                     // ========== CASE 2: LARGE TRACE (> 2MB) ==========
                     } else {
@@ -993,20 +1025,36 @@ impl WorkerAgent for WorkerAgentService {
                         let immediate_line_count = last_2mb.lines().count();
 
                         let mut immediate_metadata = std::collections::HashMap::new();
-                        immediate_metadata.insert("trace_file".to_string(), trace_events_file.to_string_lossy().to_string());
-                        immediate_metadata.insert("event_count".to_string(), trace_events_count.to_string());
-                        immediate_metadata.insert("original_size_bytes".to_string(), original_size.to_string());
+                        immediate_metadata.insert(
+                            "trace_file".to_string(),
+                            trace_events_file.to_string_lossy().to_string(),
+                        );
+                        immediate_metadata
+                            .insert("event_count".to_string(), trace_events_count.to_string());
+                        immediate_metadata
+                            .insert("original_size_bytes".to_string(), original_size.to_string());
                         immediate_metadata.insert("compression".to_string(), "none".to_string());
-                        immediate_metadata.insert("payload_type".to_string(), "last_complete_jsonl".to_string());
-                        immediate_metadata.insert("immediate_line_count".to_string(), immediate_line_count.to_string());
+                        immediate_metadata.insert(
+                            "payload_type".to_string(),
+                            "last_complete_jsonl".to_string(),
+                        );
+                        immediate_metadata.insert(
+                            "immediate_line_count".to_string(),
+                            immediate_line_count.to_string(),
+                        );
                         immediate_metadata.insert(
                             "note".to_string(),
                             format!("Last {} complete JSON lines (~2MB) sent immediately; full compressed trace will follow", immediate_line_count),
                         );
 
                         // Wrap last 2MB in JSON
-                        let immediate_payload = serde_json::json!({"content": last_2mb}).to_string().into_bytes();
-                        immediate_metadata.insert("final_size_bytes".to_string(), immediate_payload.len().to_string());
+                        let immediate_payload = serde_json::json!({"content": last_2mb})
+                            .to_string()
+                            .into_bytes();
+                        immediate_metadata.insert(
+                            "final_size_bytes".to_string(),
+                            immediate_payload.len().to_string(),
+                        );
 
                         let immediate_telemetry = automutate::common::TelemetryData {
                             job_id: job_id.clone(),
@@ -1019,48 +1067,59 @@ impl WorkerAgent for WorkerAgentService {
                         telemetry_events.push(immediate_telemetry);
 
                         info!(
-                    "[OK] Collected last {} complete JSON lines (~2MB) of trace log ({} total line traces, {} bytes total)",
-                    immediate_line_count, trace_events_count, original_size
-                );
+                            "[OK] Collected last {} complete JSON lines (~2MB) of trace log ({} total line traces, {} bytes total)",
+                            immediate_line_count, trace_events_count, original_size
+                        );
 
                         //async compression of full trace
                         let job_id_clone = job_id.clone();
                         let trace_file_clone = trace_events_file.clone();
                         let contents_clone = contents.clone();
-                        let controller_addr = self.config.controller.as_ref()
+                        let controller_addr = self
+                            .config
+                            .controller
+                            .as_ref()
                             .map(|c| c.controller_address.clone())
                             .unwrap_or_default();
 
                         info!(
-                    "Spawning async compression task for full trace ({} bytes)...",
-                    original_size
-                );
+                            "Spawning async compression task for full trace ({} bytes)...",
+                            original_size
+                        );
 
                         tokio::spawn(async move {
                             info!(
-                        "Async compression task started for trace: {:?}",
-                        trace_file_clone
-                    );
+                                "Async compression task started for trace: {:?}",
+                                trace_file_clone
+                            );
 
                             let mut metadata = std::collections::HashMap::new();
                             metadata.insert(
                                 "trace_file".to_string(),
                                 trace_file_clone.to_string_lossy().to_string(),
                             );
-                            metadata.insert("event_count".to_string(), trace_events_count.to_string());
-                            metadata.insert("original_size_bytes".to_string(), original_size.to_string());
+                            metadata
+                                .insert("event_count".to_string(), trace_events_count.to_string());
+                            metadata.insert(
+                                "original_size_bytes".to_string(),
+                                original_size.to_string(),
+                            );
 
                             let payload = if original_size <= MAX_PAYLOAD_SIZE {
                                 metadata.insert("compression".to_string(), "none".to_string());
                                 // Wrap full content in JSON
-                                serde_json::json!({"content": contents_clone.clone()}).to_string().into_bytes()
+                                serde_json::json!({"content": contents_clone.clone()})
+                                    .to_string()
+                                    .into_bytes()
                             } else {
                                 info!(
-                            "Trace log too large ({} bytes), applying CLP+MatrixProfile+Sequitur compression...",
-                            original_size
-                        );
-                                let compressed =
-                                    telemetry::trace_compressor::compress_trace_log(&contents_clone, 3);
+                                    "Trace log too large ({} bytes), applying CLP+MatrixProfile+Sequitur compression...",
+                                    original_size
+                                );
+                                let compressed = telemetry::trace_compressor::compress_trace_log(
+                                    &contents_clone,
+                                    3,
+                                );
 
                                 metadata.insert(
                                     "compression_ratio".to_string(),
@@ -1068,42 +1127,57 @@ impl WorkerAgent for WorkerAgentService {
                                 );
                                 metadata.insert(
                                     "compression_stats".to_string(),
-                                    serde_json::to_string(&compressed.statistics).unwrap_or_default(),
+                                    serde_json::to_string(&compressed.statistics)
+                                        .unwrap_or_default(),
                                 );
 
                                 if compressed.compressed_size <= MAX_PAYLOAD_SIZE {
                                     info!(
-                                "Loop compression successful: {} -> {} bytes ({:.1}x)",
-                                original_size,
-                                compressed.compressed_size,
-                                compressed.compression_ratio
-                            );
-                                    metadata.insert("compression".to_string(), "loop_detection".to_string());
+                                        "Loop compression successful: {} -> {} bytes ({:.1}x)",
+                                        original_size,
+                                        compressed.compressed_size,
+                                        compressed.compression_ratio
+                                    );
+                                    metadata.insert(
+                                        "compression".to_string(),
+                                        "loop_detection".to_string(),
+                                    );
                                     // Wrap compressed content in JSON
-                                    serde_json::json!({"content": compressed.content}).to_string().into_bytes()
+                                    serde_json::json!({"content": compressed.content})
+                                        .to_string()
+                                        .into_bytes()
                                 } else {
-                                    info!("Still too large after loop compression, applying gzip...");
+                                    info!(
+                                        "Still too large after loop compression, applying gzip..."
+                                    );
                                     match telemetry::trace_compressor::gzip_compress(
                                         compressed.content.as_bytes(),
                                     ) {
                                         Ok(gzipped) if gzipped.len() <= MAX_PAYLOAD_SIZE => {
                                             info!(
-                                        "Gzip compression successful: {} -> {} bytes",
-                                        compressed.compressed_size,
-                                        gzipped.len()
-                                    );
-                                            metadata.insert("compression".to_string(), "loop+gzip".to_string());
+                                                "Gzip compression successful: {} -> {} bytes",
+                                                compressed.compressed_size,
+                                                gzipped.len()
+                                            );
+                                            metadata.insert(
+                                                "compression".to_string(),
+                                                "loop+gzip".to_string(),
+                                            );
                                             // Store gzipped as base64 in JSON
-                                            use base64::{engine::general_purpose, Engine as _};
-                                            let gzipped_b64 = general_purpose::STANDARD.encode(&gzipped);
+                                            use base64::{Engine as _, engine::general_purpose};
+                                            let gzipped_b64 =
+                                                general_purpose::STANDARD.encode(&gzipped);
                                             serde_json::json!({"content_b64": gzipped_b64, "encoding": "gzip+base64"}).to_string().into_bytes()
                                         }
                                         Ok(gzipped) => {
                                             warn!(
-                                        "Trace log too large even after compression ({} bytes), sending metadata only",
-                                        gzipped.len()
-                                    );
-                                            metadata.insert("compression".to_string(), "truncated".to_string());
+                                                "Trace log too large even after compression ({} bytes), sending metadata only",
+                                                gzipped.len()
+                                            );
+                                            metadata.insert(
+                                                "compression".to_string(),
+                                                "truncated".to_string(),
+                                            );
                                             metadata.insert(
                                                 "note".to_string(),
                                                 "Log too large for gRPC transmission, file stored on worker"
@@ -1121,12 +1195,19 @@ impl WorkerAgent for WorkerAgentService {
                                                 contents_clone.clone()
                                             };
                                             // Wrap truncated sample in JSON
-                                            serde_json::json!({"content": sample}).to_string().into_bytes()
+                                            serde_json::json!({"content": sample})
+                                                .to_string()
+                                                .into_bytes()
                                         }
                                         Err(e) => {
                                             error!("Gzip compression failed: {}", e);
-                                            metadata.insert("compression".to_string(), "error".to_string());
-                                            serde_json::json!({"error": "compression_failed"}).to_string().into_bytes()
+                                            metadata.insert(
+                                                "compression".to_string(),
+                                                "error".to_string(),
+                                            );
+                                            serde_json::json!({"error": "compression_failed"})
+                                                .to_string()
+                                                .into_bytes()
                                         }
                                     }
                                 }
@@ -1159,11 +1240,13 @@ impl WorkerAgent for WorkerAgentService {
             info!("No trace events file found (artifact may not have line tracing enabled)");
         }
 
-
         // Also collect from trace.log file (fallback if pipe wasn't available)
         let trace_log_path = telemetry_dir.join("trace.log");
         if trace_log_path.exists() {
-            info!("Found trace.log file, collecting binary protocol events: {:?}", trace_log_path);
+            info!(
+                "Found trace.log file, collecting binary protocol events: {:?}",
+                trace_log_path
+            );
 
             // Read as binary (new binary protocol format)
             match std::fs::read(&trace_log_path) {
@@ -1180,22 +1263,38 @@ impl WorkerAgent for WorkerAgentService {
                         let header_bytes = &trace_bytes[offset..offset + 32];
 
                         // Parse header fields (little-endian)
-                        let magic = u32::from_le_bytes([header_bytes[0], header_bytes[1], header_bytes[2], header_bytes[3]]);
+                        let magic = u32::from_le_bytes([
+                            header_bytes[0],
+                            header_bytes[1],
+                            header_bytes[2],
+                            header_bytes[3],
+                        ]);
 
                         // Check magic (0x49535452 = 'ISTR')
                         if magic != 0x49535452 {
-                            warn!("Invalid magic in trace.log at offset {}: 0x{:08x}, stopping parse", offset, magic);
+                            warn!(
+                                "Invalid magic in trace.log at offset {}: 0x{:08x}, stopping parse",
+                                offset, magic
+                            );
                             break;
                         }
 
                         let event_type = u16::from_le_bytes([header_bytes[6], header_bytes[7]]);
-                        let payload_len = u32::from_le_bytes([header_bytes[28], header_bytes[29], header_bytes[30], header_bytes[31]]);
+                        let payload_len = u32::from_le_bytes([
+                            header_bytes[28],
+                            header_bytes[29],
+                            header_bytes[30],
+                            header_bytes[31],
+                        ]);
 
                         offset += 32;
 
                         // Read payload
                         if offset + payload_len as usize > trace_bytes.len() {
-                            warn!("Incomplete payload in trace.log at offset {}, expected {} bytes", offset, payload_len);
+                            warn!(
+                                "Incomplete payload in trace.log at offset {}, expected {} bytes",
+                                offset, payload_len
+                            );
                             break;
                         }
 
@@ -1239,7 +1338,10 @@ impl WorkerAgent for WorkerAgentService {
                                     let parts: Vec<&str> = failure_data.splitn(2, '|').collect();
                                     let message = parts.get(0).unwrap_or(&"unknown");
                                     let error_code = parts.get(1).unwrap_or(&"0");
-                                    warn!("[ERROR] ARTIFACT FAILURE from file: '{}' (error_code={})", message, error_code);
+                                    warn!(
+                                        "[ERROR] ARTIFACT FAILURE from file: '{}' (error_code={})",
+                                        message, error_code
+                                    );
                                     failure_count += 1;
                                 }
                             }
@@ -1249,8 +1351,10 @@ impl WorkerAgent for WorkerAgentService {
                         }
                     }
 
-                    info!("[OK] Collected from trace.log: {} line traces, {} checkpoints, {} success, {} failure",
-                          file_trace_count, checkpoint_count, success_count, failure_count);
+                    info!(
+                        "[OK] Collected from trace.log: {} line traces, {} checkpoints, {} success, {} failure",
+                        file_trace_count, checkpoint_count, success_count, failure_count
+                    );
                 }
                 Err(e) => {
                     warn!("Failed to read trace.log: {}", e);
@@ -1264,7 +1368,10 @@ impl WorkerAgent for WorkerAgentService {
         let coverage_bbs_path = telemetry_dir.join("coverage_bbs.txt");
 
         if coverage_bin_path.exists() && coverage_bbs_path.exists() {
-            info!("Found BB coverage files: {:?}, {:?}", coverage_bin_path, coverage_bbs_path);
+            info!(
+                "Found BB coverage files: {:?}, {:?}",
+                coverage_bin_path, coverage_bbs_path
+            );
 
             match collect_bb_coverage(&coverage_bin_path, &coverage_bbs_path, &job_id).await {
                 Ok(coverage_event) => {
@@ -1274,7 +1381,8 @@ impl WorkerAgent for WorkerAgentService {
                             .typed_event
                             .as_ref()
                             .and_then(|te| match te {
-                                automutate::common::telemetry_data::TypedEvent::Coverage(c) => Some(c.total_bbs),
+                                automutate::common::telemetry_data::TypedEvent::Coverage(c) =>
+                                    Some(c.total_bbs),
                                 _ => None,
                             })
                             .unwrap_or(0)
@@ -1293,7 +1401,9 @@ impl WorkerAgent for WorkerAgentService {
             if !coverage_bbs_path.exists() {
                 warn!("  Missing: {:?}", coverage_bbs_path);
             }
-            warn!("  Artifact may not be instrumented for BB coverage, or runtime did not flush files");
+            warn!(
+                "  Artifact may not be instrumented for BB coverage, or runtime did not flush files"
+            );
         }
 
         // Collect API checkpoints from disk
@@ -1313,14 +1423,16 @@ impl WorkerAgent for WorkerAgentService {
             }
         } else {
             warn!("API checkpoints file NOT found: {:?}", checkpoints_path);
-            warn!("  Artifact may not be instrumented for API tracing, or runtime did not flush file");
+            warn!(
+                "  Artifact may not be instrumented for API tracing, or runtime did not flush file"
+            );
         }
 
         let telemetry_count = telemetry_events.len() as i32;
         info!("Total telemetry events collected: {}", telemetry_count);
 
         // ====================================================================
-        // Phase 7: Send final status with telemetry count
+        // Send final status with telemetry count
         // ====================================================================
 
         let final_status_type = if timed_out {
@@ -1399,14 +1511,22 @@ impl WorkerAgent for WorkerAgentService {
             warn!("ERROR: {} - {}", artifact_name, final_details);
         }
 
-        info!("Execution completed: {} telemetry events available for pull", telemetry_count);
+        info!(
+            "Execution completed: {} telemetry events available for pull",
+            telemetry_count
+        );
 
-
-        // Phase 1: Telemetry stored locally, controller pulls via GetTelemetry RPC
+        // Telemetry stored locally, controller pulls via GetTelemetry RPC
         if !telemetry_events.is_empty() {
-            info!("Collected {} telemetry events - available for controller pull via GetTelemetry", telemetry_count);
+            info!(
+                "Collected {} telemetry events - available for controller pull via GetTelemetry",
+                telemetry_count
+            );
         } else {
-            warn!("[WARN] No telemetry events collected [job: {}, run: {}]", job_id, run_id);
+            warn!(
+                "[WARN] No telemetry events collected [job: {}, run: {}]",
+                job_id, run_id
+            );
         }
 
         // Reset RedEDR for next run (guard ensures cleanup on error, but we do it explicitly here)
@@ -1598,7 +1718,7 @@ impl WorkerAgent for WorkerAgentService {
         }))
     }
 
-    /// PHASE 1: Get worker metadata (replaces dynamic registration push)
+    /// Get worker metadata
     /// Controller calls this to query worker capabilities
     async fn get_worker_info(
         &self,
@@ -1610,7 +1730,8 @@ impl WorkerAgent for WorkerAgentService {
         info!("GetWorkerInfo RPC called by controller");
 
         // Detect current capabilities
-        let capabilities_data = capabilities::detect_capabilities().await
+        let capabilities_data = capabilities::detect_capabilities()
+            .await
             .map_err(|e| Status::internal(format!("Failed to detect capabilities: {}", e)))?;
 
         // Get system health metrics
@@ -1622,9 +1743,11 @@ impl WorkerAgent for WorkerAgentService {
 
         // Refresh CPU info and get usage
         sys.refresh_cpu_usage();
-        let cpu_percent = sys.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32;
+        let cpu_percent =
+            sys.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32;
         let cpu_percent = cpu_percent as i32;
-        let memory_percent = ((sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0) as i32;
+        let memory_percent =
+            ((sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0) as i32;
         let disk_percent = 0; // TODO: Implement disk usage
 
         // Check if currently executing a job
@@ -1646,14 +1769,26 @@ impl WorkerAgent for WorkerAgentService {
             capabilities: capabilities_data.capabilities,
             metadata: capabilities_data.metadata,
             tools: Some(ToolVersions {
-                rededr_version: capabilities_data.tools.get("rededr_version")
-                    .cloned().unwrap_or_default(),
-                defender_version: capabilities_data.tools.get("defender_version")
-                    .cloned().unwrap_or_default(),
-                etw_version: capabilities_data.tools.get("etw_version")
-                    .cloned().unwrap_or_default(),
-                llvm_version: capabilities_data.tools.get("llvm_version")
-                    .cloned().unwrap_or_default(),
+                rededr_version: capabilities_data
+                    .tools
+                    .get("rededr_version")
+                    .cloned()
+                    .unwrap_or_default(),
+                defender_version: capabilities_data
+                    .tools
+                    .get("defender_version")
+                    .cloned()
+                    .unwrap_or_default(),
+                etw_version: capabilities_data
+                    .tools
+                    .get("etw_version")
+                    .cloned()
+                    .unwrap_or_default(),
+                llvm_version: capabilities_data
+                    .tools
+                    .get("llvm_version")
+                    .cloned()
+                    .unwrap_or_default(),
             }),
             health: Some(HealthMetrics {
                 cpu_percent,
@@ -1665,14 +1800,16 @@ impl WorkerAgent for WorkerAgentService {
             current_job_id,
         };
 
-        info!("Returning worker metadata: {} capabilities, {} tools",
-              response.capabilities.len(),
-              response.tools.as_ref().map(|_| 4).unwrap_or(0));
+        info!(
+            "Returning worker metadata: {} capabilities, {} tools",
+            response.capabilities.len(),
+            response.tools.as_ref().map(|_| 4).unwrap_or(0)
+        );
 
         Ok(Response::new(response))
     }
 
-    /// PHASE 1: Get telemetry from worker (replaces worker streaming to controller)
+    /// Get telemetry from worker
     /// Controller calls this to pull telemetry on demand
     async fn get_telemetry(
         &self,
@@ -1683,13 +1820,15 @@ impl WorkerAgent for WorkerAgentService {
 
         let req = request.into_inner();
 
-        info!("GetTelemetry RPC called: job_id={}, since_timestamp={}, max_events={}",
-              req.job_id, req.since_timestamp, req.max_events);
+        info!(
+            "GetTelemetry RPC called: job_id={}, since_timestamp={}, max_events={}",
+            req.job_id, req.since_timestamp, req.max_events
+        );
 
         // Check if RedEDR is enabled
         if !self.config.telemetry.rededr.enabled {
             return Err(Status::failed_precondition(
-                "RedEDR telemetry is disabled in config"
+                "RedEDR telemetry is disabled in config",
             ));
         }
 
@@ -1723,8 +1862,11 @@ impl WorkerAgent for WorkerAgentService {
                         events
                     };
 
-                    info!("Collected {} telemetry events for job {}",
-                          events_to_send.len(), job_id);
+                    info!(
+                        "Collected {} telemetry events for job {}",
+                        events_to_send.len(),
+                        job_id
+                    );
 
                     for event in events_to_send {
                         if tx.send(Ok(event)).await.is_err() {
@@ -1734,9 +1876,12 @@ impl WorkerAgent for WorkerAgentService {
                 }
                 Err(e) => {
                     error!("Failed to collect telemetry: {}", e);
-                    let _ = tx.send(Err(Status::internal(
-                        format!("Failed to collect telemetry: {}", e)
-                    ))).await;
+                    let _ = tx
+                        .send(Err(Status::internal(format!(
+                            "Failed to collect telemetry: {}",
+                            e
+                        ))))
+                        .await;
                 }
             }
         });
@@ -1747,28 +1892,27 @@ impl WorkerAgent for WorkerAgentService {
 
     /// Bidirectional stream for real-time communication
     /// Controller initiates the stream, both sides can send messages
-    type EstablishStreamStream = tokio_stream::wrappers::ReceiverStream<Result<automutate::common::WorkerMessage, Status>>;
+    type EstablishStreamStream =
+        tokio_stream::wrappers::ReceiverStream<Result<automutate::common::WorkerMessage, Status>>;
 
     async fn establish_stream(
         &self,
         request: Request<tonic::Streaming<automutate::common::ControllerMessage>>,
     ) -> Result<Response<Self::EstablishStreamStream>, Status> {
-        use stream_handler::StreamHandler;
         use capabilities::WorkerState;
         use std::sync::Arc;
+        use stream_handler::StreamHandler;
         use tokio::sync::RwLock;
 
         info!("EstablishStream RPC called - establishing bidirectional stream with controller");
 
         // Detect current capabilities
-        let capabilities_data = capabilities::detect_capabilities().await
+        let capabilities_data = capabilities::detect_capabilities()
+            .await
             .map_err(|e| Status::internal(format!("Failed to detect capabilities: {}", e)))?;
 
         // Create worker state
-        let worker_state = WorkerState::new(
-            self.worker_id.clone(),
-            capabilities_data,
-        );
+        let worker_state = WorkerState::new(self.worker_id.clone(), capabilities_data);
         let worker_state = Arc::new(RwLock::new(worker_state));
 
         // Create stream handler
@@ -1785,7 +1929,10 @@ impl WorkerAgent for WorkerAgentService {
         // Send registration immediately
         if let Err(e) = handler.send_registration().await {
             error!("Failed to send registration: {}", e);
-            return Err(Status::internal(format!("Failed to send registration: {}", e)));
+            return Err(Status::internal(format!(
+                "Failed to send registration: {}",
+                e
+            )));
         }
 
         info!("Sent worker registration to controller");
@@ -1860,7 +2007,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let worker_id = config.worker.worker_id.clone();
 
-
     // Worker listen port from config or env var
     let worker_port = std::env::var("WORKER_PORT")
         .ok()
@@ -1911,7 +2057,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // gRPC reflection for grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!("automutate_descriptor"))
+        .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!(
+            "automutate_descriptor"
+        ))
         .build_v1()?;
 
     Server::builder()

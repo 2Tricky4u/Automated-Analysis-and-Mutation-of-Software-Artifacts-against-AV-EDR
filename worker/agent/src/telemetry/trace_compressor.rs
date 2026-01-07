@@ -4,7 +4,6 @@
 /// 1. CLP-inspired columnar decomposition (extract line numbers, deduplicate strings)
 /// 2. Matrix Profile pattern detection (find recurring motifs in line sequences)
 /// 3. Sequitur-like grammar induction (hierarchical compression of patterns)
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -48,13 +47,13 @@ struct TraceEvent {
 /// Step 1: CLP-inspired columnar decomposition
 /// Extract dense integer arrays and string dictionaries
 struct ColumnarTrace {
-    line_sequence: Vec<u32>,         // Dense array of line numbers
-    file_dict: Vec<String>,          // Dictionary of unique file names
-    func_dict: Vec<String>,          // Dictionary of unique function names
-    file_indices: Vec<usize>,        // Map event -> file dictionary index
-    func_indices: Vec<usize>,        // Map event -> func dictionary index
-    thread_ids: Vec<u32>,            // Thread IDs (for multi-threaded analysis)
-    timestamps: Vec<u64>,            // Timestamps (for temporal analysis)
+    line_sequence: Vec<u32>,  // Dense array of line numbers
+    file_dict: Vec<String>,   // Dictionary of unique file names
+    func_dict: Vec<String>,   // Dictionary of unique function names
+    file_indices: Vec<usize>, // Map event -> file dictionary index
+    func_indices: Vec<usize>, // Map event -> func dictionary index
+    thread_ids: Vec<u32>,     // Thread IDs (for multi-threaded analysis)
+    timestamps: Vec<u64>,     // Timestamps (for temporal analysis)
 }
 
 impl ColumnarTrace {
@@ -122,12 +121,17 @@ struct MatrixProfile {
 struct Motif {
     start_index: usize,
     length: usize,
-    occurrences: Vec<usize>,  // All positions where this pattern occurs
-    distance: f64,            // Average distance between occurrences
+    occurrences: Vec<usize>, // All positions where this pattern occurs
+    distance: f64,           // Average distance between occurrences
 }
 
 impl MatrixProfile {
-    fn compute(line_sequence: &[u32], min_window: usize, max_window: usize, min_occurrences: usize) -> Self {
+    fn compute(
+        line_sequence: &[u32],
+        min_window: usize,
+        max_window: usize,
+        min_occurrences: usize,
+    ) -> Self {
         let mut motifs = Vec::new();
 
         // Try different window sizes (pattern lengths)
@@ -144,10 +148,8 @@ impl MatrixProfile {
             for (pattern, occurrences) in pattern_map {
                 if occurrences.len() >= min_occurrences {
                     // Compute average distance between occurrences
-                    let distances: Vec<usize> = occurrences
-                        .windows(2)
-                        .map(|w| w[1] - w[0])
-                        .collect();
+                    let distances: Vec<usize> =
+                        occurrences.windows(2).map(|w| w[1] - w[0]).collect();
                     let avg_distance = if distances.is_empty() {
                         0.0
                     } else {
@@ -185,7 +187,7 @@ struct Grammar {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Symbol {
-    Terminal(u32),     // Line number
+    Terminal(u32),      // Line number
     NonTerminal(usize), // Rule reference
 }
 
@@ -343,7 +345,10 @@ pub fn compress_trace_log(content: &str, min_loop_iterations: usize) -> Compress
     let columnar = match ColumnarTrace::from_jsonl(content) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Warning: Failed to parse JSONL, falling back to line-based: {}", e);
+            eprintln!(
+                "Warning: Failed to parse JSONL, falling back to line-based: {}",
+                e
+            );
             return fallback_compress(content, original_size);
         }
     };
@@ -361,7 +366,8 @@ pub fn compress_trace_log(content: &str, min_loop_iterations: usize) -> Compress
     );
 
     // Stage 3: Sequitur-like grammar induction
-    let grammar = Grammar::from_sequence_and_motifs(&columnar.line_sequence, &matrix_profile.motifs);
+    let grammar =
+        Grammar::from_sequence_and_motifs(&columnar.line_sequence, &matrix_profile.motifs);
 
     // Generate compressed output
     let mut output = Vec::new();
@@ -394,7 +400,12 @@ pub fn compress_trace_log(content: &str, min_loop_iterations: usize) -> Compress
     let compressed_size = compressed_content.len();
 
     // Collect statistics
-    let max_pattern_length = matrix_profile.motifs.iter().map(|m| m.length).max().unwrap_or(0);
+    let max_pattern_length = matrix_profile
+        .motifs
+        .iter()
+        .map(|m| m.length)
+        .max()
+        .unwrap_or(0);
     let total_pattern_occurrences: usize = matrix_profile
         .motifs
         .iter()
@@ -434,8 +445,8 @@ fn fallback_compress(content: &str, original_size: usize) -> CompressedTrace {
 
 /// Apply gzip compression if needed
 pub fn gzip_compress(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::io::Write;
 
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -464,7 +475,10 @@ mod tests {
         let sequence = vec![10, 11, 12, 10, 11, 12, 10, 11, 12, 20];
         let mp = MatrixProfile::compute(&sequence, 2, 5, 3);
 
-        assert!(!mp.motifs.is_empty(), "Should find repeating pattern [10,11,12]");
+        assert!(
+            !mp.motifs.is_empty(),
+            "Should find repeating pattern [10,11,12]"
+        );
     }
 
     #[test]
