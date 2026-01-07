@@ -226,13 +226,12 @@ pub struct WorkerIdentityConfig {
     pub worker_id: String,
     pub ip_address: String,
     pub os_version: String,
-    /// PHASE 1: Worker gRPC listen port (controller dials to this)
     #[serde(default = "default_listen_port")]
     pub listen_port: u16,
 }
 
 fn default_listen_port() -> u16 {
-    50052 // Default gRPC port for workers
+    50052 // todo in config
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -774,7 +773,7 @@ impl WorkerConfig {
                 worker_id: "win11-worker-01".to_string(),
                 ip_address: "192.168.200.100".to_string(),
                 os_version: "windows11".to_string(),
-                listen_port: 50052, // PHASE 1: Worker listen port
+                listen_port: 50052,
             },
             controller: Some(ControllerEndpointConfig {
                 controller_address: "192.168.200.1:50051".to_string(),

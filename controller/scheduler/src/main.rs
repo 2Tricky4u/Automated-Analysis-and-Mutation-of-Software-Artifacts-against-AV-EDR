@@ -680,7 +680,7 @@ impl Controller for SchedulerService {
             Status::unavailable(format!("Failed to connect to worker: {}", e))
         })?;
 
-        info!("Successfully connected to worker");
+        debug!("Successfully connected to worker");
 
         // 4. Split into chunks (4MB per chunk)
         let chunk_size = 4 * 1024 * 1024; // 4MB
@@ -1678,7 +1678,7 @@ fn detect_controller_ip() -> Option<String> {
             if let Ok(local_addr) = socket.local_addr() {
                 if let IpAddr::V4(ipv4) = local_addr.ip() {
                     if !ipv4.is_loopback() {
-                        info!("Detected controller IP via routing table: {}", ipv4);
+                        debug!("Detected controller IP via routing table: {}", ipv4);
                         return Some(ipv4.to_string());
                     }
                 }
@@ -1718,7 +1718,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     debug!("Bind address: {}", config.server.bind_address);
     info!("Elasticsearch: {}", config.elasticsearch.url);
-    info!(
+    debug!(
         "Triage model: {} (threshold: {})",
         config.triage.model_type, config.triage.confidence_threshold
     );
@@ -1767,19 +1767,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create worker event bus
     use tokio::sync::mpsc;
-    let (events_tx, mut events_rx) = mpsc::channel::<worker_manager::WorkerEvent>(1000);
+    let (events_tx, mut events_rx) = mpsc::channel::<worker_manager::WorkerEvent>(1000); //todo make into config
     debug!("Created worker event bus");
 
     // Step 2: Initialize WorkerManager
     info!("Initializing WorkerManager...");
-    let worker_manager = Arc::new(worker_manager::WorkerManager::new(30, events_tx.clone())); // 30s RPC timeout
+    let worker_manager = Arc::new(worker_manager::WorkerManager::new(30, events_tx.clone())); // 30s RPC timeout //todo put in config
 
     // Step 3: Create scheduler core configuration
     let scheduler_core_config = CoreSchedulerConfig {
-        poll_interval_seconds: 5,
+        poll_interval_seconds: 5, //todo in config
         max_concurrent_jobs: config.scheduler.max_concurrent_runs_per_worker as usize,
         default_timeout_seconds: config.scheduler.run_timeout_secs,
-        health_timeout_seconds: 30, // Default health check timeout
+        health_timeout_seconds: 30, //todo in config
     };
 
     // Step 4: Create and spawn scheduler core (passing WorkerManager)
@@ -1847,7 +1847,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     scheduler.set_worker_manager(Arc::clone(&worker_manager));
     info!(
         "WorkerManager initialized with {} workers",
-        config.scheduler.workers.len()
+        &worker_manager.list_workers().len()
     );
 
     // Spawn orchestration loop to consume worker events

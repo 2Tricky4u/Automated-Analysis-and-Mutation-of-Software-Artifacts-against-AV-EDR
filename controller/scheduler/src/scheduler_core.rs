@@ -78,7 +78,7 @@ impl SchedulerCore {
         config: SchedulerConfig,
         worker_manager: Arc<crate::worker_manager::WorkerManager>,
     ) -> Result<Self> {
-        info!("Initializing scheduler core");
+        debug!("Initializing scheduler core");
         debug!("  Poll interval: {}s", config.poll_interval_seconds);
         debug!("  Max concurrent jobs: {}", config.max_concurrent_jobs);
         debug!("  Default timeout: {}s", config.default_timeout_seconds);
@@ -97,7 +97,7 @@ impl SchedulerCore {
 
         // Register same workers in WorkerManager (single source of truth)
         worker_manager.register_from_pool(discovered_workers)?;
-        info!("Worker registration synchronized between WorkerPool and WorkerManager");
+        debug!("Worker registration synchronized between WorkerPool and WorkerManager");
 
         Ok(SchedulerCore {
             queue,
@@ -172,7 +172,7 @@ impl SchedulerCore {
         let config: WorkerTomlConfig = toml::from_str(&content)?;
 
         // Worker gRPC address is worker IP + port 50052 (standard worker port)
-        let address = format!("{}:50052", config.worker.ip_address);
+        let address = format!("{}:50052", config.worker.ip_address); //todo put in config
 
         Ok((config.worker.worker_id, address))
     }
@@ -195,8 +195,8 @@ impl SchedulerCore {
     /// Main scheduling loop
     /// Runs continuously until process exits
     pub async fn run(self: Arc<Self>) {
-        info!("Scheduler core started (poll interval: {}s)", self.config.poll_interval_seconds);
-        info!("Worker pool loaded: {} workers", self.pool.total_count());
+        debug!("Scheduler core started (poll interval: {}s)", self.config.poll_interval_seconds);
+        debug!("Worker pool loaded: {} workers", self.pool.total_count());
         info!("Ready to accept jobs");
 
         loop {
@@ -457,7 +457,7 @@ impl SchedulerCore {
         let request = tonic::Request::new(SampleRequest {
             job_id: job_id.clone(),
             artifact_id: artifact_id.clone(),
-            timeout_seconds: 60, // From config
+            timeout_seconds: 60, // todo take from config
             enable_etw: true,
         });
 

@@ -172,7 +172,7 @@ impl WorkerConnection {
 
         // Create new connection
         let worker_url = format!("http://{}", self.address);
-        info!("Connecting to worker {} at {}", self.id, worker_url);
+        debug!("Connecting to worker {} at {}", self.id, worker_url);
 
         let endpoint = Endpoint::try_from(worker_url)
             .map_err(|e| anyhow!("Invalid endpoint for worker {}: {}", self.id, e))?
@@ -236,7 +236,7 @@ impl WorkerManager {
         let connection = WorkerConnection::new(config.id.clone(), config.address.clone());
         connections.insert(config.id.clone(), connection);
 
-        info!("Added worker {} at {}", config.id, config.address);
+        debug!("Added worker {} at {}", config.id, config.address);
         Ok(())
     }
 
@@ -256,7 +256,7 @@ impl WorkerManager {
     /// Called by SchedulerCore after discovering workers from automation/generated/*.toml
     /// This ensures single source of truth for worker registration
     pub fn register_from_pool(&self, workers: Vec<WorkerConfig>) -> Result<()> {
-        info!("Registering {} workers from SchedulerCore discovery", workers.len());
+        debug!("Registering {} workers from SchedulerCore discovery", workers.len());
 
         for worker in workers {
             self.add_worker(worker)?;
@@ -476,7 +476,7 @@ impl WorkerManager {
             } else {
                 // Create new connection (async operation, no lock held)
                 let worker_url = format!("http://{}", worker_address);
-                info!("Connecting to worker {} at {}", worker_id, worker_url);
+                debug!("Connecting to worker {} at {}", worker_id, worker_url);
 
                 let endpoint = Endpoint::try_from(worker_url)
                     .map_err(|e| anyhow!("Invalid endpoint for worker {}: {}", worker_id, e))?
@@ -497,7 +497,7 @@ impl WorkerManager {
                     }
                 }  // Lock dropped here
 
-                info!("Successfully connected to worker {}", worker_id);
+                debug!("Successfully connected to worker {}", worker_id);
                 channel
             }
         };
@@ -556,7 +556,7 @@ impl WorkerManager {
                                         reg.capabilities.clone(),
                                     )).await;
 
-                                    info!("Worker {} connected (OS: {}, Caps: {:?})",
+                                    debug!("Worker {} connected (OS: {}, Caps: {:?})",
                                         worker_id_clone, reg.os_version, reg.capabilities);
                                 }
                             }
@@ -645,7 +645,7 @@ impl WorkerManager {
             }
         }
 
-        info!("Bidirectional stream fully established with worker {}", worker_id);
+        debug!("Bidirectional stream fully established with worker {}", worker_id);
         Ok(())
     }
 
