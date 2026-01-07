@@ -1,5 +1,4 @@
 // Scheduler core - main scheduling loop
-// Phase 1: Simple FIFO scheduling with single job execution
 
 use crate::job::Job;
 use crate::queue::JobQueue;
@@ -19,7 +18,7 @@ use tracing::{error, info, warn, debug};
 pub struct SchedulerConfig {
     /// Poll interval in seconds
     pub poll_interval_seconds: u64,
-    /// Maximum concurrent jobs (Phase 1: 1, Phase 2+: configurable)
+    /// Maximum concurrent jobs
     pub max_concurrent_jobs: usize,
     /// Default timeout in seconds
     pub default_timeout_seconds: u64,
@@ -31,7 +30,7 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         SchedulerConfig {
             poll_interval_seconds: 5,
-            max_concurrent_jobs: 1, // Phase 1: single job at a time
+            max_concurrent_jobs: 1,
             default_timeout_seconds: 60,
             health_timeout_seconds: 30,
         }
@@ -64,7 +63,7 @@ pub struct SchedulerCore {
     run_queue: RunQueue,
     /// Worker pool
     pool: WorkerPool,
-    /// ✅ Phase 1.4: Worker manager for communication
+    /// Worker manager for communication
     worker_manager: Arc<crate::worker_manager::WorkerManager>,
     /// Round processor for iterative mutation
     round_processor: RoundProcessor,
@@ -139,7 +138,7 @@ impl SchedulerCore {
                             pool.register_worker(worker_id.clone(), address.clone(), true)?;
                             info!("  Registered worker: {} at {}", worker_id, address);
 
-                            // ✅ Phase 1.3: Add to discovered list for WorkerManager sync
+                            // Add to discovered list for WorkerManager sync
                             discovered_workers.push(crate::worker_manager::WorkerConfig {
                                 id: worker_id,
                                 address,
@@ -188,7 +187,7 @@ impl SchedulerCore {
         &self.pool
     }
 
-    /// ✅ Phase 1.4: Get reference to worker manager (for job execution)
+    /// Get reference to worker manager (for job execution)
     pub fn worker_manager(&self) -> &Arc<crate::worker_manager::WorkerManager> {
         &self.worker_manager
     }
@@ -213,7 +212,7 @@ impl SchedulerCore {
                 continue;
             }
 
-            // 3. Check if we can run more jobs (Phase 1: max 1 concurrent)
+            // 3. Check if we can run more jobs
             let running_count = self.queue.running_count();
             if running_count >= self.config.max_concurrent_jobs {
                 // Already at max concurrent jobs
@@ -293,7 +292,7 @@ impl SchedulerCore {
             queue.update_job(&job)?;
 
             // Process round (dual-run protocol)
-            // ✅ Phase 3: Pass WorkerManager for artifact deployment and execution
+            // Pass WorkerManager for artifact deployment and execution
             match round_processor.process_round(&mut round, &job, &pool, &worker_manager).await {
                 Ok(summary) => {
                     info!("[{}][{}] Round complete: detected={}, behavior_match={}, evasion_score={:.2}",
@@ -483,8 +482,6 @@ impl SchedulerCore {
 }
 
 /// Helper to create a shared scheduler core instance
-/// ✅ Phase 1.5: Now accepts WorkerManager for registration sync
-/// ✅ Phase 5: Removed pool_events_tx (WorkerManager handles connectivity)
 pub fn create_scheduler_core(
     config: SchedulerConfig,
     worker_manager: Arc<crate::worker_manager::WorkerManager>,
