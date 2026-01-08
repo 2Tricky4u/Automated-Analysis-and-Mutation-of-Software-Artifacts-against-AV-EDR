@@ -47,16 +47,6 @@ service Controller {
 
   // NEW: Compare two runs (differential analysis)
   rpc CompareRuns(CompareRunsRequest) returns (CompareRunsResponse);
-
-  // ===== DYNAMIC WORKER REGISTRATION =====
-  // Register a worker dynamically (new worker or re-registration)
-  rpc RegisterWorker(automutate.common.WorkerRegistration) returns (RegistrationAck);
-
-  // Deregister a worker (graceful shutdown)
-  rpc DeregisterWorker(WorkerDeregistration) returns (DeregistrationAck);
-
-  // Update worker metadata at runtime
-  rpc UpdateWorkerMetadata(WorkerMetadataUpdate) returns (MetadataAck);
 }
 
 // Selector Service - mutation selection with feedback
