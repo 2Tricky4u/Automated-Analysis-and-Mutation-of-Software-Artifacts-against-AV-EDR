@@ -631,6 +631,79 @@ if (`$isAdmin) {
     }
     Write-Success "Worker config copied"
 
+    # --- Copy worker-init.ps1 and telemetry zip, then run worker-init.ps1 as Admin on remote ---
+
+    $WorkerInitLocal = Join-Path $RepoRoot "automation\scripts\worker-init.ps1"
+    $RedEdrLocal     = Join-Path $RepoRoot "telemetry\RedEdr_no_stack_trace_dll.zip"
+
+    $RemoteAutoMutateRoot = "C:/AutoMutate"
+    $RemoteWorkerInit     = "$RemoteAutoMutateRoot/worker-init.ps1"
+    $RemoteRedEdrDir      = "$RemoteAutoMutateRoot/build/telemetry"
+    $RemoteRedEdrZip      = "$RemoteRedEdrDir/RedEdr.zip"
+
+    Write-Info "[X/6] Copying worker-init.ps1..."
+    scp @sshOpts "$WorkerInitLocal" "${sshTarget}:$RemoteWorkerInit"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Failed to copy worker-init.ps1 via SCP"
+        exit 1
+    }
+    Write-Success "worker-init.ps1 copied to $RemoteWorkerInit"
+
+    Write-Info "[X/6] Ensuring telemetry directory exists..."
+
+    $RemoteRedEdrDirWin = 'C:\AutoMutate\build\telemetry'
+
+    # No pipe, so cmd.exe cannot misinterpret anything.
+    # [void](...) discards output inside PowerShell.
+    $RemoteMkDirCmd = @(
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        """[void](New-Item -ItemType Directory -Force -Path '$RemoteRedEdrDirWin')"""
+    ) -join ' '
+
+    ssh @sshOpts $sshTarget $RemoteMkDirCmd
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Failed to create remote directory: $RemoteRedEdrDirWin"
+        exit 1
+    }
+
+    Write-Success "Remote directory ensured: $RemoteRedEdrDirWin"
+
+    Write-Info "[X/6] Copying RedEdr telemetry zip..."
+    scp @sshOpts "$RedEdrLocal" "${sshTarget}:$RemoteRedEdrZip"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Failed to copy RedEdr.zip via SCP"
+        exit 1
+    }
+    Write-Success "Telemetry zip copied to $RemoteRedEdrZip"
+
+    Write-Info "[X/6] Executing worker-init.ps1 with admin privileges..."
+    # This launches an elevated PowerShell on the remote host via scheduled task (works non-interactively).
+    $remoteCmd = @"
+`$Action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File `"$RemoteWorkerInit`"'
+`$Principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+`$Task = New-ScheduledTask -Action `$Action -Principal `$Principal
+Register-ScheduledTask -TaskName 'AutoMutate-WorkerInit' -InputObject `$Task -Force | Out-Null
+Start-ScheduledTask -TaskName 'AutoMutate-WorkerInit'
+Start-Sleep -Seconds 2
+# Optional: wait for completion and propagate exit code
+`$state = (Get-ScheduledTask -TaskName 'AutoMutate-WorkerInit').State
+while (`$state -eq 'Running') { Start-Sleep -Seconds 2; `$state = (Get-ScheduledTask -TaskName 'AutoMutate-WorkerInit').State }
+`$last = (Get-ScheduledTaskInfo -TaskName 'AutoMutate-WorkerInit').LastTaskResult
+Unregister-ScheduledTask -TaskName 'AutoMutate-WorkerInit' -Confirm:`$false | Out-Null
+exit `$last
+"@
+
+    ssh @sshOpts $sshTarget "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command `"$remoteCmd`""
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Remote worker-init.ps1 (elevated) failed with exit code $LASTEXITCODE"
+        exit 1
+    }
+    Write-Success "worker-init.ps1 executed successfully (elevated)"
+
     # Create directories and start worker (using SSH key - no password needed)
     Write-Info "[5/6] Setting up directories and starting worker..."
     $setupScript = 'cmd.exe /c "mkdir C:\AutoMutate\artifacts 2>nul & mkdir C:\AutoMutate\logs 2>nul & mkdir C:\AutoMutate\traces 2>nul & mkdir C:\AutoMutate\coverage 2>nul & start /B C:\AutoMutate\worker-agent.exe > C:\AutoMutate\logs\worker.log 2>&1"'
