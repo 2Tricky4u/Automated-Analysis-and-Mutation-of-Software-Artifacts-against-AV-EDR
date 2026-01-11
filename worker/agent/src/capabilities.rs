@@ -215,7 +215,6 @@ fn get_hostname() -> String {
 }
 
 fn get_cpu_cores() -> usize {
-    // Use std::thread::available_parallelism (available in Rust 1.59+)
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
