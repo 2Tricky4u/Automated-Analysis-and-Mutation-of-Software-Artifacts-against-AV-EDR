@@ -204,7 +204,10 @@ impl SchedulerCore {
             // DISABLED: Legacy health checks replaced by bidirectional stream heartbeats
             // self.pool.check_worker_health().await;
 
+            debug!("=== Poll iteration starting ===");
+
             // 2. Check for available workers
+            debug!("About to call get_available_workers()...");
             let available_workers = self.pool.get_available_workers();
             debug!("Poll iteration - available workers: {}", available_workers.len());
 
