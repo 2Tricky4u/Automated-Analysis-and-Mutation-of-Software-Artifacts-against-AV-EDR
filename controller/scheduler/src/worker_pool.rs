@@ -164,9 +164,13 @@ impl WorkerPool {
         let mut state = self.state.lock().unwrap();
 
         // Check if worker already exists (allow re-registration)
-        if let Some(existing) = state.workers.get(&id) {
+        // Preserve connected flag if worker is re-registering
+        let existing_connected = if let Some(existing) = state.workers.get(&id) {
             info!("Worker {} re-registering (was: {:?})", id, existing.status);
-        }
+            existing.connected  // Preserve existing connected state
+        } else {
+            false  // New worker, initially disconnected
+        };
 
         let worker = WorkerState {
             id: id.clone(),
@@ -181,7 +185,7 @@ impl WorkerPool {
             tools,
             registered_at: SystemTime::now(),
             registration_type: registration_type.clone(),
-            connected: false,  // Initially disconnected, will be set by WorkerManager
+            connected: existing_connected,  // Preserve connected flag from existing worker
         };
 
         state.workers.insert(id.clone(), worker);
