@@ -199,6 +199,13 @@ impl SchedulerCore {
         debug!("Worker pool loaded: {} workers", self.pool.total_count());
         info!("Ready to accept jobs");
 
+        // TODO REMOVE AFTER FIX
+        // Yield to allow other tasks to run before entering the loop
+        // This prevents the sync mutex in WorkerPool from blocking this task
+        tokio::task::yield_now().await;
+        debug!("Entering main scheduler loop...");
+        // TODO REMOVE AFTER FIX
+
         loop {
             // 1. Check worker health (actively call HealthCheck RPC)
             // DISABLED: Legacy health checks replaced by bidirectional stream heartbeats
