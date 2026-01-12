@@ -206,8 +206,10 @@ impl SchedulerCore {
 
             // 2. Check for available workers
             let available_workers = self.pool.get_available_workers();
+            debug!("Poll iteration - available workers: {}", available_workers.len());
 
             if available_workers.is_empty() {
+                debug!("No available workers, sleeping {}s", self.config.poll_interval_seconds);
                 // No workers available, wait and retry
                 sleep(Duration::from_secs(self.config.poll_interval_seconds)).await;
                 continue;
@@ -215,7 +217,9 @@ impl SchedulerCore {
 
             // 3. Check if we can run more jobs
             let running_count = self.queue.running_count();
+            debug!("Running jobs: {} / {} max", running_count, self.config.max_concurrent_jobs);
             if running_count >= self.config.max_concurrent_jobs {
+                debug!("Max concurrent jobs reached, sleeping {}s", self.config.poll_interval_seconds);
                 // Already at max concurrent jobs
                 sleep(Duration::from_secs(self.config.poll_interval_seconds)).await;
                 continue;
@@ -223,8 +227,12 @@ impl SchedulerCore {
 
             // 4. Get next queued job
             let job = match self.queue.pop_next() {
-                Some(job) => job,
+                Some(job) => {
+                    debug!("Found queued job: {}", job.id);
+                    job
+                }
                 None => {
+                    debug!("No queued jobs, sleeping {}s", self.config.poll_interval_seconds);
                     // No jobs in queue
                     sleep(Duration::from_secs(self.config.poll_interval_seconds)).await;
                     continue;
