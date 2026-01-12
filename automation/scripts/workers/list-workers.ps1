@@ -69,7 +69,7 @@ Write-Info "Querying workers from controller at $ControllerAddress..."
 
 # Call ListWorkers RPC
 try {
-    $result = grpcurl -plaintext -d '{}' $ControllerAddress edr.controller.Controller/ListWorkers 2>&1
+    $result = grpcurl -plaintext -d '{}' $ControllerAddress automutate.controller.Controller/ListWorkers 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Err "Failed to connect to controller"
         Write-Info "Error: $result"
