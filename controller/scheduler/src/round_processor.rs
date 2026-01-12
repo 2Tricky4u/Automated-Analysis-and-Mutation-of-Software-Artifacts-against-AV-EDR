@@ -432,9 +432,11 @@ impl RoundProcessor {
             enable_etw: trace_mode != "off",
         };
 
-        // Route execution through WorkerManager (reuses existing connection)
+        // Route execution through WorkerManager via bidirectional stream
+        // Uses execute_artifact_stream (NEW) instead of execute_artifact (LEGACY RPC)
+        // Worker receives RunSampleCommand via stream, executes, sends SampleResponse back
         let exec_result = worker_manager
-            .execute_artifact(&worker_id_to_use, request)
+            .execute_artifact_stream(&worker_id_to_use, request)
             .await?;
 
         let elapsed = start_time.elapsed().as_secs();

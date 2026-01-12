@@ -213,6 +213,11 @@ pub struct WorkerManager {
 
     /// Default RPC timeout
     rpc_timeout: Duration,
+
+    /// Response channel registry for stream-based execution
+    /// Maps run_id (request_id) to oneshot channel for awaiting SampleResponse
+    /// Used by execute_artifact_stream() to await responses from stream handler
+    pending_responses: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<SampleResponse>>>>,
 }
 
 impl WorkerManager {
@@ -223,6 +228,7 @@ impl WorkerManager {
             sessions: DashMap::new(),
             events_tx,
             rpc_timeout: Duration::from_secs(rpc_timeout_secs),
+            pending_responses: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -982,6 +988,135 @@ impl WorkerManager {
             request.job_id, worker_id, exec_result.success, exec_result.exit_code, exec_result.telemetry_ids.len());
 
         Ok(exec_result)
+    }
+
+    /// Execute artifact on worker via bidirectional stream (NON-BLOCKING, awaits stream response)
+    ///
+    /// This is the NEW stream-based execution method that replaces blocking RPC.
+    /// Worker receives RunSampleCommand via stream, executes artifact, and sends SampleResponse back via stream.
+    /// This method awaits the response via channel (registered in pending_responses registry).
+    ///
+    /// # Arguments
+    /// * `worker_id` - Target worker ID
+    /// * `request` - SampleRequest containing job_id, artifact_id, timeout, etc.
+    ///
+    /// # Returns
+    /// * `Ok(SampleResponse)` - Execution result with success, exit_code, telemetry_ids
+    /// * `Err(_)` - Execution failed (network, timeout, channel closed, or worker error)
+    ///
+    /// # Workflow
+    /// 1. Generate unique run_id (for response matching)
+    /// 2. Register pending execution (get receiver channel)
+    /// 3. Send RunSampleCommand via stream (non-blocking)
+    /// 4. Await response from stream handler via channel (blocking here)
+    /// 5. Return response to caller (round_processor)
+    pub async fn execute_artifact_stream(
+        &self,
+        worker_id: &str,
+        request: SampleRequest,
+    ) -> Result<SampleResponse> {
+        info!("[{}] Executing artifact {} on worker {} (via stream)...",
+            request.job_id, request.artifact_id, worker_id);
+
+        // Generate unique run_id for response matching
+        let run_id = format!("{}-{}-{}",
+            request.job_id,
+            request.artifact_id,
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
+
+        // Register pending execution (get receiver channel)
+        let rx = self.register_pending_execution(run_id.clone());
+
+        // Send execution request via stream (non-blocking)
+        let command = ControllerMessage {
+            payload: Some(controller_message::Payload::RunSample(RunSampleCommand {
+                request_id: run_id.clone(),
+                request: Some(request.clone()),
+            })),
+        };
+
+        self.send_command(worker_id, command).await?;
+
+        info!("[{}] Sent RunSampleCommand to worker {} via stream [run_id: {}]",
+            request.job_id, worker_id, run_id);
+
+        // Await response from stream handler (blocking until worker completes execution)
+        // Timeout matches the request timeout + buffer (for telemetry upload)
+        let timeout_duration = Duration::from_secs(request.timeout_seconds as u64 + 30);
+
+        match timeout(timeout_duration, rx).await {
+            Ok(Ok(response)) => {
+                info!("[{}] Execution complete on worker {}: success={}, exit_code={}, telemetry_events={}",
+                    request.job_id, worker_id, response.success, response.exit_code, response.telemetry_ids.len());
+                Ok(response)
+            }
+            Ok(Err(_)) => {
+                // Channel closed (worker disconnected or stream handler died)
+                Err(anyhow!(
+                    "Response channel closed for run_id: {} (worker {} disconnected?)",
+                    run_id, worker_id
+                ))
+            }
+            Err(_) => {
+                // Timeout waiting for response
+                Err(anyhow!(
+                    "Timeout waiting for execution response from worker {} [run_id: {}, timeout: {}s]",
+                    worker_id, run_id, timeout_duration.as_secs()
+                ))
+            }
+        }
+    }
+
+    /// Register a pending execution and get receiver for awaiting response
+    ///
+    /// Used by stream-based execution to await SampleResponse from worker.
+    /// The stream handler will call complete_pending_execution() with the response.
+    ///
+    /// # Arguments
+    /// * `run_id` - Unique run identifier (matches RunSampleCommand.request_id and SampleResponse.run_id)
+    ///
+    /// # Returns
+    /// * Receiver that will receive SampleResponse when worker completes execution
+    pub fn register_pending_execution(&self, run_id: String) -> tokio::sync::oneshot::Receiver<SampleResponse> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        let mut pending = self.pending_responses.lock().unwrap();
+        pending.insert(run_id.clone(), tx);
+
+        debug!("Registered pending execution: run_id={}", run_id);
+
+        rx
+    }
+
+    /// Complete a pending execution by routing response to waiting channel
+    ///
+    /// Called by stream handler when SampleResponse arrives.
+    /// Routes response to round_processor waiting on register_pending_execution().
+    ///
+    /// # Arguments
+    /// * `run_id` - Run identifier from SampleResponse
+    /// * `response` - Execution result from worker
+    ///
+    /// # Returns
+    /// * Ok(()) if response routed successfully
+    /// * Err(_) if no pending execution found (might be legacy RPC execution)
+    pub fn complete_pending_execution(&self, run_id: &str, response: SampleResponse) -> Result<()> {
+        let mut pending = self.pending_responses.lock().unwrap();
+
+        if let Some(tx) = pending.remove(run_id) {
+            // Send response via channel (ignore error if receiver dropped)
+            let _ = tx.send(response);
+            debug!("Completed pending execution: run_id={}", run_id);
+            Ok(())
+        } else {
+            // No pending execution - might be legacy RPC execution or already completed
+            debug!("No pending execution found for run_id: {} (might be legacy RPC)", run_id);
+            Err(anyhow!("No pending execution for run_id: {}", run_id))
+        }
     }
 }
 

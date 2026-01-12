@@ -463,6 +463,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         Some(worker_message::Payload::SampleResponse(response)) => {
                             let job_id = response.job_id.clone();
+                            let run_id = response.run_id.clone();
                             let success = response.success;
                             let exit_code = response.exit_code;
                             let output_preview = if response.output.len() > 200 {
@@ -472,10 +473,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             };
 
                             info!(
-                                "[WORKER-EVENT] Worker {} completed job {} - Success: {}, Exit code: {}",
-                                worker_id, job_id, success, exit_code
+                                "[WORKER-EVENT] Worker {} completed job {} - Success: {}, Exit code: {} [run_id: {}]",
+                                worker_id, job_id, success, exit_code, run_id
                             );
                             debug!("Output preview: {}", output_preview);
+
+                            // Route response to waiting round_processor (via channel)
+                            // If run_id is empty, this is a legacy RPC response (no routing needed)
+                            if !run_id.is_empty() {
+                                if let Some(core) = &scheduler_for_events.scheduler_core {
+                                    if let Err(e) = core.worker_manager()
+                                        .complete_pending_execution(&run_id, response.clone())
+                                    {
+                                        debug!(
+                                            "No pending execution for run_id: {} (might be legacy RPC execution): {}",
+                                            run_id, e
+                                        );
+                                    }
+                                }
+                            }
 
                             // Release worker (mark as available for new jobs)
                             if let Some(core) = &scheduler_for_events.scheduler_core {
@@ -561,8 +577,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             });
 
-                            // TODO: Update job status in queue if this was the final round
-                            // This would require coordination with scheduler_core/round_processor
+                            // NOTE: Job status is managed by round_processor via execute_artifact_stream()
+                            // The stream-based execution now uses response channels (Option 3 implemented)
+                            // - Controller sends RunSampleCommand via stream
+                            // - Worker executes and sends SampleResponse via stream
+                            // - Response routed via channel to waiting round_processor
+                            // - round_processor continues execution and updates job status
+                            // No job status update needed here - round_processor handles full lifecycle
+                            // See JOB-STATUS-UPDATE-ANALYSIS.md for details
                         }
 
                         Some(worker_message::Payload::Ack(ack)) => {

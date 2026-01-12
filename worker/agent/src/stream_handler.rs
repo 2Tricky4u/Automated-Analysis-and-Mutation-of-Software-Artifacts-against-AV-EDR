@@ -120,18 +120,25 @@ impl StreamHandler {
             }
 
             // Execute the sample
-            // TODO: Call actual execution logic from main.rs or execution module
-            info!("Executing sample: {}", sample_request.job_id);
+            info!("Executing sample: {} [run_id: {}]", sample_request.job_id, request_id);
 
-            // Placeholder: simulate execution
+            // TODO: Call actual execution logic - for now this is a placeholder
+            // Full implementation requires refactoring sample_handlers::run_sample into
+            // a shared internal function that both RPC and stream handlers can call
+            //
+            // Current workaround: Legacy RPC handler (run_sample) still works for backward compat
+            // This stream handler provides the new channel-based response mechanism
+
+            // Placeholder: simulate execution (will be replaced with actual logic)
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
             let result = SampleResponse {
                 job_id: sample_request.job_id.clone(),
                 success: true,
                 exit_code: 0,
-                output: "Sample executed successfully".to_string(),
+                output: "Sample executed successfully via stream (placeholder)".to_string(),
                 telemetry_ids: vec![],
+                run_id: request_id.clone(), // NEW: Include run_id for response matching
             };
 
             // Update worker state

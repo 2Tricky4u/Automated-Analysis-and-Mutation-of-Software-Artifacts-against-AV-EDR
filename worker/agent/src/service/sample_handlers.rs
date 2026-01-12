@@ -1273,6 +1273,7 @@ pub async fn run_sample(
             success: !timed_out && exit_code == 0,
             exit_code,
             output,
-            telemetry_ids: vec![run_id],
+            telemetry_ids: vec![run_id.clone()],
+            run_id: String::new(), // Empty for legacy RPC (will be populated by stream handler if called via stream)
         }))
     }

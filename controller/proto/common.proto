@@ -160,6 +160,7 @@ message SampleResponse {
   int32 exit_code = 3;
   string output = 4;
   repeated string telemetry_ids = 5;
+  string run_id = 6;  // Unique run identifier for response matching (matches RunSampleCommand.request_id)
 }
 
 // ===== Bidirectional Stream Messages (Phase 2) =====
