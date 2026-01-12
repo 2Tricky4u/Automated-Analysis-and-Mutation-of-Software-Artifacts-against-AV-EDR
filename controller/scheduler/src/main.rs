@@ -221,9 +221,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             scheduler.set_scheduler_core(Arc::clone(&scheduler_core));
 
             // Spawn scheduler core in background task
+            debug!("Spawning scheduler core run loop...");
             tokio::spawn(async move {
+                debug!("Scheduler core task started - beginning job processing loop");
                 scheduler_core.run().await;
+                warn!("Scheduler core run loop exited unexpectedly");
             });
+            debug!("Scheduler core task spawned successfully");
         }
         Err(e) => {
             warn!("Failed to initialize scheduler core: {}", e);
