@@ -13,7 +13,7 @@ use tracing::{debug, error, info, warn};
 
 // Import generated protobuf types
 use crate::automutate::common::{
-    Ack, ControllerMessage, ExecutionStatusReport, HealthCheckRequest, Heartbeat, RunSampleCommand,
+    Ack, ControllerMessage, DisconnectNotice, ExecutionStatusReport, HealthCheckRequest, Heartbeat, RunSampleCommand,
     SampleResponse, StatusReport, TelemetryBatch, WorkerMessage, WorkerRegistration,
     controller_message, worker_message,
 };
@@ -74,6 +74,9 @@ impl StreamHandler {
             }
             Some(controller_message::Payload::Heartbeat(hb)) => {
                 self.handle_heartbeat(hb).await?;
+            }
+            Some(controller_message::Payload::Disconnect(notice)) => {
+                self.handle_disconnect(notice).await?;
             }
             Some(controller_message::Payload::Ack(ack)) => {
                 debug!("Received ack for request: {}", ack.request_id);
@@ -195,6 +198,31 @@ impl StreamHandler {
         {
             let mut state = self.worker_state.write().await;
             state.last_controller_heartbeat = Some(hb.timestamp);
+        }
+
+        Ok(())
+    }
+
+    /// Handle disconnect notification from controller
+    async fn handle_disconnect(&self, notice: DisconnectNotice) -> Result<()> {
+        if notice.reconnect_allowed {
+            info!(
+                "Controller disconnecting (reconnect allowed): {}",
+                notice.reason
+            );
+        } else {
+            warn!(
+                "Controller disconnecting (reconnect NOT allowed): {}",
+                notice.reason
+            );
+        }
+
+        // Update worker state to mark controller as disconnected
+        {
+            let mut state = self.worker_state.write().await;
+            state.controller_disconnected = true;
+            state.disconnect_reason = Some(notice.reason.clone());
+            state.reconnect_allowed = notice.reconnect_allowed;
         }
 
         Ok(())
@@ -352,11 +380,31 @@ pub async fn heartbeat_loop(handler: Arc<StreamHandler>, interval_secs: u64) {
     loop {
         interval.tick().await;
 
+        // Check if controller has explicitly disconnected
+        let disconnected = {
+            let state = handler.worker_state.read().await;
+            state.controller_disconnected
+        };
+
         if let Err(e) = handler.send_status_update("heartbeat").await {
-            warn!("Failed to send heartbeat status: {}", e);
-            // Continue sending heartbeats even if one fails
+            if disconnected {
+                // Controller explicitly disconnected - log at debug level
+                debug!("Heartbeat failed (controller disconnected): {}", e);
+            } else {
+                // Unexpected disconnect - log at warn level
+                warn!("Failed to send heartbeat status: {}", e);
+            }
+            // Continue trying regardless (user wants continuous retries)
         } else {
             debug!("Sent heartbeat status update");
+
+            // If we successfully sent after disconnect, controller reconnected
+            if disconnected {
+                info!("Controller reconnected - heartbeat successful");
+                let mut state = handler.worker_state.write().await;
+                state.controller_disconnected = false;
+                state.disconnect_reason = None;
+            }
         }
     }
 }

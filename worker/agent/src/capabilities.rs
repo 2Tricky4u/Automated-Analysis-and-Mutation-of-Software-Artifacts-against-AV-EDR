@@ -23,6 +23,9 @@ pub struct WorkerState {
     pub health: HealthMetrics,
     pub current_job_id: Option<String>,
     pub last_controller_heartbeat: Option<i64>,
+    pub controller_disconnected: bool,
+    pub disconnect_reason: Option<String>,
+    pub reconnect_allowed: bool,
 }
 
 /// Health metrics for worker
@@ -69,6 +72,9 @@ impl WorkerState {
             health: HealthMetrics::default(),
             current_job_id: None,
             last_controller_heartbeat: None,
+            controller_disconnected: false,
+            disconnect_reason: None,
+            reconnect_allowed: true,
         }
     }
 

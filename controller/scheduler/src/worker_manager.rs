@@ -29,6 +29,7 @@ use crate::automutate::common::{
     worker_message,
     RunSampleCommand,
     Heartbeat,
+    DisconnectNotice,
     SampleRequest,
     SampleResponse,
     ArtifactChunk,
@@ -241,7 +242,28 @@ impl WorkerManager {
     }
 
     /// Remove a worker from the manager
-    pub fn remove_worker(&self, worker_id: &str) -> Result<()> {
+    pub async fn remove_worker(&self, worker_id: &str) -> Result<()> {
+        // Send disconnect notification first (if stream is active)
+        let disconnect_msg = ControllerMessage {
+            payload: Some(controller_message::Payload::Disconnect(DisconnectNotice {
+                reason: "Worker removal requested".to_string(),
+                reconnect_allowed: false,
+            })),
+        };
+
+        // Try to send disconnect notification (best effort, don't fail if stream is already dead)
+        if let Err(e) = self.send_command(worker_id, disconnect_msg).await {
+            warn!("Could not send disconnect notification to worker {}: {}", worker_id, e);
+        } else {
+            info!("Sent disconnect notification to worker {}", worker_id);
+            // Give worker a moment to process the disconnect
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // Remove session (this will cause heartbeat to stop)
+        self.sessions.remove(worker_id);
+
+        // Remove from connections
         let mut connections = self.connections.lock().unwrap();
 
         if connections.remove(worker_id).is_some() {
@@ -791,6 +813,29 @@ impl WorkerManager {
             success_count, self.sessions.len());
 
         success_count
+    }
+
+    /// Gracefully disconnect all workers
+    ///
+    /// Sends disconnect notification to all workers before shutting down
+    pub async fn disconnect_all(&self, reason: &str, reconnect_allowed: bool) {
+        info!("Disconnecting all workers - reason: {}", reason);
+
+        let disconnect_msg = ControllerMessage {
+            payload: Some(controller_message::Payload::Disconnect(DisconnectNotice {
+                reason: reason.to_string(),
+                reconnect_allowed,
+            })),
+        };
+
+        let sent_count = self.broadcast(disconnect_msg).await;
+        info!("Sent disconnect notification to {}/{} workers", sent_count, self.sessions.len());
+
+        // Give workers a moment to process the disconnect
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Clear all sessions
+        self.sessions.clear();
     }
 
     /// Check if worker has active stream

@@ -172,6 +172,7 @@ message ControllerMessage {
     HealthCheckRequest health_check = 3;
     Heartbeat heartbeat = 4;
     Ack ack = 5;
+    DisconnectNotice disconnect = 6;
   }
 }
 
@@ -214,6 +215,12 @@ message Ack {
   string request_id = 1;
   bool success = 2;
   string error = 3;
+}
+
+// Disconnect notification (sent by controller before closing stream)
+message DisconnectNotice {
+  string reason = 1;  // "controller_shutdown", "session_timeout", "manual_disconnect", etc.
+  bool reconnect_allowed = 2;  // Whether worker should attempt reconnection
 }
 
 // Status report (periodic heartbeat from worker)
