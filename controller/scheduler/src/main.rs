@@ -280,6 +280,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &worker_manager.list_workers().len()
     );
 
+    // Clone scheduler for orchestration loop
+    let scheduler_for_events = scheduler.clone();
+
     // Spawn orchestration loop to consume worker events
     tokio::spawn(async move {
         info!("Worker event orchestration loop started");
@@ -296,8 +299,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "[WORKER-EVENT] Worker {} connected - OS: {}, Caps: {:?}",
                         worker_id, os_version, capabilities
                     );
-                    // TODO: Send initial configuration or sync state
-                    // TODO: Update WorkerPool state
+
+                    // Update WorkerPool state: mark worker as connected
+                    if let Some(core) = &scheduler_for_events.scheduler_core {
+                        if let Err(e) = core.pool().mark_connected(&worker_id) {
+                            warn!("Failed to mark worker {} as connected: {}", worker_id, e);
+                        }
+                        // Also update health to mark as Available if it was Offline
+                        if let Err(e) = core.pool().update_health(&worker_id) {
+                            warn!("Failed to update health for worker {}: {}", worker_id, e);
+                        }
+                    }
                 }
 
                 // Message event handler
@@ -314,7 +326,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "[WORKER-EVENT] Worker {} status - CPU: {}%, Jobs: {}",
                                 worker_id, status.cpu_percent, status.active_jobs
                             );
-                            // TODO: Update worker health metrics
+
+                            // Update worker health: this is the heartbeat from the stream
+                            if let Some(core) = &scheduler_for_events.scheduler_core {
+                                if let Err(e) = core.pool().update_health(&worker_id) {
+                                    warn!("Failed to update health for worker {}: {}", worker_id, e);
+                                }
+                            }
                         }
 
                         Some(worker_message::Payload::Telemetry(batch)) => {
@@ -362,14 +380,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "[WORKER-EVENT] Worker {} disconnected: {}",
                         worker_id, reason
                     );
-                    // TODO: Reschedule jobs assigned to this worker
-                    // if let Some(scheduler) = scheduler_core_orch.as_ref() {
-                    //     scheduler.reschedule_worker_jobs(&worker_id);
-                    // }
 
-                    // TODO: Mark worker as offline in WorkerPool
-                    // if let Some(scheduler) = scheduler_core_orch.as_ref() {
-                    //     let _ = scheduler.pool().mark_worker_offline(&worker_id);
+                    // Mark worker as offline in WorkerPool
+                    if let Some(core) = &scheduler_for_events.scheduler_core {
+                        if let Err(e) = core.pool().mark_worker_offline(&worker_id) {
+                            warn!("Failed to mark worker {} as offline: {}", worker_id, e);
+                        }
+                        if let Err(e) = core.pool().mark_disconnected(&worker_id) {
+                            warn!("Failed to mark worker {} as disconnected: {}", worker_id, e);
+                        }
+                    }
+
+                    // TODO: Reschedule jobs assigned to this worker
+                    // if let Some(core) = &scheduler_for_events.scheduler_core {
+                    //     core.reschedule_worker_jobs(&worker_id);
                     // }
                 }
             }

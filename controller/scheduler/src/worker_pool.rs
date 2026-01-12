@@ -411,6 +411,7 @@ impl WorkerPool {
 
     /// Actively check worker health by calling HealthCheck RPC
     /// This should be called periodically by the scheduler loop
+    /// LEGACY TODO transfer to new stream way
     pub async fn check_worker_health(&self) {
         use crate::automutate::worker::{HealthRequest, worker_agent_client::WorkerAgentClient};
 
