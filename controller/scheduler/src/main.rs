@@ -336,18 +336,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         Some(worker_message::Payload::Telemetry(batch)) => {
+                            let events_count = batch.events.len();
+                            let job_id = batch.job_id.clone();
+                            let is_final = batch.is_final;
+
                             info!(
                                 "[WORKER-EVENT] Worker {} telemetry - {} events (job: {}, final: {})",
-                                worker_id,
-                                batch.events.len(),
-                                batch.job_id,
-                                batch.is_final
+                                worker_id, events_count, job_id, is_final
                             );
-                            // TODO: Forward to Elasticsearch asynchronously
-                            // let es = es_client_orch.clone();
-                            // tokio::spawn(async move {
-                            //     index_telemetry_batch(&es, &batch).await;
-                            // });
+
+                            // Forward to Elasticsearch asynchronously (non-blocking)
+                            if !batch.events.is_empty() {
+                                let scheduler_clone = scheduler_for_events.clone();
+                                let worker_id_clone = worker_id.clone();
+
+                                tokio::spawn(async move {
+                                    use tokio::time::{Duration, timeout};
+
+                                    info!(
+                                        "[UPLOAD] Indexing {} events to Elasticsearch [job: {}, worker: {}]",
+                                        events_count, job_id, worker_id_clone
+                                    );
+
+                                    // Index with 10s timeout (matches legacy behavior)
+                                    match timeout(Duration::from_secs(10), scheduler_clone.index_telemetry_batch(&batch.events)).await {
+                                        Ok(Ok(())) => {
+                                            info!(
+                                                "[OK] Successfully indexed {} telemetry events to Elasticsearch [job: {}, worker: {}]",
+                                                events_count, job_id, worker_id_clone
+                                            );
+                                        }
+                                        Ok(Err(e)) => {
+                                            error!("[ERROR] ELASTICSEARCH ERROR: Failed to index telemetry batch");
+                                            error!(
+                                                "   Job: {}, Events: {}, Worker: {}",
+                                                job_id, events_count, worker_id_clone
+                                            );
+                                            error!("   Error details: {}", e);
+                                            warn!(
+                                                "   Telemetry received but NOT INDEXED (Elasticsearch may be down/unreachable)"
+                                            );
+                                            warn!(
+                                                "   Possible causes: Elasticsearch down, network issue, mapping conflict, disk full"
+                                            );
+                                            // Don't crash - telemetry was received, just not indexed
+                                        }
+                                        Err(_) => {
+                                            error!(
+                                                "[TIMEOUT] ELASTICSEARCH TIMEOUT: Indexing exceeded 10s limit [job: {}, worker: {}]",
+                                                job_id, worker_id_clone
+                                            );
+                                            error!(
+                                                "   {} events NOT INDEXED due to timeout",
+                                                events_count
+                                            );
+                                            warn!("   Possible causes: Elasticsearch overloaded, large batch, slow network");
+                                            // Don't crash - continue processing other events
+                                        }
+                                    }
+                                });
+                            } else {
+                                debug!("[WORKER-EVENT] Empty telemetry batch from worker {}, skipping indexing", worker_id);
+                            }
                         }
 
                         Some(worker_message::Payload::SampleResponse(response)) => {
