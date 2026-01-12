@@ -82,8 +82,6 @@ impl WorkerAgentService {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
-
     // Load generated TOML config (auto-finds in standard locations)
     // Search order:
     //   1. AUTOMUTATE_WORKER_CONFIG env var (highest priority)
@@ -114,6 +112,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         std::process::exit(1);
     });
+
+    // Initialize logging with level from config
+    let log_level = match config.logging.level.to_uppercase().as_str() {
+        "TRACE" => tracing::Level::TRACE,
+        "DEBUG" => tracing::Level::DEBUG,
+        "INFO" => tracing::Level::INFO,
+        "WARN" => tracing::Level::WARN,
+        "ERROR" => tracing::Level::ERROR,
+        _ => {
+            eprintln!("Invalid log level '{}', defaulting to INFO", config.logging.level);
+            tracing::Level::INFO
+        }
+    };
+
+    tracing_subscriber::fmt()
+        .with_max_level(log_level)
+        .init();
 
     let worker_id = config.worker.worker_id.clone();
 

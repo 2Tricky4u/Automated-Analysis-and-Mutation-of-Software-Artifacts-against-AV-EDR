@@ -111,11 +111,6 @@ fn detect_controller_ip() -> Option<String> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing with INFO level (visible in both debug and release builds)
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
-
     // Load generated TOML config (auto-finds in standard locations)
     // Search order:
     //   1. AUTOMUTATE_CONTROLLER_CONFIG env var
@@ -129,6 +124,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Or set AUTOMUTATE_CONTROLLER_CONFIG environment variable");
         std::process::exit(1);
     });
+
+    // Initialize logging with level from config
+    let log_level = match config.logging.level.to_uppercase().as_str() {
+        "TRACE" => tracing::Level::TRACE,
+        "DEBUG" => tracing::Level::DEBUG,
+        "INFO" => tracing::Level::INFO,
+        "WARN" => tracing::Level::WARN,
+        "ERROR" => tracing::Level::ERROR,
+        _ => {
+            eprintln!("Invalid log level '{}', defaulting to INFO", config.logging.level);
+            tracing::Level::INFO
+        }
+    };
+
+    tracing_subscriber::fmt()
+        .with_max_level(log_level)
+        .init();
 
     info!(
         "Loaded controller config successfully from {}",
