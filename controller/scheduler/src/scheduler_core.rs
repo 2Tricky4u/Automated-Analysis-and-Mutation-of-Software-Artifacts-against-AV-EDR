@@ -201,7 +201,8 @@ impl SchedulerCore {
 
         loop {
             // 1. Check worker health (actively call HealthCheck RPC)
-            self.pool.check_worker_health().await;
+            // DISABLED: Legacy health checks replaced by bidirectional stream heartbeats
+            // self.pool.check_worker_health().await;
 
             // 2. Check for available workers
             let available_workers = self.pool.get_available_workers();
