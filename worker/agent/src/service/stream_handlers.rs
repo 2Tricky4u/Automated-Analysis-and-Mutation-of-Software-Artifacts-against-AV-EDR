@@ -28,8 +28,12 @@ pub async fn establish_stream(
     let worker_state = WorkerState::new(service.worker_id.clone(), capabilities_data);
     let worker_state = Arc::new(RwLock::new(worker_state));
 
+    // Wrap service in Arc for sharing with stream handler
+    // Clone the service (it's already cheap to clone since all fields are Arc/shared)
+    let service_arc = Arc::new(service.clone());
+
     // Create stream handler
-    let (handler, rx) = StreamHandler::new(worker_state.clone());
+    let (handler, rx) = StreamHandler::new(worker_state.clone(), service_arc);
     let handler = Arc::new(handler);
 
     // Store handler in service for use by run_sample()

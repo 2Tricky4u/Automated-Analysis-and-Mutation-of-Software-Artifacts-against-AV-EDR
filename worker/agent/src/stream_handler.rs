@@ -19,6 +19,7 @@ use crate::automutate::common::{
 };
 
 use crate::capabilities::WorkerState;
+use crate::WorkerAgentService;
 
 /// Handles incoming controller messages and sends worker responses via bidirectional stream
 pub struct StreamHandler {
@@ -27,6 +28,9 @@ pub struct StreamHandler {
 
     /// Channel for sending messages to controller
     tx: mpsc::Sender<Result<WorkerMessage, Status>>,
+
+    /// Reference to worker service (for accessing execution logic)
+    service: Arc<WorkerAgentService>,
 }
 
 impl StreamHandler {
@@ -35,10 +39,15 @@ impl StreamHandler {
     /// Returns the handler and a receiver for outgoing messages
     pub fn new(
         worker_state: Arc<RwLock<WorkerState>>,
+        service: Arc<WorkerAgentService>,
     ) -> (Self, mpsc::Receiver<Result<WorkerMessage, Status>>) {
         let (tx, rx) = mpsc::channel(100);
 
-        let handler = StreamHandler { worker_state, tx };
+        let handler = StreamHandler {
+            worker_state,
+            tx,
+            service,
+        };
 
         (handler, rx)
     }
@@ -111,6 +120,7 @@ impl StreamHandler {
         // Execute sample asynchronously and send response via stream
         let tx = self.tx.clone();
         let worker_state = self.worker_state.clone();
+        let service = self.service.clone();
 
         tokio::spawn(async move {
             // Update worker state to indicate job is running
@@ -119,26 +129,38 @@ impl StreamHandler {
                 state.current_job_id = Some(sample_request.job_id.clone());
             }
 
-            // Execute the sample
+            // Execute the sample using actual execution logic
             info!("Executing sample: {} [run_id: {}]", sample_request.job_id, request_id);
 
-            // TODO: Call actual execution logic - for now this is a placeholder
-            // Full implementation requires refactoring sample_handlers::run_sample into
-            // a shared internal function that both RPC and stream handlers can call
-            //
-            // Current workaround: Legacy RPC handler (run_sample) still works for backward compat
-            // This stream handler provides the new channel-based response mechanism
+            // Call the actual run_sample execution function
+            // Wrap SampleRequest in tonic::Request for compatibility with RPC handler
+            let request = tonic::Request::new(sample_request.clone());
 
-            // Placeholder: simulate execution (will be replaced with actual logic)
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            let result = match crate::service::sample_handlers::run_sample(&service, request).await {
+                Ok(response) => {
+                    let mut sample_response = response.into_inner();
+                    // Populate run_id in response for controller to match
+                    sample_response.run_id = request_id.clone();
 
-            let result = SampleResponse {
-                job_id: sample_request.job_id.clone(),
-                success: true,
-                exit_code: 0,
-                output: "Sample executed successfully via stream (placeholder)".to_string(),
-                telemetry_ids: vec![],
-                run_id: request_id.clone(), // NEW: Include run_id for response matching
+                    info!(
+                        "Sample execution completed successfully: job_id={}, success={}, exit_code={}",
+                        sample_response.job_id, sample_response.success, sample_response.exit_code
+                    );
+
+                    sample_response
+                }
+                Err(status) => {
+                    error!("Sample execution failed with status: {}", status);
+                    // Return error response with run_id
+                    SampleResponse {
+                        job_id: sample_request.job_id.clone(),
+                        success: false,
+                        exit_code: -1,
+                        output: format!("Execution error: {}", status.message()),
+                        telemetry_ids: vec![],
+                        run_id: request_id.clone(),
+                    }
+                }
             };
 
             // Update worker state

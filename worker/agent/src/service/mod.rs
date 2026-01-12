@@ -13,7 +13,7 @@ use crate::automutate::worker::{
     WorkerInfoRequest, WorkerInfoResponse,
     worker_agent_server::WorkerAgent,
 };
-use crate::WorkerAgentService;
+use crate::WorkerAgentService;  // Now available from lib.rs
 use tonic::{Request, Response, Status};
 
 /// Implement WorkerAgent trait for WorkerAgentService by delegating to handler modules

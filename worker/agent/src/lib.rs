@@ -17,5 +17,63 @@ pub mod automutate {
 
 pub mod capabilities;
 pub mod execution;
+pub mod service;
 pub mod stream_handler;
 pub mod telemetry;
+
+// Re-export WorkerAgentService for use in stream_handler and main
+use execution::guards::ExecutionState;
+use edr_config::WorkerConfig;
+use std::sync::Arc;
+use sysinfo::System;
+use tokio::sync::Mutex;
+
+#[derive(Clone)]
+pub struct WorkerAgentService {
+    pub(crate) worker_id: String,
+    pub(crate) config: WorkerConfig,
+    pub(crate) system_info: Arc<Mutex<System>>,
+    /// Single execution lock needed for rededr
+    /// This ensures clean telemetry collection with no cross-contamination
+    pub(crate) execution_lock: Arc<Mutex<ExecutionState>>,
+    /// StreamHandler for bidirectional communication (set when establish_stream is called)
+    pub(crate) stream_handler: Arc<tokio::sync::RwLock<Option<Arc<stream_handler::StreamHandler>>>>,
+}
+
+impl WorkerAgentService {
+    pub fn new(worker_id: String, config: WorkerConfig) -> Self {
+        Self {
+            worker_id,
+            config,
+            system_info: Arc::new(Mutex::new(System::new_all())),
+            execution_lock: Arc::new(Mutex::new(ExecutionState {
+                busy: false,
+                current_job_id: None,
+                current_artifact: None,
+            })),
+            stream_handler: Arc::new(Default::default()),
+        }
+    }
+
+    /// Get current execution state (for health check)
+    pub async fn get_execution_state(&self) -> ExecutionState {
+        self.execution_lock.lock().await.clone()
+    }
+
+    pub fn truncate_middle_output(stdout_output: &String) -> String {
+        let formatted = if stdout_output.len() > 1000 {
+            // Show first 400 chars and last 400 chars, truncate middle
+            let first_part = &stdout_output[..400];
+            let last_part = &stdout_output[stdout_output.len() - 400..];
+            format!(
+                "{}\n\n... ({} bytes truncated) ...\n\n{}",
+                first_part,
+                stdout_output.len() - 800,
+                last_part
+            )
+        } else {
+            stdout_output.clone()
+        };
+        formatted
+    }
+}
