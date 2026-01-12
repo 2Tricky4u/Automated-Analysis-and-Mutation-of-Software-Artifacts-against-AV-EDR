@@ -712,7 +712,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         worker_id, reason
                     );
 
-                    // Mark worker as offline in WorkerPool
+                    // Reschedule jobs assigned to this worker (BEFORE marking offline)
+                    if let Some(core) = &scheduler_for_events.scheduler_core {
+                        // Get worker's current job (if any) before marking offline
+                        if let Some(worker) = core.pool().get_worker(&worker_id) {
+                            if let Some(job_id) = worker.current_job {
+                                info!(
+                                    "[JOB-RECOVERY] Worker {} had assigned job: {} - marking as failed",
+                                    worker_id, job_id
+                                );
+
+                                // Get job from queue
+                                if let Some(mut job) = core.queue().get_job(&job_id) {
+                                    // Check if job is still running (not already completed)
+                                    if !job.is_terminal() {
+                                        // Mark job as failed
+                                        job.mark_failed(format!(
+                                            "Worker {} disconnected during execution: {}",
+                                            worker_id, reason
+                                        ));
+
+                                        // Update job in queue
+                                        if let Err(e) = core.queue().update_job(&job) {
+                                            error!(
+                                                "[JOB-RECOVERY] Failed to update job {} status: {}",
+                                                job_id, e
+                                            );
+                                        } else {
+                                            warn!(
+                                                "[JOB-RECOVERY] Job {} marked as FAILED due to worker disconnect",
+                                                job_id
+                                            );
+                                            warn!(
+                                                "  Reason: Worker {} - {}",
+                                                worker_id, reason
+                                            );
+                                            warn!(
+                                                "  Job was in round {}/{} when worker disconnected",
+                                                job.current_round, job.max_rounds
+                                            );
+                                        }
+                                    } else {
+                                        debug!(
+                                            "[JOB-RECOVERY] Job {} already terminal (status: {}), no recovery needed",
+                                            job_id, job.status
+                                        );
+                                    }
+                                } else {
+                                    warn!(
+                                        "[JOB-RECOVERY] Job {} not found in queue (worker: {})",
+                                        job_id, worker_id
+                                    );
+                                }
+                            } else {
+                                debug!(
+                                    "[JOB-RECOVERY] Worker {} had no assigned job",
+                                    worker_id
+                                );
+                            }
+                        }
+                    }
+
+                    // Mark worker as offline in WorkerPool (clears current_job)
                     if let Some(core) = &scheduler_for_events.scheduler_core {
                         if let Err(e) = core.pool().mark_worker_offline(&worker_id) {
                             warn!("Failed to mark worker {} as offline: {}", worker_id, e);
@@ -721,11 +782,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             warn!("Failed to mark worker {} as disconnected: {}", worker_id, e);
                         }
                     }
-
-                    // TODO: Reschedule jobs assigned to this worker
-                    // if let Some(core) = &scheduler_for_events.scheduler_core {
-                    //     core.reschedule_worker_jobs(&worker_id);
-                    // }
                 }
             }
         }
