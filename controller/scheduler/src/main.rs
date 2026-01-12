@@ -318,7 +318,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     match msg.payload {
                         Some(worker_message::Payload::Registration(reg)) => {
-                            debug!("[WORKER-EVENT] Worker {} registered", worker_id);
+                            info!(
+                                "[WORKER-EVENT] Worker {} registration - OS: {}, Capabilities: {:?}",
+                                worker_id, reg.os_version, reg.capabilities
+                            );
+
+                            // Convert ToolVersions proto to HashMap
+                            let tools = if let Some(tool_versions) = reg.tools {
+                                let mut tools_map = std::collections::HashMap::new();
+                                if !tool_versions.rededr_version.is_empty() {
+                                    tools_map.insert("rededr".to_string(), tool_versions.rededr_version);
+                                }
+                                if !tool_versions.defender_version.is_empty() {
+                                    tools_map.insert("defender".to_string(), tool_versions.defender_version);
+                                }
+                                if !tool_versions.etw_version.is_empty() {
+                                    tools_map.insert("etw".to_string(), tool_versions.etw_version);
+                                }
+                                if !tool_versions.llvm_version.is_empty() {
+                                    tools_map.insert("llvm".to_string(), tool_versions.llvm_version);
+                                }
+                                tools_map
+                            } else {
+                                std::collections::HashMap::new()
+                            };
+
+                            // Log tool versions if present
+                            if !tools.is_empty() {
+                                debug!("  Tools: {:?}", tools);
+                            }
+
+                            // Log metadata if present
+                            if !reg.metadata.is_empty() {
+                                debug!("  Metadata: {:?}", reg.metadata);
+                            }
+
+                            // Register/update worker in WorkerPool with full metadata
+                            if let Some(core) = &scheduler_for_events.scheduler_core {
+                                match core.pool().register_worker_with_metadata(
+                                    worker_id.clone(),
+                                    reg.ip_address.clone(),
+                                    true, // enabled
+                                    reg.os_version.clone(),
+                                    reg.capabilities.clone(),
+                                    reg.metadata.clone(),
+                                    tools,
+                                ) {
+                                    Ok(()) => {
+                                        info!(
+                                            "[OK] Worker {} metadata updated in WorkerPool [OS: {}, Caps: {}]",
+                                            worker_id,
+                                            reg.os_version,
+                                            reg.capabilities.len()
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to update worker {} metadata in WorkerPool: {}",
+                                            worker_id, e
+                                        );
+                                    }
+                                }
+                            }
                         }
 
                         Some(worker_message::Payload::Status(status)) => {
@@ -401,12 +462,107 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         Some(worker_message::Payload::SampleResponse(response)) => {
+                            let job_id = response.job_id.clone();
+                            let success = response.success;
+                            let exit_code = response.exit_code;
+                            let output_preview = if response.output.len() > 200 {
+                                format!("{}... ({} bytes)", &response.output[..200], response.output.len())
+                            } else {
+                                response.output.clone()
+                            };
+
                             info!(
                                 "[WORKER-EVENT] Worker {} completed job {} - Success: {}, Exit code: {}",
-                                worker_id, response.job_id, response.success, response.exit_code
+                                worker_id, job_id, success, exit_code
                             );
-                            // TODO: Mark job as complete in scheduler
-                            // scheduler_core_orch.complete_job(&response.job_id, response);
+                            debug!("Output preview: {}", output_preview);
+
+                            // Release worker (mark as available for new jobs)
+                            if let Some(core) = &scheduler_for_events.scheduler_core {
+                                match core.pool().release_worker(&worker_id) {
+                                    Ok(()) => {
+                                        info!(
+                                            "[OK] Worker {} released and marked available (job: {})",
+                                            worker_id, job_id
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to release worker {} after job completion: {}",
+                                            worker_id, e
+                                        );
+                                        // Continue processing - non-critical error
+                                    }
+                                }
+                            }
+
+                            // Store job completion result to Elasticsearch asynchronously
+                            let scheduler_clone = scheduler_for_events.clone();
+                            let worker_id_clone = worker_id.clone();
+
+                            tokio::spawn(async move {
+                                use serde_json::json;
+                                use tokio::time::{Duration, timeout};
+
+                                // Build a simple completion document for ES
+                                let index_name = format!("job-completions-{}", chrono::Utc::now().format("%Y.%m"));
+
+                                let doc = json!({
+                                    "job_id": job_id,
+                                    "worker_id": worker_id_clone,
+                                    "success": success,
+                                    "exit_code": exit_code,
+                                    "output": response.output,
+                                    "telemetry_ids": response.telemetry_ids,
+                                    "completed_at": chrono::Utc::now().to_rfc3339(),
+                                });
+
+                                info!(
+                                    "[UPLOAD] Storing job completion to Elasticsearch [job: {}, worker: {}]",
+                                    job_id, worker_id_clone
+                                );
+
+                                // Store with 5s timeout
+                                match timeout(Duration::from_secs(5), async {
+                                    use elasticsearch::{IndexParts, http::StatusCode};
+
+                                    let response = scheduler_clone.es_client
+                                        .index(IndexParts::Index(&index_name))
+                                        .body(doc)
+                                        .send()
+                                        .await?;
+
+                                    if response.status_code().is_success() {
+                                        Ok(())
+                                    } else {
+                                        Err(anyhow::anyhow!("ES returned status: {}", response.status_code()))
+                                    }
+                                }).await {
+                                    Ok(Ok(())) => {
+                                        info!(
+                                            "[OK] Stored job completion to Elasticsearch [job: {}, worker: {}]",
+                                            job_id, worker_id_clone
+                                        );
+                                    }
+                                    Ok(Err(e)) => {
+                                        error!(
+                                            "[ERROR] Failed to store job completion to ES [job: {}, worker: {}]: {}",
+                                            job_id, worker_id_clone, e
+                                        );
+                                        // Don't crash - job completion was handled, just not indexed
+                                    }
+                                    Err(_) => {
+                                        error!(
+                                            "[TIMEOUT] ES timeout storing job completion [job: {}, worker: {}]",
+                                            job_id, worker_id_clone
+                                        );
+                                        // Don't crash - job completion was handled
+                                    }
+                                }
+                            });
+
+                            // TODO: Update job status in queue if this was the final round
+                            // This would require coordination with scheduler_core/round_processor
                         }
 
                         Some(worker_message::Payload::Ack(ack)) => {
@@ -415,6 +571,131 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 worker_id, ack.request_id, ack.success
                             );
                             // Optional: Update pending command tracking
+                        }
+
+                        Some(worker_message::Payload::ExecutionStatus(status)) => {
+                            // Log detailed execution progress based on event type
+                            match status.event_type.as_str() {
+                                "started" => {
+                                    info!(
+                                        "[EXEC-STATUS] Worker {} started execution [job: {}, run: {}, artifact: {}, PID: {}]",
+                                        worker_id, status.job_id, status.run_id, status.artifact_name, status.pid
+                                    );
+                                }
+                                "heartbeat" => {
+                                    debug!(
+                                        "[EXEC-STATUS] Worker {} heartbeat [job: {}, PID: {}, elapsed: {}s, alive: {}, events: {}, CPU: {}%, MEM: {}MB]",
+                                        worker_id,
+                                        status.job_id,
+                                        status.pid,
+                                        status.elapsed_seconds,
+                                        status.process_alive,
+                                        status.telemetry_events_count,
+                                        status.cpu_percent,
+                                        status.memory_mb
+                                    );
+                                }
+                                "stuck" => {
+                                    warn!(
+                                        "[EXEC-STATUS] Worker {} execution stuck [job: {}, PID: {}, elapsed: {}s, events: {}]",
+                                        worker_id,
+                                        status.job_id,
+                                        status.pid,
+                                        status.elapsed_seconds,
+                                        status.telemetry_events_count
+                                    );
+                                    if !status.details.is_empty() {
+                                        warn!("  Details: {}", status.details);
+                                    }
+                                }
+                                "approaching_timeout" => {
+                                    warn!(
+                                        "[EXEC-STATUS] Worker {} approaching timeout [job: {}, PID: {}, elapsed: {}s, alive: {}]",
+                                        worker_id,
+                                        status.job_id,
+                                        status.pid,
+                                        status.elapsed_seconds,
+                                        status.process_alive
+                                    );
+                                }
+                                "terminated" => {
+                                    info!(
+                                        "[EXEC-STATUS] Worker {} execution terminated [job: {}, PID: {}, elapsed: {}s, events: {}]",
+                                        worker_id,
+                                        status.job_id,
+                                        status.pid,
+                                        status.elapsed_seconds,
+                                        status.telemetry_events_count
+                                    );
+                                    if !status.details.is_empty() {
+                                        debug!("  Details: {}", status.details);
+                                    }
+                                }
+                                _ => {
+                                    debug!(
+                                        "[EXEC-STATUS] Worker {} execution status [type: {}, job: {}, PID: {}]",
+                                        worker_id, status.event_type, status.job_id, status.pid
+                                    );
+                                }
+                            }
+
+                            // Optional: Store intermediate execution status in Elasticsearch for monitoring dashboards
+                            // Uncomment this block to enable ES storage of execution status
+                            /*
+                            let scheduler_clone = scheduler_for_events.clone();
+                            let worker_id_clone = worker_id.clone();
+
+                            tokio::spawn(async move {
+                                use serde_json::json;
+                                use tokio::time::{Duration, timeout};
+
+                                let index_name = format!("execution-status-{}", chrono::Utc::now().format("%Y.%m"));
+
+                                let doc = json!({
+                                    "worker_id": worker_id_clone,
+                                    "worker_ip": status.worker_ip,
+                                    "job_id": status.job_id,
+                                    "run_id": status.run_id,
+                                    "artifact_name": status.artifact_name,
+                                    "pid": status.pid,
+                                    "elapsed_seconds": status.elapsed_seconds,
+                                    "process_alive": status.process_alive,
+                                    "telemetry_events_count": status.telemetry_events_count,
+                                    "event_type": status.event_type,
+                                    "cpu_percent": status.cpu_percent,
+                                    "memory_mb": status.memory_mb,
+                                    "details": status.details,
+                                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                                });
+
+                                // Store with 3s timeout (lower than telemetry since this is more frequent)
+                                match timeout(Duration::from_secs(3), async {
+                                    use elasticsearch::{IndexParts, http::StatusCode};
+
+                                    let response = scheduler_clone.es_client
+                                        .index(IndexParts::Index(&index_name))
+                                        .body(doc)
+                                        .send()
+                                        .await?;
+
+                                    if response.status_code().is_success() {
+                                        Ok(())
+                                    } else {
+                                        Err(anyhow::anyhow!("ES returned status: {}", response.status_code()))
+                                    }
+                                }).await {
+                                    Ok(Ok(())) => {
+                                        debug!("[OK] Stored execution status to ES [job: {}]", status.job_id);
+                                    }
+                                    Ok(Err(e)) => {
+                                        debug!("[ERROR] Failed to store execution status to ES: {}", e);
+                                    }
+                                    Err(_) => {
+                                        debug!("[TIMEOUT] ES timeout storing execution status");
+                                    }
+                                }
+                            });
+                            */
                         }
 
                         None => {
