@@ -520,17 +520,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 use serde_json::json;
                                 use tokio::time::{Duration, timeout};
 
-                                // Build a simple completion document for ES
-                                let index_name = format!("job-completions-{}", chrono::Utc::now().format("%Y.%m"));
+                                // Build run result document for ES (schema-compliant with dashboard)
+                                let index_name = format!("runs-{}", chrono::Utc::now().format("%Y.%m"));
+
+                                // Parse artifact_name from job_id (format: "job-XXX/round-Y/baseline|instrumented")
+                                // Example: "job-000001/round-1/baseline" -> artifact_name = "baseline"
+                                let artifact_name = job_id
+                                    .split('/')
+                                    .last()
+                                    .unwrap_or("unknown")
+                                    .to_string();
+
+                                // Derive status from success and exit_code
+                                let status = if success {
+                                    "success".to_string()
+                                } else if exit_code == -1 {
+                                    "timeout".to_string()
+                                } else {
+                                    "error".to_string()
+                                };
+
+                                // Extract elapsed_seconds from output if available
+                                // Output format: "Execution failed with exit code -1073741819, elapsed: 0.02s"
+                                let elapsed_seconds = response.output
+                                    .split("elapsed: ")
+                                    .nth(1)
+                                    .and_then(|s| s.split('s').next())
+                                    .and_then(|s| s.parse::<f64>().ok())
+                                    .map(|f| f.ceil() as i32)
+                                    .unwrap_or(0);
+
+                                // Get worker IP from pool (if available)
+                                let worker_ip = if let Some(core) = &scheduler_clone.scheduler_core {
+                                    match core.pool().get_worker(&worker_id_clone).await {
+                                        Some(w) => w.address.split(':').next().unwrap_or("unknown").to_string(),
+                                        None => "unknown".to_string()
+                                    }
+                                } else {
+                                    "unknown".to_string()
+                                };
+
+                                let telemetry_count = response.telemetry_ids.len() as i32;
 
                                 let doc = json!({
+                                    "run_id": run_id,
                                     "job_id": job_id,
+                                    "status": status,
+                                    "elapsed_seconds": elapsed_seconds,
+                                    "artifact_name": artifact_name,
                                     "worker_id": worker_id_clone,
-                                    "success": success,
+                                    "worker_ip": worker_ip,
                                     "exit_code": exit_code,
+                                    "telemetry_events_count": telemetry_count,
                                     "output": response.output,
                                     "telemetry_ids": response.telemetry_ids,
-                                    "completed_at": chrono::Utc::now().to_rfc3339(),
+                                    "timestamp": chrono::Utc::now().to_rfc3339(),
                                 });
 
                                 info!(
