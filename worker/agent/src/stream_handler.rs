@@ -23,8 +23,8 @@ use crate::WorkerAgentService;
 
 /// Handles incoming controller messages and sends worker responses via bidirectional stream
 pub struct StreamHandler {
-    /// Shared worker state
-    worker_state: Arc<RwLock<WorkerState>>,
+    /// Shared worker state (public for access from run_sample)
+    pub worker_state: Arc<RwLock<WorkerState>>,
 
     /// Channel for sending messages to controller
     tx: mpsc::Sender<Result<WorkerMessage, Status>>,
@@ -109,7 +109,7 @@ impl StreamHandler {
             .request
             .ok_or_else(|| anyhow!("RunSampleCommand missing request"))?;
 
-        info!(
+        debug!(
             "Received RunSample command (request_id: {}, job_id: {})",
             request_id, sample_request.job_id
         );
@@ -123,14 +123,15 @@ impl StreamHandler {
         let service = self.service.clone();
 
         tokio::spawn(async move {
-            // Update worker state to indicate job is running
+            // Update worker state to indicate job is running AND store request_id for telemetry
             {
                 let mut state = worker_state.write().await;
                 state.current_job_id = Some(sample_request.job_id.clone());
+                state.current_run_id = Some(request_id.clone());  // Store request_id for telemetry correlation
             }
 
             // Execute the sample using actual execution logic
-            info!("Executing sample: {} [run_id: {}]", sample_request.job_id, request_id);
+            debug!("Executing sample: {} [run_id: {}]", sample_request.job_id, request_id);
 
             // Call the actual run_sample execution function
             // Wrap SampleRequest in tonic::Request for compatibility with RPC handler
@@ -142,7 +143,7 @@ impl StreamHandler {
                     // Populate run_id in response for controller to match
                     sample_response.run_id = request_id.clone();
 
-                    info!(
+                    debug!(
                         "Sample execution completed successfully: job_id={}, success={}, exit_code={}",
                         sample_response.job_id, sample_response.success, sample_response.exit_code
                     );
@@ -178,7 +179,7 @@ impl StreamHandler {
             {
                 error!("Failed to send sample response: {}", e);
             } else {
-                info!("Sample execution completed: {}", sample_request.job_id);
+                debug!("Sample execution completed: {}", sample_request.job_id);
             }
         });
 
@@ -277,7 +278,7 @@ impl StreamHandler {
     ///
     /// Called by telemetry collectors to stream events to controller
     pub async fn send_telemetry(&self, batch: TelemetryBatch) -> Result<()> {
-        info!(
+        debug!(
             "Sending telemetry batch: {} events for job {}",
             batch.events.len(),
             batch.job_id
@@ -395,7 +396,7 @@ impl StreamHandler {
             .await
             .map_err(|e| anyhow!("Failed to send registration: {}", e))?;
 
-        info!("Sent worker registration to controller (IP: {})", ip_address);
+        debug!("Sent worker registration to controller (IP: {})", ip_address);
         Ok(())
     }
 }

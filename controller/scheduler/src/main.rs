@@ -264,7 +264,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    info!(
+    debug!(
         "Stream establishment complete: {} successful, {} failed",
         streams_established, streams_failed
     );
@@ -290,7 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Spawn orchestration loop to consume worker events
     tokio::spawn(async move {
-        info!("Worker event orchestration loop started");
+        debug!("Worker event orchestration loop started");
 
         while let Some(event) = events_rx.recv().await {
             match event {
@@ -370,7 +370,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     tools,
                                 ).await {
                                     Ok(()) => {
-                                        info!(
+                                        debug!(
                                             "[OK] Worker {} metadata updated in WorkerPool [OS: {}, Caps: {}]",
                                             worker_id,
                                             reg.os_version,
@@ -407,7 +407,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let run_id = batch.run_id.clone();
                             let is_final = batch.is_final;
 
-                            info!(
+                            debug!(
                                 "[WORKER-EVENT] Worker {} telemetry - {} events (job: {}, run: {}, final: {})",
                                 worker_id, events_count, job_id, run_id, is_final
                             );
@@ -430,7 +430,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 tokio::spawn(async move {
                                     use tokio::time::{Duration, timeout};
 
-                                    info!(
+                                    debug!(
                                         "[UPLOAD] Indexing {} events to Elasticsearch [job: {}, worker: {}]",
                                         events_count, job_id, worker_id_clone
                                     );
@@ -438,7 +438,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // Index with 10s timeout (matches legacy behavior)
                                     match timeout(Duration::from_secs(10), scheduler_clone.index_telemetry_batch(&batch.events)).await {
                                         Ok(Ok(())) => {
-                                            info!(
+                                            debug!(
                                                 "[OK] Successfully indexed {} telemetry events to Elasticsearch [job: {}, worker: {}]",
                                                 events_count, job_id, worker_id_clone
                                             );
@@ -488,7 +488,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 response.output.clone()
                             };
 
-                            info!(
+                            debug!(
                                 "[WORKER-EVENT] Worker {} completed job {} - Success: {}, Exit code: {} [run_id: {}]",
                                 worker_id, job_id, success, exit_code, run_id
                             );
@@ -513,7 +513,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Some(core) = &scheduler_for_events.scheduler_core {
                                 match core.pool().release_worker(&worker_id).await {
                                     Ok(()) => {
-                                        info!(
+                                        debug!(
                                             "[OK] Worker {} released and marked available (job: {})",
                                             worker_id, job_id
                                         );
@@ -604,7 +604,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     "timestamp": chrono::Utc::now().to_rfc3339(),
                                 });
 
-                                info!(
+                                debug!(
                                     "[UPLOAD] Storing job completion to Elasticsearch [job: {}, worker: {}]",
                                     job_id, worker_id_clone
                                 );
@@ -626,7 +626,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }).await {
                                     Ok(Ok(())) => {
-                                        info!(
+                                        debug!(
                                             "[OK] Stored job completion to Elasticsearch [job: {}, worker: {}]",
                                             job_id, worker_id_clone
                                         );
@@ -810,7 +810,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Get worker's current job (if any) before marking offline
                         if let Some(worker) = core.pool().get_worker(&worker_id).await {
                             if let Some(ref job_id) = worker.current_job {
-                                info!(
+                                debug!(
                                     "[JOB-RECOVERY] Worker {} had assigned job: {} - marking as failed",
                                     worker_id, job_id
                                 );
@@ -882,7 +882,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         warn!("Worker event orchestration loop terminated (event channel closed)");
     });
 
-    info!("Orchestration loop spawned successfully");
+    debug!("Orchestration loop spawned successfully");
 
     // gRPC reflection for grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()

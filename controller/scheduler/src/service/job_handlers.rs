@@ -8,7 +8,7 @@ use crate::automutate::controller::{
 use crate::job;
 use crate::SchedulerService;
 use tonic::{Request, Response, Status};
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, debug};
 
 const DELAY: u64 = 20;
 
@@ -135,7 +135,7 @@ pub async fn get_job_progress(
 ) -> Result<Response<JobProgressResponse>, Status> {
     let job_id = &request.get_ref().job_id;
 
-    info!("[RPC] GetJobProgress: job_id={}", job_id);
+    debug!("[RPC] GetJobProgress: job_id={}", job_id);
 
     // Get job from queue
     let scheduler = service
@@ -192,7 +192,7 @@ pub async fn stop_job(
 ) -> Result<Response<StopJobResponse>, Status> {
     let job_id = &request.get_ref().job_id;
 
-    info!("[RPC] StopJob: job_id={}", job_id);
+    debug!("[RPC] StopJob: job_id={}", job_id);
 
     // Get scheduler
     let scheduler = service
@@ -229,7 +229,7 @@ pub async fn stop_job(
         .update_job(&job)
         .map_err(|e| Status::internal(format!("Failed to update job: {}", e)))?;
 
-    info!("[RPC] Job {} stopped successfully", job_id);
+    debug!("[RPC] Job {} stopped successfully", job_id);
 
     let response = StopJobResponse {
         stopped: true,
@@ -247,7 +247,7 @@ pub async fn get_round(
     let job_id = &req.job_id;
     let round_id = &req.round_id;
 
-    info!("[RPC] GetRound: job_id={}, round_id={}", job_id, round_id);
+    debug!("[RPC] GetRound: job_id={}, round_id={}", job_id, round_id);
 
     // Get job from queue
     let scheduler = service
@@ -310,7 +310,7 @@ pub async fn compare_runs(
     let baseline_run_id = &req.baseline_run_id;
     let instrumented_run_id = &req.instrumented_run_id;
 
-    info!(
+    debug!(
         "[RPC] CompareRuns: baseline={}, instrumented={}",
         baseline_run_id, instrumented_run_id
     );
@@ -459,7 +459,7 @@ pub async fn report_status(
     // Store RunResult to Elasticsearch when final status received
     // Use timeout to prevent blocking RPC if Elasticsearch is slow/unreachable
     if matches!(report.event_type.as_str(), "success" | "error" | "timeout") {
-        info!(
+        debug!(
             "[SAVE]Storing final run result for job: {} [worker: {}]",
             report.job_id, remote_addr
         );
@@ -467,7 +467,7 @@ pub async fn report_status(
             .await
         {
             Ok(Ok(())) => {
-                info!(
+                debug!(
                     "[OK] Run result stored successfully [job: {}, run: {}]",
                     report.job_id, report.run_id
                 );

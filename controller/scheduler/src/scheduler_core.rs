@@ -196,7 +196,7 @@ impl SchedulerCore {
     pub async fn run(self: Arc<Self>) {
         debug!("Scheduler core started (poll interval: {}ms)", self.config.poll_interval_ms);
         debug!("Worker pool loaded: {} workers", self.pool.total_count().await);
-        info!("Ready to accept jobs");
+        debug!("Ready to accept jobs");
 
         loop {
             // 1. Check worker health (actively call HealthCheck RPC)
@@ -281,7 +281,7 @@ impl SchedulerCore {
         worker_manager: std::sync::Arc<crate::worker_manager::WorkerManager>,
         _config: SchedulerConfig,
     ) -> Result<()> {
-        info!("[{}] Starting job (max_rounds: {})", job.id, job.max_rounds);
+        debug!("[{}] Starting job (max_rounds: {})", job.id, job.max_rounds);
         job.start_running();
         queue.update_job(&job)?;
 
@@ -344,11 +344,11 @@ impl SchedulerCore {
 
     /// Build artifact using build/emitter
     async fn build_artifact(job: &Job) -> Result<String> {
-        info!("[{}] Build parameters:", job.id);
-        info!("  Template: {}", job.template_name);
-        info!("  Source: {}", job.source_file);
-        info!("  Trace mode: {}", job.trace_mode);
-        info!("  Mutations: {}", job.mutations.len());
+        debug!("[{}] Build parameters:", job.id);
+        debug!("  Template: {}", job.template_name);
+        debug!("  Source: {}", job.source_file);
+        debug!("  Trace mode: {}", job.trace_mode);
+        debug!("  Mutations: {}", job.mutations.len());
 
         // Create builder with default config
         let builder_config = builder::BuilderConfig::default();
@@ -398,8 +398,8 @@ impl SchedulerCore {
         use crate::automutate::worker::worker_agent_client::WorkerAgentClient;
         use futures::stream;
 
-        info!("[{}] Deploying to worker: {}", job.id, worker_address);
-        info!("  Artifact: {:?}", job.artifact_id);
+        debug!("[{}] Deploying to worker: {}", job.id, worker_address);
+        debug!("  Artifact: {:?}", job.artifact_id);
 
         let artifact_id = job.artifact_id.as_ref().ok_or_else(|| anyhow!("No artifact ID"))?;
 
@@ -415,7 +415,7 @@ impl SchedulerCore {
 
         let artifact_data = tokio::fs::read(&artifact_path).await?;
 
-        info!("[{}] Read artifact: {} bytes", job.id, artifact_data.len());
+        debug!("[{}] Read artifact: {} bytes", job.id, artifact_data.len());
 
         // 2. Connect to worker
         let worker_url = format!("http://{}", worker_address);
@@ -451,8 +451,8 @@ impl SchedulerCore {
         use crate::automutate::common::SampleRequest;
         use crate::automutate::worker::worker_agent_client::WorkerAgentClient;
 
-        info!("[{}] Starting execution on worker: {}", job.id, worker_address);
-        info!("  Run ID: {:?}", job.run_id);
+        debug!("[{}] Starting execution on worker: {}", job.id, worker_address);
+        debug!("  Run ID: {:?}", job.run_id);
 
         let artifact_id = job.artifact_id.as_ref().ok_or_else(|| anyhow!("No artifact ID"))?;
         let job_id = job.id.clone();
@@ -478,7 +478,7 @@ impl SchedulerCore {
         tokio::spawn(async move {
             match client.run_sample(request).await {
                 Ok(response) => {
-                    info!("[{}] Worker execution completed: success={}", job_id_clone, response.get_ref().success);
+                    debug!("[{}] Worker execution completed: success={}", job_id_clone, response.get_ref().success);
                 }
                 Err(e) => {
                     error!("[{}] Worker execution RPC failed: {}", job_id_clone, e);
@@ -486,7 +486,7 @@ impl SchedulerCore {
             }
         });
 
-        info!("[{}] Execution request sent to worker", job_id);
+        debug!("[{}] Execution request sent to worker", job_id);
 
         Ok(())
     }

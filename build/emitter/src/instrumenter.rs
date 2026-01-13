@@ -44,7 +44,7 @@ impl Instrumenter {
         let abs_output_path = std::fs::canonicalize(output_path).unwrap_or_else(|_| output_path.to_path_buf());
         eprintln!("[INSTRUMENTER] Starting instrumentation: {:?} mode={:?}", abs_ir_path, trace_mode);
         eprintln!("[INSTRUMENTER] Output path: {:?}", abs_output_path);
-        info!("Instrumenting LLVM IR: {:?} (mode: {:?})", abs_ir_path, trace_mode);
+        debug!("Instrumenting LLVM IR: {:?} (mode: {:?})", abs_ir_path, trace_mode);
 
         // Determine what instrumentation we need
         let needs_bb = matches!(trace_mode,
@@ -86,7 +86,7 @@ impl Instrumenter {
             let _ = tokio::fs::remove_file(&ir_after_bb).await;
         }
 
-        info!(
+        debug!(
             "IR-level instrumentation complete: {} BBs (via SanitizerCoverage), {} API checkpoints",
             self.bb_counter, self.line_counter
         );
@@ -96,7 +96,7 @@ impl Instrumenter {
 
     /// Inject BB coverage using LLVM SanitizerCoverage (industry-standard)
     async fn inject_bb_coverage_sancov(&mut self, ir_path: &Path, output_path: &Path) -> Result<()> {
-        info!("Applying LLVM SanitizerCoverage pass for BB instrumentation");
+        debug!("Applying LLVM SanitizerCoverage pass for BB instrumentation");
         eprintln!("[INSTRUMENTER] Running opt with SanitizerCoverage pass");
 
         // Use LLVM opt tool with SanitizerCoverage pass
@@ -136,7 +136,7 @@ impl Instrumenter {
         self.bb_counter = call_count as u32;
 
         eprintln!("[INSTRUMENTER] SanitizerCoverage injected {} BB callbacks", self.bb_counter);
-        info!("SanitizerCoverage complete: {} basic blocks instrumented", self.bb_counter);
+        debug!("SanitizerCoverage complete: {} basic blocks instrumented", self.bb_counter);
 
         Ok(())
     }

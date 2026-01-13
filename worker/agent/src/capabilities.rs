@@ -22,6 +22,7 @@ pub struct WorkerState {
     pub tools: Option<ToolVersions>,
     pub health: HealthMetrics,
     pub current_job_id: Option<String>,
+    pub current_run_id: Option<String>,  // Current execution run_id (from controller's request_id)
     pub last_controller_heartbeat: Option<i64>,
     pub controller_disconnected: bool,
     pub disconnect_reason: Option<String>,
@@ -71,6 +72,7 @@ impl WorkerState {
             tools,
             health: HealthMetrics::default(),
             current_job_id: None,
+            current_run_id: None,
             last_controller_heartbeat: None,
             controller_disconnected: false,
             disconnect_reason: None,

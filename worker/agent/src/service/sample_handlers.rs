@@ -20,13 +20,28 @@ pub async fn run_sample(
     request: Request<SampleRequest>,
 ) -> Result<Response<SampleResponse>, Status> {
         let req = request.into_inner();
-        let run_id = uuid::Uuid::new_v4().to_string();
+
+        // Use run_id from worker state (set by controller via stream_handler)
+        // This ensures telemetry batches and responses use the same run_id for correlation
+        let run_id = {
+            if let Some(handler) = service.stream_handler.read().await.as_ref() {
+                let state = handler.worker_state.read().await;
+                state.current_run_id.clone().unwrap_or_else(|| {
+                    warn!("current_run_id not set in worker state, generating new UUID");
+                    uuid::Uuid::new_v4().to_string()
+                })
+            } else {
+                // No stream handler (Phase 1 mode), generate UUID
+                uuid::Uuid::new_v4().to_string()
+            }
+        };
+
         let job_id = req.job_id.clone();
         let artifact_name = format!("{}.exe", req.artifact_id);
 
         info!(
-            "Received sample execution request: job_id={}, artifact_id={}",
-            job_id, req.artifact_id
+            "Received sample execution request: job_id={}, artifact_id={}, run_id={}",
+            job_id, req.artifact_id, run_id
         );
         // ====================================================================
         // Acquire single execution lock
