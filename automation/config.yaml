@@ -98,3 +98,6 @@ rededr:
 logging:
   level: "INFO"  # DEBUG, INFO, WARN, ERROR
 
+  security:
+    enable_vm_isolation: false
+
