@@ -283,6 +283,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Clone scheduler for orchestration loop
     let scheduler_for_events = scheduler.clone();
 
+    // Cache for tracking telemetry counts per run_id (populated when TelemetryBatch arrives)
+    let telemetry_counts: Arc<tokio::sync::RwLock<std::collections::HashMap<String, i32>>> =
+        Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+    let telemetry_counts_for_loop = Arc::clone(&telemetry_counts);
+
     // Spawn orchestration loop to consume worker events
     tokio::spawn(async move {
         info!("Worker event orchestration loop started");
@@ -399,12 +404,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Some(worker_message::Payload::Telemetry(batch)) => {
                             let events_count = batch.events.len();
                             let job_id = batch.job_id.clone();
+                            let run_id = batch.run_id.clone();
                             let is_final = batch.is_final;
 
                             info!(
-                                "[WORKER-EVENT] Worker {} telemetry - {} events (job: {}, final: {})",
-                                worker_id, events_count, job_id, is_final
+                                "[WORKER-EVENT] Worker {} telemetry - {} events (job: {}, run: {}, final: {})",
+                                worker_id, events_count, job_id, run_id, is_final
                             );
+
+                            // Cache telemetry count for this run_id (used later when SampleResponse arrives)
+                            {
+                                let mut counts = telemetry_counts_for_loop.write().await;
+                                *counts.entry(run_id.clone()).or_insert(0) += events_count as i32;
+                                debug!(
+                                    "Cached telemetry count for run {}: {} events (cumulative)",
+                                    run_id, counts[&run_id]
+                                );
+                            }
 
                             // Forward to Elasticsearch asynchronously (non-blocking)
                             if !batch.events.is_empty() {
@@ -515,6 +531,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Store job completion result to Elasticsearch asynchronously
                             let scheduler_clone = scheduler_for_events.clone();
                             let worker_id_clone = worker_id.clone();
+                            let telemetry_counts_clone = Arc::clone(&telemetry_counts_for_loop);
 
                             tokio::spawn(async move {
                                 use serde_json::json;
@@ -560,7 +577,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     "unknown".to_string()
                                 };
 
-                                let telemetry_count = response.telemetry_ids.len() as i32;
+                                // Look up actual telemetry count from cache (populated when TelemetryBatch arrived)
+                                let telemetry_count = {
+                                    let counts = telemetry_counts_clone.read().await;
+                                    counts.get(&run_id).copied().unwrap_or(0)
+                                };
+
+                                // Clean up cache entry (no longer needed after indexing)
+                                {
+                                    let mut counts = telemetry_counts_clone.write().await;
+                                    counts.remove(&run_id);
+                                }
 
                                 let doc = json!({
                                     "run_id": run_id,
