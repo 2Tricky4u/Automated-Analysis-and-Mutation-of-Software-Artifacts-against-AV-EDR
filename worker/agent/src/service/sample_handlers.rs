@@ -390,6 +390,9 @@ pub async fn run_sample(
             info!("ExecutionMonitor running without StreamHandler (worker-only mode)");
         }
 
+        // Clone for ExecutionMonitor (we need to keep a copy for telemetry streaming later)
+        let stream_handler_for_monitor = stream_handler.clone();
+
         let monitor = crate::execution::monitor::ExecutionMonitor::new(
             run_id.clone(),
             job_id.clone(),
@@ -398,7 +401,7 @@ pub async fn run_sample(
             artifact_name.clone(),
             pid,
             service.config.telemetry.rededr.base_url.clone(),
-            stream_handler, // Pass StreamHandler if available
+            stream_handler_for_monitor, // Pass cloned StreamHandler to monitor
             req.timeout_seconds,
         );
 
@@ -1196,21 +1199,55 @@ pub async fn run_sample(
         }
 
         info!(
-            "Execution completed: {} telemetry events available for pull",
+            "Execution completed: {} telemetry events collected",
             telemetry_count
         );
 
-        // Telemetry stored locally, controller pulls via GetTelemetry RPC
-        if !telemetry_events.is_empty() {
-            info!(
-                "Collected {} telemetry events - available for controller pull via GetTelemetry",
-                telemetry_count
-            );
+        // Stream telemetry to controller if bidirectional stream is available
+        if let Some(ref handler) = stream_handler {
+            if !telemetry_events.is_empty() {
+                info!(
+                    "Streaming {} telemetry events to controller via bidirectional stream",
+                    telemetry_count
+                );
+
+                // Create TelemetryBatch message
+                let telemetry_batch = crate::automutate::common::TelemetryBatch {
+                    job_id: job_id.clone(),
+                    run_id: run_id.clone(),
+                    events: telemetry_events.clone(),
+                    is_final: true, // Final batch for this execution
+                };
+
+                // Stream to controller
+                match handler.send_telemetry(telemetry_batch).await {
+                    Ok(_) => {
+                        info!("Successfully streamed {} telemetry events to controller", telemetry_count);
+                    }
+                    Err(e) => {
+                        error!("Failed to stream telemetry to controller: {}", e);
+                        warn!("Telemetry will be lost - controller should handle stream failures gracefully");
+                        // Continue execution - telemetry failure shouldn't fail the job
+                    }
+                }
+            } else {
+                warn!(
+                    "No telemetry events collected [job: {}, run: {}]",
+                    job_id, run_id
+                );
+            }
         } else {
+            // Legacy mode: no stream available (shouldn't happen in Phase 2)
             warn!(
-                "[WARN] No telemetry events collected [job: {}, run: {}]",
+                "No bidirectional stream available - telemetry NOT sent to controller [job: {}, run: {}]",
                 job_id, run_id
             );
+            if !telemetry_events.is_empty() {
+                warn!(
+                    "{} telemetry events collected but cannot be sent (stream unavailable)",
+                    telemetry_count
+                );
+            }
         }
 
         // Reset RedEDR for next run (guard ensures cleanup on error, but we do it explicitly here)
