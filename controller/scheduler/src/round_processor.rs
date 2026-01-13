@@ -474,31 +474,16 @@ impl RoundProcessor {
             run_id, detected, exit_code, elapsed, result.telemetry_events_count
         );
 
-        // Step 6: Pull telemetry events from worker and forward to controller for Elasticsearch indexing
+        // Step 6: Telemetry handling
+        // NOTE: Telemetry is now pushed automatically via bidirectional stream during execution
+        // The telemetry_events_count in SampleResponse is just a reference count
+        // Actual telemetry data is streamed in real-time and handled by main.rs event loop
+        // No need to pull telemetry here - it's already been pushed and indexed
         if result.telemetry_events_count > 0 {
             info!(
-                "[{}] Pulling {} telemetry events from worker...",
+                "[{}] Telemetry: {} events were streamed during execution (already indexed)",
                 run_id, result.telemetry_events_count
             );
-
-            // Create client for telemetry pulling (separate operation from execution)
-            let worker_url = format!("http://{}", worker_address);
-            let endpoint = tonic::transport::Endpoint::try_from(worker_url)?;
-            let mut telemetry_client = WorkerAgentClient::connect(endpoint).await?;
-
-            match Self::pull_and_forward_telemetry(&mut telemetry_client, &run_id, &worker).await {
-                Ok(actual_count) => {
-                    info!(
-                        "[{}] Successfully pulled and indexed {} telemetry events",
-                        run_id, actual_count
-                    );
-                    result.telemetry_events_count = actual_count as u64;
-                }
-                Err(e) => {
-                    warn!("[{}] Failed to pull/index telemetry: {}", run_id, e);
-                    warn!("[{}] Telemetry may be lost", run_id);
-                }
-            }
         }
 
         Ok(result)

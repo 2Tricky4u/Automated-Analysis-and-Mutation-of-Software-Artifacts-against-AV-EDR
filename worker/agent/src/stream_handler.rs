@@ -373,18 +373,16 @@ impl StreamHandler {
     pub async fn send_registration(&self) -> Result<()> {
         let state = self.worker_state.read().await;
 
+        // Use config values for IP address and OS version (authoritative source)
+        // Metadata from detect_capabilities() doesn't include these
+        let ip_address = format!("{}:{}",
+            self.service.config.worker.ip_address,
+            self.service.config.worker.listen_port);
+
         let registration = WorkerRegistration {
             worker_id: state.worker_id.clone(),
-            ip_address: state
-                .metadata
-                .get("ip_address")
-                .cloned()
-                .unwrap_or_default(),
-            os_version: state
-                .metadata
-                .get("os_version")
-                .cloned()
-                .unwrap_or_default(),
+            ip_address: ip_address.clone(),
+            os_version: self.service.config.worker.os_version.clone(),
             capabilities: state.capabilities.clone(),
             metadata: state.metadata.clone(),
             tools: state.tools.clone(),
@@ -397,7 +395,7 @@ impl StreamHandler {
             .await
             .map_err(|e| anyhow!("Failed to send registration: {}", e))?;
 
-        info!("Sent worker registration to controller");
+        info!("Sent worker registration to controller (IP: {})", ip_address);
         Ok(())
     }
 }
