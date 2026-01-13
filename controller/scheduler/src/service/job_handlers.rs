@@ -397,7 +397,7 @@ pub async fn report_status(
     // Update worker health and job status in scheduler core (if available)
     if let Some(ref scheduler_core) = service.scheduler_core {
         // Update worker health timestamp
-        if let Err(e) = scheduler_core.pool().update_health(&report.worker_id) {
+        if let Err(e) = scheduler_core.pool().update_health(&report.worker_id).await {
             warn!(
                 "Failed to update worker health for {}: {}",
                 report.worker_id, e

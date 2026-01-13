@@ -74,7 +74,7 @@ pub struct SchedulerCore {
 impl SchedulerCore {
     /// Create a new scheduler core
     /// Automatically discovers workers from automation/generated/win*-worker-*.toml files
-    pub fn new(
+    pub async fn new(
         config: SchedulerConfig,
         worker_manager: Arc<crate::worker_manager::WorkerManager>,
     ) -> Result<Self> {
@@ -93,7 +93,7 @@ impl SchedulerCore {
 
         //Discover and register workers from automation/generated/*.toml
         // Returns list of discovered workers for syncing with WorkerManager
-        let discovered_workers = Self::discover_and_register_workers(&pool)?;
+        let discovered_workers = Self::discover_and_register_workers(&pool).await?;
 
         // Register same workers in WorkerManager (single source of truth)
         worker_manager.register_from_pool(discovered_workers)?;
@@ -111,7 +111,7 @@ impl SchedulerCore {
 
     /// Discover workers from automation/generated/win*-worker-*.toml files
     /// returns Vec<WorkerConfig> for syncing with WorkerManager
-    fn discover_and_register_workers(pool: &WorkerPool) -> Result<Vec<crate::worker_manager::WorkerConfig>> {
+    async fn discover_and_register_workers(pool: &WorkerPool) -> Result<Vec<crate::worker_manager::WorkerConfig>> {
         let generated_dir = Path::new("automation/generated");
 
         if !generated_dir.exists() {
@@ -135,7 +135,7 @@ impl SchedulerCore {
                     match Self::load_worker_config(&path) {
                         Ok((worker_id, address)) => {
                             // Register in WorkerPool
-                            pool.register_worker(worker_id.clone(), address.clone(), true)?;
+                            pool.register_worker(worker_id.clone(), address.clone(), true).await?;
                             info!("  Registered worker: {} at {}", worker_id, address);
 
                             // Add to discovered list for WorkerManager sync
@@ -196,15 +196,8 @@ impl SchedulerCore {
     /// Runs continuously until process exits
     pub async fn run(self: Arc<Self>) {
         debug!("Scheduler core started (poll interval: {}s)", self.config.poll_interval_seconds);
-        debug!("Worker pool loaded: {} workers", self.pool.total_count());
+        debug!("Worker pool loaded: {} workers", self.pool.total_count().await);
         info!("Ready to accept jobs");
-
-        // TODO REMOVE AFTER FIX
-        // Yield to allow other tasks to run before entering the loop
-        // This prevents the sync mutex in WorkerPool from blocking this task
-        tokio::task::yield_now().await;
-        debug!("Entering main scheduler loop...");
-        // TODO REMOVE AFTER FIX
 
         loop {
             // 1. Check worker health (actively call HealthCheck RPC)
@@ -215,7 +208,7 @@ impl SchedulerCore {
 
             // 2. Check for available workers
             debug!("About to call get_available_workers()...");
-            let available_workers = self.pool.get_available_workers();
+            let available_workers = self.pool.get_available_workers().await;
             debug!("Poll iteration - available workers: {}", available_workers.len());
 
             if available_workers.is_empty() {
@@ -501,10 +494,10 @@ impl SchedulerCore {
 }
 
 /// Helper to create a shared scheduler core instance
-pub fn create_scheduler_core(
+pub async fn create_scheduler_core(
     config: SchedulerConfig,
     worker_manager: Arc<crate::worker_manager::WorkerManager>,
 ) -> Result<Arc<SchedulerCore>> {
-    let core = SchedulerCore::new(config, worker_manager)?;
+    let core = SchedulerCore::new(config, worker_manager).await?;
     Ok(Arc::new(core))
 }

@@ -17,7 +17,7 @@ async fn test_add_remove_worker() {
     assert_eq!(workers.len(), 1);
     assert!(workers.contains(&"win10-worker-01".to_string()));
 
-    manager.remove_worker("win10-worker-01").unwrap();
+    manager.remove_worker("win10-worker-01").await.unwrap();
 
     let workers = manager.list_workers();
     assert_eq!(workers.len(), 0);

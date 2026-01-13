@@ -95,7 +95,7 @@ impl RoundProcessor {
         // - EXECUTION runs in PARALLEL if different workers, SEQUENTIAL if same worker
 
         // Select workers with matching OS
-        let workers_by_os = pool.get_available_workers_by_os();
+        let workers_by_os = pool.get_available_workers_by_os().await;
         let (baseline_worker_id, instrumented_worker_id, selected_os) =
             Self::select_os_matched_workers(&workers_by_os)?;
 
@@ -394,7 +394,7 @@ impl RoundProcessor {
         let worker_id_to_use = if let Some(worker_id) = specific_worker_id {
             worker_id.to_string()
         } else {
-            let worker_ids = pool.get_available_workers();
+            let worker_ids = pool.get_available_workers().await;
             if worker_ids.is_empty() {
                 return Err(anyhow::anyhow!("No available workers in pool"));
             }
@@ -403,6 +403,7 @@ impl RoundProcessor {
 
         let worker = pool
             .get_worker(&worker_id_to_use)
+            .await
             .ok_or_else(|| anyhow::anyhow!("Worker {} not found", worker_id_to_use))?;
         let worker_address = worker.address.clone();
         info!(

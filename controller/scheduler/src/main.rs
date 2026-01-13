@@ -213,7 +213,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Step 4: Create and spawn scheduler core (passing WorkerManager)
-    match create_scheduler_core(scheduler_core_config, Arc::clone(&worker_manager)) {
+    match create_scheduler_core(scheduler_core_config, Arc::clone(&worker_manager)).await {
         Ok(scheduler_core) => {
             info!("Scheduler core initialized successfully");
 
@@ -306,11 +306,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     // Update WorkerPool state: mark worker as connected
                     if let Some(core) = &scheduler_for_events.scheduler_core {
-                        if let Err(e) = core.pool().mark_connected(&worker_id) {
+                        if let Err(e) = core.pool().mark_connected(&worker_id).await {
                             warn!("Failed to mark worker {} as connected: {}", worker_id, e);
                         }
                         // Also update health to mark as Available if it was Offline
-                        if let Err(e) = core.pool().update_health(&worker_id) {
+                        if let Err(e) = core.pool().update_health(&worker_id).await {
                             warn!("Failed to update health for worker {}: {}", worker_id, e);
                         }
                     }
@@ -367,7 +367,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     reg.capabilities.clone(),
                                     reg.metadata.clone(),
                                     tools,
-                                ) {
+                                ).await {
                                     Ok(()) => {
                                         info!(
                                             "[OK] Worker {} metadata updated in WorkerPool [OS: {}, Caps: {}]",
@@ -394,7 +394,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             // Update worker health: this is the heartbeat from the stream
                             if let Some(core) = &scheduler_for_events.scheduler_core {
-                                if let Err(e) = core.pool().update_health(&worker_id) {
+                                if let Err(e) = core.pool().update_health(&worker_id).await {
                                     warn!("Failed to update health for worker {}: {}", worker_id, e);
                                 }
                             }
@@ -499,7 +499,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             // Release worker (mark as available for new jobs)
                             if let Some(core) = &scheduler_for_events.scheduler_core {
-                                match core.pool().release_worker(&worker_id) {
+                                match core.pool().release_worker(&worker_id).await {
                                     Ok(()) => {
                                         info!(
                                             "[OK] Worker {} released and marked available (job: {})",
@@ -741,8 +741,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Reschedule jobs assigned to this worker (BEFORE marking offline)
                     if let Some(core) = &scheduler_for_events.scheduler_core {
                         // Get worker's current job (if any) before marking offline
-                        if let Some(worker) = core.pool().get_worker(&worker_id) {
-                            if let Some(job_id) = worker.current_job {
+                        if let Some(worker) = core.pool().get_worker(&worker_id).await {
+                            if let Some(ref job_id) = worker.current_job {
                                 info!(
                                     "[JOB-RECOVERY] Worker {} had assigned job: {} - marking as failed",
                                     worker_id, job_id
@@ -801,10 +801,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     // Mark worker as offline in WorkerPool (clears current_job)
                     if let Some(core) = &scheduler_for_events.scheduler_core {
-                        if let Err(e) = core.pool().mark_worker_offline(&worker_id) {
+                        if let Err(e) = core.pool().mark_worker_offline(&worker_id).await {
                             warn!("Failed to mark worker {} as offline: {}", worker_id, e);
                         }
-                        if let Err(e) = core.pool().mark_disconnected(&worker_id) {
+                        if let Err(e) = core.pool().mark_disconnected(&worker_id).await {
                             warn!("Failed to mark worker {} as disconnected: {}", worker_id, e);
                         }
                     }

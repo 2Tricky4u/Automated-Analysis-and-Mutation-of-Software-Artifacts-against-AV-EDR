@@ -16,7 +16,7 @@ pub async fn list_workers(
         }
     };
 
-    let workers = scheduler_core.pool().list_workers();
+    let workers = scheduler_core.pool().list_workers().await;
     let worker_infos: Vec<WorkerInfo> = workers
         .iter()
         .map(|w| {

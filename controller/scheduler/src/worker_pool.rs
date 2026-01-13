@@ -3,8 +3,9 @@
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{SystemTime, Duration};
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 
@@ -86,8 +87,8 @@ pub struct WorkerState {
 /// Worker pool managing multiple workers
 #[derive(Clone)]
 pub struct WorkerPool {
-    /// Shared state containing all workers
-    state: Arc<Mutex<PoolState>>,
+    /// Shared state containing all workers (async RwLock for concurrent read access)
+    state: Arc<RwLock<PoolState>>,
     /// Health check timeout (seconds)
     health_timeout: Duration,
     // WorkerManager handles connectivity events instead
@@ -102,7 +103,7 @@ impl WorkerPool {
     /// Create a new worker pool
     pub fn new(health_timeout_secs: u64) -> Self {
         WorkerPool {
-            state: Arc::new(Mutex::new(PoolState {
+            state: Arc::new(RwLock::new(PoolState {
                 workers: HashMap::new(),
             })),
             health_timeout: Duration::from_secs(health_timeout_secs),
@@ -110,7 +111,7 @@ impl WorkerPool {
     }
 
     /// Register a worker from configuration (backward compatible - static registration)
-    pub fn register_worker(&self, id: String, address: String, enabled: bool) -> Result<()> {
+    pub async fn register_worker(&self, id: String, address: String, enabled: bool) -> Result<()> {
         // Delegate to internal method with default values and Static type
         self.register_worker_internal(
             id,
@@ -121,11 +122,11 @@ impl WorkerPool {
             HashMap::new(),         // metadata (empty)
             HashMap::new(),         // tools (empty)
             RegistrationType::Static,
-        )
+        ).await
     }
 
     /// Register a worker with full metadata (for dynamic registration)
-    pub fn register_worker_with_metadata(
+    pub async fn register_worker_with_metadata(
         &self,
         id: String,
         address: String,
@@ -144,11 +145,11 @@ impl WorkerPool {
             metadata,
             tools,
             RegistrationType::Dynamic,
-        )
+        ).await
     }
 
     /// Internal method to register a worker (used by both static and dynamic registration)
-    fn register_worker_internal(
+    async fn register_worker_internal(
         &self,
         id: String,
         address: String,
@@ -161,7 +162,7 @@ impl WorkerPool {
     ) -> Result<()> {
         use tracing::info;
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.write().await;
 
         // Check if worker already exists (allow re-registration)
         // Preserve connected flag if worker is re-registering
@@ -206,8 +207,8 @@ impl WorkerPool {
     }
 
     /// Get list of available workers
-    pub fn get_available_workers(&self) -> Vec<String> {
-        let state = self.state.lock().unwrap();
+    pub async fn get_available_workers(&self) -> Vec<String> {
+        let state = self.state.read().await;
 
         state
             .workers
@@ -223,10 +224,10 @@ impl WorkerPool {
     /// # Example
     /// Worker IDs like "win10-worker-01", "win11-worker-02" are grouped by OS prefix
     /// Returns: HashMap<"win10", vec!["win10-worker-01", "win10-worker-02"]>
-    pub fn get_available_workers_by_os(&self) -> std::collections::HashMap<String, Vec<String>> {
+    pub async fn get_available_workers_by_os(&self) -> std::collections::HashMap<String, Vec<String>> {
         use std::collections::HashMap;
 
-        let state = self.state.lock().unwrap();
+        let state = self.state.read().await;
         let mut by_os: HashMap<String, Vec<String>> = HashMap::new();
 
         for worker in state.workers.values() {
@@ -259,11 +260,11 @@ impl WorkerPool {
 
     /// Get available workers with specific capabilities
     /// Returns workers that have ALL required capabilities
-    pub fn get_available_workers_with_capabilities(
+    pub async fn get_available_workers_with_capabilities(
         &self,
         required_capabilities: &[String],
     ) -> Vec<String> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.read().await;
 
         state.workers.values()
             .filter(|w| {
@@ -287,8 +288,8 @@ impl WorkerPool {
     }
 
     /// Get workers by OS version
-    pub fn get_available_workers_by_os_version(&self, os: &str) -> Vec<String> {
-        let state = self.state.lock().unwrap();
+    pub async fn get_available_workers_by_os_version(&self, os: &str) -> Vec<String> {
+        let state = self.state.read().await;
 
         state.workers.values()
             .filter(|w| {
@@ -303,8 +304,8 @@ impl WorkerPool {
     }
 
     /// Assign a job to a worker (marks worker as busy)
-    pub fn assign_worker(&self, worker_id: &str, job_id: &str) -> Result<String> {
-        let mut state = self.state.lock().unwrap();
+    pub async fn assign_worker(&self, worker_id: &str, job_id: &str) -> Result<String> {
+        let mut state = self.state.write().await;
 
         let worker = state
             .workers
@@ -326,8 +327,8 @@ impl WorkerPool {
     }
 
     /// Release a worker (marks worker as available)
-    pub fn release_worker(&self, worker_id: &str) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
+    pub async fn release_worker(&self, worker_id: &str) -> Result<()> {
+        let mut state = self.state.write().await;
 
         let worker = state
             .workers
@@ -341,10 +342,10 @@ impl WorkerPool {
     }
 
     /// Mark worker as offline (for graceful deregistration)
-    pub fn mark_worker_offline(&self, worker_id: &str) -> Result<()> {
+    pub async fn mark_worker_offline(&self, worker_id: &str) -> Result<()> {
         use tracing::{info, warn};
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.write().await;
 
         let worker = state
             .workers
@@ -367,8 +368,8 @@ impl WorkerPool {
     }
 
     /// Mark worker as connected (WorkerManager has active gRPC stream)
-    pub fn mark_connected(&self, worker_id: &str) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
+    pub async fn mark_connected(&self, worker_id: &str) -> Result<()> {
+        let mut state = self.state.write().await;
 
         let worker = state
             .workers
@@ -381,8 +382,8 @@ impl WorkerPool {
     }
 
     /// Mark worker as disconnected (WorkerManager lost gRPC stream)
-    pub fn mark_disconnected(&self, worker_id: &str) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
+    pub async fn mark_disconnected(&self, worker_id: &str) -> Result<()> {
+        let mut state = self.state.write().await;
 
         let worker = state
             .workers
@@ -395,8 +396,8 @@ impl WorkerPool {
     }
 
     /// Update worker health check timestamp
-    pub fn update_health(&self, worker_id: &str) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
+    pub async fn update_health(&self, worker_id: &str) -> Result<()> {
+        let mut state = self.state.write().await;
 
         let worker = state
             .workers
@@ -421,7 +422,7 @@ impl WorkerPool {
 
         // Get list of workers to check (clone to avoid holding lock during async calls)
         let workers_to_check: Vec<(String, String)> = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.read().await;
             state.workers.iter()
                 .filter(|(_, w)| w.enabled)
                 .map(|(id, w)| (id.clone(), w.address.clone()))
@@ -457,7 +458,7 @@ impl WorkerPool {
                     Ok(Ok(_response)) => {
                         // Health check succeeded - update last_ping
                         let came_back_online = {
-                            let mut state = state.lock().unwrap();
+                            let mut state = state.write().await;
                             let mut status_changed = false;
                             if let Some(worker) = state.workers.get_mut(&worker_id) {
                                 worker.last_ping = SystemTime::now();
@@ -478,7 +479,7 @@ impl WorkerPool {
                     Ok(Err(e)) => {
                         // RPC error - mark worker as offline
                         let went_offline = {
-                            let mut state = state.lock().unwrap();
+                            let mut state = state.write().await;
                             let mut status_changed = false;
                             if let Some(worker) = state.workers.get_mut(&worker_id) {
                                 if worker.status != WorkerStatus::Offline {
@@ -501,7 +502,7 @@ impl WorkerPool {
                     Err(_) => {
                         // Timeout - mark worker as offline
                         let went_offline = {
-                            let mut state = state.lock().unwrap();
+                            let mut state = state.write().await;
                             let mut status_changed = false;
                             if let Some(worker) = state.workers.get_mut(&worker_id) {
                                 if worker.status != WorkerStatus::Offline {
@@ -530,26 +531,26 @@ impl WorkerPool {
     }
 
     /// Get worker state by ID
-    pub fn get_worker(&self, worker_id: &str) -> Option<WorkerState> {
-        let state = self.state.lock().unwrap();
+    pub async fn get_worker(&self, worker_id: &str) -> Option<WorkerState> {
+        let state = self.state.read().await;
         state.workers.get(worker_id).cloned()
     }
 
     /// List all workers
-    pub fn list_workers(&self) -> Vec<WorkerState> {
-        let state = self.state.lock().unwrap();
+    pub async fn list_workers(&self) -> Vec<WorkerState> {
+        let state = self.state.read().await;
         state.workers.values().cloned().collect()
     }
 
     /// Get worker count by status
-    pub fn count_by_status(&self, status: WorkerStatus) -> usize {
-        let state = self.state.lock().unwrap();
+    pub async fn count_by_status(&self, status: WorkerStatus) -> usize {
+        let state = self.state.read().await;
         state.workers.values().filter(|w| w.status == status).count()
     }
 
     /// Get total worker count
-    pub fn total_count(&self) -> usize {
-        let state = self.state.lock().unwrap();
+    pub async fn total_count(&self) -> usize {
+        let state = self.state.read().await;
         state.workers.len()
     }
 }
