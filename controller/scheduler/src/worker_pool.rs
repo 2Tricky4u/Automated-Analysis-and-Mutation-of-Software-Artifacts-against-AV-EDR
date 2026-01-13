@@ -175,7 +175,7 @@ impl WorkerPool {
 
         let worker = WorkerState {
             id: id.clone(),
-            address,
+            address: address.clone(),
             status: if enabled { WorkerStatus::Available } else { WorkerStatus::Offline },
             current_job: None,
             last_ping: SystemTime::now(),
@@ -189,6 +189,7 @@ impl WorkerPool {
             connected: existing_connected,  // Preserve connected flag from existing worker
         };
 
+        info!("Registering worker {} with address: '{}'", id, address);
         state.workers.insert(id.clone(), worker);
 
         match registration_type {

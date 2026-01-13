@@ -323,8 +323,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match msg.payload {
                         Some(worker_message::Payload::Registration(reg)) => {
                             info!(
-                                "[WORKER-EVENT] Worker {} registration - OS: {}, Capabilities: {:?}",
-                                worker_id, reg.os_version, reg.capabilities
+                                "[WORKER-EVENT] Worker {} registration - IP: '{}', OS: {}, Capabilities: {:?}",
+                                worker_id, reg.ip_address, reg.os_version, reg.capabilities
                             );
 
                             // Convert ToolVersions proto to HashMap
