@@ -29,6 +29,8 @@ controller:
 
 # Elasticsearch configuration
 elasticsearch:
+  version: "8.11.0"
+  memory_gb: 4
   data_path: "/var/lib/elasticsearch"
 
 # Worker VMs configuration (TEMPLATE-BASED)
