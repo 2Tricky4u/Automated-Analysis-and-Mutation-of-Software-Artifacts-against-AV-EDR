@@ -100,4 +100,5 @@ logging:
 
   security:
     enable_vm_isolation: false
+    enable_egress_filter: false
 
