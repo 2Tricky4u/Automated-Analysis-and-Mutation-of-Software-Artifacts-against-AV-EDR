@@ -74,8 +74,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Worker IP: {}", config.worker.ip_address);
     info!("OS Version: {}", config.worker.os_version);
     info!("Worker listening on: {}", addr);
-    info!("Sandbox enabled: {}", config.harness.sandbox_enabled);
-    info!("ETW enabled: {}", config.telemetry.etw.enabled);
 
     // === Detect capabilities ===
     info!("Detecting worker capabilities...");

@@ -199,13 +199,6 @@ pub async fn get_telemetry(
         req.job_id, req.since_timestamp, req.max_events
     );
 
-    // Check if RedEDR is enabled
-    if !service.config.telemetry.rededr.enabled {
-        return Err(Status::failed_precondition(
-            "RedEDR telemetry is disabled in config",
-        ));
-    }
-
     // For now, return telemetry from the most recent run
     // TODO: Implement persistent storage of telemetry per job_id
 

@@ -148,10 +148,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     debug!("Bind address: {}", config.server.bind_address);
     info!("Elasticsearch: {}", config.elasticsearch.url);
-    debug!(
-        "Triage model: {} (threshold: {})",
-        config.triage.model_type, config.triage.confidence_threshold
-    );
 
     // Create Elasticsearch client
     let es_transport = Transport::single_node(&config.elasticsearch.url)?;
@@ -206,10 +202,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 3: Create scheduler core configuration
     let scheduler_core_config = CoreSchedulerConfig {
-        poll_interval_seconds: 5, //todo in config
+        poll_interval_ms: config.scheduler.poll_interval_ms,
         max_concurrent_jobs: config.scheduler.max_concurrent_runs_per_worker as usize,
         default_timeout_seconds: config.scheduler.run_timeout_secs,
-        health_timeout_seconds: 30, //todo in config
+        health_timeout_seconds: config.scheduler.health_timeout_seconds,
     };
 
     // Step 4: Create and spawn scheduler core (passing WorkerManager)

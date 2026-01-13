@@ -13,7 +13,7 @@ use tokio::sync::watch;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
-const ARTIFACTS_PATH: &str = "C:\\temp\\artifacts";
+const ARTIFACTS_PATH: &str = "C:\\temp\\artifacts"; //TODO read from config.storage.artifact_path
 
 pub async fn run_sample(
     service: &WorkerAgentService,
@@ -64,13 +64,6 @@ pub async fn run_sample(
             "[OK] Starting sample execution: job_id={}, artifact_id={}",
             job_id, req.artifact_id
         );
-
-        // Check if RedEDR is enabled
-        if !service.config.telemetry.rededr.enabled {
-            return Err(Status::failed_precondition(
-                "RedEDR telemetry is disabled in config",
-            ));
-        }
 
         // ====================================================================
         // Setup with RAII guards for automatic cleanup
@@ -772,12 +765,6 @@ pub async fn run_sample(
                         let job_id_clone = job_id.clone();
                         let trace_file_clone = trace_events_file.clone();
                         let contents_clone = contents.clone();
-                        let controller_addr = service
-                            .config
-                            .controller
-                            .as_ref()
-                            .map(|c| c.controller_address.clone())
-                            .unwrap_or_default();
 
                         info!(
                             "Spawning async compression task for full trace ({} bytes)...",

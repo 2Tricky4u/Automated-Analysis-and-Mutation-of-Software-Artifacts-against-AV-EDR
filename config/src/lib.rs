@@ -18,15 +18,15 @@ use std::path::Path;
 pub struct ControllerConfig {
     pub server: ServerConfig,
     pub elasticsearch: ElasticsearchConfig,
-    pub triage: TriageConfig,
-    pub mutator: MutatorConfig,
+    //pub triage: TriageConfig,
+    //pub mutator: MutatorConfig,
     pub scheduler: SchedulerConfig,
-    pub corpus: CorpusConfig,
+    //pub corpus: CorpusConfig,
     pub logging: LoggingConfig,
-    pub metrics: MetricsConfig,
-    pub telemetry: TelemetryConfig,
-    pub differential: DifferentialConfig,
-    pub experiments: ExperimentsConfig,
+    //pub metrics: MetricsConfig,
+    //pub telemetry: TelemetryConfig,
+    //pub differential: DifferentialConfig,
+    //pub experiments: ExperimentsConfig,
 }
 
 /// Worker configuration (loaded from worker.toml)
@@ -34,17 +34,15 @@ pub struct ControllerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerConfig {
     pub worker: WorkerIdentityConfig,
-    /// DEPRECATED: Phase 1 removes worker->controller connections
-    /// Workers now listen for controller-initiated connections
-    #[serde(default)]
-    pub controller: Option<ControllerEndpointConfig>,
-    pub harness: HarnessConfig,
+    //#[serde(default)]
+    //pub controller: Option<ControllerEndpointConfig>,
+    //pub harness: HarnessConfig,
     pub telemetry: WorkerTelemetryConfig,
-    pub build: BuildConfig,
+    //pub build: BuildConfig,
     pub storage: StorageConfig,
     pub logging: LoggingConfig,
-    pub health: HealthConfig,
-    pub security: SecurityConfig,
+    //pub health: HealthConfig,
+    //pub security: SecurityConfig,
 }
 
 // === Controller Sub-Configs ===
@@ -52,36 +50,36 @@ pub struct WorkerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub bind_address: String,
-    pub max_connections: u32,
-    pub request_timeout_secs: u64,
-    #[serde(default)]
-    pub tls_enabled: bool,
-    #[serde(default)]
-    pub tls_cert_path: Option<String>,
-    #[serde(default)]
-    pub tls_key_path: Option<String>,
-    #[serde(default)]
-    pub require_client_cert: bool,
-    #[serde(default)]
-    pub client_ca_cert_path: Option<String>,
+    //pub max_connections: u32,
+    //pub request_timeout_secs: u64,
+    //#[serde(default)]
+    //pub tls_enabled: bool,
+    //#[serde(default)]
+    //pub tls_cert_path: Option<String>,
+    //#[serde(default)]
+    //pub tls_key_path: Option<String>,
+    //#[serde(default)]
+    //pub require_client_cert: bool,
+    //#[serde(default)]
+    //pub client_ca_cert_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElasticsearchConfig {
     pub url: String,
-    pub index_prefix: String,
-    pub etw_index: String,
-    pub rededr_index: String,
-    pub runs_index: String,
-    pub bulk_size: usize,
-    pub bulk_timeout_ms: u64,
-    pub bulk_max_retries: u32,
-    #[serde(default)]
-    pub ilm_enabled: bool,
-    #[serde(default)]
-    pub ilm_max_age_days: u32,
-    #[serde(default)]
-    pub ilm_max_size_gb: u32,
+    //pub index_prefix: String,
+    //pub etw_index: String,
+    //pub rededr_index: String,
+    //pub runs_index: String,
+    //pub bulk_size: usize,
+    //pub bulk_timeout_ms: u64,
+    //pub bulk_max_retries: u32,
+    //#[serde(default)]
+    //pub ilm_enabled: bool,
+    //#[serde(default)]
+    //pub ilm_max_age_days: u32,
+    //#[serde(default)]
+    //pub ilm_max_size_gb: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,15 +133,16 @@ pub struct BehavioralTransformConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchedulerConfig {
-    pub queue_capacity: usize,
+    //pub queue_capacity: usize,
     pub max_concurrent_runs_per_worker: u32,
     pub run_timeout_secs: u64,
-    pub max_retries: u32,
-    pub retry_backoff_secs: u64,
-    /// PHASE 1: List of workers (controller dials to these)
+    pub poll_interval_ms: u64,
+    pub health_timeout_seconds: u64,
+    //pub max_retries: u32,
+    //pub retry_backoff_secs: u64,
     /// Format: [{id: "win10-worker-01", address: "10.200.200.11:50052", enabled: true}]
     #[serde(default)]
-    pub workers: Vec<WorkerEntryConfig>,
+    pub workers: Vec<WorkerEntryConfig>, //TODO still useful?
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,15 +168,15 @@ pub struct CorpusConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub level: String,
-    pub format: String,
-    #[serde(default)]
-    pub file_enabled: bool,
-    #[serde(default)]
-    pub file_path: Option<String>,
-    #[serde(default)]
-    pub file_rotation: Option<String>,
-    #[serde(default)]
-    pub file_retention_days: Option<u32>,
+    //pub format: String,
+    //#[serde(default)]
+    //pub file_enabled: bool,
+    //#[serde(default)]
+    //pub file_path: Option<String>,
+    //#[serde(default)]
+    //pub file_rotation: Option<String>,
+    //#[serde(default)]
+    //pub file_retention_days: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,18 +259,18 @@ pub struct HarnessConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerTelemetryConfig {
-    pub stream_buffer_size: usize,
-    pub flush_interval_ms: u64,
-    pub etw: EtwConfig,
-    pub eventlog: EventLogConfig,
-    pub defender: DefenderConfig,
+    //pub stream_buffer_size: usize,
+    //pub flush_interval_ms: u64,
+    //pub etw: EtwConfig,
+    //pub eventlog: EventLogConfig,
+    //pub defender: DefenderConfig,
     pub rededr: RedEdrConfig,
-    pub api_tracing: ApiTracingConfig,
-    pub bb_coverage: BbCoverageConfig,
-    pub line_tracing: LineTracingConfig,
-    pub last_seen: LastSeenConfig,
-    #[serde(default)]
-    pub external: ExternalTelemetryConfig,
+    //pub api_tracing: ApiTracingConfig,
+    //pub bb_coverage: BbCoverageConfig,
+    //pub line_tracing: LineTracingConfig,
+    //pub last_seen: LastSeenConfig,
+    //#[serde(default)]
+    //pub external: ExternalTelemetryConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,10 +296,10 @@ pub struct DefenderConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedEdrConfig {
-    pub enabled: bool,
+    //pub enabled: bool,
     pub base_url: String,
-    pub data_path: String,
-    pub file_watch_enabled: bool,
+    //pub data_path: String,
+    //pub file_watch_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,8 +339,6 @@ pub struct ExternalTelemetryConfig {
     pub cortex: CortexConfig,
     #[serde(default)]
     pub mde: MdeConfig,
-    #[serde(default)]
-    pub custom_http: CustomHttpConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -399,26 +396,6 @@ pub struct MdeConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CustomHttpConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub endpoint: String,
-    #[serde(default)]
-    pub method: String,
-    #[serde(default)]
-    pub headers: HashMap<String, String>,
-    #[serde(default)]
-    pub batch_size: usize,
-    #[serde(default)]
-    pub flush_interval_secs: u64,
-    #[serde(default)]
-    pub retry_attempts: u32,
-    #[serde(default)]
-    pub timeout_secs: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildConfig {
     pub rust_toolchain: String,
     pub llvm_version: String,
@@ -433,9 +410,9 @@ pub struct StorageConfig {
     pub artifacts_path: String,
     pub results_path: String,
     pub logs_path: String,
-    pub max_artifact_age_days: u32,
-    pub max_log_age_days: u32,
-    pub max_storage_gb: u32,
+    //pub max_artifact_age_days: u32,
+    //pub max_log_age_days: u32,
+    //pub max_storage_gb: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -638,122 +615,124 @@ impl ControllerConfig {
         Self {
             server: ServerConfig {
                 bind_address: "0.0.0.0:50051".to_string(),
-                max_connections: 100,
-                request_timeout_secs: 300,
-                tls_enabled: false,
-                tls_cert_path: None,
-                tls_key_path: None,
-                require_client_cert: false,
-                client_ca_cert_path: None,
+                // max_connections: 100,
+                // request_timeout_secs: 300,
+                // tls_enabled: false,
+                // tls_cert_path: None,
+                // tls_key_path: None,
+                // require_client_cert: false,
+                // client_ca_cert_path: None,
             },
             elasticsearch: ElasticsearchConfig {
                 url: "http://localhost:9200".to_string(),
-                index_prefix: "automutate-".to_string(),
-                etw_index: "etw-*".to_string(),
-                rededr_index: "rededr-*".to_string(),
-                runs_index: "runs".to_string(),
-                bulk_size: 100,
-                bulk_timeout_ms: 5000,
-                bulk_max_retries: 3,
-                ilm_enabled: true,
-                ilm_max_age_days: 90,
-                ilm_max_size_gb: 50,
+                //index_prefix: "automutate-".to_string(),
+                //etw_index: "etw-*".to_string(),
+                //rededr_index: "rededr-*".to_string(),
+                //runs_index: "runs".to_string(),
+                //bulk_size: 100,
+                //bulk_timeout_ms: 5000,
+                //bulk_max_retries: 3,
+                //ilm_enabled: true,
+                //ilm_max_age_days: 90,
+                //ilm_max_size_gb: 50,
             },
-            triage: TriageConfig {
-                model_type: "forest".to_string(),
-                confidence_threshold: 0.7,
-                min_support_count: 10,
-                max_hypotheses: 10,
-                feature_importance_method: "shap".to_string(),
-            },
-            mutator: MutatorConfig {
-                selector_weights: [
-                    ("coverage".to_string(), 1.5),
-                    ("evasion".to_string(), 3.0),
-                    ("similarity".to_string(), 0.5),
-                ]
-                .iter()
-                .cloned()
-                .collect(),
-                max_mutations_per_artifact: 5,
-                probabilities: MutationProbabilities {
-                    ast_transform: 0.7,
-                    binary_transform: 0.5,
-                    behavioral_transform: 0.6,
-                },
-                ast: AstTransformConfig {
-                    control_flow_jitter: true,
-                    opaque_predicates: true,
-                    constant_encoding: true,
-                    import_reshaping: true,
-                    api_indirection: true,
-                },
-                binary: BinaryTransformConfig {
-                    splice_enabled: true,
-                    shellcode_reencoding: true,
-                    preserve_semantics: true,
-                },
-                behavioral: BehavioralTransformConfig {
-                    benign_preambles: true,
-                    staged_execution: true,
-                    timing_randomization: true,
-                },
-            },
+            //triage: TriageConfig {
+            //    model_type: "forest".to_string(),
+            //    confidence_threshold: 0.7,
+            //    min_support_count: 10,
+            //    max_hypotheses: 10,
+            //    feature_importance_method: "shap".to_string(),
+            //},
+            //mutator: MutatorConfig {
+            //    selector_weights: [
+            //        ("coverage".to_string(), 1.5),
+            //        ("evasion".to_string(), 3.0),
+            //        ("similarity".to_string(), 0.5),
+            //    ]
+            //    .iter()
+            //    .cloned()
+            //    .collect(),
+            //    max_mutations_per_artifact: 5,
+            //    probabilities: MutationProbabilities {
+            //        ast_transform: 0.7,
+            //        binary_transform: 0.5,
+            //        behavioral_transform: 0.6,
+            //    },
+            //    ast: AstTransformConfig {
+            //        control_flow_jitter: true,
+            //        opaque_predicates: true,
+            //        constant_encoding: true,
+            //        import_reshaping: true,
+            //        api_indirection: true,
+            //    },
+            //    binary: BinaryTransformConfig {
+            //        splice_enabled: true,
+            //        shellcode_reencoding: true,
+            //        preserve_semantics: true,
+            //    },
+            //    behavioral: BehavioralTransformConfig {
+            //        benign_preambles: true,
+            //        staged_execution: true,
+            //        timing_randomization: true,
+            //    },
+            //},
             scheduler: SchedulerConfig {
-                queue_capacity: 1000,
+                //queue_capacity: 1000,
                 max_concurrent_runs_per_worker: 1,
                 run_timeout_secs: 300,
-                max_retries: 3,
-                retry_backoff_secs: 30,
-                workers: vec![], // PHASE 1: Empty, will be populated from config
+                //max_retries: 3,
+                //retry_backoff_secs: 30,
+                poll_interval_ms: 500,
+                health_timeout_seconds: 30,
+                workers: vec![],
             },
-            corpus: CorpusConfig {
-                storage_path: "/var/lib/automutate/corpus".to_string(),
-                max_size: 10000,
-                prioritization: "hybrid".to_string(),
-                novelty_threshold: 0.1,
-            },
+            //corpus: CorpusConfig {
+            //    storage_path: "/var/lib/automutate/corpus".to_string(),
+            //    max_size: 10000,
+            //    prioritization: "hybrid".to_string(),
+            //    novelty_threshold: 0.1,
+            //},
             logging: LoggingConfig {
                 level: "info".to_string(),
-                format: "json".to_string(),
-                file_enabled: true,
-                file_path: Some("/var/log/automutate/controller.log".to_string()),
-                file_rotation: Some("daily".to_string()),
-                file_retention_days: Some(30),
+                //format: "json".to_string(),
+                //file_enabled: true,
+                //file_path: Some("/var/log/automutate/controller.log".to_string()),
+                //file_rotation: Some("daily".to_string()),
+                //file_retention_days: Some(30),
             },
-            metrics: MetricsConfig {
-                metrics_enabled: true,
-                metrics_bind_address: "0.0.0.0:9090".to_string(),
-            },
-            telemetry: TelemetryConfig {
-                collection_interval_ms: 100,
-                rededr_enabled: true,
-                rededr_data_path: "C:\\RedEDR\\Data".to_string(),
-                api_tracing_enabled: true,
-                api_trace_format: "newline-json".to_string(),
-                bb_coverage_enabled: true,
-                bb_bitmap_size: 65536,
-                line_tracing_enabled: false,
-                line_trace_targeted: false,
-                line_trace_around_bb: vec![],
-            },
-            differential: DifferentialConfig {
-                enabled: true,
-                layers: vec![
-                    "event_counts".to_string(),
-                    "api_sequences".to_string(),
-                    "bb_coverage".to_string(),
-                    "argument_patterns".to_string(),
-                ],
-                lift_threshold: 1.2,
-                min_confidence: 0.5,
-            },
-            experiments: ExperimentsConfig {
-                track_experiments: true,
-                experiment_metadata_required: true,
-                require_deterministic_seeds: true,
-                require_artifact_ids: true,
-            },
+            //metrics: MetricsConfig {
+            //    metrics_enabled: true,
+            //    metrics_bind_address: "0.0.0.0:9090".to_string(),
+            //},
+            //telemetry: TelemetryConfig {
+            //    collection_interval_ms: 100,
+            //    rededr_enabled: true,
+            //    rededr_data_path: "C:\\RedEDR\\Data".to_string(),
+            //    api_tracing_enabled: true,
+            //    api_trace_format: "newline-json".to_string(),
+            //    bb_coverage_enabled: true,
+            //    bb_bitmap_size: 65536,
+            //    line_tracing_enabled: false,
+            //    line_trace_targeted: false,
+            //    line_trace_around_bb: vec![],
+            //},
+            //differential: DifferentialConfig {
+            //    enabled: true,
+            //    layers: vec![
+            //        "event_counts".to_string(),
+            //        "api_sequences".to_string(),
+            //        "bb_coverage".to_string(),
+            //        "argument_patterns".to_string(),
+            //    ],
+            //    lift_threshold: 1.2,
+            //    min_confidence: 0.5,
+            //},
+            //experiments: ExperimentsConfig {
+            //    track_experiments: true,
+            //    experiment_metadata_required: true,
+            //    require_deterministic_seeds: true,
+            //    require_artifact_ids: true,
+            //},
         }
     }
 }
@@ -771,126 +750,126 @@ impl WorkerConfig {
         Self {
             worker: WorkerIdentityConfig {
                 worker_id: "win11-worker-01".to_string(),
-                ip_address: "192.168.200.100".to_string(),
+                ip_address: "10.200.200.100".to_string(),
                 os_version: "windows11".to_string(),
                 listen_port: 50052,
             },
-            controller: Some(ControllerEndpointConfig {
-                controller_address: "192.168.200.1:50051".to_string(),
-                connect_timeout_secs: 30,
-                request_timeout_secs: 300,
-                keepalive_interval_secs: 30,
-                tls_enabled: false,
-                tls_ca_cert_path: None,
-            }), // DEPRECATED: Phase 1 removes worker->controller connections
-            harness: HarnessConfig {
-                working_directory: "C:\\AutoMutate\\runs".to_string(),
-                execution_timeout_secs: 120,
-                cleanup_enabled: true,
-                sandbox_enabled: true,
-                sandbox_low_integrity: true,
-                sandbox_job_object: true,
-                monitor_children: true,
-                max_child_depth: 3,
-            },
+            //controller: Some(ControllerEndpointConfig {
+            //    controller_address: "192.168.200.1:50051".to_string(),
+            //    connect_timeout_secs: 30,
+            //    request_timeout_secs: 300,
+            //    keepalive_interval_secs: 30,
+            //    tls_enabled: false,
+            //    tls_ca_cert_path: None,
+            //}),
+            //harness: HarnessConfig {
+            //    working_directory: "C:\\AutoMutate\\runs".to_string(),
+            //    execution_timeout_secs: 120,
+            //    cleanup_enabled: true,
+            //    sandbox_enabled: true,
+            //    sandbox_low_integrity: true,
+            //    sandbox_job_object: true,
+            //    monitor_children: true,
+            //    max_child_depth: 3,
+            //},
             telemetry: WorkerTelemetryConfig {
-                stream_buffer_size: 10000,
-                flush_interval_ms: 1000,
-                etw: EtwConfig {
-                    enabled: true,
-                    buffer_size_kb: 1024,
-                    lost_event_threshold: 100,
-                    providers: vec![
-                        "Microsoft-Windows-Kernel-Process".to_string(),
-                        "Microsoft-Windows-Kernel-File".to_string(),
-                        "Microsoft-Windows-Kernel-Network".to_string(),
-                        "Microsoft-Windows-Threat-Intelligence".to_string(),
-                    ],
-                },
-                eventlog: EventLogConfig {
-                    enabled: true,
-                    channels: vec![
-                        "Security".to_string(),
-                        "System".to_string(),
-                        "Application".to_string(),
-                        "Microsoft-Windows-Windows Defender/Operational".to_string(),
-                    ],
-                },
-                defender: DefenderConfig {
-                    enabled: true,
-                    alert_polling_interval_ms: 500,
-                    scan_timeout_secs: 60,
-                },
+            //    stream_buffer_size: 10000,
+            //    flush_interval_ms: 1000,
+            //    etw: EtwConfig {
+            //        enabled: true,
+            //        buffer_size_kb: 1024,
+            //        lost_event_threshold: 100,
+            //        providers: vec![
+            //            "Microsoft-Windows-Kernel-Process".to_string(),
+            //            "Microsoft-Windows-Kernel-File".to_string(),
+            //            "Microsoft-Windows-Kernel-Network".to_string(),
+            //            "Microsoft-Windows-Threat-Intelligence".to_string(),
+            //        ],
+            //    },
+            //    eventlog: EventLogConfig {
+            //        enabled: true,
+            //        channels: vec![
+            //            "Security".to_string(),
+            //            "System".to_string(),
+            //            "Application".to_string(),
+            //            "Microsoft-Windows-Windows Defender/Operational".to_string(),
+            //        ],
+            //    },
+            //    defender: DefenderConfig {
+            //        enabled: true,
+            //        alert_polling_interval_ms: 500,
+            //        scan_timeout_secs: 60,
+            //    },
                 rededr: RedEdrConfig {
-                    enabled: true,
+            //        enabled: true,
                     base_url: "http://localhost:8080".to_string(),
-                    data_path: "C:\\RedEDR\\Data".to_string(),
-                    file_watch_enabled: true,
+            //        data_path: "C:\\RedEDR\\Data".to_string(),
+            //        file_watch_enabled: true,
                 },
-                api_tracing: ApiTracingConfig {
-                    enabled: true,
-                    per_thread: true,
-                    output_format: "newline-json".to_string(),
-                    output_path: "C:\\AutoMutate\\traces".to_string(),
-                },
-                bb_coverage: BbCoverageConfig {
-                    enabled: true,
-                    bitmap_size: 65536,
-                    output_path: "C:\\AutoMutate\\coverage".to_string(),
-                },
-                line_tracing: LineTracingConfig {
-                    enabled: false,
-                    mode: "off".to_string(),
-                    output_path: "C:\\AutoMutate\\lines".to_string(),
-                },
-                last_seen: LastSeenConfig {
-                    enabled: true,
-                    ring_buffer_size: 100,
-                    flush_on_abnormal_exit: true,
-                },
-                external: ExternalTelemetryConfig::default(),
-            },
-            build: BuildConfig {
-                rust_toolchain: "stable".to_string(),
-                llvm_version: "17".to_string(),
-                default_trace_mode: "api+bb".to_string(),
-                optimization_level: "2".to_string(),
-                debug_info: false,
-                strip_symbols: true,
+            //    api_tracing: ApiTracingConfig {
+            //        enabled: true,
+            //        per_thread: true,
+            //        output_format: "newline-json".to_string(),
+            //        output_path: "C:\\AutoMutate\\traces".to_string(),
+            //    },
+            //    bb_coverage: BbCoverageConfig {
+            //        enabled: true,
+            //        bitmap_size: 65536,
+            //        output_path: "C:\\AutoMutate\\coverage".to_string(),
+            //    },
+            //    line_tracing: LineTracingConfig {
+            //        enabled: false,
+            //        mode: "off".to_string(),
+            //        output_path: "C:\\AutoMutate\\lines".to_string(),
+            //    },
+            //    last_seen: LastSeenConfig {
+            //        enabled: true,
+            //        ring_buffer_size: 100,
+            //        flush_on_abnormal_exit: true,
+            //    },
+            //    external: ExternalTelemetryConfig::default(),
+            //},
+            //build: BuildConfig {
+            //    rust_toolchain: "stable".to_string(),
+            //    llvm_version: "17".to_string(),
+            //    default_trace_mode: "api+bb".to_string(),
+            //    optimization_level: "2".to_string(),
+            //    debug_info: false,
+            //    strip_symbols: true,
             },
             storage: StorageConfig {
                 artifacts_path: "C:\\AutoMutate\\artifacts".to_string(),
                 results_path: "C:\\AutoMutate\\results".to_string(),
                 logs_path: "C:\\AutoMutate\\logs".to_string(),
-                max_artifact_age_days: 7,
-                max_log_age_days: 30,
-                max_storage_gb: 50,
+            //    max_artifact_age_days: 7,
+            //    max_log_age_days: 30,
+            //    max_storage_gb: 50,
             },
             logging: LoggingConfig {
                 level: "info".to_string(),
-                format: "json".to_string(),
-                file_enabled: false,
-                file_path: Some("C:\\AutoMutate\\logs\\worker.log".to_string()),
-                file_rotation: Some("daily".to_string()),
-                file_retention_days: Some(14),
+                //format: "json".to_string(),
+                //file_enabled: false,
+                //file_path: Some("C:\\AutoMutate\\logs\\worker.log".to_string()),
+                //file_rotation: Some("daily".to_string()),
+                //file_retention_days: Some(14),
             },
-            health: HealthConfig {
-                health_check_interval_secs: 60,
-                max_cpu_percent: 90,
-                max_memory_percent: 80,
-                max_disk_percent: 90,
-                auto_revert_on_hang: true,
-                hang_detection_timeout_secs: 600,
-            },
-            security: SecurityConfig {
-                disable_network: false,
-                block_internet: true,
-                allow_controller_only: true,
-                allowed_ips: vec![],
-                verify_dep: true,
-                verify_aslr: true,
-                verify_cfg: false,
-            },
+            //health: HealthConfig {
+            //    health_check_interval_secs: 60,
+            //    max_cpu_percent: 90,
+            //    max_memory_percent: 80,
+            //    max_disk_percent: 90,
+            //    auto_revert_on_hang: true,
+            //    hang_detection_timeout_secs: 600,
+            //},
+            //security: SecurityConfig {
+            //    disable_network: false,
+            //    block_internet: true,
+            //    allow_controller_only: true,
+            //    allowed_ips: vec![],
+            //    verify_dep: true,
+            //    verify_aslr: true,
+            //    verify_cfg: false,
+            //},
         }
     }
 }
@@ -930,21 +909,6 @@ impl Default for MdeConfig {
             flush_interval_secs: 30,
             retry_attempts: 3,
             timeout_secs: 60,
-        }
-    }
-}
-
-impl Default for CustomHttpConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            endpoint: String::new(),
-            method: "POST".to_string(),
-            headers: HashMap::new(),
-            batch_size: 500,
-            flush_interval_secs: 15,
-            retry_attempts: 3,
-            timeout_secs: 30,
         }
     }
 }

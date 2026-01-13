@@ -17,7 +17,7 @@ use tracing::{error, info, warn, debug};
 #[derive(Debug, Clone, Deserialize)]
 pub struct SchedulerConfig {
     /// Poll interval in seconds
-    pub poll_interval_seconds: u64,
+    pub poll_interval_ms: u64,
     /// Maximum concurrent jobs
     pub max_concurrent_jobs: usize,
     /// Default timeout in seconds
@@ -29,7 +29,7 @@ pub struct SchedulerConfig {
 impl Default for SchedulerConfig {
     fn default() -> Self {
         SchedulerConfig {
-            poll_interval_seconds: 5,
+            poll_interval_ms: 500,
             max_concurrent_jobs: 1,
             default_timeout_seconds: 60,
             health_timeout_seconds: 30,
@@ -41,7 +41,6 @@ impl Default for SchedulerConfig {
 #[derive(Debug, Clone, Deserialize)]
 struct WorkerTomlConfig {
     worker: WorkerInfo,
-    controller: ControllerInfo,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -79,7 +78,7 @@ impl SchedulerCore {
         worker_manager: Arc<crate::worker_manager::WorkerManager>,
     ) -> Result<Self> {
         debug!("Initializing scheduler core");
-        debug!("  Poll interval: {}s", config.poll_interval_seconds);
+        debug!("  Poll interval: {}ms", config.poll_interval_ms);
         debug!("  Max concurrent jobs: {}", config.max_concurrent_jobs);
         debug!("  Default timeout: {}s", config.default_timeout_seconds);
 
@@ -195,7 +194,7 @@ impl SchedulerCore {
     /// Main scheduling loop
     /// Runs continuously until process exits
     pub async fn run(self: Arc<Self>) {
-        debug!("Scheduler core started (poll interval: {}s)", self.config.poll_interval_seconds);
+        debug!("Scheduler core started (poll interval: {}ms)", self.config.poll_interval_ms);
         debug!("Worker pool loaded: {} workers", self.pool.total_count().await);
         info!("Ready to accept jobs");
 
@@ -212,9 +211,9 @@ impl SchedulerCore {
             debug!("Poll iteration - available workers: {}", available_workers.len());
 
             if available_workers.is_empty() {
-                debug!("No available workers, sleeping {}s", self.config.poll_interval_seconds);
+                debug!("No available workers, sleeping {}ms", self.config.poll_interval_ms);
                 // No workers available, wait and retry
-                sleep(Duration::from_secs(self.config.poll_interval_seconds)).await;
+                sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
                 continue;
             }
 
@@ -222,9 +221,9 @@ impl SchedulerCore {
             let running_count = self.queue.running_count();
             debug!("Running jobs: {} / {} max", running_count, self.config.max_concurrent_jobs);
             if running_count >= self.config.max_concurrent_jobs {
-                debug!("Max concurrent jobs reached, sleeping {}s", self.config.poll_interval_seconds);
+                debug!("Max concurrent jobs reached, sleeping {}ms", self.config.poll_interval_ms);
                 // Already at max concurrent jobs
-                sleep(Duration::from_secs(self.config.poll_interval_seconds)).await;
+                sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
                 continue;
             }
 
@@ -235,9 +234,9 @@ impl SchedulerCore {
                     job
                 }
                 None => {
-                    debug!("No queued jobs, sleeping {}s", self.config.poll_interval_seconds);
+                    debug!("No queued jobs, sleeping {}ms", self.config.poll_interval_ms);
                     // No jobs in queue
-                    sleep(Duration::from_secs(self.config.poll_interval_seconds)).await;
+                    sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
                     continue;
                 }
             };
@@ -260,7 +259,7 @@ impl SchedulerCore {
             });
 
             // 6. Wait before checking for next job
-            sleep(Duration::from_secs(self.config.poll_interval_seconds)).await;
+            sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
         }
     }
 
