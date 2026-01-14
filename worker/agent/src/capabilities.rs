@@ -153,7 +153,7 @@ async fn check_rededr_available() -> bool {
         .build()
         .unwrap();
 
-    match client.get("http://localhost:8081/api/health").send().await {
+    match client.get("http://localhost:8081/api/stats").send().await {
         Ok(response) if response.status().is_success() => {
             debug!("RedEDR detected at localhost:8081");
             true
