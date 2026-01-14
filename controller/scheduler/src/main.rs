@@ -417,8 +417,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let mut counts = telemetry_counts_for_loop.write().await;
                                 *counts.entry(run_id.clone()).or_insert(0) += events_count as i32;
                                 debug!(
-                                    "Cached telemetry count for run {}: {} events (cumulative)",
-                                    run_id, counts[&run_id]
+                                    "[TELEMETRY-CACHE-STORE] run_id='{}' events={} cumulative={}",
+                                    run_id, events_count, counts[&run_id]
                                 );
                             }
 
@@ -489,9 +489,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             };
 
                             debug!(
-                                "[WORKER-EVENT] Worker {} completed job {} - Success: {}, Exit code: {} [run_id: {}]",
-                                worker_id, job_id, success, exit_code, run_id
+                                "[WORKER-EVENT] Worker {} completed job {} - Success: {}, Exit code: {}",
+                                worker_id, job_id, success, exit_code
                             );
+                            debug!("[SAMPLE-RESPONSE] run_id='{}' job_id='{}'", run_id, job_id);
                             debug!("Output preview: {}", output_preview);
 
                             // Route response to waiting round_processor (via channel)
@@ -580,7 +581,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // Look up actual telemetry count from cache (populated when TelemetryBatch arrived)
                                 let telemetry_count = {
                                     let counts = telemetry_counts_clone.read().await;
-                                    counts.get(&run_id).copied().unwrap_or(0)
+                                    let count = counts.get(&run_id).copied().unwrap_or(0);
+                                    debug!(
+                                        "[TELEMETRY-CACHE-LOOKUP] run_id='{}' found={} count={}",
+                                        run_id, counts.contains_key(&run_id), count
+                                    );
+                                    count
                                 };
 
                                 // Clean up cache entry (no longer needed after indexing)

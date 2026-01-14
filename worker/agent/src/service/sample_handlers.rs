@@ -1226,6 +1226,9 @@ pub async fn run_sample(
                     telemetry_count
                 );
 
+                debug!("[WORKER-TELEMETRY-SEND] run_id='{}' job_id='{}' events={}",
+                    run_id, job_id, telemetry_count);
+
                 // Create TelemetryBatch message
                 let telemetry_batch = crate::automutate::common::TelemetryBatch {
                     job_id: job_id.clone(),
@@ -1305,6 +1308,8 @@ pub async fn run_sample(
 
         //TODO needed for lock
         //collector.release_lock().await.expect("Error");
+
+        debug!("[WORKER-RESPONSE] Creating SampleResponse with run_id='{}' (will be overwritten by stream_handler)", run_id);
 
         // 11. Return response
         Ok(Response::new(SampleResponse {
