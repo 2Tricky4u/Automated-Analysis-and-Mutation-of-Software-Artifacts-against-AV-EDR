@@ -203,15 +203,15 @@ impl SchedulerCore {
             // DISABLED: Legacy health checks replaced by bidirectional stream heartbeats
             // self.pool.check_worker_health().await;
 
-            debug!("=== Poll iteration starting ===");
+            //debug!("=== Poll iteration starting ===");
 
             // 2. Check for available workers
-            debug!("About to call get_available_workers()...");
+            //debug!("About to call get_available_workers()...");
             let available_workers = self.pool.get_available_workers().await;
-            debug!("Poll iteration - available workers: {}", available_workers.len());
+            //debug!("Poll iteration - available workers: {}", available_workers.len());
 
             if available_workers.is_empty() {
-                debug!("No available workers, sleeping {}ms", self.config.poll_interval_ms);
+                //debug!("No available workers, sleeping {}ms", self.config.poll_interval_ms);
                 // No workers available, wait and retry
                 sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
                 continue;
@@ -219,7 +219,7 @@ impl SchedulerCore {
 
             // 3. Check if we can run more jobs
             let running_count = self.queue.running_count();
-            debug!("Running jobs: {} / {} max", running_count, self.config.max_concurrent_jobs);
+            //debug!("Running jobs: {} / {} max", running_count, self.config.max_concurrent_jobs);
             if running_count >= self.config.max_concurrent_jobs {
                 debug!("Max concurrent jobs reached, sleeping {}ms", self.config.poll_interval_ms);
                 // Already at max concurrent jobs
@@ -234,7 +234,7 @@ impl SchedulerCore {
                     job
                 }
                 None => {
-                    debug!("No queued jobs, sleeping {}ms", self.config.poll_interval_ms);
+                    //debug!("No queued jobs, sleeping {}ms", self.config.poll_interval_ms);
                     // No jobs in queue
                     sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
                     continue;
