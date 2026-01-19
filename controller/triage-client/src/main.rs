@@ -1,19 +1,19 @@
 use tonic::Request;
 use tracing::info;
 
-pub mod edr {
+pub mod automutate {
     pub mod common {
-        tonic::include_proto!("edr.common");
+        tonic::include_proto!("automutate.common");
     }
     pub mod controller {
-        tonic::include_proto!("edr.controller");
+        tonic::include_proto!("automutate.controller");
     }
     pub mod worker {
-        tonic::include_proto!("edr.worker");
+        tonic::include_proto!("automutate.worker");
     }
 }
 
-use edr::controller::{TriageRequest, controller_client::ControllerClient};
+use automutate::controller::{TriageRequest, controller_client::ControllerClient};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

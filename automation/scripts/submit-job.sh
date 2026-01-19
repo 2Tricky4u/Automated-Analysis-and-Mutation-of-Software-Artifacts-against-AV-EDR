@@ -6,6 +6,7 @@ set -e
 
 # Default values
 CONTROLLER_ADDRESS="${CONTROLLER_ADDRESS:-10.200.200.1:50051}"
+# CONTROLLER_ADDRESS="${CONTROLLER_ADDRESS:-localhost:50051}"
 TEMPLATE=""
 SOURCE=""
 MUTATIONS=""
@@ -109,11 +110,10 @@ RESPONSE=$(grpcurl -plaintext \
         \"name\": \"$NAME\",
         \"artifact_type\": \"$TEMPLATE\",
         \"source\": \"$SOURCE\",
-        \"mutation_strategies\": $MUTATION_ARRAY,
         \"priority\": $PRIORITY
     }" \
     "$CONTROLLER_ADDRESS" \
-    edr.controller.Controller/ScheduleJob)
+    automutate.controller.Controller/ScheduleJob)
 
 # Parse response
 JOB_ID=$(echo "$RESPONSE" | jq -r '.jobId.value // empty')

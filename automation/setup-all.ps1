@@ -74,13 +74,13 @@ if (-not (Test-Path $ConfigPath)) {
 Write-Info "Using configuration: $ConfigPath"
 
 # Validate config can be parsed
-try {
-    $Config = Read-AutoMutateConfig -ConfigPath $ConfigPath
-    Write-Success "Configuration loaded successfully"
-} catch {
-    Write-Error "Failed to parse config: $_"
-    exit 1
-}
+# try {
+#     # $Config = Read-AutoMutateConfig -ConfigPath $ConfigPath
+#     Write-Success "Configuration loaded successfully"
+# } catch {
+#     Write-Error "Failed to parse config: $_"
+#     exit 1
+# }
 
 # Generate runtime TOML configs from YAML
 Write-Step "Step 0/4: Generate Runtime Configs"

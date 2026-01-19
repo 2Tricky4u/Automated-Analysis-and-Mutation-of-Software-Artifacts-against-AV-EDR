@@ -1,9 +1,9 @@
 // Job structure and state machine for scheduler queue system
 // Phase 1: Basic implementation with in-memory storage
 
+use crate::round::RoundSummary;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
-use crate::round::RoundSummary;
 
 /// Job status for iterative mutation loop
 /// Queued -> Running -> Completed/Failed/Stopped
@@ -77,10 +77,10 @@ pub struct Job {
     pub max_rounds: u32,
 
     /// Stop condition: evasion goal
-    pub stop_on_evasion: bool,  // If true, stop when not_detected
+    pub stop_on_evasion: bool, // If true, stop when not_detected
 
     /// Stop condition: detection goal (for testing)
-    pub stop_on_detection: bool,  // If true, stop when detected
+    pub stop_on_detection: bool, // If true, stop when detected
 
     /// History of completed rounds
     pub rounds: Vec<RoundSummary>,
@@ -116,7 +116,7 @@ impl Job {
         mutations: Vec<MutationSpec>,
         trace_mode: String,
         priority: i32,
-        max_rounds: u32,  // NEW parameter
+        max_rounds: u32, // NEW parameter
     ) -> Self {
         Job {
             id,
@@ -125,13 +125,13 @@ impl Job {
             source_file,
             mutations,
             trace_mode,
-            target_os: None,  // Will be assigned by scheduler
+            target_os: None, // Will be assigned by scheduler
             priority,
-            current_round: 0,           // NEW
-            max_rounds,                  // NEW
-            stop_on_evasion: false,      // NEW
-            stop_on_detection: false,    // NEW
-            rounds: Vec::new(),          // NEW
+            current_round: 0,         // NEW
+            max_rounds,               // NEW
+            stop_on_evasion: false,   // NEW
+            stop_on_detection: false, // NEW
+            rounds: Vec::new(),       // NEW
             worker_id: None,
             artifact_id: None,
             run_id: None,
@@ -223,96 +223,9 @@ impl Job {
 
     /// Get elapsed time since job creation
     pub fn elapsed_seconds(&self) -> u64 {
-        self.created_at
-            .elapsed()
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
+        self.created_at.elapsed().map(|d| d.as_secs()).unwrap_or(0)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_job_creation() {
-        let job = Job::new(
-            "job-000001".to_string(),
-            "rwx_direct".to_string(),
-            "rwx_direct.c".to_string(),
-            vec![],
-            "api+bb".to_string(),
-            0,
-            10,  // max_rounds
-        );
-
-        assert_eq!(job.id, "job-000001");
-        assert_eq!(job.status, JobStatus::Queued);
-        assert_eq!(job.priority, 0);
-        assert_eq!(job.current_round, 0);
-        assert_eq!(job.max_rounds, 10);
-        assert!(job.worker_id.is_none());
-        assert!(job.rounds.is_empty());
-    }
-
-    #[test]
-    fn test_job_state_transitions() {
-        let mut job = Job::new(
-            "job-000001".to_string(),
-            "test".to_string(),
-            "test.c".to_string(),
-            vec![],
-            "api+bb".to_string(),
-            0,
-            10,  // max_rounds
-        );
-
-        // Queued -> Running
-        job.start_running();
-        assert_eq!(job.status, JobStatus::Running);
-        assert!(job.started_at.is_some());
-
-        // Running -> Completed
-        job.mark_completed();
-        assert_eq!(job.status, JobStatus::Completed);
-        assert!(job.is_terminal());
-    }
-
-    #[test]
-    fn test_job_failure() {
-        let mut job = Job::new(
-            "job-000001".to_string(),
-            "test".to_string(),
-            "test.c".to_string(),
-            vec![],
-            "api+bb".to_string(),
-            0,
-            10,  // max_rounds
-        );
-
-        job.mark_failed("Build error".to_string());
-        assert_eq!(job.status, JobStatus::Failed);
-        assert_eq!(job.error, Some("Build error".to_string()));
-        assert!(job.is_terminal());
-    }
-
-    #[test]
-    fn test_should_continue_max_rounds() {
-        let mut job = Job::new(
-            "job-000001".to_string(),
-            "test".to_string(),
-            "test.c".to_string(),
-            vec![],
-            "api+bb".to_string(),
-            0,
-            5,  // max_rounds
-        );
-
-        // Should continue when current_round < max_rounds
-        assert!(job.should_continue());
-
-        // Should not continue when reaching max_rounds
-        job.current_round = 5;
-        assert!(!job.should_continue());
-    }
-}
+mod tests;

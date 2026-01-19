@@ -10,19 +10,19 @@
 use tonic::{Request, Response, Status, transport::Server};
 use tracing::info;
 
-pub mod edr {
+pub mod automutate {
     pub mod common {
-        tonic::include_proto!("edr.common");
+        tonic::include_proto!("automutate.common");
     }
     pub mod controller {
-        tonic::include_proto!("edr.controller");
+        tonic::include_proto!("automutate.controller");
     }
     pub mod worker {
-        tonic::include_proto!("edr.worker");
+        tonic::include_proto!("automutate.worker");
     }
 }
 
-use edr::controller::{
+use automutate::controller::{
     AnalysisRequest, AnalysisResponse, AvoidListRequest, AvoidListResponse,
     triage_server::{Triage, TriageServer},
 };

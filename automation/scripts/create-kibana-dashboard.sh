@@ -79,7 +79,7 @@ curl -X POST "$KIBANA_URL/api/saved_objects/search/coverage-events-search" \
 
 echo "[+] Saved search created: Coverage Events"
 
-# Run results - uses exact fields per schema (lines 198-209)
+# Run results - uses actual controller fields (from main.rs:565-578)
 echo "[*] Creating saved search: Run Results"
 curl -X POST "$KIBANA_URL/api/saved_objects/search/run-results-search" \
     -H 'kbn-xsrf: true' \
@@ -87,8 +87,8 @@ curl -X POST "$KIBANA_URL/api/saved_objects/search/run-results-search" \
     -d '{
         "attributes": {
             "title": "Run Results",
-            "description": "Final execution outcomes (status: success|error|timeout)",
-            "columns": ["run_id", "job_id", "status", "elapsed_seconds", "artifact_name", "worker_id", "timestamp"],
+            "description": "Final execution outcomes (index: runs-YYYY.MM, fields: run_id, job_id, status, elapsed_seconds, artifact_name, worker_id, exit_code, telemetry_events_count, timestamp)",
+            "columns": ["timestamp", "run_id", "job_id", "status", "exit_code", "elapsed_seconds", "artifact_name", "worker_id", "telemetry_events_count"],
             "sort": [["timestamp", "desc"]],
             "kibanaSavedObjectMeta": {
                 "searchSourceJSON": "{\"index\":\"runs-star\",\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"
@@ -171,7 +171,7 @@ echo "  ✓ telemetry-* (time: indexed_at) → telemetry-YYYY.MM.DD indices"
 echo "  ✓ runs-* (time: timestamp) → runs-YYYY.MM indices"
 echo ""
 echo "=== Data Tables ==="
-echo "  ✓ Run Results: run_id, job_id, status, elapsed_seconds, artifact_name, worker_id"
+echo "  ✓ Run Results: timestamp, run_id, job_id, status, exit_code, elapsed_seconds, artifact_name, worker_id, telemetry_events_count"
 echo "  ✓ Coverage Events: job_id, event_type, payload_total_bbs, indexed_at"
 echo "  ✓ All Telemetry: job_id, event_type, timestamp, indexed_at"
 echo ""
@@ -190,18 +190,19 @@ echo "    - payload_bb_ids (array): For event_type=coverage"
 echo "    - payload_hit_counts (array): For event_type=coverage"
 echo "    - payload_seq, payload_file, payload_line (for event_type=trace)"
 echo ""
-echo "  Runs fields:"
-echo "    - run_id (keyword, document ID)"
-echo "    - job_id (keyword)"
+echo "  Runs fields (controller/scheduler/src/main.rs:565-578):"
+echo "    - run_id (keyword): Unique execution identifier"
+echo "    - job_id (keyword): Job identifier (e.g., job-000001/round-1/baseline)"
 echo "    - status (keyword): 'success', 'error', 'timeout'"
-echo "    - elapsed_seconds (integer)"
-echo "    - artifact_name (keyword)"
-echo "    - worker_id (keyword)"
-echo "    - worker_ip (ip)"
-echo "    - pid (integer)"
-echo "    - telemetry_events_count (integer)"
-echo "    - details (text)"
-echo "    - timestamp (date): When indexed"
+echo "    - elapsed_seconds (integer): Execution duration"
+echo "    - artifact_name (keyword): 'baseline' or 'instrumented'"
+echo "    - worker_id (keyword): Worker that executed the run"
+echo "    - worker_ip (ip): Worker IP address"
+echo "    - exit_code (integer): Process exit code"
+echo "    - telemetry_events_count (integer): Number of telemetry events collected"
+echo "    - output (text): Execution output/error message"
+echo "    - telemetry_ids (array): References to telemetry data"
+echo "    - timestamp (date): When indexed (RFC3339)"
 echo ""
 echo "=== Quick Filters (use in dashboard) ==="
 echo "  job_id.keyword: \"job-000001\"          # Filter to specific job"

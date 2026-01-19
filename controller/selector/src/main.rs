@@ -13,23 +13,23 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use rand::Rng;
 
-pub mod edr {
+pub mod automutate {
     pub mod common {
-        tonic::include_proto!("edr.common");
+        tonic::include_proto!("automutate.common");
     }
     pub mod controller {
-        tonic::include_proto!("edr.controller");
+        tonic::include_proto!("automutate.controller");
     }
     pub mod worker {
-        tonic::include_proto!("edr.worker");
+        tonic::include_proto!("automutate.worker");
     }
 }
 
-use edr::controller::{
+use automutate::controller::{
     OutcomeAck, OutcomeReport, SelectionRequest, SelectionResponse,
     selector_server::{Selector, SelectorServer},
 };
-use edr::common::Mutation;
+use automutate::common::Mutation;
 
 /// Mutation pool with predefined mutation strategies
 #[derive(Debug, Clone)]

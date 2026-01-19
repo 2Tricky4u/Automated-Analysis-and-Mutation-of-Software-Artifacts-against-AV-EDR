@@ -10,14 +10,7 @@ network:
   dns: "10.200.200.1"
   enable_nat: "true"
 
-  # External network support (VPN/RPC machines)
-  allow_external: false          # Set to true to enable VPN connectivity
-  vpn_gateway: ""                # VPN gateway IP (e.g., "10.0.0.1")
-  external_dns: "8.8.8.8"        # DNS for external resolution
-
-  # Optional: Bridge to existing network instead of isolated switch
-  # bridge_adapter: ""           # Name of host network adapter to bridge
-  # bridge_mode: false           # Set to true to use bridge instead of NAT
+listen_port: 50052
 
 # Controller configuration (runs in WSL2)
 controller:
@@ -25,59 +18,14 @@ controller:
   grpc_port: 50051
   elasticsearch_port: 9200
   kibana_port: 5601
-  triage_port: 8080
 
-  # Runtime settings (used to generate controller.toml)
-  max_connections: 100
-  request_timeout_secs: 300
-
-  # Triage configuration
-  triage:
-    model_type: "forest"
-    confidence_threshold: 0.7
-    min_support_count: 10
-    max_hypotheses: 10
-    feature_importance_method: "shap"
-
-  # Mutator configuration
-  mutator:
-    max_mutations_per_artifact: 5
-    selector_weights:
-      coverage: 1.5
-      evasion: 3.0
-      similarity: 0.5
-    probabilities:
-      ast_transform: 0.7
-      binary_transform: 0.5
-      behavioral_transform: 0.6
 
   # Scheduler configuration
   scheduler:
-    queue_capacity: 1000
     max_concurrent_runs_per_worker: 1
     run_timeout_secs: 300
-    max_retries: 3
-    retry_backoff_secs: 30
-
-  # Corpus configuration
-  corpus:
-    storage_path: "/var/lib/automutate/corpus"
-    max_size: 10000
-    prioritization: "hybrid"
-    novelty_threshold: 0.1
-
-  # Telemetry configuration
-  telemetry:
-    collection_interval_ms: 100
-    api_tracing_enabled: true
-    bb_coverage_enabled: true
-    line_tracing_enabled: false
-
-  # Differential analysis
-  differential:
-    enabled: true
-    lift_threshold: 1.2
-    min_confidence: 0.5
+    poll_interval_ms: 500
+    health_timeout_seconds: 30
 
 # Elasticsearch configuration
 elasticsearch:
@@ -98,31 +46,6 @@ workers:
     memory_gb: 4
     disk_gb: 64
 
-    # Runtime settings (used to generate worker.toml)
-    harness:
-      working_directory: "C:\\AutoMutate\\runs"
-      execution_timeout_secs: 120
-      cleanup_enabled: true
-      sandbox_enabled: true
-      sandbox_low_integrity: true
-      sandbox_job_object: true
-      monitor_children: true
-      max_child_depth: 3
-
-    telemetry:
-      stream_buffer_size: 10000
-      flush_interval_ms: 1000
-      etw_enabled: true
-      etw_buffer_size_kb: 1024
-      api_tracing_enabled: true
-      bb_coverage_enabled: true
-      line_tracing_enabled: false
-
-    build:
-      rust_toolchain: "stable"
-      default_trace_mode: "api+bb"
-      optimization_level: "2"
-
   # Windows 11 template
   windows11:
     count: 0                    # Number of Windows 11 VMs to create
@@ -134,120 +57,49 @@ workers:
     memory_gb: 6
     disk_gb: 80
 
-    # Runtime settings (same as win10 for now)
-    harness:
-      working_directory: "C:\\AutoMutate\\runs"
-      execution_timeout_secs: 120
-      cleanup_enabled: true
-      sandbox_enabled: true
-      sandbox_low_integrity: true
-      sandbox_job_object: true
-      monitor_children: true
-      max_child_depth: 3
-
-    telemetry:
-      stream_buffer_size: 10000
-      flush_interval_ms: 1000
-      etw_enabled: true
-      etw_buffer_size_kb: 1024
-      api_tracing_enabled: true
-      bb_coverage_enabled: true
-      line_tracing_enabled: false
-
-    build:
-      rust_toolchain: "stable"
-      default_trace_mode: "api+bb"
-      optimization_level: "2"
-
 # VM storage paths
 storage:
   vhd_root: "C:\\HyperV\\VHDs"
   iso_root: "C:\\ISOs"
   backup_root: "D:\\Backups\\AutoMutate"
 
-# Rust toolchain configuration
-rust:
-  stable_version: "1.75.0"
-  nightly_date: "2024-01-15"
-  components:
-    - "llvm-tools-preview"
-    - "rust-src"
-
-# Protobuf configuration
-protobuf:
-  version: "25.1"
-
 # RedEDR configuration (deployed to workers)
 rededr:
-  version: "latest"
   api_port: 8081
-  data_dir: "C:\\RedEDR\\Data"
-  enable_etw: true
-  enable_etwti: true
-  enable_kernel: true
-  enable_dll: true
-
-# Security settings
-security:
-  disable_enhanced_session: true
-  disable_guest_services: true
-  enable_vm_isolation: false       # Set to true to prevent VM-to-VM communication by default
-  enable_egress_filter: false      # Set to true to whitelist-only egress traffic (DNS, HTTP, HTTPS, NTP)
-  enable_mtls: false               # Set to true for production/VPN
-  mtls_ca_path: "./certs/ca.crt"
-  mtls_cert_path: "./certs/client.crt"
-  mtls_key_path: "./certs/client.key"
 
 # External telemetry destinations (Cortex, MDE, etc.)
-external_telemetry:
-  # Cortex (Prometheus-compatible TSDB)
-  cortex:
-    enabled: false
-    endpoint: ""                # e.g., "https://cortex.vpn:9009/write"
-    bearer_token: ""            # API token for authentication
-    # OR use mTLS:
-    use_mtls: false
-    tls_cert_path: ""           # e.g., "./certs/cortex-client.crt"
-    tls_key_path: ""            # e.g., "./certs/cortex-client.key"
-    tls_ca_path: ""             # e.g., "./certs/cortex-ca.crt"
-    batch_size: 1000            # Events per batch
-    flush_interval_secs: 10     # Max time before flush
-
-  # Microsoft Defender for Endpoint (MDE)
-  mde:
-    enabled: false
-    endpoint: ""                # e.g., "https://api.securitycenter.microsoft.com"
-    tenant_id: ""               # Azure AD tenant ID
-    client_id: ""               # App registration client ID
-    client_secret: ""           # App registration secret
-    # OR use certificate auth:
-    use_cert_auth: false
-    cert_path: ""               # e.g., "./certs/mde-client.pfx"
-    cert_password: ""
-    batch_size: 100             # Events per batch
-    flush_interval_secs: 30
-
-  # Generic HTTP endpoint (for custom collectors)
-  custom_http:
-    enabled: false
-    endpoint: ""                # e.g., "https://custom-collector.vpn:8443/events"
-    method: "POST"              # HTTP method
-    headers:                    # Custom headers
-      Content-Type: "application/json"
-      # Authorization: "Bearer YOUR_TOKEN"
-    batch_size: 500
-    flush_interval_secs: 15
+#external_telemetry:
+#  # Cortex (Prometheus-compatible TSDB)
+#  cortex:
+#    enabled: false
+#    endpoint: ""                # e.g., "https://cortex.vpn:9009/write"
+#    bearer_token: ""            # API token for authentication
+#    # OR use mTLS:
+#    use_mtls: false
+#    tls_cert_path: ""           # e.g., "./certs/cortex-client.crt"
+#    tls_key_path: ""            # e.g., "./certs/cortex-client.key"
+#    tls_ca_path: ""             # e.g., "./certs/cortex-ca.crt"
+#    batch_size: 1000            # Events per batch
+#    flush_interval_secs: 10     # Max time before flush
+#
+#  # Microsoft Defender for Endpoint (MDE)
+#  mde:
+#    enabled: false
+#    endpoint: ""                # e.g., "https://api.securitycenter.microsoft.com"
+#    tenant_id: ""               # Azure AD tenant ID
+#    client_id: ""               # App registration client ID
+#    client_secret: ""           # App registration secret
+#    # OR use certificate auth:
+#    use_cert_auth: false
+#    cert_path: ""               # e.g., "./certs/mde-client.pfx"
+#    cert_password: ""
+#    batch_size: 100             # Events per batch
+#    flush_interval_secs: 30
 
 # Logging
 logging:
   level: "INFO"  # DEBUG, INFO, WARN, ERROR
-  log_dir: "./logs"
-  max_log_size_mb: 100
-  max_log_files: 10
 
-# Advanced settings
-advanced:
-  enable_unattended_install: false  # Requires autounattend.xml
-  enable_snapshot_compression: true
-  parallel_vm_creation: 3  # Max workers to create in parallel
-  checkpoint_retention_days: 30
+security:
+  enable_vm_isolation: false
+  enable_egress_filter: false

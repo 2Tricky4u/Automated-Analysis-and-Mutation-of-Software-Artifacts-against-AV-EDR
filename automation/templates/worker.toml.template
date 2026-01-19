@@ -6,116 +6,15 @@
 worker_id = "{{WORKER_ID}}"
 ip_address = "{{WORKER_IP}}"
 os_version = "{{WORKER_OS_VERSION}}"
-
-[controller]
-controller_address = "{{NETWORK_HOST_IP}}:{{CONTROLLER_GRPC_PORT}}"
-connect_timeout_secs = 30
-request_timeout_secs = 300
-keepalive_interval_secs = 30
-tls_enabled = false
-
-[harness]
-working_directory = "{{HARNESS_WORKING_DIRECTORY}}"
-execution_timeout_secs = {{HARNESS_EXECUTION_TIMEOUT_SECS}}
-cleanup_enabled = {{HARNESS_CLEANUP_ENABLED}}
-sandbox_enabled = {{HARNESS_SANDBOX_ENABLED}}
-sandbox_low_integrity = {{HARNESS_SANDBOX_LOW_INTEGRITY}}
-sandbox_job_object = {{HARNESS_SANDBOX_JOB_OBJECT}}
-monitor_children = {{HARNESS_MONITOR_CHILDREN}}
-max_child_depth = {{HARNESS_MAX_CHILD_DEPTH}}
-
-[telemetry]
-stream_buffer_size = {{TELEMETRY_STREAM_BUFFER_SIZE}}
-flush_interval_ms = {{TELEMETRY_FLUSH_INTERVAL_MS}}
-
-[telemetry.etw]
-enabled = {{TELEMETRY_ETW_ENABLED}}
-buffer_size_kb = {{TELEMETRY_ETW_BUFFER_SIZE_KB}}
-lost_event_threshold = 100
-providers = [
-    "Microsoft-Windows-Kernel-Process",
-    "Microsoft-Windows-Kernel-File",
-    "Microsoft-Windows-Kernel-Network",
-    "Microsoft-Windows-Threat-Intelligence"
-]
-
-[telemetry.eventlog]
-enabled = true
-channels = [
-    "Security",
-    "System",
-    "Application",
-    "Microsoft-Windows-Windows Defender/Operational"
-]
-
-[telemetry.defender]
-enabled = {{REDEDR_ENABLE_ETW}}
-alert_polling_interval_ms = 500
-scan_timeout_secs = 60
+listen_port = {{WORKER_LISTEN_PORT}}
 
 [telemetry.rededr]
-enabled = {{REDEDR_ENABLE_ETW}}
 base_url = "http://localhost:{{REDEDR_API_PORT}}"
-data_path = "{{REDEDR_DATA_DIR}}"
-file_watch_enabled = true
-
-[telemetry.api_tracing]
-enabled = {{TELEMETRY_API_TRACING_ENABLED}}
-per_thread = true
-output_format = "newline-json"
-output_path = "C:\\AutoMutate\\traces"
-
-[telemetry.bb_coverage]
-enabled = {{TELEMETRY_BB_COVERAGE_ENABLED}}
-bitmap_size = 65536
-output_path = "C:\\AutoMutate\\coverage"
-
-[telemetry.line_tracing]
-enabled = {{TELEMETRY_LINE_TRACING_ENABLED}}
-mode = "off"
-output_path = "C:\\AutoMutate\\lines"
-
-[telemetry.last_seen]
-enabled = true
-ring_buffer_size = 100
-flush_on_abnormal_exit = true
-
-[build]
-rust_toolchain = "{{BUILD_RUST_TOOLCHAIN}}"
-llvm_version = "17"
-default_trace_mode = "{{BUILD_DEFAULT_TRACE_MODE}}"
-optimization_level = "{{BUILD_OPTIMIZATION_LEVEL}}"
-debug_info = false
-strip_symbols = true
 
 [storage]
 artifacts_path = "C:\\AutoMutate\\artifacts"
 results_path = "C:\\AutoMutate\\results"
 logs_path = "C:\\AutoMutate\\logs"
-max_artifact_age_days = 7
-max_log_age_days = 30
-max_storage_gb = 50
 
 [logging]
 level = "{{LOGGING_LEVEL}}"
-format = "json"
-file_enabled = false
-file_path = "C:\\AutoMutate\\logs\\worker.log"
-file_rotation = "daily"
-file_retention_days = 14
-
-[health]
-health_check_interval_secs = 60
-max_cpu_percent = 90
-max_memory_percent = 80
-max_disk_percent = 90
-auto_revert_on_hang = true
-hang_detection_timeout_secs = 600
-
-[security]
-disable_network = false
-block_internet = true
-allow_controller_only = true
-verify_dep = true
-verify_aslr = true
-verify_cfg = false

@@ -14,43 +14,38 @@ fn main() {
             println!("Configuration Summary:");
             println!("  Server:");
             println!("    - Bind address: {}", config.server.bind_address);
-            println!("    - Max connections: {}", config.server.max_connections);
-            println!("    - TLS enabled: {}", config.server.tls_enabled);
-            println!("    - mTLS required: {}", config.server.require_client_cert);
 
             println!("\n  Elasticsearch:");
             println!("    - URL: {}", config.elasticsearch.url);
-            println!("    - Index prefix: {}", config.elasticsearch.index_prefix);
-            println!("    - ETW index: {}", config.elasticsearch.etw_index);
-            println!("    - RedEDR index: {}", config.elasticsearch.rededr_index);
+            //println!("    - RedEDR index: {}", config.elasticsearch.rededr_index);
 
-            println!("\n  Triage:");
-            println!("    - Model type: {}", config.triage.model_type);
-            println!(
-                "    - Confidence threshold: {}",
-                config.triage.confidence_threshold
-            );
-
-            println!("\n  Mutator:");
-            println!(
-                "    - Max mutations per artifact: {}",
-                config.mutator.max_mutations_per_artifact
-            );
-            println!(
-                "    - Selector weights: {:?}",
-                config.mutator.selector_weights
-            );
-
-            println!("\n  Telemetry:");
-            println!("    - RedEDR enabled: {}", config.telemetry.rededr_enabled);
-            println!(
-                "    - API tracing enabled: {}",
-                config.telemetry.api_tracing_enabled
-            );
-            println!(
-                "    - BB coverage enabled: {}",
-                config.telemetry.bb_coverage_enabled
-            );
+            //println!("\n  Triage:");
+            //println!("    - Model type: {}", config.triage.model_type);
+            //println!(
+            //    "    - Confidence threshold: {}",
+            //    config.triage.confidence_threshold
+            //);
+//
+            //println!("\n  Mutator:");
+            //println!(
+            //    "    - Max mutations per artifact: {}",
+            //    config.mutator.max_mutations_per_artifact
+            //);
+            //println!(
+            //    "    - Selector weights: {:?}",
+            //    config.mutator.selector_weights
+            //);
+//
+            //println!("\n  Telemetry:");
+            //println!("    - RedEDR enabled: {}", config.telemetry.rededr_enabled);
+            //println!(
+            //    "    - API tracing enabled: {}",
+            //    config.telemetry.api_tracing_enabled
+            //);
+            //println!(
+            //    "    - BB coverage enabled: {}",
+            //    config.telemetry.bb_coverage_enabled
+            //);
 
             println!("\n[OK] All checks passed!");
             std::process::exit(0);

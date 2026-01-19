@@ -3,8 +3,8 @@
 // Phase 2: Will upgrade to BinaryHeap for priority scheduling
 
 use crate::job::{Job, JobStatus};
-use std::sync::{Arc, Mutex};
 use anyhow::{Result, anyhow};
+use std::sync::{Arc, Mutex};
 
 /// Job queue that manages pending and active jobs
 /// Phase 1: Simple FIFO queue using Vec
@@ -79,7 +79,10 @@ impl JobQueue {
 
         // Find first queued job (FIFO)
         // Phase 2: Will use BinaryHeap for priority ordering
-        let position = state.jobs.iter().position(|j| j.status == JobStatus::Queued)?;
+        let position = state
+            .jobs
+            .iter()
+            .position(|j| j.status == JobStatus::Queued)?;
 
         Some(state.jobs[position].clone())
     }
@@ -123,13 +126,21 @@ impl JobQueue {
     /// Get count of queued jobs
     pub fn queued_count(&self) -> usize {
         let state = self.state.lock().unwrap();
-        state.jobs.iter().filter(|j| j.status == JobStatus::Queued).count()
+        state
+            .jobs
+            .iter()
+            .filter(|j| j.status == JobStatus::Queued)
+            .count()
     }
 
     /// Get count of running jobs
     pub fn running_count(&self) -> usize {
         let state = self.state.lock().unwrap();
-        state.jobs.iter().filter(|j| j.status == JobStatus::Running).count()
+        state
+            .jobs
+            .iter()
+            .filter(|j| j.status == JobStatus::Running)
+            .count()
     }
 
     /// Get count of completed jobs (completed + failed + timeout)
@@ -152,94 +163,4 @@ impl Default for JobQueue {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_queue_submit() {
-        let queue = JobQueue::new();
-
-        let job_id = queue
-            .submit_job(
-                "test".to_string(),
-                "test.c".to_string(),
-                vec![],
-                "api+bb".to_string(),
-                0,
-                10,  // max_rounds
-                false,  // stop_on_evasion
-                false,  // stop_on_detection
-            )
-            .unwrap();
-
-        assert_eq!(job_id, "job-000001");
-        assert_eq!(queue.total_count(), 1);
-        assert_eq!(queue.queued_count(), 1);
-    }
-
-    #[test]
-    fn test_queue_pop_fifo() {
-        let queue = JobQueue::new();
-
-        // Submit 3 jobs
-        queue
-            .submit_job("test1".to_string(), "test1.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
-            .unwrap();
-        queue
-            .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
-            .unwrap();
-        queue
-            .submit_job("test3".to_string(), "test3.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
-            .unwrap();
-
-        // Pop should return first job (FIFO)
-        let job = queue.pop_next().unwrap();
-        assert_eq!(job.id, "job-000001");
-        assert_eq!(job.template_name, "test1");
-    }
-
-    #[test]
-    fn test_queue_update() {
-        let queue = JobQueue::new();
-
-        let job_id = queue
-            .submit_job("test".to_string(), "test.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
-            .unwrap();
-
-        let mut job = queue.get_job(&job_id).unwrap();
-        job.start_running();
-
-        queue.update_job(&job).unwrap();
-
-        let updated_job = queue.get_job(&job_id).unwrap();
-        assert_eq!(updated_job.status, JobStatus::Running);
-    }
-
-    #[test]
-    fn test_queue_filter() {
-        let queue = JobQueue::new();
-
-        // Submit jobs
-        let job_id1 = queue
-            .submit_job("test1".to_string(), "test1.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
-            .unwrap();
-        let job_id2 = queue
-            .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false)
-            .unwrap();
-
-        // Mark one as running
-        let mut job1 = queue.get_job(&job_id1).unwrap();
-        job1.start_running();
-        queue.update_job(&job1).unwrap();
-
-        // Filter queued
-        let queued = queue.list_jobs(Some(JobStatus::Queued));
-        assert_eq!(queued.len(), 1);
-        assert_eq!(queued[0].id, job_id2);
-
-        // Filter running
-        let running = queue.list_jobs(Some(JobStatus::Running));
-        assert_eq!(running.len(), 1);
-        assert_eq!(running[0].id, job_id1);
-    }
-}
+mod tests;

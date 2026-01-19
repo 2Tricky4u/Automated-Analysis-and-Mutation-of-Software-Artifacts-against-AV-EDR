@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // file descriptor set for reflection in OUT_DIR
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
-    let descriptor_path = out_dir.join("edr_descriptor.bin");
+    let descriptor_path = out_dir.join("automutate_descriptor.bin");
 
     tonic_prost_build::configure()
         .build_server(true)

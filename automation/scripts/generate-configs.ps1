@@ -185,6 +185,8 @@ $controllerValues = @{
     "SCHEDULER_QUEUE_CAPACITY" = $config.controller.scheduler.queue_capacity
     "SCHEDULER_MAX_CONCURRENT" = $config.controller.scheduler.max_concurrent_runs_per_worker
     "SCHEDULER_RUN_TIMEOUT_SECS" = $config.controller.scheduler.run_timeout_secs
+    "SCHEDULER_POLL_INTERVAL" = $config.controller.scheduler.poll_interval_ms
+    "SCHEDULER_HEALTH_TIMEOUT" = $config.controller.scheduler.health_timeout_seconds
     "SCHEDULER_MAX_RETRIES" = $config.controller.scheduler.max_retries
     "SCHEDULER_RETRY_BACKOFF_SECS" = $config.controller.scheduler.retry_backoff_secs
     "CORPUS_STORAGE_PATH" = $config.controller.corpus.storage_path
@@ -239,6 +241,7 @@ foreach ($osType in @('windows10', 'windows11')) {
             "WORKER_IP" = $workerIp
             "WORKER_OS_VERSION" = $osType
             "NETWORK_HOST_IP" = $config.network.host_ip
+            "WORKER_LISTEN_PORT" = $config.listen_port
             "CONTROLLER_GRPC_PORT" = $config.controller.grpc_port
             "HARNESS_WORKING_DIRECTORY" = $workerConfig.harness.working_directory
             "HARNESS_EXECUTION_TIMEOUT_SECS" = $workerConfig.harness.execution_timeout_secs

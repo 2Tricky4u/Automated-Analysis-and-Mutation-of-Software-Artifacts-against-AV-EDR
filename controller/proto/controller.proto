@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package edr.controller;
+package automutate.controller;
 
 import "common.proto";
 
@@ -22,7 +22,7 @@ service Controller {
   rpc QueryResults(QueryRequest) returns (QueryResponse);
 
   // Workers push telemetry data here (client-streaming)
-  rpc StreamTelemetry(stream edr.common.TelemetryData) returns (edr.common.TelemetryAck);
+  rpc StreamTelemetry(stream automutate.common.TelemetryData) returns (automutate.common.TelemetryAck);
 
   // Workers report execution status (lightweight heartbeat)
   rpc ReportStatus(StatusReport) returns (StatusAck);
@@ -47,16 +47,6 @@ service Controller {
 
   // NEW: Compare two runs (differential analysis)
   rpc CompareRuns(CompareRunsRequest) returns (CompareRunsResponse);
-
-  // ===== DYNAMIC WORKER REGISTRATION =====
-  // Register a worker dynamically (new worker or re-registration)
-  rpc RegisterWorker(WorkerRegistration) returns (RegistrationAck);
-
-  // Deregister a worker (graceful shutdown)
-  rpc DeregisterWorker(WorkerDeregistration) returns (DeregistrationAck);
-
-  // Update worker metadata at runtime
-  rpc UpdateWorkerMetadata(WorkerMetadataUpdate) returns (MetadataAck);
 }
 
 // Selector Service - mutation selection with feedback
@@ -106,7 +96,7 @@ message JobRequest {
 }
 
 message JobResponse {
-  edr.common.JobId job_id = 1;
+  automutate.common.JobId job_id = 1;
   bool accepted = 2;
   string message = 3;
   int64 estimated_duration_seconds = 4;
@@ -165,7 +155,7 @@ message AnalysisResult {
 
 // Selection messages
 message SelectionRequest {
-  edr.common.JobId job_id = 1;
+  automutate.common.JobId job_id = 1;
   string round_id = 2;  // NEW: Current round ID
 
   // NEW: Feedback from previous round (if any)
@@ -173,14 +163,14 @@ message SelectionRequest {
 }
 
 message SelectionResponse {
-  repeated edr.common.Mutation mutations = 1;
+  repeated automutate.common.Mutation mutations = 1;
   float exploration_probability = 2;
   string rationale = 3;
 }
 
 message OutcomeReport {
-  edr.common.RunId run_id = 1;
-  edr.common.RunResult result = 2;
+  automutate.common.RunId run_id = 1;
+  automutate.common.RunResult result = 2;
 }
 
 message OutcomeAck {
@@ -189,7 +179,7 @@ message OutcomeAck {
 
 // Triage messages
 message AnalysisRequest {
-  edr.common.RunId run_id = 1;
+  automutate.common.RunId run_id = 1;
   string elastic_index = 2;  // Query this index for events
 }
 
@@ -207,7 +197,7 @@ message Hypothesis {
 }
 
 message AvoidListRequest {
-  edr.common.JobId job_id = 1;
+  automutate.common.JobId job_id = 1;
 }
 
 message AvoidListResponse {
@@ -240,7 +230,7 @@ message BuildRequest {
   string template_name = 1;  // e.g., "rwx_direct"
   string source_file = 2;    // e.g., "rwx_direct.c"
   repeated string compiler_flags = 3;  // Optional custom flags
-  repeated edr.common.Mutation mutations = 4;  // Optional mutations to apply
+  repeated automutate.common.Mutation mutations = 4;  // Optional mutations to apply
 
   // Instrumentation control (maps to build/emitter --trace flag)
   // Values: "off" | "lines" | "api" | "bb" | "api+bb" | "all" | "lines-around-bb=<id>"
@@ -297,7 +287,7 @@ message WorkerInfo {
   string os_version = 7;            // "windows10", "windows11", "ubuntu22.04"
   repeated string capabilities = 8; // ["rededr", "defender", "etw", "gpu"]
   map<string, string> metadata = 9; // {"cpu_cores": "8", "ram_gb": "32"}
-  ToolVersions tools = 10;          // Tool versions
+  automutate.common.ToolVersions tools = 10;          // Tool versions
   string registration_type = 11;    // "static" (TOML) or "dynamic" (RPC)
 }
 
@@ -352,7 +342,7 @@ message RoundProto {
   string round_id = 1;
   string job_id = 2;
   uint32 round_number = 3;
-  repeated edr.common.Mutation mutations = 4;
+  repeated automutate.common.Mutation mutations = 4;
   RunResultProto baseline_run = 5;
   RunResultProto instrumented_run = 6;
   string status = 7;
@@ -363,7 +353,7 @@ message RunResultProto {
   string run_id = 1;
   string job_id = 2;
   string round_id = 3;
-  edr.common.RunType run_type = 4;
+  automutate.common.RunType run_type = 4;
   string artifact_id = 5;
   repeated string mutations = 6;
   string outcome = 7;
@@ -404,30 +394,7 @@ message FeedbackProto {
 }
 
 // ===== DYNAMIC WORKER REGISTRATION MESSAGES =====
-
-// Worker registration (sent by worker on startup)
-message WorkerRegistration {
-  string worker_id = 1;             // e.g., "win10-worker-01", "win11-azure-worker-05"
-  string ip_address = 2;            // e.g., "10.200.200.100" or "20.123.45.67" (public IP)
-  string os_version = 3;            // e.g., "windows10", "windows11", "ubuntu22.04"
-
-  // Worker capabilities
-  repeated string capabilities = 4;  // ["rededr", "defender", "etw", "gpu"]
-
-  // Worker metadata (key-value pairs)
-  map<string, string> metadata = 5;  // {"cpu_cores": "8", "ram_gb": "32", "region": "us-east-1"}
-
-  // Installed tool versions
-  ToolVersions tools = 6;
-}
-
-// Tool version information
-message ToolVersions {
-  string rededr_version = 1;     // e.g., "1.2.3" or empty if not installed
-  string defender_version = 2;   // e.g., "4.18.2106.1" or empty
-  string etw_version = 3;        // e.g., "native" (always available on Windows)
-  string llvm_version = 4;       // e.g., "17.0.6" or empty
-}
+// (WorkerRegistration and ToolVersions moved to common.proto)
 
 // Registration acknowledgment (sent by controller)
 message RegistrationAck {

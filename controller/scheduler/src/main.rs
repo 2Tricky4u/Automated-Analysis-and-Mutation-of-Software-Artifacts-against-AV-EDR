@@ -1,51 +1,40 @@
 use edr_config::ControllerConfig;
-use elasticsearch::{Elasticsearch, IndexParts, http::transport::Transport};
+use elasticsearch::{Elasticsearch, http::transport::Transport};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tonic::{Request, Response, Status, transport::Server};
-use tracing::{error, info, warn};
+use tonic::{transport::Server};
+use tracing::{debug, error, info, warn};
 
 mod job;
 mod queue;
-mod run_queue;  // NEW: Async run queue
-mod worker_pool;
-mod scheduler_core;
 mod round;
-mod run_result;
 mod round_processor;
+mod run_queue;
+mod run_result;
+mod scheduler_core;
+mod worker_manager;
+mod worker_pool;
+
+// NEW: Service and storage modules
+mod service;
+mod storage;
 
 use scheduler_core::{SchedulerConfig as CoreSchedulerConfig, create_scheduler_core};
 
-pub mod edr {
+pub mod automutate {
     pub mod common {
-        tonic::include_proto!("edr.common");
+        tonic::include_proto!("automutate.common");
     }
     pub mod controller {
-        tonic::include_proto!("edr.controller");
+        tonic::include_proto!("automutate.controller");
     }
     pub mod worker {
-        tonic::include_proto!("edr.worker");
+        tonic::include_proto!("automutate.worker");
     }
 }
 
-use edr::common::{JobId, TelemetryAck, TelemetryData};
-use edr::controller::{
-    BuildRequest, BuildResponse, DeployRequest, DeployResponse, JobRequest, JobResponse,
-    JobStatusRequest, JobStatusResponse, ListWorkersRequest, ListWorkersResponse,
-    PingRequest, PingResponse, QueryRequest, QueryResponse,
-    StatusAck, StatusReport, TriageRequest, TriageResponse, WorkerInfo,
-    // NEW: Iterative loop types
-    JobProgressRequest, JobProgressResponse, StopJobRequest, StopJobResponse,
-    GetRoundRequest, GetRoundResponse, CompareRunsRequest, CompareRunsResponse,
-    RoundSummaryProto, RoundProto, BehaviorComparisonProto,
-    // NEW: Dynamic worker registration types
-    WorkerRegistration, RegistrationAck, WorkerDeregistration, DeregistrationAck,
-    WorkerMetadataUpdate, MetadataAck, ToolVersions,
-    controller_server::{Controller, ControllerServer},
-};
-
-const DELAY: u64 = 20;
+use crate::automutate::controller::controller_server::ControllerServer;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -70,6 +59,7 @@ pub struct SchedulerService {
     es_client: Elasticsearch,
     controller_ip: String,
     scheduler_core: Option<Arc<scheduler_core::SchedulerCore>>,
+    worker_manager: Option<Arc<worker_manager::WorkerManager>>,
 }
 
 impl SchedulerService {
@@ -79,1476 +69,16 @@ impl SchedulerService {
             es_client,
             controller_ip,
             scheduler_core: None,
+            worker_manager: None,
         }
     }
 
     pub fn set_scheduler_core(&mut self, core: Arc<scheduler_core::SchedulerCore>) {
         self.scheduler_core = Some(core);
     }
-}
 
-#[tonic::async_trait]
-impl Controller for SchedulerService {
-    async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PingResponse>, Status> {
-        let req = request.into_inner();
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        info!("Ping received: {}", req.message);
-
-        Ok(Response::new(PingResponse {
-            message: format!("pong: {}", req.message),
-            timestamp,
-            server: "controller/scheduler".to_string(),
-        }))
-    }
-
-    async fn schedule_job(
-        &self,
-        request: Request<JobRequest>,
-    ) -> Result<Response<JobResponse>, Status> {
-        let req = request.into_inner();
-
-        // Check if scheduler core is available
-        let scheduler_core = match &self.scheduler_core {
-            Some(core) => core,
-            None => {
-                warn!("Scheduler core not available, job submission rejected");
-                return Ok(Response::new(JobResponse {
-                    job_id: None,
-                    accepted: false,
-                    message: "Scheduler core not initialized. Check that worker configs exist in automation/generated/".to_string(),
-                    estimated_duration_seconds: 0,
-                    max_rounds: 0,
-                }));
-            }
-        };
-
-        // Mutations are now selected per-round by Selector service
-        let mutations: Vec<job::MutationSpec> = vec![];  // Empty for now
-
-        // Get max_rounds from request (default to 10 if not specified)
-        let max_rounds = if req.max_rounds == 0 { 10 } else { req.max_rounds };
-
-        // Get stopping conditions from request (default to false)
-        let stop_on_evasion = req.stop_on_evasion;
-        let stop_on_detection = req.stop_on_detection;
-
-        // Submit job to scheduler queue
-        match scheduler_core.queue().submit_job(
-            req.artifact_type.clone(),  // template_name
-            req.source.clone(),          // source_file
-            mutations,
-            "lines".to_string(),        // Default trace mode (Phase 1) //TODO make modular
-            req.priority,
-            max_rounds,
-            stop_on_evasion,
-            stop_on_detection,
-        ) {
-            Ok(job_id) => {
-                info!(
-                    "Job {} submitted to scheduler queue: {} ({})",
-                    job_id, req.name, req.artifact_type
-                );
-
-                // Index job to Elasticsearch
-                if let Some(job) = scheduler_core.queue().get_job(&job_id) {
-                    if let Err(e) = self.index_job(&job).await {
-                        warn!("Failed to index job {} to Elasticsearch: {}", job_id, e);
-                    }
-                }
-
-                Ok(Response::new(JobResponse {
-                    job_id: Some(JobId {
-                        value: job_id.clone(),
-                    }),
-                    accepted: true,
-                    message: format!("Job {} queued for execution", job_id),
-                    estimated_duration_seconds: 60, // Estimated from config timeout
-                    max_rounds,
-                }))
-            }
-            Err(e) => {
-                error!("Failed to submit job: {}", e);
-                Ok(Response::new(JobResponse {
-                    job_id: None,
-                    accepted: false,
-                    message: format!("Failed to queue job: {}", e),
-                    estimated_duration_seconds: 0,
-                    max_rounds: 0,
-                }))
-            }
-        }
-    }
-
-    async fn get_job_status(
-        &self,
-        request: Request<JobStatusRequest>,
-    ) -> Result<Response<JobStatusResponse>, Status> {
-        let req = request.into_inner();
-
-        // Check if scheduler core is available
-        let scheduler_core = match &self.scheduler_core {
-            Some(core) => core,
-            None => {
-                return Err(Status::unavailable("Scheduler core not initialized"));
-            }
-        };
-
-        // Query job from scheduler queue
-        match scheduler_core.queue().get_job(&req.job_id) {
-            Some(job) => {
-                let progress_percent = if job.is_terminal() {
-                    100
-                } else {
-                    job.progress_percent()
-                };
-
-                Ok(Response::new(JobStatusResponse {
-                    job_id: job.id.clone(),
-                    status: job.status.to_string(),
-                    progress_percent: progress_percent as i32,
-                    current_phase: format!("{:?}", job.status),
-                    logs: vec![format!("Job {} is {}", job.id, job.status)],
-                }))
-            }
-            None => Err(Status::not_found(format!("Job {} not found", req.job_id))),
-        }
-    }
-
-    async fn submit_triage(
-        &self,
-        request: Request<TriageRequest>,
-    ) -> Result<Response<TriageResponse>, Status> {
-        let req = request.into_inner();
-        let triage_id = format!(
-            "triage-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-        );
-
-        info!(
-            "Triage submitted for job {}: detected={}",
-            req.job_id, req.detected
-        );
-
-        Ok(Response::new(TriageResponse {
-            job_id: req.job_id,
-            stored: true,
-            triage_id,
-        }))
-    }
-
-    async fn query_results(
-        &self,
-        request: Request<QueryRequest>,
-    ) -> Result<Response<QueryResponse>, Status> {
-        let _req = request.into_inner();
-
-        Ok(Response::new(QueryResponse {
-            results: vec![],
-            total_count: 0,
-        }))
-    }
-
-    async fn stream_telemetry(
-        &self,
-        request: Request<tonic::Streaming<TelemetryData>>,
-    ) -> Result<Response<TelemetryAck>, Status> {
-        use tokio::time::{timeout, Duration};
-
-        // Get remote_addr BEFORE into_inner() consumes the request
-        let remote_addr = request.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string());
-
-        let mut stream = request.into_inner();
-        let mut events_count = 0;
-        let mut first_job_id = String::new();
-        let mut batch = Vec::new();
-        const MAX_BATCH_SIZE: usize = 10000; // Prevent memory exhaustion
-
-        info!("[RECV]  Telemetry stream opened from worker: {}", remote_addr);
-
-        // Collect all events from stream with timeout
-        let collection_result = timeout(Duration::from_secs(30), async {
-            while let Some(telemetry) = stream.message().await? {
-                if events_count == 0 {
-                    first_job_id = telemetry.job_id.clone();
-                }
-
-                events_count += 1;
-                batch.push(telemetry);
-
-                // Prevent unbounded memory growth
-                if batch.len() >= MAX_BATCH_SIZE {
-                    warn!(
-                        "[WARN]  Telemetry batch size limit reached ({} events), stopping collection [worker: {}]",
-                        MAX_BATCH_SIZE, remote_addr
-                    );
-                    break;
-                }
-            }
-            Ok::<(), tonic::Status>(())
-        })
-        .await;
-
-        match collection_result {
-            Ok(Ok(())) => {
-                info!(
-                    "[OK] Telemetry batch collected: job={}, events_count={}, worker={}",
-                    first_job_id, events_count, remote_addr
-                );
-            }
-            Ok(Err(e)) => {
-                error!("[ERROR] STREAM ERROR: Failed to collect telemetry from worker: {}", remote_addr);
-                error!("   Error details: {:?}", e);
-                error!("   Status code: {}, Message: {}", e.code(), e.message());
-                return Err(e);
-            }
-            Err(_) => {
-                error!(
-                    "[TIMEOUT]  TIMEOUT: Telemetry stream collection exceeded 30s limit [worker: {}]",
-                    remote_addr
-                );
-                error!("   Collected {} events before timeout (partial batch)", events_count);
-                warn!("   Possible causes: slow network, large payload, worker stalled");
-                // Continue with partial batch rather than failing
-            }
-        }
-
-        // Index batch to Elasticsearch with timeout
-        if !batch.is_empty() {
-            info!("[UPLOAD]Indexing {} events to Elasticsearch [job: {}]", events_count, first_job_id);
-            match timeout(
-                Duration::from_secs(10),
-                self.index_telemetry_batch(&batch)
-            )
-            .await
-            {
-                Ok(Ok(())) => {
-                    info!(
-                        "[OK] Successfully indexed {} telemetry events to Elasticsearch [job: {}]",
-                        events_count, first_job_id
-                    );
-                }
-                Ok(Err(e)) => {
-                    error!("[ERROR] ELASTICSEARCH ERROR: Failed to index telemetry batch");
-                    error!("   Job: {}, Events: {}, Worker: {}", first_job_id, events_count, remote_addr);
-                    error!("   Error details: {}", e);
-                    error!("   [WARN]  Telemetry received but NOT INDEXED (Elasticsearch may be down/unreachable)");
-                    warn!("   Possible causes: Elasticsearch down, network issue, mapping conflict, disk full");
-                    // Don't fail the RPC - telemetry was received, just not indexed
-                }
-                Err(_) => {
-                    error!(
-                        "[TIMEOUT]  ELASTICSEARCH TIMEOUT: Indexing exceeded 10s limit [job: {}]",
-                        first_job_id
-                    );
-                    error!(
-                        "   Events: {}, Worker: {}", events_count, remote_addr
-                    );
-                    error!(
-                        "   [WARN]  Telemetry received but NOT INDEXED (Elasticsearch is slow/unavailable)"
-                    );
-                    warn!("   Possible causes: Elasticsearch overloaded, slow disk I/O, large batch size");
-                    // Don't fail the RPC - telemetry was received, just not indexed
-                }
-            }
-        } else {
-            warn!("[WARN]  Telemetry stream closed with ZERO events [worker: {}]", remote_addr);
-            warn!("   This may indicate: worker had no telemetry to send, or stream failed early");
-        }
-
-        Ok(Response::new(TelemetryAck {
-            received: true,
-            events_count,
-        }))
-    }
-
-    async fn report_status(
-        &self,
-        request: Request<StatusReport>,
-    ) -> Result<Response<StatusAck>, Status> {
-        use tokio::time::Duration;
-
-        let remote_addr = request.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string());
-        let report = request.into_inner();
-
-        // Update worker health and job status in scheduler core (if available)
-        if let Some(ref scheduler_core) = self.scheduler_core {
-            // Update worker health timestamp
-            if let Err(e) = scheduler_core.pool().update_health(&report.worker_id) {
-                warn!("Failed to update worker health for {}: {}", report.worker_id, e);
-            }
-
-            // Update job status based on status report
-            if let Some(mut job) = scheduler_core.queue().get_job(&report.job_id) {
-                match report.event_type.as_str() {
-                    "success" => {
-                        job.mark_completed();
-                        let _ = scheduler_core.queue().update_job(&job);
-                        // Release worker
-                        let _ = scheduler_core.pool().release_worker(&report.worker_id);
-                    }
-                    "error" => {
-                        job.mark_failed(report.details.clone());
-                        let _ = scheduler_core.queue().update_job(&job);
-                        // Release worker
-                        let _ = scheduler_core.pool().release_worker(&report.worker_id);
-                    }
-                    "timeout" => {
-                        job.mark_failed("Execution timeout".to_string());
-                        let _ = scheduler_core.queue().update_job(&job);
-                        // Release worker
-                        let _ = scheduler_core.pool().release_worker(&report.worker_id);
-                    }
-                    _ => {
-                        // Heartbeat or other status - job is still running, just update
-                        let _ = scheduler_core.queue().update_job(&job);
-                    }
-                }
-            }
-        }
-
-        // Format status display: [WORKER: ip] [PID: pid] [JOB: job_id] [STATUS: event_type] details
-        let status_line = format!(
-            "[WORKER: {} ({})] [PID: {}] [JOB: {}] [RUN: {}] [STATUS: {}] [ARTIFACT: {}] {}",
-            report.worker_ip,
-            report.worker_id,
-            report.pid,
-            report.job_id,
-            report.run_id,
-            report.event_type.to_uppercase(),
-            report.artifact_name,
-            report.details
-        );
-
-        // Use appropriate log level based on status type
-        match report.event_type.as_str() {
-            "error" | "timeout" | "stuck" | "crashed" => {
-                tracing::warn!("[WARN]  {}", status_line);
-            }
-            _ => {
-                info!("[STATUS] {}", status_line);
-            }
-        }
-
-        // Store RunResult to Elasticsearch when final status received
-        // Use timeout to prevent blocking RPC if Elasticsearch is slow/unreachable
-        if matches!(report.event_type.as_str(), "success" | "error" | "timeout") {
-            info!("[SAVE]Storing final run result for job: {} [worker: {}]", report.job_id, remote_addr);
-            match tokio::time::timeout(
-                Duration::from_secs(DELAY),
-                self.store_run_result(&report)
-            ).await {
-                Ok(Ok(())) => {
-                    info!("[OK] Run result stored successfully [job: {}, run: {}]", report.job_id, report.run_id);
-                }
-                Ok(Err(e)) => {
-                    error!("[ERROR] ELASTICSEARCH ERROR: Failed to store run result");
-                    error!("   Job: {}, Run: {}, Worker: {}", report.job_id, report.run_id, remote_addr);
-                    error!("   Error details: {}", e);
-                    error!("   [WARN]  Status report received but NOT INDEXED (Elasticsearch may be down/unreachable)");
-                    warn!("   Possible causes: Elasticsearch down, network issue, mapping conflict, disk full");
-                    // Don't fail the RPC - status was received, just not indexed
-                }
-                Err(_) => {
-                    error!(
-                        "[TIMEOUT]  ELASTICSEARCH TIMEOUT: Storing run result exceeded {}s limit", DELAY
-                    );
-                    error!("   Job: {}, Run: {}, Worker: {}", report.job_id, report.run_id, remote_addr);
-                    error!(
-                        "   [WARN]  Status report received but NOT INDEXED (Elasticsearch is slow/unavailable)"
-                    );
-                    warn!("   Possible causes: Elasticsearch overloaded, slow disk I/O, query queue backlog");
-                    // Don't fail the RPC - status was received, just not indexed
-                }
-            }
-        }
-
-        Ok(Response::new(StatusAck { received: true }))
-    }
-
-    async fn build_artifact(
-        &self,
-        request: Request<BuildRequest>,
-    ) -> Result<Response<BuildResponse>, Status> {
-        let req = request.into_inner();
-
-        // Extract trace_mode with default (backwards compatibility)
-        let trace_mode = if req.trace_mode.is_empty() {
-            "lines".to_string() // Default: API + BB coverage for mutation loop
-        } else {
-            req.trace_mode.clone()
-        };
-
-        info!(
-            "Build request: template={}, source={}, mutations={}, trace_mode={}",
-            req.template_name,
-            req.source_file,
-            req.mutations.len(),
-            trace_mode
-        );
-
-        // Create builder with default config
-        let builder_config = builder::BuilderConfig::default();
-        let artifact_builder = builder::ArtifactBuilder::new(builder_config).map_err(|e| {
-            error!("Failed to create artifact builder: {}", e);
-            Status::internal(format!("Failed to create builder: {}", e))
-        })?;
-
-        // Convert proto mutations to builder::mutator::MutationSpec
-        let mutations: Vec<builder::mutator::MutationSpec> = req
-            .mutations
-            .into_iter()
-            .map(|m| builder::mutator::MutationSpec {
-                id: m.id,
-                params: m.params,
-            })
-            .collect();
-
-        if !mutations.is_empty() {
-            info!(
-                "Applying mutations: {:?}",
-                mutations.iter().map(|m| &m.id).collect::<Vec<_>>()
-            );
-        }
-
-        // Build the artifact with mutations
-        // NOTE: trace_mode is passed to builder; emitter support pending
-        let built = artifact_builder
-            .build(builder::BuildInput::SourceFile {
-                template_name: req.template_name.clone(),
-                source_file: req.source_file.clone(),
-                mutations,
-                trace_mode: trace_mode.clone(),
-            })
-            .await
-            .map_err(|e| {
-                error!("Build failed: {}", e);
-                Status::internal(format!("Build failed: {}", e))
-            })?;
-
-        info!(
-            "Build successful: artifact_id={}, size={} bytes, mutations_applied={:?}, trace_mode={}",
-            built.artifact_id, built.size_bytes, built.mutations_applied, trace_mode
-        );
-
-        // TODO (Phase 3): Index artifact metadata to Elasticsearch
-
-        Ok(Response::new(BuildResponse {
-            artifact_id: built.artifact_id,
-            size_bytes: built.size_bytes,
-            build_status: "success".to_string(),
-            error: String::new(),
-            storage_path: built.output_path.to_string_lossy().to_string(),
-            build_timestamp: built.build_timestamp.timestamp(),
-            mutations_applied: built.mutations_applied,
-            trace_mode,  // Echo back the trace_mode that was used
-        }))
-    }
-
-    async fn deploy_artifact(
-        &self,
-        request: Request<DeployRequest>,
-    ) -> Result<Response<DeployResponse>, Status> {
-        use edr::worker::{ArtifactChunk, worker_agent_client::WorkerAgentClient};
-        use futures::stream;
-        use sha2::{Digest, Sha256};
-
-        let req = request.into_inner();
-
-        info!(
-            "Deploy request: artifact_id={}, worker={}",
-            req.artifact_id, req.worker_address
-        );
-
-        // 1. Read artifact from disk
-        let builder_config = builder::BuilderConfig::default();
-        let artifact_path = builder_config
-            .output_dir
-            .join(format!("{}.exe", req.artifact_id));
-
-        if !artifact_path.exists() {
-            return Err(Status::not_found(format!(
-                "Artifact {} not found. Build it first using BuildArtifact RPC.",
-                req.artifact_id
-            )));
-        }
-
-        let artifact_data = tokio::fs::read(&artifact_path)
-            .await
-            .map_err(|e| Status::internal(format!("Failed to read artifact: {}", e)))?;
-
-        info!(
-            "Read artifact: {} bytes from {:?}",
-            artifact_data.len(),
-            artifact_path
-        );
-
-        // 2. Verify SHA256 matches artifact_id
-        let mut hasher = Sha256::new();
-        hasher.update(&artifact_data);
-        let actual_sha256 = format!("{:x}", hasher.finalize());
-
-        if actual_sha256 != req.artifact_id {
-            return Err(Status::internal(format!(
-                "Artifact SHA256 mismatch: expected {}, got {}",
-                req.artifact_id, actual_sha256
-            )));
-        }
-
-        // 3. Connect to worker
-        let worker_url = format!("http://{}", req.worker_address);
-        info!("Attempting connection to worker: {}", worker_url);
-
-        // Create endpoint with explicit configuration
-        let endpoint = match tonic::transport::Endpoint::try_from(worker_url.clone()) {
-            Ok(ep) => ep,
-            Err(e) => {
-                error!("Invalid endpoint URL '{}': {}", worker_url, e);
-                return Err(Status::invalid_argument(format!(
-                    "Invalid worker address: {}",
-                    e
-                )));
-            }
-        };
-
-        info!("Endpoint created, connecting...");
-        let mut client = WorkerAgentClient::connect(endpoint).await.map_err(|e| {
-            error!("=== CONNECT TO WORKER FAILED ===");
-            error!("Worker URL: {}", worker_url);
-            error!("Error type: {}", std::any::type_name_of_val(&e));
-            error!("Error: {}", e);
-            error!("Debug: {:?}", e);
-            Status::unavailable(format!("Failed to connect to worker: {}", e))
-        })?;
-
-        info!("Successfully connected to worker");
-
-        // 4. Split into chunks (4MB per chunk)
-        let chunk_size = 4 * 1024 * 1024; // 4MB
-        let total_chunks = (artifact_data.len() + chunk_size - 1) / chunk_size;
-
-        let chunks: Vec<ArtifactChunk> = artifact_data
-            .chunks(chunk_size)
-            .enumerate()
-            .map(|(i, chunk)| ArtifactChunk {
-                artifact_id: req.artifact_id.clone(),
-                data: chunk.to_vec(),
-                chunk_index: i as u32,
-                total_chunks: total_chunks as u32,
-                sha256: req.artifact_id.clone(),
-            })
-            .collect();
-
-        info!(
-            "Streaming {} chunks ({} bytes total) to worker",
-            chunks.len(),
-            artifact_data.len()
-        );
-
-        // 5. Stream chunks to worker
-        let chunk_stream = stream::iter(chunks.clone());
-
-        info!("Calling send_artifact RPC with {} chunks...", chunks.len());
-        let response = client
-            .send_artifact(chunk_stream)
-            .await
-            .map_err(|e| {
-                error!("=== send_artifact RPC FAILED ===");
-                error!("Error: {}", e);
-                error!("Error code: {:?}", e.code());
-                error!("Error message: {}", e.message());
-                error!("Worker URL: {}", worker_url);
-                error!("Full debug: {:?}", e);
-                Status::internal(format!(
-                    "Failed to send artifact: {} (code: {:?})",
-                    e.message(),
-                    e.code()
-                ))
-            })?
-            .into_inner();
-
-        info!("send_artifact RPC completed successfully");
-
-        if !response.received {
-            return Err(Status::internal(format!(
-                "Worker rejected artifact: {}",
-                response.error
-            )));
-        }
-
-        info!(
-            "Artifact deployed successfully: {} chunks sent to {}",
-            response.chunks_received, req.worker_address
-        );
-
-        Ok(Response::new(DeployResponse {
-            success: true,
-            artifact_id: req.artifact_id,
-            worker_address: req.worker_address,
-            worker_storage_path: response.storage_path,
-            chunks_sent: response.chunks_received,
-            error: String::new(),
-        }))
-    }
-
-    async fn list_workers(
-        &self,
-        _request: Request<ListWorkersRequest>,
-    ) -> Result<Response<ListWorkersResponse>, Status> {
-        let scheduler_core = match &self.scheduler_core {
-            Some(core) => core,
-            None => {
-                return Err(Status::unavailable("Scheduler core not initialized"));
-            }
-        };
-
-        let workers = scheduler_core.pool().list_workers();
-        let worker_infos: Vec<WorkerInfo> = workers
-            .iter()
-            .map(|w| {
-                use edr::controller::ToolVersions;
-
-                let last_ping_secs = w
-                    .last_ping
-                    .elapsed()
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-
-                WorkerInfo {
-                    worker_id: w.id.clone(),
-                    address: w.address.clone(),
-                    status: w.status.to_string(),
-                    current_job_id: w.current_job.clone().unwrap_or_default(),
-                    last_ping_seconds_ago: last_ping_secs,
-                    enabled: w.enabled,
-                    // NEW FIELDS for dynamic registration
-                    os_version: w.os_version.clone(),
-                    capabilities: w.capabilities.clone(),
-                    metadata: w.metadata.clone(),
-                    tools: Some(ToolVersions {
-                        rededr_version: w.tools.get("rededr_version").cloned().unwrap_or_default(),
-                        defender_version: w.tools.get("defender_version").cloned().unwrap_or_default(),
-                        etw_version: w.tools.get("etw_version").cloned().unwrap_or_default(),
-                        llvm_version: w.tools.get("llvm_version").cloned().unwrap_or_default(),
-                    }),
-                    registration_type: match w.registration_type {
-                        worker_pool::RegistrationType::Dynamic => "dynamic".to_string(),
-                        worker_pool::RegistrationType::Static => "static".to_string(),
-                    },
-                }
-            })
-            .collect();
-
-        Ok(Response::new(ListWorkersResponse {
-            workers: worker_infos,
-        }))
-    }
-
-    // ===== DYNAMIC WORKER REGISTRATION =====
-
-    async fn register_worker(
-        &self,
-        request: Request<WorkerRegistration>,
-    ) -> Result<Response<RegistrationAck>, Status> {
-        let remote_addr = request.remote_addr();
-        let reg = request.into_inner();
-
-        info!(
-            "Worker registration request from {:?}: {} (IP: {}, OS: {}, capabilities: {:?})",
-            remote_addr, reg.worker_id, reg.ip_address, reg.os_version, reg.capabilities
-        );
-
-        // Get scheduler core
-        let scheduler_core = match &self.scheduler_core {
-            Some(core) => core,
-            None => {
-                return Err(Status::unavailable("Scheduler core not initialized"));
-            }
-        };
-
-        // Validate worker_id format (must start with OS prefix: win*, linux*, etc.)
-        if !reg.worker_id.starts_with("win")
-            && !reg.worker_id.starts_with("linux")
-            && !reg.worker_id.starts_with("ubuntu")
-        {
-            warn!("Registration rejected: invalid worker_id format: {}", reg.worker_id);
-            return Err(Status::invalid_argument(
-                "worker_id must start with OS prefix (win*, linux*, ubuntu*)"
-            ));
-        }
-
-        // Validate IP address format (basic check)
-        if reg.ip_address.is_empty() {
-            return Err(Status::invalid_argument("ip_address cannot be empty"));
-        }
-
-        // Parse tools from protobuf to HashMap
-        let tools: HashMap<String, String> = if let Some(tool_versions) = reg.tools {
-            vec![
-                ("rededr_version".to_string(), tool_versions.rededr_version),
-                ("defender_version".to_string(), tool_versions.defender_version),
-                ("etw_version".to_string(), tool_versions.etw_version),
-                ("llvm_version".to_string(), tool_versions.llvm_version),
-            ]
-            .into_iter()
-            .filter(|(_, v)| !v.is_empty())
-            .collect()
-        } else {
-            HashMap::new()
-        };
-
-        // Register worker in pool
-        match scheduler_core.pool().register_worker_with_metadata(
-            reg.worker_id.clone(),
-            format!("{}:50052", reg.ip_address), // Add standard worker port
-            true, // enabled
-            reg.os_version.clone(),
-            reg.capabilities.clone(),
-            reg.metadata.clone(),
-            tools.clone(),
-        ) {
-            Ok(_) => {
-                info!("✓ Worker {} registered successfully", reg.worker_id);
-
-                // Log registration event to Elasticsearch (async)
-                tokio::spawn({
-                    let worker_id = reg.worker_id.clone();
-                    let es_client = self.es_client.clone();
-                    async move {
-                        let event = serde_json::json!({
-                            "event_type": "worker_registered",
-                            "worker_id": worker_id,
-                            "timestamp": chrono::Utc::now().to_rfc3339(),
-                            "registration_type": "dynamic",
-                        });
-
-                        let index = format!("worker-events-{}", chrono::Utc::now().format("%Y.%m"));
-                        let _ = es_client
-                            .index(IndexParts::Index(&index))
-                            .body(event)
-                            .send()
-                            .await;
-                    }
-                });
-
-                // Return success
-                Ok(Response::new(RegistrationAck {
-                    accepted: true,
-                    message: format!("Worker {} registered successfully", reg.worker_id),
-                    heartbeat_interval_seconds: 30, // Tell worker to send health updates every 30s
-                }))
-            }
-            Err(e) => {
-                error!("Failed to register worker {}: {}", reg.worker_id, e);
-                Err(Status::internal(format!("Registration failed: {}", e)))
-            }
-        }
-    }
-
-    async fn deregister_worker(
-        &self,
-        request: Request<WorkerDeregistration>,
-    ) -> Result<Response<DeregistrationAck>, Status> {
-        let dereg = request.into_inner();
-
-        info!("Worker {} deregistering (reason: {})", dereg.worker_id, dereg.reason);
-
-        // Get scheduler core
-        let scheduler_core = match &self.scheduler_core {
-            Some(core) => core,
-            None => {
-                return Err(Status::unavailable("Scheduler core not initialized"));
-            }
-        };
-
-        // Mark worker as offline
-        match scheduler_core.pool().mark_worker_offline(&dereg.worker_id) {
-            Ok(_) => {
-                // Log deregistration event (async)
-                tokio::spawn({
-                    let worker_id = dereg.worker_id.clone();
-                    let reason = dereg.reason.clone();
-                    let es_client = self.es_client.clone();
-                    async move {
-                        let event = serde_json::json!({
-                            "event_type": "worker_deregistered",
-                            "worker_id": worker_id,
-                            "reason": reason,
-                            "timestamp": chrono::Utc::now().to_rfc3339(),
-                        });
-
-                        let index = format!("worker-events-{}", chrono::Utc::now().format("%Y.%m"));
-                        let _ = es_client
-                            .index(IndexParts::Index(&index))
-                            .body(event)
-                            .send()
-                            .await;
-                    }
-                });
-
-                Ok(Response::new(DeregistrationAck {
-                    success: true,
-                    message: format!("Worker {} deregistered", dereg.worker_id),
-                }))
-            }
-            Err(e) => {
-                warn!("Failed to deregister worker {}: {}", dereg.worker_id, e);
-                Err(Status::not_found(format!("Worker not found: {}", e)))
-            }
-        }
-    }
-
-    async fn update_worker_metadata(
-        &self,
-        _request: Request<WorkerMetadataUpdate>,
-    ) -> Result<Response<MetadataAck>, Status> {
-        // TODO: Implement metadata updates
-        // For now, just return success
-        warn!("update_worker_metadata called but not yet implemented");
-        Ok(Response::new(MetadataAck { success: true }))
-    }
-
-    // NEW METHODS (Phase 3 implementation - stubs for now)
-
-    async fn get_job_progress(
-        &self,
-        request: Request<JobProgressRequest>,
-    ) -> Result<Response<JobProgressResponse>, Status> {
-        let job_id = &request.get_ref().job_id;
-
-        info!("[RPC] GetJobProgress: job_id={}", job_id);
-
-        // Get job from queue
-        let scheduler = self.scheduler_core.as_ref()
-            .ok_or_else(|| Status::internal("Scheduler not initialized"))?;
-        let job = scheduler.queue().get_job(job_id)
-            .ok_or_else(|| Status::not_found(format!("Job not found: {}", job_id)))?;
-
-        // Calculate progress percentage
-        let progress_percent = job.progress_percent();
-
-        // Convert rounds to protobuf format
-        let rounds: Vec<RoundSummaryProto> = job.rounds
-            .iter()
-            .map(|r| RoundSummaryProto {
-                round_id: r.round_id.clone(),
-                round_number: r.round_number,
-                mutations: r.mutations.clone(),
-                detected: r.detected,
-                behavior_match: r.behavior_match,
-                evasion_score: r.evasion_score,
-                status: if r.behavior_match { "completed".to_string() } else { "behavior_mismatch".to_string() },
-                completed_at: r.completed_at
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64,
-            })
-            .collect();
-
-        let response = JobProgressResponse {
-            job_id: job.id.clone(),
-            status: job.status.to_string(),
-            current_round: job.current_round,
-            max_rounds: job.max_rounds,
-            progress_percent,
-            rounds,
-        };
-
-        Ok(Response::new(response))
-    }
-
-    async fn stop_job(
-        &self,
-        request: Request<StopJobRequest>,
-    ) -> Result<Response<StopJobResponse>, Status> {
-        let job_id = &request.get_ref().job_id;
-
-        info!("[RPC] StopJob: job_id={}", job_id);
-
-        // Get scheduler
-        let scheduler = self.scheduler_core.as_ref()
-            .ok_or_else(|| Status::internal("Scheduler not initialized"))?;
-
-        // Get job from queue
-        let mut job = scheduler.queue().get_job(job_id)
-            .ok_or_else(|| Status::not_found(format!("Job not found: {}", job_id)))?;
-
-        // Check if job can be stopped (only stop running jobs)
-        if !matches!(job.status, job::JobStatus::Running) {
-            let message = format!(
-                "Job {} cannot be stopped (current status: {})",
-                job_id,
-                job.status.to_string()
-            );
-            warn!("[RPC] {}", message);
-            return Ok(Response::new(StopJobResponse {
-                stopped: false,
-                message,
-            }));
-        }
-
-        // Mark job as stopped
-        job.mark_stopped();
-
-        // Update job in queue
-        scheduler.queue().update_job(&job)
-            .map_err(|e| Status::internal(format!("Failed to update job: {}", e)))?;
-
-        info!("[RPC] Job {} stopped successfully", job_id);
-
-        let response = StopJobResponse {
-            stopped: true,
-            message: format!("Job {} stopped after {} rounds", job_id, job.current_round),
-        };
-
-        Ok(Response::new(response))
-    }
-
-    async fn get_round(
-        &self,
-        request: Request<GetRoundRequest>,
-    ) -> Result<Response<GetRoundResponse>, Status> {
-        let req = request.get_ref();
-        let job_id = &req.job_id;
-        let round_id = &req.round_id;
-
-        info!("[RPC] GetRound: job_id={}, round_id={}", job_id, round_id);
-
-        // Get job from queue
-        let scheduler = self.scheduler_core.as_ref()
-            .ok_or_else(|| Status::internal("Scheduler not initialized"))?;
-        let job = scheduler.queue().get_job(job_id)
-            .ok_or_else(|| Status::not_found(format!("Job not found: {}", job_id)))?;
-
-        // Find the round
-        let round_summary = job.rounds
-            .iter()
-            .find(|r| r.round_id == *round_id)
-            .ok_or_else(|| Status::not_found(format!("Round not found: {}", round_id)))?;
-
-        // Convert to RoundProto (detailed format)
-        // Note: For Phase 2, we don't have full RunResult details yet
-        // Phase 3/4 will add baseline_run and instrumented_run data
-
-        // Infer status from RoundSummary fields
-        let status = if round_summary.behavior_match {
-            "completed"
-        } else {
-            "behavior_mismatch"
-        };
-
-        let round_proto = RoundProto {
-            round_id: round_summary.round_id.clone(),
-            job_id: job.id.clone(),
-            round_number: round_summary.round_number,
-            mutations: vec![], // TODO Phase 3: Convert mutations to protobuf format
-            baseline_run: None,      // TODO Phase 3: Add RunResult data
-            instrumented_run: None,  // TODO Phase 3: Add RunResult data
-            status: status.to_string(),
-            behavior_match: Some(BehaviorComparisonProto {
-                outcome_match: round_summary.behavior_match,
-                baseline_detected: round_summary.detected,
-                baseline_exit_code: 0,  // TODO Phase 3: Add from RunResult
-                instrumented_detected: round_summary.detected,
-                instrumented_exit_code: 0,  // TODO Phase 3: Add from RunResult
-                differences: vec![],  // TODO Phase 3: Add from BehaviorComparison
-                confidence: 1.0,  // TODO Phase 3: Add from BehaviorComparison
-            }),
-        };
-
-        let response = GetRoundResponse {
-            round: Some(round_proto),
-        };
-
-        Ok(Response::new(response))
-    }
-
-    async fn compare_runs(
-        &self,
-        request: Request<CompareRunsRequest>,
-    ) -> Result<Response<CompareRunsResponse>, Status> {
-        let req = request.get_ref();
-        let baseline_run_id = &req.baseline_run_id;
-        let instrumented_run_id = &req.instrumented_run_id;
-
-        info!("[RPC] CompareRuns: baseline={}, instrumented={}",
-            baseline_run_id, instrumented_run_id);
-
-        // Parse run IDs (format: job_id/round_id/run_type)
-        let baseline_parts: Vec<&str> = baseline_run_id.split('/').collect();
-        let instrumented_parts: Vec<&str> = instrumented_run_id.split('/').collect();
-
-        if baseline_parts.len() != 3 || instrumented_parts.len() != 3 {
-            return Err(Status::invalid_argument(
-                "Invalid run ID format. Expected: job_id/round_id/run_type"
-            ));
-        }
-
-        let job_id = baseline_parts[0];
-        let round_id = baseline_parts[1];
-
-        // Verify both runs are from same job and round
-        if baseline_parts[0] != instrumented_parts[0] || baseline_parts[1] != instrumented_parts[1] {
-            return Err(Status::invalid_argument(
-                "Baseline and instrumented runs must be from same job and round"
-            ));
-        }
-
-        // Get scheduler
-        let scheduler = self.scheduler_core.as_ref()
-            .ok_or_else(|| Status::internal("Scheduler not initialized"))?;
-
-        // Get job
-        let job = scheduler.queue().get_job(job_id)
-            .ok_or_else(|| Status::not_found(format!("Job not found: {}", job_id)))?;
-
-        // Find the round
-        let round_summary = job.rounds
-            .iter()
-            .find(|r| r.round_id == round_id)
-            .ok_or_else(|| Status::not_found(format!("Round not found: {}", round_id)))?;
-
-        // Create comparison response from round summary
-        // Note: Phase 2 stores simplified data; Phase 4 will add full RunResult details
-        let comparison = BehaviorComparisonProto {
-            outcome_match: round_summary.behavior_match,
-            baseline_detected: round_summary.detected,
-            baseline_exit_code: 0,  // TODO Phase 4: Get from stored RunResult
-            instrumented_detected: round_summary.detected,
-            instrumented_exit_code: 0,  // TODO Phase 4: Get from stored RunResult
-            differences: if round_summary.behavior_match {
-                vec![]
-            } else {
-                vec!["Behavior mismatch detected".to_string()]
-            },
-            confidence: if round_summary.behavior_match { 1.0 } else { 0.5 },
-        };
-
-        let response = CompareRunsResponse {
-            comparison: Some(comparison),
-        };
-
-        Ok(Response::new(response))
-    }
-}
-
-impl SchedulerService {
-    /// Index telemetry batch to Elasticsearch
-    async fn index_telemetry_batch(
-        &self,
-        batch: &[TelemetryData],
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        use serde_json::json;
-
-        let index_name = format!("telemetry-{}", chrono::Utc::now().format("%Y.%m.%d"));
-        let mut indexed = 0;
-
-        // Index events individually (simpler API usage)
-        for event in batch {
-            // Parse payload to extract searchable fields, but keep original as string
-            let mut payload_fields = if let Ok(payload_json) =
-                serde_json::from_slice::<serde_json::Value>(&event.payload)
-            {
-                payload_json.as_object().cloned().unwrap_or_default()
-            } else {
-                Default::default()
-            };
-
-            // Handle typed_event variants (for events using structured proto instead of JSON payload)
-            // This is critical for trace events which use typed_event.trace instead of payload
-            if let Some(ref typed_event) = event.typed_event {
-                use edr::common::telemetry_data::TypedEvent;
-                match typed_event {
-                    TypedEvent::Trace(trace) => {
-                        // Extract trace event fields into payload_fields for indexing
-                        payload_fields.insert("seq".to_string(), json!(trace.seq));
-                        payload_fields.insert("file".to_string(), json!(&trace.file));
-                        payload_fields.insert("line".to_string(), json!(trace.line));
-                        payload_fields.insert("func".to_string(), json!(&trace.func));
-                        payload_fields.insert("ts_us".to_string(), json!(trace.ts_us));
-                    }
-                    TypedEvent::Coverage(cov) => {
-                        // Extract BB coverage fields into payload_fields for indexing
-                        payload_fields.insert("total_bbs".to_string(), json!(cov.total_bbs));
-                        payload_fields.insert("bb_ids".to_string(), json!(&cov.bb_ids));
-                        payload_fields.insert("hit_counts".to_string(), json!(&cov.hit_counts));
-                        payload_fields.insert("bitmap_size".to_string(), json!(cov.bitmap.len()));
-
-                        // Store bitmap as Base64 for Elasticsearch (more efficient than raw bytes)
-                        use base64::{engine::general_purpose, Engine as _};
-                        let bitmap_b64 = general_purpose::STANDARD.encode(&cov.bitmap);
-                        payload_fields.insert("bitmap_b64".to_string(), json!(bitmap_b64));
-                    }
-                    TypedEvent::Checkpoint(cp) => {
-                        // Extract checkpoint fields into payload_fields for indexing
-                        payload_fields.insert("checkpoint_name".to_string(), json!(&cp.name));
-                        payload_fields.insert("ts_us".to_string(), json!(cp.ts_us));
-                    }
-                }
-            }
-
-            // Build document with flattened payload fields at top level for searchability
-            let mut doc = json!({
-                "job_id": event.job_id,
-                "event_type": event.event_type,
-                "timestamp": event.timestamp,
-                "metadata": event.metadata,
-                "indexed_at": chrono::Utc::now().to_rfc3339(),
-            });
-
-            // Merge payload fields into top level (makes them searchable)
-            if let Some(obj) = doc.as_object_mut() {
-                for (key, value) in payload_fields {
-                    // Detect pointer/address fields by name pattern
-                    let key_lower = key.to_lowercase();
-                    let is_pointer_field = key_lower.contains("address")
-                        || key_lower.contains("pointer")
-                        || key_lower.contains("stack")
-                        || key_lower.contains("base")
-                        || key_lower.contains("limit")
-                        || key_lower.contains("rva")
-                        || key_lower.contains("offset") && value.is_number();
-
-                    // Detect fields that should be numeric (daddr, saddr, port, etc.)
-                    let should_be_numeric = key_lower.contains("addr")
-                        || key_lower.contains("port")
-                        || key_lower.contains("pid")
-                        || key_lower.contains("tid")
-                        || key_lower.contains("size");
-
-                    // Smart conversion: keep small numbers as numbers, convert problematic ones
-                    let converted_value = match value {
-                        serde_json::Value::Number(n) => {
-                            if is_pointer_field {
-                                // Pointer/address field: always convert to hex string
-                                if let Some(u) = n.as_u64() {
-                                    json!(format!("0x{:X}", u))
-                                } else if let Some(i) = n.as_i64() {
-                                    json!(format!("0x{:X}", i))
-                                } else {
-                                    json!(n.to_string())
-                                }
-                            } else {
-                                // Non-pointer field: check range
-                                if let Some(u) = n.as_u64() {
-                                    if u > i64::MAX as u64 {
-                                        // Exceeds i64 range - convert to string
-                                        json!(format!("0x{:X}", u))
-                                    } else {
-                                        // Safe range - keep as number for Kibana aggregations
-                                        json!(u)
-                                    }
-                                } else if let Some(i) = n.as_i64() {
-                                    // Signed integer in safe range
-                                    json!(i)
-                                } else if let Some(f) = n.as_f64() {
-                                    // Float - keep as-is
-                                    json!(f)
-                                } else {
-                                    // Fallback to string
-                                    json!(n.to_string())
-                                }
-                            }
-                        }
-                        serde_json::Value::String(s) => {
-                            // If field should be numeric but contains "unsupported" or other non-numeric string,
-                            // convert to null to avoid Elasticsearch type conflicts
-                            if should_be_numeric && (s == "unsupported" || s.parse::<i64>().is_err()) {
-                                json!(null)
-                            } else {
-                                json!(s)
-                            }
-                        }
-                        serde_json::Value::Bool(b) => json!(b),
-                        serde_json::Value::Null => json!(null),
-                        serde_json::Value::Array(arr) => json!(arr),
-                        serde_json::Value::Object(obj) => json!(obj),
-                    };
-
-                    // Prefix payload fields to avoid conflicts with top-level fields
-                    obj.insert(format!("payload_{}", key), converted_value);
-                }
-            }
-
-            let doc_str = serde_json::to_string(&doc).unwrap_or_default();
-
-            let response = self
-                .es_client
-                .index(IndexParts::Index(&index_name))
-                .body(doc)
-                .send()
-                .await;
-
-            match response {
-                Ok(resp) if resp.status_code().is_success() => {
-                    indexed += 1;
-                }
-                Ok(resp) => {
-                    let status = resp.status_code();
-                    let body = resp.text().await.unwrap_or_default();
-                    warn!("Failed to index event: status {} - {}", status, body);
-
-                    // Log the problematic document for debugging (first occurrence only)
-                    if indexed == 0 {
-                        warn!("Problematic document: {}", doc_str);
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to index event: {}", e);
-                }
-            }
-        }
-
-        info!(
-            "Indexed {}/{} telemetry events to {}",
-            indexed,
-            batch.len(),
-            index_name
-        );
-
-        Ok(())
-    }
-
-    /// Store run result to Elasticsearch
-    /// Tries worker IP first, falls back to configured localhost if that fails
-    async fn store_run_result(
-        &self,
-        report: &StatusReport,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        use serde_json::json;
-
-        let index_name = format!("runs-{}", chrono::Utc::now().format("%Y.%m"));
-
-        let doc = json!({
-            "run_id": report.run_id,
-            "job_id": report.job_id,
-            "worker_id": report.worker_id,
-            "worker_ip": report.worker_ip,
-            "artifact_name": report.artifact_name,
-            "pid": report.pid,
-            "status": report.event_type,
-            "elapsed_seconds": report.elapsed_seconds,
-            "telemetry_events_count": report.telemetry_events_count,
-            "details": report.details,
-            "timestamp": chrono::Utc::now().to_rfc3339(),
-        });
-
-        // Strategy: Try controller IP first (Elasticsearch runs on controller),
-        // then fall back to configured localhost
-        let controller_es_url = format!("http://{}:9200", self.controller_ip);
-
-        // Try controller IP first (as seen from worker's network perspective)
-        info!("Attempting to store run result to Elasticsearch at controller IP: {}", controller_es_url);
-        match self.try_index_to_es(&controller_es_url, &index_name, &report.run_id, &doc).await {
-            Ok(()) => {
-                info!(
-                    "[OK] Stored run result to controller ES ({}): {} (status: {})",
-                    self.controller_ip, report.run_id, report.event_type
-                );
-                return Ok(());
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to store to controller ES ({}): {} - falling back to localhost",
-                    controller_es_url, e
-                );
-            }
-        }
-
-        // Fallback to configured localhost client
-        info!("Falling back to configured Elasticsearch client (localhost)");
-        let response = self
-            .es_client
-            .index(IndexParts::IndexId(&index_name, &report.run_id))
-            .body(doc)
-            .send()
-            .await?;
-
-        if response.status_code().is_success() {
-            info!(
-                "[OK] Stored run result to localhost ES: {} (status: {})",
-                report.run_id, report.event_type
-            );
-        } else {
-            warn!(
-                "Index run result returned non-success status: {}",
-                response.status_code()
-            );
-        }
-
-        Ok(())
-    }
-
-    /// Try to index document to a specific Elasticsearch URL
-    async fn try_index_to_es(
-        &self,
-        es_url: &str,
-        index_name: &str,
-        doc_id: &str,
-        doc: &serde_json::Value,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // Create temporary ES client for this specific URL
-        let es_transport = Transport::single_node(es_url)?;
-        let es_client = Elasticsearch::new(es_transport);
-
-        let response = es_client
-            .index(IndexParts::IndexId(index_name, doc_id))
-            .body(doc.clone())
-            .send()
-            .await?;
-
-        if response.status_code().is_success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "Elasticsearch returned non-success status: {}",
-                response.status_code()
-            )
-            .into())
-        }
-    }
-
-    /// Create Elasticsearch index template for jobs
-    async fn create_jobs_index_template(&self) -> Result<(), Box<dyn std::error::Error>> {
-        use serde_json::json;
-
-        let template = json!({
-            "index_patterns": ["jobs-*"],
-            "template": {
-                "settings": {
-                    "number_of_shards": 1,
-                    "number_of_replicas": 0
-                },
-                "mappings": {
-                    "properties": {
-                        "job_id": { "type": "keyword" },
-                        "status": { "type": "keyword" },
-                        "template_name": { "type": "keyword" },
-                        "source_file": { "type": "keyword" },
-                        "trace_mode": { "type": "keyword" },
-                        "priority": { "type": "integer" },
-                        "current_round": { "type": "integer" },
-                        "max_rounds": { "type": "integer" },
-                        "stop_on_evasion": { "type": "boolean" },
-                        "stop_on_detection": { "type": "boolean" },
-                        "created_at": { "type": "date" },
-                        "updated_at": { "type": "date" }
-                    }
-                }
-            }
-        });
-
-        self.es_client
-            .indices()
-            .put_index_template(elasticsearch::indices::IndicesPutIndexTemplateParts::Name("jobs-template"))
-            .body(template)
-            .send()
-            .await?;
-
-        info!("Created Elasticsearch index template: jobs-template");
-        Ok(())
-    }
-
-    /// Create Elasticsearch index template for rounds
-    async fn create_rounds_index_template(&self) -> Result<(), Box<dyn std::error::Error>> {
-        use serde_json::json;
-
-        let template = json!({
-            "index_patterns": ["rounds-*"],
-            "template": {
-                "settings": {
-                    "number_of_shards": 1,
-                    "number_of_replicas": 0
-                },
-                "mappings": {
-                    "properties": {
-                        "round_id": { "type": "keyword" },
-                        "job_id": { "type": "keyword" },
-                        "round_number": { "type": "integer" },
-                        "mutations": { "type": "keyword" },
-                        "detected": { "type": "boolean" },
-                        "behavior_match": { "type": "boolean" },
-                        "evasion_score": { "type": "float" },
-                        "completed_at": { "type": "date" }
-                    }
-                }
-            }
-        });
-
-        self.es_client
-            .indices()
-            .put_index_template(elasticsearch::indices::IndicesPutIndexTemplateParts::Name("rounds-template"))
-            .body(template)
-            .send()
-            .await?;
-
-        info!("Created Elasticsearch index template: rounds-template");
-        Ok(())
-    }
-
-    /// Index job document to Elasticsearch
-    async fn index_job(&self, job: &job::Job) -> Result<(), Box<dyn std::error::Error>> {
-        use serde_json::json;
-
-        let index_name = format!("jobs-{}", chrono::Utc::now().format("%Y.%m"));
-
-        let doc = json!({
-            "job_id": job.id,
-            "status": job.status.to_string(),
-            "template_name": job.template_name,
-            "source_file": job.source_file,
-            "trace_mode": job.trace_mode,
-            "priority": job.priority,
-            "current_round": job.current_round,
-            "max_rounds": job.max_rounds,
-            "stop_on_evasion": job.stop_on_evasion,
-            "stop_on_detection": job.stop_on_detection,
-            "created_at": chrono::Utc::now().to_rfc3339(),
-            "updated_at": chrono::Utc::now().to_rfc3339(),
-        });
-
-        self.es_client
-            .index(IndexParts::IndexId(&index_name, &job.id))
-            .body(doc)
-            .send()
-            .await?;
-
-        Ok(())
-    }
-
-    /// Index round document to Elasticsearch
-    async fn index_round(&self, job_id: &str, round: &round::RoundSummary) -> Result<(), Box<dyn std::error::Error>> {
-        use serde_json::json;
-
-        let index_name = format!("rounds-{}", chrono::Utc::now().format("%Y.%m"));
-
-        let doc = json!({
-            "round_id": round.round_id,
-            "job_id": job_id,
-            "round_number": round.round_number,
-            "mutations": round.mutations,
-            "detected": round.detected,
-            "behavior_match": round.behavior_match,
-            "evasion_score": round.evasion_score,
-            "completed_at": round.completed_at.duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-        });
-
-        let doc_id = format!("{}/{}", job_id, round.round_id);
-        self.es_client
-            .index(IndexParts::IndexId(&index_name, &doc_id))
-            .body(doc)
-            .send()
-            .await?;
-
-        Ok(())
+    pub fn set_worker_manager(&mut self, manager: Arc<worker_manager::WorkerManager>) {
+        self.worker_manager = Some(manager);
     }
 }
 
@@ -1566,7 +96,7 @@ fn detect_controller_ip() -> Option<String> {
             if let Ok(local_addr) = socket.local_addr() {
                 if let IpAddr::V4(ipv4) = local_addr.ip() {
                     if !ipv4.is_loopback() {
-                        info!("Detected controller IP via routing table: {}", ipv4);
+                        debug!("Detected controller IP via routing table: {}", ipv4);
                         return Some(ipv4.to_string());
                     }
                 }
@@ -1581,11 +111,6 @@ fn detect_controller_ip() -> Option<String> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing with INFO level (visible in both debug and release builds)
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
-
     // Load generated TOML config (auto-finds in standard locations)
     // Search order:
     //   1. AUTOMUTATE_CONTROLLER_CONFIG env var
@@ -1600,22 +125,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     });
 
+    // Initialize logging with level from config
+    let log_level = match config.logging.level.to_uppercase().as_str() {
+        "TRACE" => tracing::Level::TRACE,
+        "DEBUG" => tracing::Level::DEBUG,
+        "INFO" => tracing::Level::INFO,
+        "WARN" => tracing::Level::WARN,
+        "ERROR" => tracing::Level::ERROR,
+        _ => {
+            eprintln!("Invalid log level '{}', defaulting to INFO", config.logging.level);
+            tracing::Level::INFO
+        }
+    };
+
+    tracing_subscriber::fmt()
+        .with_max_level(log_level)
+        .init();
+
     info!(
         "Loaded controller config successfully from {}",
         ControllerConfig::find_config_path()
     );
-    info!("Bind address: {}", config.server.bind_address);
+    debug!("Bind address: {}", config.server.bind_address);
     info!("Elasticsearch: {}", config.elasticsearch.url);
-    info!(
-        "Triage model: {} (threshold: {})",
-        config.triage.model_type, config.triage.confidence_threshold
-    );
 
     // Create Elasticsearch client
     let es_transport = Transport::single_node(&config.elasticsearch.url)?;
     let es_client = Elasticsearch::new(es_transport);
 
-    info!(
+    debug!(
         "Elasticsearch client initialized: {}",
         config.elasticsearch.url
     );
@@ -1629,14 +167,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         detect_controller_ip().unwrap_or_else(|| "127.0.0.1".to_string())
     } else {
         // Extract IP from bind address
-        config.server.bind_address
+        config
+            .server
+            .bind_address
             .split(':')
             .next()
             .unwrap_or("127.0.0.1")
             .to_string()
     };
 
-    info!("Controller IP for Elasticsearch access: {}", controller_ip);
+    debug!("Controller IP for Elasticsearch access: {}", controller_ip);
 
     let mut scheduler = SchedulerService::new(es_client, controller_ip);
 
@@ -1651,16 +191,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Controller/Scheduler starting...");
 
-    // Create scheduler core configuration from controller config
+    // Create worker event bus
+    use tokio::sync::mpsc;
+    let (events_tx, mut events_rx) = mpsc::channel::<worker_manager::WorkerEvent>(1000); //todo make into config
+    debug!("Created worker event bus");
+
+    // Step 2: Initialize WorkerManager
+    info!("Initializing WorkerManager...");
+    let worker_manager = Arc::new(worker_manager::WorkerManager::new(30, events_tx.clone())); // 30s RPC timeout //todo put in config
+
+    // Step 3: Create scheduler core configuration
     let scheduler_core_config = CoreSchedulerConfig {
-        poll_interval_seconds: 5,
+        poll_interval_ms: config.scheduler.poll_interval_ms,
         max_concurrent_jobs: config.scheduler.max_concurrent_runs_per_worker as usize,
         default_timeout_seconds: config.scheduler.run_timeout_secs,
-        health_timeout_seconds: 30, // Default health check timeout
+        health_timeout_seconds: config.scheduler.health_timeout_seconds,
     };
 
-    // Create and spawn scheduler core
-    match create_scheduler_core(scheduler_core_config) {
+    // Step 4: Create and spawn scheduler core (passing WorkerManager)
+    match create_scheduler_core(scheduler_core_config, Arc::clone(&worker_manager)).await {
         Ok(scheduler_core) => {
             info!("Scheduler core initialized successfully");
 
@@ -1668,9 +217,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             scheduler.set_scheduler_core(Arc::clone(&scheduler_core));
 
             // Spawn scheduler core in background task
+            debug!("Spawning scheduler core run loop...");
             tokio::spawn(async move {
+                debug!("Scheduler core task started - beginning job processing loop");
                 scheduler_core.run().await;
+                warn!("Scheduler core run loop exited unexpectedly");
             });
+            debug!("Scheduler core task spawned successfully");
         }
         Err(e) => {
             warn!("Failed to initialize scheduler core: {}", e);
@@ -1678,9 +231,670 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Query worker info on startup (optional, non-blocking)
+    info!("Querying worker metadata...");
+    let worker_infos = worker_manager.query_all_workers().await;
+    for (worker_id, info) in worker_infos {
+        info!(
+            "Worker {} - OS: {}, Capabilities: {:?}",
+            worker_id, info.os_version, info.capabilities
+        );
+    }
+
+    // Establish bidirectional streams with all workers for real-time communication
+    info!("Establishing bidirectional streams with workers...");
+    let stream_results = worker_manager.establish_all_streams().await;
+
+    let mut streams_established = 0;
+    let mut streams_failed = 0;
+
+    for (worker_id, result) in stream_results {
+        match result {
+            Ok(()) => {
+                info!("Stream established with worker: {}", worker_id);
+                streams_established += 1;
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to establish stream with worker {}: {}",
+                    worker_id, e
+                );
+                streams_failed += 1;
+            }
+        }
+    }
+
+    debug!(
+        "Stream establishment complete: {} successful, {} failed",
+        streams_established, streams_failed
+    );
+
+    if streams_established > 0 {
+        debug!("Workers connected - real-time communication active");
+    }
+
+    // Set worker manager in scheduler service
+    scheduler.set_worker_manager(Arc::clone(&worker_manager));
+    info!(
+        "WorkerManager initialized with {} workers",
+        &worker_manager.list_workers().len()
+    );
+
+    // Clone scheduler for orchestration loop
+    let scheduler_for_events = scheduler.clone();
+
+    // Cache for tracking telemetry counts per run_id (populated when TelemetryBatch arrives)
+    let telemetry_counts: Arc<tokio::sync::RwLock<std::collections::HashMap<String, i32>>> =
+        Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+    let telemetry_counts_for_loop = Arc::clone(&telemetry_counts);
+
+    // Spawn orchestration loop to consume worker events
+    tokio::spawn(async move {
+        debug!("Worker event orchestration loop started");
+
+        while let Some(event) = events_rx.recv().await {
+            match event {
+                // Connected event handler
+                worker_manager::WorkerEvent::Connected {
+                    worker_id,
+                    os_version,
+                    capabilities,
+                } => {
+                    debug!(
+                        "[WORKER-EVENT] Worker {} connected - OS: {}, Caps: {:?}",
+                        worker_id, os_version, capabilities
+                    );
+
+                    // Update WorkerPool state: mark worker as connected
+                    if let Some(core) = &scheduler_for_events.scheduler_core {
+                        if let Err(e) = core.pool().mark_connected(&worker_id).await {
+                            warn!("Failed to mark worker {} as connected: {}", worker_id, e);
+                        }
+                        // Also update health to mark as Available if it was Offline
+                        if let Err(e) = core.pool().update_health(&worker_id).await {
+                            warn!("Failed to update health for worker {}: {}", worker_id, e);
+                        }
+                    }
+                }
+
+                // Message event handler
+                worker_manager::WorkerEvent::Message { worker_id, msg } => {
+                    use crate::automutate::common::worker_message;
+
+                    match msg.payload {
+                        Some(worker_message::Payload::Registration(reg)) => {
+                            info!(
+                                "[WORKER-EVENT] Worker {} registration - IP: '{}', OS: {}, Capabilities: {:?}",
+                                worker_id, reg.ip_address, reg.os_version, reg.capabilities
+                            );
+
+                            // Convert ToolVersions proto to HashMap
+                            let tools = if let Some(tool_versions) = reg.tools {
+                                let mut tools_map = std::collections::HashMap::new();
+                                if !tool_versions.rededr_version.is_empty() {
+                                    tools_map.insert("rededr".to_string(), tool_versions.rededr_version);
+                                }
+                                if !tool_versions.defender_version.is_empty() {
+                                    tools_map.insert("defender".to_string(), tool_versions.defender_version);
+                                }
+                                if !tool_versions.etw_version.is_empty() {
+                                    tools_map.insert("etw".to_string(), tool_versions.etw_version);
+                                }
+                                if !tool_versions.llvm_version.is_empty() {
+                                    tools_map.insert("llvm".to_string(), tool_versions.llvm_version);
+                                }
+                                tools_map
+                            } else {
+                                std::collections::HashMap::new()
+                            };
+
+                            // Log tool versions if present
+                            if !tools.is_empty() {
+                                debug!("  Tools: {:?}", tools);
+                            }
+
+                            // Log metadata if present
+                            if !reg.metadata.is_empty() {
+                                debug!("  Metadata: {:?}", reg.metadata);
+                            }
+
+                            // Register/update worker in WorkerPool with full metadata
+                            if let Some(core) = &scheduler_for_events.scheduler_core {
+                                match core.pool().register_worker_with_metadata(
+                                    worker_id.clone(),
+                                    reg.ip_address.clone(),
+                                    true, // enabled
+                                    reg.os_version.clone(),
+                                    reg.capabilities.clone(),
+                                    reg.metadata.clone(),
+                                    tools,
+                                ).await {
+                                    Ok(()) => {
+                                        debug!(
+                                            "[OK] Worker {} metadata updated in WorkerPool [OS: {}, Caps: {}]",
+                                            worker_id,
+                                            reg.os_version,
+                                            reg.capabilities.len()
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to update worker {} metadata in WorkerPool: {}",
+                                            worker_id, e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        Some(worker_message::Payload::Status(status)) => {
+                            debug!(
+                                "[WORKER-EVENT] Worker {} status - CPU: {}%, Jobs: {}",
+                                worker_id, status.cpu_percent, status.active_jobs
+                            );
+
+                            // Update worker health: this is the heartbeat from the stream
+                            if let Some(core) = &scheduler_for_events.scheduler_core {
+                                if let Err(e) = core.pool().update_health(&worker_id).await {
+                                    warn!("Failed to update health for worker {}: {}", worker_id, e);
+                                }
+                            }
+                        }
+
+                        Some(worker_message::Payload::Telemetry(batch)) => {
+                            let events_count = batch.events.len();
+                            let job_id = batch.job_id.clone();
+                            let run_id = batch.run_id.clone();
+                            let is_final = batch.is_final;
+
+                            debug!(
+                                "[WORKER-EVENT] Worker {} telemetry - {} events (job: {}, run: {}, final: {})",
+                                worker_id, events_count, job_id, run_id, is_final
+                            );
+
+                            // Cache telemetry count for this run_id (used later when SampleResponse arrives)
+                            {
+                                let mut counts = telemetry_counts_for_loop.write().await;
+                                *counts.entry(run_id.clone()).or_insert(0) += events_count as i32;
+                                debug!(
+                                    "[TELEMETRY-CACHE-STORE] run_id='{}' events={} cumulative={}",
+                                    run_id, events_count, counts[&run_id]
+                                );
+                            }
+
+                            // Forward to Elasticsearch asynchronously (non-blocking)
+                            if !batch.events.is_empty() {
+                                let scheduler_clone = scheduler_for_events.clone();
+                                let worker_id_clone = worker_id.clone();
+
+                                tokio::spawn(async move {
+                                    use tokio::time::{Duration, timeout};
+
+                                    debug!(
+                                        "[UPLOAD] Indexing {} events to Elasticsearch [job: {}, worker: {}]",
+                                        events_count, job_id, worker_id_clone
+                                    );
+
+                                    // Index with 10s timeout (matches legacy behavior)
+                                    match timeout(Duration::from_secs(10), scheduler_clone.index_telemetry_batch(&batch.events)).await {
+                                        Ok(Ok(())) => {
+                                            debug!(
+                                                "[OK] Successfully indexed {} telemetry events to Elasticsearch [job: {}, worker: {}]",
+                                                events_count, job_id, worker_id_clone
+                                            );
+                                        }
+                                        Ok(Err(e)) => {
+                                            error!("[ERROR] ELASTICSEARCH ERROR: Failed to index telemetry batch");
+                                            error!(
+                                                "   Job: {}, Events: {}, Worker: {}",
+                                                job_id, events_count, worker_id_clone
+                                            );
+                                            error!("   Error details: {}", e);
+                                            warn!(
+                                                "   Telemetry received but NOT INDEXED (Elasticsearch may be down/unreachable)"
+                                            );
+                                            warn!(
+                                                "   Possible causes: Elasticsearch down, network issue, mapping conflict, disk full"
+                                            );
+                                            // Don't crash - telemetry was received, just not indexed
+                                        }
+                                        Err(_) => {
+                                            error!(
+                                                "[TIMEOUT] ELASTICSEARCH TIMEOUT: Indexing exceeded 10s limit [job: {}, worker: {}]",
+                                                job_id, worker_id_clone
+                                            );
+                                            error!(
+                                                "   {} events NOT INDEXED due to timeout",
+                                                events_count
+                                            );
+                                            warn!("   Possible causes: Elasticsearch overloaded, large batch, slow network");
+                                            // Don't crash - continue processing other events
+                                        }
+                                    }
+                                });
+                            } else {
+                                debug!("[WORKER-EVENT] Empty telemetry batch from worker {}, skipping indexing", worker_id);
+                            }
+                        }
+
+                        Some(worker_message::Payload::SampleResponse(response)) => {
+                            let job_id = response.job_id.clone();
+                            let run_id = response.run_id.clone();
+                            let success = response.success;
+                            let exit_code = response.exit_code;
+                            let output_preview = if response.output.len() > 200 {
+                                format!("{}... ({} bytes)", &response.output[..200], response.output.len())
+                            } else {
+                                response.output.clone()
+                            };
+
+                            debug!(
+                                "[WORKER-EVENT] Worker {} completed job {} - Success: {}, Exit code: {}",
+                                worker_id, job_id, success, exit_code
+                            );
+                            debug!("[SAMPLE-RESPONSE] run_id='{}' job_id='{}'", run_id, job_id);
+                            debug!("Output preview: {}", output_preview);
+
+                            // Route response to waiting round_processor (via channel)
+                            // If run_id is empty, this is a legacy RPC response (no routing needed)
+                            if !run_id.is_empty() {
+                                if let Some(core) = &scheduler_for_events.scheduler_core {
+                                    if let Err(e) = core.worker_manager()
+                                        .complete_pending_execution(&run_id, response.clone())
+                                    {
+                                        debug!(
+                                            "No pending execution for run_id: {} (might be legacy RPC execution): {}",
+                                            run_id, e
+                                        );
+                                    }
+                                }
+                            }
+
+                            // Release worker (mark as available for new jobs)
+                            if let Some(core) = &scheduler_for_events.scheduler_core {
+                                match core.pool().release_worker(&worker_id).await {
+                                    Ok(()) => {
+                                        debug!(
+                                            "[OK] Worker {} released and marked available (job: {})",
+                                            worker_id, job_id
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to release worker {} after job completion: {}",
+                                            worker_id, e
+                                        );
+                                        // Continue processing - non-critical error
+                                    }
+                                }
+                            }
+
+                            // Store job completion result to Elasticsearch asynchronously
+                            let scheduler_clone = scheduler_for_events.clone();
+                            let worker_id_clone = worker_id.clone();
+                            let telemetry_counts_clone = Arc::clone(&telemetry_counts_for_loop);
+
+                            tokio::spawn(async move {
+                                use serde_json::json;
+                                use tokio::time::{Duration, timeout};
+
+                                // Build run result document for ES (schema-compliant with dashboard)
+                                let index_name = format!("runs-{}", chrono::Utc::now().format("%Y.%m"));
+
+                                // Parse artifact_name from job_id (format: "job-XXX/round-Y/baseline|instrumented")
+                                // Example: "job-000001/round-1/baseline" -> artifact_name = "baseline"
+                                let artifact_name = job_id
+                                    .split('/')
+                                    .last()
+                                    .unwrap_or("unknown")
+                                    .to_string();
+
+                                // Derive status from success and exit_code
+                                let status = if success {
+                                    "success".to_string()
+                                } else if exit_code == -1 {
+                                    "timeout".to_string()
+                                } else {
+                                    "error".to_string()
+                                };
+
+                                // Extract elapsed_seconds from output if available
+                                // Output format: "Execution failed with exit code -1073741819, elapsed: 0.02s"
+                                let elapsed_seconds = response.output
+                                    .split("elapsed: ")
+                                    .nth(1)
+                                    .and_then(|s| s.split('s').next())
+                                    .and_then(|s| s.parse::<f64>().ok())
+                                    .map(|f| f.ceil() as i32)
+                                    .unwrap_or(0);
+
+                                // Get worker IP from pool (if available)
+                                let worker_ip = if let Some(core) = &scheduler_clone.scheduler_core {
+                                    match core.pool().get_worker(&worker_id_clone).await {
+                                        Some(w) => w.address.split(':').next().unwrap_or("unknown").to_string(),
+                                        None => "unknown".to_string()
+                                    }
+                                } else {
+                                    "unknown".to_string()
+                                };
+
+                                // Look up actual telemetry count from cache (populated when TelemetryBatch arrived)
+                                let telemetry_count = {
+                                    let counts = telemetry_counts_clone.read().await;
+                                    let count = counts.get(&run_id).copied().unwrap_or(0);
+                                    debug!(
+                                        "[TELEMETRY-CACHE-LOOKUP] run_id='{}' found={} count={}",
+                                        run_id, counts.contains_key(&run_id), count
+                                    );
+                                    count
+                                };
+
+                                // Clean up cache entry (no longer needed after indexing)
+                                {
+                                    let mut counts = telemetry_counts_clone.write().await;
+                                    counts.remove(&run_id);
+                                }
+
+                                let doc = json!({
+                                    "run_id": run_id,
+                                    "job_id": job_id,
+                                    "status": status,
+                                    "elapsed_seconds": elapsed_seconds,
+                                    "artifact_name": artifact_name,
+                                    "worker_id": worker_id_clone,
+                                    "worker_ip": worker_ip,
+                                    "exit_code": exit_code,
+                                    "telemetry_events_count": telemetry_count,
+                                    "output": response.output,
+                                    "telemetry_ids": response.telemetry_ids,
+                                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                                });
+
+                                debug!(
+                                    "[UPLOAD] Storing job completion to Elasticsearch [job: {}, worker: {}]",
+                                    job_id, worker_id_clone
+                                );
+
+                                // Store with 5s timeout
+                                match timeout(Duration::from_secs(5), async {
+                                    use elasticsearch::{IndexParts, http::StatusCode};
+
+                                    let response = scheduler_clone.es_client
+                                        .index(IndexParts::Index(&index_name))
+                                        .body(doc)
+                                        .send()
+                                        .await?;
+
+                                    if response.status_code().is_success() {
+                                        Ok(())
+                                    } else {
+                                        Err(anyhow::anyhow!("ES returned status: {}", response.status_code()))
+                                    }
+                                }).await {
+                                    Ok(Ok(())) => {
+                                        debug!(
+                                            "[OK] Stored job completion to Elasticsearch [job: {}, worker: {}]",
+                                            job_id, worker_id_clone
+                                        );
+                                    }
+                                    Ok(Err(e)) => {
+                                        error!(
+                                            "[ERROR] Failed to store job completion to ES [job: {}, worker: {}]: {}",
+                                            job_id, worker_id_clone, e
+                                        );
+                                        // Don't crash - job completion was handled, just not indexed
+                                    }
+                                    Err(_) => {
+                                        error!(
+                                            "[TIMEOUT] ES timeout storing job completion [job: {}, worker: {}]",
+                                            job_id, worker_id_clone
+                                        );
+                                        // Don't crash - job completion was handled
+                                    }
+                                }
+                            });
+
+                            // NOTE: Job status is managed by round_processor via execute_artifact_stream()
+                            // The stream-based execution now uses response channels (Option 3 implemented)
+                            // - Controller sends RunSampleCommand via stream
+                            // - Worker executes and sends SampleResponse via stream
+                            // - Response routed via channel to waiting round_processor
+                            // - round_processor continues execution and updates job status
+                            // No job status update needed here - round_processor handles full lifecycle
+                            // See JOB-STATUS-UPDATE-ANALYSIS.md for details
+                        }
+
+                        Some(worker_message::Payload::Ack(ack)) => {
+                            debug!(
+                                "[WORKER-EVENT] Worker {} acked request {} - Success: {}",
+                                worker_id, ack.request_id, ack.success
+                            );
+                            // Optional: Update pending command tracking
+                        }
+
+                        Some(worker_message::Payload::ExecutionStatus(status)) => {
+                            // Log detailed execution progress based on event type
+                            match status.event_type.as_str() {
+                                "started" => {
+                                    info!(
+                                        "[EXEC-STATUS] Worker {} started execution [job: {}, run: {}, artifact: {}, PID: {}]",
+                                        worker_id, status.job_id, status.run_id, status.artifact_name, status.pid
+                                    );
+                                }
+                                "heartbeat" => {
+                                    debug!(
+                                        "[EXEC-STATUS] Worker {} heartbeat [job: {}, PID: {}, elapsed: {}s, alive: {}, events: {}, CPU: {}%, MEM: {}MB]",
+                                        worker_id,
+                                        status.job_id,
+                                        status.pid,
+                                        status.elapsed_seconds,
+                                        status.process_alive,
+                                        status.telemetry_events_count,
+                                        status.cpu_percent,
+                                        status.memory_mb
+                                    );
+                                }
+                                "stuck" => {
+                                    warn!(
+                                        "[EXEC-STATUS] Worker {} execution stuck [job: {}, PID: {}, elapsed: {}s, events: {}]",
+                                        worker_id,
+                                        status.job_id,
+                                        status.pid,
+                                        status.elapsed_seconds,
+                                        status.telemetry_events_count
+                                    );
+                                    if !status.details.is_empty() {
+                                        warn!("  Details: {}", status.details);
+                                    }
+                                }
+                                "approaching_timeout" => {
+                                    warn!(
+                                        "[EXEC-STATUS] Worker {} approaching timeout [job: {}, PID: {}, elapsed: {}s, alive: {}]",
+                                        worker_id,
+                                        status.job_id,
+                                        status.pid,
+                                        status.elapsed_seconds,
+                                        status.process_alive
+                                    );
+                                }
+                                "terminated" => {
+                                    info!(
+                                        "[EXEC-STATUS] Worker {} execution terminated [job: {}, PID: {}, elapsed: {}s, events: {}]",
+                                        worker_id,
+                                        status.job_id,
+                                        status.pid,
+                                        status.elapsed_seconds,
+                                        status.telemetry_events_count
+                                    );
+                                    if !status.details.is_empty() {
+                                        debug!("  Details: {}", status.details);
+                                    }
+                                }
+                                _ => {
+                                    debug!(
+                                        "[EXEC-STATUS] Worker {} execution status [type: {}, job: {}, PID: {}]",
+                                        worker_id, status.event_type, status.job_id, status.pid
+                                    );
+                                }
+                            }
+
+                            // Optional: Store intermediate execution status in Elasticsearch for monitoring dashboards
+                            // Uncomment this block to enable ES storage of execution status
+                            /*
+                            let scheduler_clone = scheduler_for_events.clone();
+                            let worker_id_clone = worker_id.clone();
+
+                            tokio::spawn(async move {
+                                use serde_json::json;
+                                use tokio::time::{Duration, timeout};
+
+                                let index_name = format!("execution-status-{}", chrono::Utc::now().format("%Y.%m"));
+
+                                let doc = json!({
+                                    "worker_id": worker_id_clone,
+                                    "worker_ip": status.worker_ip,
+                                    "job_id": status.job_id,
+                                    "run_id": status.run_id,
+                                    "artifact_name": status.artifact_name,
+                                    "pid": status.pid,
+                                    "elapsed_seconds": status.elapsed_seconds,
+                                    "process_alive": status.process_alive,
+                                    "telemetry_events_count": status.telemetry_events_count,
+                                    "event_type": status.event_type,
+                                    "cpu_percent": status.cpu_percent,
+                                    "memory_mb": status.memory_mb,
+                                    "details": status.details,
+                                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                                });
+
+                                // Store with 3s timeout (lower than telemetry since this is more frequent)
+                                match timeout(Duration::from_secs(3), async {
+                                    use elasticsearch::{IndexParts, http::StatusCode};
+
+                                    let response = scheduler_clone.es_client
+                                        .index(IndexParts::Index(&index_name))
+                                        .body(doc)
+                                        .send()
+                                        .await?;
+
+                                    if response.status_code().is_success() {
+                                        Ok(())
+                                    } else {
+                                        Err(anyhow::anyhow!("ES returned status: {}", response.status_code()))
+                                    }
+                                }).await {
+                                    Ok(Ok(())) => {
+                                        debug!("[OK] Stored execution status to ES [job: {}]", status.job_id);
+                                    }
+                                    Ok(Err(e)) => {
+                                        debug!("[ERROR] Failed to store execution status to ES: {}", e);
+                                    }
+                                    Err(_) => {
+                                        debug!("[TIMEOUT] ES timeout storing execution status");
+                                    }
+                                }
+                            });
+                            */
+                        }
+
+                        None => {
+                            warn!("[WORKER-EVENT] Worker {} sent empty message", worker_id);
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Disconnected event handler
+                worker_manager::WorkerEvent::Disconnected { worker_id, reason } => {
+                    warn!(
+                        "[WORKER-EVENT] Worker {} disconnected: {}",
+                        worker_id, reason
+                    );
+
+                    // Reschedule jobs assigned to this worker (BEFORE marking offline)
+                    if let Some(core) = &scheduler_for_events.scheduler_core {
+                        // Get worker's current job (if any) before marking offline
+                        if let Some(worker) = core.pool().get_worker(&worker_id).await {
+                            if let Some(ref job_id) = worker.current_job {
+                                debug!(
+                                    "[JOB-RECOVERY] Worker {} had assigned job: {} - marking as failed",
+                                    worker_id, job_id
+                                );
+
+                                // Get job from queue
+                                if let Some(mut job) = core.queue().get_job(&job_id) {
+                                    // Check if job is still running (not already completed)
+                                    if !job.is_terminal() {
+                                        // Mark job as failed
+                                        job.mark_failed(format!(
+                                            "Worker {} disconnected during execution: {}",
+                                            worker_id, reason
+                                        ));
+
+                                        // Update job in queue
+                                        if let Err(e) = core.queue().update_job(&job) {
+                                            error!(
+                                                "[JOB-RECOVERY] Failed to update job {} status: {}",
+                                                job_id, e
+                                            );
+                                        } else {
+                                            warn!(
+                                                "[JOB-RECOVERY] Job {} marked as FAILED due to worker disconnect",
+                                                job_id
+                                            );
+                                            warn!(
+                                                "  Reason: Worker {} - {}",
+                                                worker_id, reason
+                                            );
+                                            warn!(
+                                                "  Job was in round {}/{} when worker disconnected",
+                                                job.current_round, job.max_rounds
+                                            );
+                                        }
+                                    } else {
+                                        debug!(
+                                            "[JOB-RECOVERY] Job {} already terminal (status: {}), no recovery needed",
+                                            job_id, job.status
+                                        );
+                                    }
+                                } else {
+                                    warn!(
+                                        "[JOB-RECOVERY] Job {} not found in queue (worker: {})",
+                                        job_id, worker_id
+                                    );
+                                }
+                            } else {
+                                debug!(
+                                    "[JOB-RECOVERY] Worker {} had no assigned job",
+                                    worker_id
+                                );
+                            }
+                        }
+                    }
+
+                    // Mark worker as offline in WorkerPool (clears current_job)
+                    if let Some(core) = &scheduler_for_events.scheduler_core {
+                        if let Err(e) = core.pool().mark_worker_offline(&worker_id).await {
+                            warn!("Failed to mark worker {} as offline: {}", worker_id, e);
+                        }
+                        if let Err(e) = core.pool().mark_disconnected(&worker_id).await {
+                            warn!("Failed to mark worker {} as disconnected: {}", worker_id, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        warn!("Worker event orchestration loop terminated (event channel closed)");
+    });
+
+    debug!("Orchestration loop spawned successfully");
+
     // gRPC reflection for grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!("edr_descriptor"))
+        .register_encoded_file_descriptor_set(tonic::include_file_descriptor_set!(
+            "automutate_descriptor"
+        ))
         .build_v1()?;
 
     Server::builder()
