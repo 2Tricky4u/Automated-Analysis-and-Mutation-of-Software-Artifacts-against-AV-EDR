@@ -70,7 +70,7 @@ impl Default for BuildConfig {
         Self {
             target: "x86_64-pc-windows-msvc".to_string(),
             optimization: "2".to_string(),
-            trace_mode: TraceMode::ApiPlusBB,
+            trace_mode: TraceMode::Lines,
             deterministic: true,
             xwin_path: dirs::home_dir().unwrap().join(".xwin"),
             llvm_passes: vec![],

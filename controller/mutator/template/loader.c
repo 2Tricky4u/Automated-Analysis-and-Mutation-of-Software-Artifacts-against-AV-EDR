@@ -2,7 +2,7 @@
 #include <stdio.h>
 
 /* 
- * SuperMega Loader - Standalone Integration Version
+ * SuperMega Loader
  * Adapted for AutoMutate++ Fuzzer Integration
  * 
  * Components:
@@ -12,14 +12,6 @@
  * 
  * Note: Payload is embedded directly for standalone compilation.
  */
-
-// =========================================================================
-// CONFIGURATION
-// =========================================================================
-
-// =========================================================================
-// CONFIGURATION
-// =========================================================================
 
 // Include auto-generated encrypted payload and keys
 #include "payload.h"
