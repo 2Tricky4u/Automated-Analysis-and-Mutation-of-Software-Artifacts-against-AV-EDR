@@ -34,8 +34,8 @@ impl std::fmt::Display for RoundStatus {
 /// Run type identifier
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RunType {
-    Baseline,      // No instrumentation
-    Instrumented,  // Full tracing
+    Baseline,     // No instrumentation
+    Instrumented, // Full tracing
 }
 
 impl RunType {
@@ -95,10 +95,10 @@ pub struct Feedback {
 pub struct RoundSummary {
     pub round_id: String,
     pub round_number: u32,
-    pub mutations: Vec<String>,  // Mutation IDs only
-    pub detected: bool,          // Was artifact detected?
-    pub behavior_match: bool,    // Did baseline and instrumented match?
-    pub evasion_score: f64,      // Score for selector feedback (0.0-1.0)
+    pub mutations: Vec<String>, // Mutation IDs only
+    pub detected: bool,         // Was artifact detected?
+    pub behavior_match: bool,   // Did baseline and instrumented match?
+    pub evasion_score: f64,     // Score for selector feedback (0.0-1.0)
     pub completed_at: SystemTime,
 }
 
@@ -175,9 +175,20 @@ impl Round {
             round_number: self.round_number,
             mutations: self.mutations.iter().map(|m| m.id.clone()).collect(),
             detected: self.feedback.as_ref().map(|f| f.detected).unwrap_or(false),
-            behavior_match: self.behavior_match.as_ref().map(|b| b.outcome_match).unwrap_or(false),
-            evasion_score: self.feedback.as_ref().map(|f| f.evasion_score).unwrap_or(0.0),
+            behavior_match: self
+                .behavior_match
+                .as_ref()
+                .map(|b| b.outcome_match)
+                .unwrap_or(false),
+            evasion_score: self
+                .feedback
+                .as_ref()
+                .map(|f| f.evasion_score)
+                .unwrap_or(0.0),
             completed_at: self.completed_at.unwrap_or(SystemTime::now()),
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

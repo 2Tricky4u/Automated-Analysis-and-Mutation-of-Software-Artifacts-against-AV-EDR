@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package edr.worker;
+package automutate.worker;
 
 import "common.proto";
 
@@ -10,13 +10,27 @@ service WorkerAgent {
   rpc Ping(PingRequest) returns (PingResponse);
 
   // Run a sample for analysis
-  rpc RunSample(SampleRequest) returns (SampleResponse);
+  rpc RunSample(automutate.common.SampleRequest) returns (automutate.common.SampleResponse);
 
   // Get worker health status
   rpc HealthCheck(HealthRequest) returns (HealthResponse);
 
   // Receive artifact binary from controller (streaming upload)
-  rpc SendArtifact(stream ArtifactChunk) returns (TransferAck);
+  rpc SendArtifact(stream automutate.common.ArtifactChunk) returns (TransferAck);
+
+  // PHASE 1: Get worker metadata (replaces dynamic registration)
+  // Controller calls this to query worker capabilities instead of worker pushing registration
+  rpc GetWorkerInfo(WorkerInfoRequest) returns (WorkerInfoResponse);
+
+  // PHASE 1: Pull telemetry from worker (instead of worker streaming to controller)
+  // Controller calls this to fetch telemetry instead of worker pushing via StreamTelemetry
+  rpc GetTelemetry(TelemetryRequest) returns (stream automutate.common.TelemetryData);
+
+  // PHASE 2: Bidirectional stream for real-time communication
+  // Controller initiates connection, both sides can send messages
+  // Controller sends: run commands, artifact chunks, health checks, heartbeats
+  // Worker sends: registration, status, telemetry, sample results
+  rpc EstablishStream(stream automutate.common.ControllerMessage) returns (stream automutate.common.WorkerMessage);
 }
 
 // Harness Service - sample execution with monitoring
@@ -39,21 +53,7 @@ message PingResponse {
   string server = 3;
 }
 
-// Sample execution request
-message SampleRequest {
-  string job_id = 1;
-  string artifact_id = 2;  // NEW: Reference to transferred artifact (replaces artifact_path)
-  int32 timeout_seconds = 3;
-  bool enable_etw = 4;
-}
-
-message SampleResponse {
-  string job_id = 1;
-  bool success = 2;
-  int32 exit_code = 3;
-  string output = 4;
-  repeated string telemetry_ids = 5;
-}
+// (SampleRequest and SampleResponse moved to common.proto)
 
 // Health check
 message HealthRequest {
@@ -71,20 +71,20 @@ message HealthResponse {
 
 // Harness messages
 message ExecuteRequest {
-  edr.common.JobId job_id = 1;
+  automutate.common.JobId job_id = 1;
   string artifact_id = 2;  // NEW: Reference to artifact (replaces artifact_path)
   int32 timeout_seconds = 3;
   repeated string telemetry_providers = 4;
 }
 
 message ExecuteResponse {
-  edr.common.RunResult result = 1;
+  automutate.common.RunResult result = 1;
   // Full telemetry batch attached to final response
-  repeated edr.common.TelemetryData telemetry_events = 2;
+  repeated automutate.common.TelemetryData telemetry_events = 2;
 }
 
 message MonitorRequest {
-  edr.common.RunId run_id = 1;
+  automutate.common.RunId run_id = 1;
 }
 
 message MonitorEvent {
@@ -106,14 +106,7 @@ message ExecutionStatus {
   string last_activity = 7;  // Last significant API call or "idle"
 }
 
-// Artifact transfer (Phase 1: Build-Deploy-Execute Pipeline)
-message ArtifactChunk {
-  string artifact_id = 1;     // SHA256 hash
-  bytes data = 2;             // Binary chunk (4MB max per message)
-  uint32 chunk_index = 3;     // 0-based chunk sequence
-  uint32 total_chunks = 4;    // Total number of chunks
-  string sha256 = 5;          // Expected SHA256 for verification
-}
+// (ArtifactChunk moved to common.proto)
 
 message TransferAck {
   bool received = 1;
@@ -121,3 +114,45 @@ message TransferAck {
   string error = 3;
   string storage_path = 4;  // Where artifact was written on worker
 }
+
+// PHASE 1: New messages for controller-initiated queries
+
+// Request worker metadata (empty request - just query current state)
+message WorkerInfoRequest {
+  // Empty - controller just queries worker's current state
+}
+
+// Response with worker metadata (replaces WorkerRegistration push)
+message WorkerInfoResponse {
+  string worker_id = 1;
+  string ip_address = 2;
+  string os_version = 3;
+  repeated string capabilities = 4;  // ["rededr", "defender", "etw", "gpu"]
+  map<string, string> metadata = 5;  // {"cpu_cores": "8", "ram_gb": "32"}
+  automutate.common.ToolVersions tools = 6;
+  HealthMetrics health = 7;
+  string current_job_id = 8;  // Empty if no job running
+}
+
+// (ToolVersions moved to common.proto)
+
+// Health metrics
+message HealthMetrics {
+  int32 cpu_percent = 1;
+  int32 memory_percent = 2;
+  int32 disk_percent = 3;
+  int32 active_jobs = 4;
+  int64 uptime_seconds = 5;
+}
+
+// Request telemetry from worker (controller pulls instead of worker pushing)
+message TelemetryRequest {
+  string job_id = 1;             // Get telemetry for this job
+  int64 since_timestamp = 2;      // Get events since this time (0 = all)
+  int32 max_events = 3;           // Limit number of events (0 = all)
+}
+
+// PHASE 2: Bidirectional streaming messages (moved to common.proto)
+// - ControllerMessage, WorkerMessage
+// - RunSampleCommand, ArtifactChunkBatch, HealthCheckRequest
+// - Heartbeat, Ack, WorkerRegistration, StatusReport, TelemetryBatch

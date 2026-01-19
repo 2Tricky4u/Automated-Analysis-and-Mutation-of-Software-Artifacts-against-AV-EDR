@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, debug};
 use uuid::Uuid;
 
 pub mod mutator;
@@ -65,7 +65,8 @@ pub struct BuiltArtifact {
 /// Template-specific library dependencies
 /// Returns base library names (without .lib extension or -Wl prefix)
 /// Caller is responsible for formatting for specific linker
-fn get_template_libs(template_name: &str) -> &'static [&'static str] { //TODO change that
+fn get_template_libs(template_name: &str) -> &'static [&'static str] {
+    //TODO change that
     match template_name {
         "loader_v1" => &[],
         "rwx_direct" => &["advapi32", "wininet"],
@@ -146,21 +147,28 @@ impl ArtifactBuilder {
                 mutations,
                 trace_mode,
             } => {
-                info!("Building {} with trace_mode: {}", source_file, trace_mode);
+                debug!("Building {} with trace_mode: {}", source_file, trace_mode);
 
                 // Determine if we need to link runtime (any trace mode except "off")
                 let needs_runtime = trace_mode != "off" && !trace_mode.is_empty();
 
                 // Build artifact (with or without mutations)
                 let mut built = if mutations.is_empty() {
-                    self.build_template_with_runtime(&template_name, &source_file, needs_runtime).await?
+                    self.build_template_with_runtime(&template_name, &source_file, needs_runtime)
+                        .await?
                 } else {
-                    self.build_template_with_mutations_and_runtime(&template_name, &source_file, &mutations, needs_runtime).await?
+                    self.build_template_with_mutations_and_runtime(
+                        &template_name,
+                        &source_file,
+                        &mutations,
+                        needs_runtime,
+                    )
+                    .await?
                 };
 
                 // Apply instrumentation if trace_mode is not "off"
                 if needs_runtime {
-                    info!("Applying instrumentation: trace_mode={}", trace_mode);
+                    debug!("Applying instrumentation: trace_mode={}", trace_mode);
                     built = self.apply_instrumentation(built, &trace_mode).await?;
                 }
 
@@ -173,7 +181,10 @@ impl ArtifactBuilder {
                 mutations,
                 trace_mode,
             } => {
-                info!("Building LLVM IR {} with trace_mode: {}", artifact_name, trace_mode);
+                debug!(
+                    "Building LLVM IR {} with trace_mode: {}",
+                    artifact_name, trace_mode
+                );
                 self.build_from_llvm_ir_with_mutations(&ir_code, &artifact_name, &mutations)
                     .await
             }
@@ -184,7 +195,10 @@ impl ArtifactBuilder {
                 mutations,
                 trace_mode,
             } => {
-                info!("Building source code {} with trace_mode: {}", artifact_name, trace_mode);
+                debug!(
+                    "Building source code {} with trace_mode: {}",
+                    artifact_name, trace_mode
+                );
 
                 self.build_from_source_code_with_mutations(&source_code, &artifact_name, &mutations)
                     .await
@@ -205,7 +219,8 @@ impl ArtifactBuilder {
         template_name: &str,
         source_file: &str,
     ) -> Result<BuiltArtifact> {
-        self.build_template_with_runtime(template_name, source_file, false).await
+        self.build_template_with_runtime(template_name, source_file, false)
+            .await
     }
 
     /// Build a template from source file with optional runtime linking
@@ -234,7 +249,7 @@ impl ArtifactBuilder {
             anyhow::bail!("Source file not found: {:?}", source_path);
         }
 
-        info!(
+        debug!(
             "Building template: {} from {:?}",
             template_name, source_path
         );
@@ -302,7 +317,8 @@ impl ArtifactBuilder {
         source_file: &str,
         mutations: &[mutator::MutationSpec],
     ) -> Result<BuiltArtifact> {
-        self.build_template_with_mutations_and_runtime(template_name, source_file, mutations, false).await
+        self.build_template_with_mutations_and_runtime(template_name, source_file, mutations, false)
+            .await
     }
 
     /// Build template with mutations and optional runtime linking
@@ -315,10 +331,12 @@ impl ArtifactBuilder {
     ) -> Result<BuiltArtifact> {
         if mutations.is_empty() {
             // No mutations - use original build path
-            return self.build_template_with_runtime(template_name, source_file, link_runtime).await;
+            return self
+                .build_template_with_runtime(template_name, source_file, link_runtime)
+                .await;
         }
 
-        info!(
+        debug!(
             "Building template {} with {} mutations",
             template_name,
             mutations.len()
@@ -406,7 +424,7 @@ impl ArtifactBuilder {
                 .await
                 .context("Failed to write mutated IR")?;
 
-            info!(
+            debug!(
                 "Applied {} mutations: {:?}",
                 all_mutations_applied.len(),
                 all_mutations_applied
@@ -439,7 +457,7 @@ impl ArtifactBuilder {
                 .await
                 .context("Failed to move artifact to output directory")?;
 
-            info!(
+            debug!(
                 "Mutated artifact built (IR path): {} ({} bytes) -> {:?}",
                 artifact_id,
                 artifact_data.len(),
@@ -462,7 +480,7 @@ impl ArtifactBuilder {
         }
 
         // 5. AST-only mutations: write mutated source and compile directly
-        info!(
+        debug!(
             "Applied {} mutations: {:?}",
             all_mutations_applied.len(),
             all_mutations_applied
@@ -507,7 +525,7 @@ impl ArtifactBuilder {
             .await
             .context("Failed to move artifact to output directory")?;
 
-        info!(
+        debug!(
             "Mutated artifact built (AST path): {} ({} bytes) -> {:?}",
             artifact_id,
             artifact_data.len(),
@@ -612,7 +630,7 @@ impl ArtifactBuilder {
             .await
             .context("Failed to move artifact")?;
 
-        info!(
+        debug!(
             "Source-code artifact built: {} ({} bytes)",
             artifact_id,
             artifact_data.len()
@@ -676,7 +694,7 @@ impl ArtifactBuilder {
             .await
             .context("Failed to move artifact")?;
 
-        info!(
+        debug!(
             "LLVM IR artifact built: {} ({} bytes)",
             artifact_id,
             artifact_data.len()
@@ -739,11 +757,18 @@ impl ArtifactBuilder {
     /// * `output` - Output executable path
     /// * `link_runtime` - If true, also link instrumentation_runtime.o
     async fn invoke_clang(&self, template_name: &str, source: &Path, output: &Path) -> Result<()> {
-        self.invoke_clang_internal(template_name, source, output, false).await
+        self.invoke_clang_internal(template_name, source, output, false)
+            .await
     }
 
     /// Internal invoke_clang with optional runtime linking
-    async fn invoke_clang_internal(&self, template_name: &str, source: &Path, output: &Path, link_runtime: bool) -> Result<()> {
+    async fn invoke_clang_internal(
+        &self,
+        template_name: &str,
+        source: &Path,
+        output: &Path,
+        link_runtime: bool,
+    ) -> Result<()> {
         let xwin = &self.config.xwin_dir;
 
         // Pre-format paths to avoid lifetime issues
@@ -760,10 +785,14 @@ impl ArtifactBuilder {
         let source_str = source.to_str().context("Invalid source path")?;
 
         // Pre-format runtime include path (always needed for instrumentation.h header)
-        let runtime_include_str = format!("{}", self.config.runtime_src
-            .parent()
-            .context("Invalid runtime source path")?
-            .display());
+        let runtime_include_str = format!(
+            "{}",
+            self.config
+                .runtime_src
+                .parent()
+                .context("Invalid runtime source path")?
+                .display()
+        );
 
         // Base flags (from build_all.sh COMMON_FLAGS + BASE_LIBS)
         let mut args = vec![
@@ -814,7 +843,7 @@ impl ArtifactBuilder {
         // ALWAYS compile and link minimal_runtime.o (provides __runtime_exit)
         let minimal_runtime_obj = self.config.output_dir.join("minimal_runtime.o");
         if !minimal_runtime_obj.exists() {
-            info!("Compiling minimal runtime (for __runtime_exit)...");
+            debug!("Compiling minimal runtime (for __runtime_exit)...");
             self.compile_runtime(&self.config.minimal_runtime_src, &minimal_runtime_obj)
                 .await
                 .context("Failed to compile minimal runtime")?;
@@ -827,7 +856,7 @@ impl ArtifactBuilder {
 
             // Compile runtime if not already compiled
             if !runtime_obj.exists() {
-                info!("Compiling instrumentation runtime for direct linking...");
+                debug!("Compiling instrumentation runtime for direct linking...");
                 self.compile_runtime(&self.config.runtime_src, &runtime_obj)
                     .await
                     .context("Failed to compile instrumentation runtime")?;
@@ -851,7 +880,7 @@ impl ArtifactBuilder {
             args.push(runtime_str.as_str());
         }
 
-        info!("Invoking: clang {}", args.join(" "));
+        debug!("Invoking: clang {}", args.join(" "));
 
         // Execute clang
         let output_result = tokio::process::Command::new("clang")
@@ -900,7 +929,9 @@ impl ArtifactBuilder {
         let sdk_winrt_include = xwin_root.join("sdk/include/winrt");
 
         // Get runtime include path for instrumentation.h
-        let runtime_include = self.config.runtime_src
+        let runtime_include = self
+            .config
+            .runtime_src
             .parent()
             .context("Invalid runtime source path")?
             .to_str()
@@ -920,17 +951,17 @@ impl ArtifactBuilder {
             "-isystem",
             sdk_winrt_include.to_str().unwrap(),
             "-I",
-            runtime_include,  // Add instrumentation header path
-            "-DENABLE_INSTRUMENTATION",  // Always define when compiling to IR (instrumentation will be applied)
-            "-S",         // Emit assembly (LLVM IR in this case)
-            "-emit-llvm", // Output LLVM IR instead of native assembly
-            "-O0",        // No optimization to preserve all instructions for mutation
+            runtime_include,            // Add instrumentation header path
+            "-DENABLE_INSTRUMENTATION", // Always define when compiling to IR (instrumentation will be applied)
+            "-S",                       // Emit assembly (LLVM IR in this case)
+            "-emit-llvm",               // Output LLVM IR instead of native assembly
+            "-O0",                      // No optimization to preserve all instructions for mutation
             "-o",
             ir_path.to_str().unwrap(),
             source_path.to_str().unwrap(),
         ];
 
-        info!("Compiling source -> IR: clang {}", args.join(" "));
+        debug!("Compiling source -> IR: clang {}", args.join(" "));
 
         let output = tokio::process::Command::new("clang")
             .args(&args)
@@ -988,7 +1019,7 @@ impl ArtifactBuilder {
         args.push(exe_path.to_str().unwrap());
         args.push(ir_path.to_str().unwrap());
 
-        info!("Compiling IR -> EXE: clang {}", args.join(" "));
+        debug!("Compiling IR -> EXE: clang {}", args.join(" "));
 
         let output = tokio::process::Command::new("clang")
             .args(&args)
@@ -1059,7 +1090,7 @@ impl ArtifactBuilder {
         ir_code: &[u8],
         artifact_name: &str,
     ) -> Result<BuiltArtifact> {
-        info!("Building from LLVM IR: {}", artifact_name);
+        debug!("Building from LLVM IR: {}", artifact_name);
 
         // 1. Write IR to temp file
         let temp_ir = self.config.output_dir.join(format!("{}.ll", artifact_name));
@@ -1093,7 +1124,7 @@ impl ArtifactBuilder {
         let _ = tokio::fs::remove_file(&temp_ir).await;
         let _ = tokio::fs::remove_file(&temp_obj).await;
 
-        info!(
+        debug!(
             "Artifact built from IR: {} ({} bytes)",
             artifact_id,
             artifact_data.len()
@@ -1118,7 +1149,7 @@ impl ArtifactBuilder {
         source_code: &[u8],
         artifact_name: &str,
     ) -> Result<BuiltArtifact> {
-        info!("Building from in-memory source: {}", artifact_name);
+        debug!("Building from in-memory source: {}", artifact_name);
 
         // Write source to temp file
         let temp_source = self.config.output_dir.join(format!("{}.c", artifact_name));
@@ -1243,7 +1274,7 @@ impl ArtifactBuilder {
         built: BuiltArtifact,
         trace_mode_str: &str,
     ) -> Result<BuiltArtifact> {
-        info!("Applying instrumentation: trace_mode={}", trace_mode_str);
+        debug!("Applying instrumentation: trace_mode={}", trace_mode_str);
 
         // Parse trace_mode string to build_emitter::TraceMode enum
         let trace_mode = match trace_mode_str {
@@ -1254,26 +1285,32 @@ impl ArtifactBuilder {
             "lines" => build_emitter::TraceMode::Lines,
             "all" => build_emitter::TraceMode::All,
             _ => {
-                warn!("Unknown trace_mode '{}', defaulting to 'lines'", trace_mode_str);
+                warn!(
+                    "Unknown trace_mode '{}', defaulting to 'lines'",
+                    trace_mode_str
+                );
                 build_emitter::TraceMode::Lines
             }
         };
 
         if trace_mode == build_emitter::TraceMode::Off {
-            info!("Instrumentation disabled (trace_mode=off)");
+            debug!("Instrumentation disabled (trace_mode=off)");
             return Ok(built);
         }
 
         // Step 1: Verify source exists
         if !built.source_path.exists() {
-            anyhow::bail!("Source file not found for instrumentation: {:?}", built.source_path);
+            anyhow::bail!(
+                "Source file not found for instrumentation: {:?}",
+                built.source_path
+            );
         }
 
         // Step 1.5: Apply AST-level line tracing (if enabled)
         let source_for_compilation = if trace_mode == build_emitter::TraceMode::Lines
             || trace_mode == build_emitter::TraceMode::All
         {
-            info!("Applying AST-level line tracing to source code (Binary protocol format)...");
+            debug!("Applying AST-level line tracing to source code (Binary protocol format)...");
 
             // Read original source
             let original_source = tokio::fs::read_to_string(&built.source_path)
@@ -1291,7 +1328,7 @@ impl ArtifactBuilder {
                 &original_source,
                 language,
                 &file_path_str,
-                build_emitter::TraceFormat::default()
+                build_emitter::TraceFormat::default(),
             )
             .context("Failed to inject line traces at AST level")?;
 
@@ -1304,10 +1341,9 @@ impl ArtifactBuilder {
                 .await
                 .context("Failed to write line-traced source")?;
 
-            info!(
+            debug!(
                 "AST line tracing complete: injected {} trace calls into {:?}",
-                trace_call_count,
-                instrumented_source_path
+                trace_call_count, instrumented_source_path
             );
             instrumented_source_path
         } else {
@@ -1318,8 +1354,9 @@ impl ArtifactBuilder {
         // Step 2: Compile source -> LLVM IR
         let ir_path = source_for_compilation.with_extension("instrumented.ll");
 
-        info!("Compiling source to LLVM IR for instrumentation...");
-        let template_name = built.source_path
+        debug!("Compiling source to LLVM IR for instrumentation...");
+        let template_name = built
+            .source_path
             .parent()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
@@ -1332,7 +1369,7 @@ impl ArtifactBuilder {
         // Step 3: Instrument the IR
         let instrumented_ir_path = built.source_path.with_extension("instrumented_final.ll");
 
-        info!("Instrumenting LLVM IR with trace_mode={:?}...", trace_mode);
+        debug!("Instrumenting LLVM IR with trace_mode={:?}...", trace_mode);
         let mut instrumenter = build_emitter::Instrumenter::new();
         instrumenter
             .instrument(&ir_path, trace_mode, &instrumented_ir_path)
@@ -1350,7 +1387,7 @@ impl ArtifactBuilder {
         // Step 4: Compile instrumented IR -> object file
         let obj_path = built.source_path.with_extension("instrumented.o");
 
-        info!("Compiling instrumented IR to object file...");
+        debug!("Compiling instrumented IR to object file...");
         self.compile_ir_to_object(&instrumented_ir_path, &obj_path)
             .await
             .context("Failed to compile instrumented IR to object")?;
@@ -1367,20 +1404,24 @@ impl ArtifactBuilder {
             anyhow::bail!(
                 "Instrumentation runtime source not found: {:?}\nExpected at: {:?}\nCurrent working directory: {:?}",
                 runtime_src,
-                runtime_src.canonicalize().unwrap_or_else(|_| runtime_src.clone()),
+                runtime_src
+                    .canonicalize()
+                    .unwrap_or_else(|_| runtime_src.clone()),
                 std::env::current_dir().unwrap_or_else(|_| PathBuf::from("unknown"))
             );
         }
 
         if !runtime_obj.exists() {
-            info!("Compiling instrumentation runtime...");
+            debug!("Compiling instrumentation runtime...");
             self.compile_runtime(runtime_src, &runtime_obj)
                 .await
                 .context("Failed to compile instrumentation runtime")?;
         }
 
         // Step 5.5: Verify runtime has required symbols for line tracing (non-fatal)
-        if trace_mode == build_emitter::TraceMode::Lines || trace_mode == build_emitter::TraceMode::All {
+        if trace_mode == build_emitter::TraceMode::Lines
+            || trace_mode == build_emitter::TraceMode::All
+        {
             if let Err(e) = self.verify_runtime_symbols(&runtime_obj, trace_mode).await {
                 warn!("Runtime symbol verification failed (non-fatal): {}", e);
                 warn!("Build will continue, but linking may fail if symbols are missing");
@@ -1390,17 +1431,25 @@ impl ArtifactBuilder {
         // Step 6: Link instrumented object + runtime -> final executable
         let instrumented_exe_path = built.source_path.with_extension("instrumented.exe");
 
-        info!("Linking instrumented binary with runtime...");
-        self.link_instrumented_exe(&obj_path, &runtime_obj, &instrumented_exe_path, template_name)
-            .await
-            .context("Failed to link instrumented executable")?;
+        debug!("Linking instrumented binary with runtime...");
+        self.link_instrumented_exe(
+            &obj_path,
+            &runtime_obj,
+            &instrumented_exe_path,
+            template_name,
+        )
+        .await
+        .context("Failed to link instrumented executable")?;
 
         // Clean up object file
         let _ = tokio::fs::remove_file(&obj_path).await;
 
         // Step 7: Verify instrumented executable exists and has reasonable size
         if !instrumented_exe_path.exists() {
-            anyhow::bail!("Instrumented executable not found at {:?}", instrumented_exe_path);
+            anyhow::bail!(
+                "Instrumented executable not found at {:?}",
+                instrumented_exe_path
+            );
         }
 
         let instrumented_data = tokio::fs::read(&instrumented_exe_path)
@@ -1420,7 +1469,10 @@ impl ArtifactBuilder {
             // Check if object file exists (might have been left behind)
             if obj_path.exists() {
                 let obj_size = tokio::fs::metadata(&obj_path).await?.len();
-                error!("Object file still exists: {:?} ({} bytes)", obj_path, obj_size);
+                error!(
+                    "Object file still exists: {:?} ({} bytes)",
+                    obj_path, obj_size
+                );
             }
 
             anyhow::bail!(
@@ -1431,7 +1483,10 @@ impl ArtifactBuilder {
         }
 
         let instrumented_id = self.compute_sha256(&instrumented_data);
-        let final_output = self.config.output_dir.join(format!("{}.exe", instrumented_id));
+        let final_output = self
+            .config
+            .output_dir
+            .join(format!("{}.exe", instrumented_id));
 
         tokio::fs::rename(&instrumented_exe_path, &final_output)
             .await
@@ -1460,11 +1515,7 @@ impl ArtifactBuilder {
     }
 
     /// Compile instrumentation runtime C file to object file
-    async fn compile_runtime(
-        &self,
-        runtime_src: &Path,
-        runtime_obj: &Path,
-    ) -> Result<()> {
+    async fn compile_runtime(&self, runtime_src: &Path, runtime_obj: &Path) -> Result<()> {
         // Build the command
         let mut cmd = tokio::process::Command::new("clang");
         cmd.arg("-c") // Compile only (don't link)
@@ -1480,12 +1531,21 @@ impl ArtifactBuilder {
             .arg(format!("--sysroot={}", self.config.xwin_dir.display()))
             // Add explicit include paths for xwin SDK
             .arg(format!("-I{}/crt/include", self.config.xwin_dir.display()))
-            .arg(format!("-I{}/sdk/include/ucrt", self.config.xwin_dir.display()))
-            .arg(format!("-I{}/sdk/include/um", self.config.xwin_dir.display()))
-            .arg(format!("-I{}/sdk/include/shared", self.config.xwin_dir.display()));
+            .arg(format!(
+                "-I{}/sdk/include/ucrt",
+                self.config.xwin_dir.display()
+            ))
+            .arg(format!(
+                "-I{}/sdk/include/um",
+                self.config.xwin_dir.display()
+            ))
+            .arg(format!(
+                "-I{}/sdk/include/shared",
+                self.config.xwin_dir.display()
+            ));
 
         // Log the command for debugging
-        info!(
+        debug!(
             "Compiling runtime: clang -c {} -o {} -target x86_64-pc-windows-msvc --sysroot={} -I.../crt/include -I.../sdk/include/{{ucrt,um,shared}}",
             runtime_src.display(),
             runtime_obj.display(),
@@ -1509,7 +1569,7 @@ impl ArtifactBuilder {
             );
         }
 
-        info!("Instrumentation runtime compiled: {:?}", runtime_obj);
+        debug!("Instrumentation runtime compiled: {:?}", runtime_obj);
         Ok(())
     }
 
@@ -1533,7 +1593,7 @@ impl ArtifactBuilder {
         // ALWAYS compile minimal_runtime.o (provides __runtime_exit)
         let minimal_runtime_obj = self.config.output_dir.join("minimal_runtime.o");
         if !minimal_runtime_obj.exists() {
-            info!("Compiling minimal runtime (for __runtime_exit)...");
+            debug!("Compiling minimal runtime (for __runtime_exit)...");
             self.compile_runtime(&self.config.minimal_runtime_src, &minimal_runtime_obj)
                 .await
                 .context("Failed to compile minimal runtime")?;
@@ -1547,9 +1607,18 @@ impl ArtifactBuilder {
             .arg("/subsystem:console")
             .arg("/machine:x64")
             // Add xwin library paths (CRT and Windows SDK)
-            .arg(format!("/libpath:{}/crt/lib/x86_64", self.config.xwin_dir.display()))
-            .arg(format!("/libpath:{}/sdk/lib/um/x86_64", self.config.xwin_dir.display()))
-            .arg(format!("/libpath:{}/sdk/lib/ucrt/x86_64", self.config.xwin_dir.display()));
+            .arg(format!(
+                "/libpath:{}/crt/lib/x86_64",
+                self.config.xwin_dir.display()
+            ))
+            .arg(format!(
+                "/libpath:{}/sdk/lib/um/x86_64",
+                self.config.xwin_dir.display()
+            ))
+            .arg(format!(
+                "/libpath:{}/sdk/lib/ucrt/x86_64",
+                self.config.xwin_dir.display()
+            ));
 
         // Add template-specific libraries
         for lib in template_libs {
@@ -1561,39 +1630,55 @@ impl ArtifactBuilder {
             .arg("user32.lib")
             .arg("advapi32.lib")
             .arg("ws2_32.lib")
-            .arg("libcmt.lib")    // Static C runtime (must match clang builds that use -Wl,-defaultlib:libcmt)
-            .arg("libucrt.lib");  // Universal CRT
+            .arg("libcmt.lib") // Static C runtime (must match clang builds that use -Wl,-defaultlib:libcmt)
+            .arg("libucrt.lib"); // Universal CRT
 
         // Log the FULL command for debugging (including all library arguments)
         let full_cmd = format!("{:?}", cmd);
-        info!("Full linking command: {}", full_cmd);
+        debug!("Full linking command: {}", full_cmd);
 
-        let output = cmd
-            .output()
-            .await
-            .context("Failed to run lld-link")?;
+        let output = cmd.output().await.context("Failed to run lld-link")?;
 
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
 
         // Always log linker output (even if empty) to diagnose issues
-        info!("Linker stderr: [{}]", if stderr.is_empty() { "empty" } else { &stderr });
-        info!("Linker stdout: [{}]", if stdout.is_empty() { "empty" } else { &stdout });
+        debug!(
+            "Linker stderr: [{}]",
+            if stderr.is_empty() { "empty" } else { &stderr }
+        );
+        debug!(
+            "Linker stdout: [{}]",
+            if stdout.is_empty() { "empty" } else { &stdout }
+        );
 
         if !output.status.success() {
-            anyhow::bail!("Linking instrumented executable failed:\nSTDERR:\n{}\nSTDOUT:\n{}", stderr, stdout);
+            anyhow::bail!(
+                "Linking instrumented executable failed:\nSTDERR:\n{}\nSTDOUT:\n{}",
+                stderr,
+                stdout
+            );
         }
 
         // Verify output file was created and has reasonable size
         if !output_exe.exists() {
-            anyhow::bail!("Linker succeeded but output file not found: {:?}", output_exe);
+            anyhow::bail!(
+                "Linker succeeded but output file not found: {:?}",
+                output_exe
+            );
         }
 
         let output_size = tokio::fs::metadata(output_exe).await?.len();
-        info!("Linked executable created: {:?} ({} bytes)", output_exe, output_size);
+        debug!(
+            "Linked executable created: {:?} ({} bytes)",
+            output_exe, output_size
+        );
 
         if output_size < 10000 {
-            warn!("WARNING: Linked executable is very small ({} bytes). This may indicate a linker issue.", output_size);
+            warn!(
+                "WARNING: Linked executable is very small ({} bytes). This may indicate a linker issue.",
+                output_size
+            );
         }
 
         Ok(())
@@ -1605,7 +1690,10 @@ impl ArtifactBuilder {
         runtime_obj: &Path,
         trace_mode: build_emitter::TraceMode,
     ) -> Result<()> {
-        info!("Verifying runtime object has required symbols for trace mode: {:?}", trace_mode);
+        debug!(
+            "Verifying runtime object has required symbols for trace mode: {:?}",
+            trace_mode
+        );
 
         // Use llvm-nm to list symbols in the object file (full path to LLVM 17 tools)
         let nm_path = if cfg!(target_os = "linux") {
@@ -1630,7 +1718,9 @@ impl ArtifactBuilder {
         // Check for required symbols based on trace mode
         let mut missing_symbols = Vec::new();
 
-        if trace_mode == build_emitter::TraceMode::Lines || trace_mode == build_emitter::TraceMode::All {
+        if trace_mode == build_emitter::TraceMode::Lines
+            || trace_mode == build_emitter::TraceMode::All
+        {
             // Binary protocol is the default, check for __trace_line_binary
             if !symbols.contains("__trace_line_binary") {
                 missing_symbols.push("__trace_line_binary");
@@ -1638,18 +1728,18 @@ impl ArtifactBuilder {
         }
 
         if !missing_symbols.is_empty() {
-            warn!("Runtime object file is missing required symbols: {:?}", missing_symbols);
+            warn!(
+                "Runtime object file is missing required symbols: {:?}",
+                missing_symbols
+            );
             warn!("Runtime path: {:?}", runtime_obj);
             warn!("This usually means the runtime source is outdated or wasn't recompiled.");
             warn!("Solution: Remove the cached runtime object to force recompilation:");
             warn!("  rm -f {:?}", runtime_obj);
-            anyhow::bail!(
-                "Runtime object file missing symbols: {:?}",
-                missing_symbols
-            );
+            anyhow::bail!("Runtime object file missing symbols: {:?}", missing_symbols);
         }
 
-        info!("Runtime symbol verification passed: all required symbols present");
+        debug!("Runtime symbol verification passed: all required symbols present");
         Ok(())
     }
 }

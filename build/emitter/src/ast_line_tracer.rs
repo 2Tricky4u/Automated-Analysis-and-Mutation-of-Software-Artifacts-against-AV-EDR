@@ -2,7 +2,6 @@
 ///
 /// Injects printf/std::cout statements at the source code level (before compilation)
 /// using tree-sitter parser. Works with both C and C++ sources.
-
 use anyhow::{Context, Result};
 use std::path::Path;
 use tree_sitter::{Node, Parser};
@@ -36,7 +35,7 @@ pub enum TraceFormat {
 
 impl Default for TraceFormat {
     fn default() -> Self {
-        TraceFormat::Binary  // Phase 1: binary is the new default
+        TraceFormat::Binary // Phase 1: binary is the new default
     }
 }
 
@@ -85,7 +84,8 @@ pub fn inject_line_traces_with_opts(
 
     // Add runtime function declaration at the top of the file
     let mut result = String::new();
-    result.push_str("// AST-level line tracing runtime functions (from instrumentation_runtime.c)\n");
+    result
+        .push_str("// AST-level line tracing runtime functions (from instrumentation_runtime.c)\n");
     match format {
         TraceFormat::Base64 => {
             result.push_str("void __trace_line_b64(const char* base64_marker);\n\n");
@@ -142,7 +142,8 @@ fn visit_node(
                 let indent = calculate_indentation(source, start_offset);
 
                 // Generate trace statement with file path and line number
-                let trace_stmt = generate_trace_statement(start_line, &indent, language, file_path, format);
+                let trace_stmt =
+                    generate_trace_statement(start_line, &indent, language, file_path, format);
 
                 injections.push((start_offset, trace_stmt));
             }
@@ -179,10 +180,7 @@ fn is_traceable_statement(node: &Node) -> bool {
 
 /// Calculate indentation by looking at the beginning of the line
 fn calculate_indentation(source: &str, offset: usize) -> String {
-    let line_start = source[..offset]
-        .rfind('\n')
-        .map(|pos| pos + 1)
-        .unwrap_or(0);
+    let line_start = source[..offset].rfind('\n').map(|pos| pos + 1).unwrap_or(0);
 
     let indent_slice = &source[line_start..offset];
     indent_slice
@@ -251,8 +249,8 @@ int main() {
         let result = inject_line_traces(source, SourceLanguage::C).unwrap();
 
         // Should contain Base64-encoded line markers
-        assert!(result.contains("[TRACE:"));
-        assert!(result.contains("printf(\"[TRACE:"));
+        assert!(result.contains("// AST-level line tracing runtime functions"));
+        assert!(result.contains("__trace_line_binary("));
     }
 
     #[test]
@@ -268,7 +266,8 @@ int main() {
         let result = inject_line_traces(source, SourceLanguage::Cpp).unwrap();
 
         // Should contain trace markers
-        assert!(result.contains("[TRACE:"));
+        assert!(result.contains("__trace_line_binary("));
+        assert_eq!(result.matches("__trace_line_binary(").count(), 4);
     }
 
     #[test]
@@ -285,7 +284,7 @@ int main() {
         let result = inject_line_traces(source, SourceLanguage::C).unwrap();
 
         // Should inject in both outer and inner blocks
-        assert!(result.matches("[TRACE:").count() >= 2);
+        assert_eq!(result.matches("__trace_line_binary(").count(), 4);
     }
 
     #[test]
@@ -302,7 +301,10 @@ int main() {
 
         // Check that indentation is preserved (look for indented printf)
         let lines: Vec<&str> = result.lines().collect();
-        let printf_lines: Vec<&&str> = lines.iter().filter(|l| l.contains("printf")).collect();
+        let printf_lines: Vec<&&str> = lines
+            .iter()
+            .filter(|l| l.contains("__trace_line_binary("))
+            .collect();
 
         // At least one printf should be indented
         assert!(printf_lines.iter().any(|l| l.starts_with("    ")));

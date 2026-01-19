@@ -7,6 +7,7 @@ edition.workspace = true
 edr-config = { path = "../../config" }
 builder = { path = "../builder" }
 tokio.workspace = true
+tokio-stream = "0.1"
 tonic.workspace = true
 prost.workspace = true
 tonic-prost = "0.14.2"
@@ -24,6 +25,7 @@ futures = "0.3"
 base64 = "0.22"
 toml = "0.8"
 uuid = { version = "1.11", features = ["v4"] }
+dashmap = "6.0"
 
 [build-dependencies]
 tonic-prost-build = "0.14.2"

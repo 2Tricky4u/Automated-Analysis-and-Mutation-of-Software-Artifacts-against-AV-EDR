@@ -1,6 +1,6 @@
+use crate::round::RunType;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
-use crate::round::RunType;
 
 /// Run outcome
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -48,7 +48,7 @@ impl RunOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunResult {
     /// Full run ID: {job_id}/{round_id}/{run_type}
-    pub run_id: String,  // e.g., "job-000001/round-3/baseline"
+    pub run_id: String, // e.g., "job-000001/round-3/baseline"
 
     /// Parent job ID
     pub job_id: String,
@@ -138,61 +138,4 @@ impl RunResult {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_run_result_creation() {
-        let result = RunResult::new(
-            "job-000001".to_string(),
-            "round-1".to_string(),
-            RunType::Baseline,
-            "abc123".to_string(),
-            vec![],
-        );
-
-        assert_eq!(result.run_id, "job-000001/round-1/baseline");
-        assert_eq!(result.job_id, "job-000001");
-        assert_eq!(result.round_id, "round-1");
-        assert_eq!(result.run_type, RunType::Baseline);
-        assert_eq!(result.outcome, RunOutcome::NotDetected);
-    }
-
-    #[test]
-    fn test_run_outcome_from_status() {
-        // Not detected, clean exit
-        let outcome = RunOutcome::from_status(false, 0, false);
-        assert_eq!(outcome, RunOutcome::NotDetected);
-
-        // Detected
-        let outcome = RunOutcome::from_status(true, 0, false);
-        assert_eq!(outcome, RunOutcome::Detected);
-
-        // Crashed (non-zero exit)
-        let outcome = RunOutcome::from_status(false, 1, false);
-        assert_eq!(outcome, RunOutcome::Crashed);
-
-        // Timeout
-        let outcome = RunOutcome::from_status(false, 0, true);
-        assert_eq!(outcome, RunOutcome::Timeout);
-    }
-
-    #[test]
-    fn test_update_result() {
-        let mut result = RunResult::new(
-            "job-000001".to_string(),
-            "round-1".to_string(),
-            RunType::Instrumented,
-            "abc123".to_string(),
-            vec!["ast.string_xor".to_string()],
-        );
-
-        result.update_result(true, 1, 60, 342, false);
-
-        assert_eq!(result.detected, true);
-        assert_eq!(result.exit_code, 1);
-        assert_eq!(result.elapsed_seconds, 60);
-        assert_eq!(result.telemetry_events_count, 342);
-        assert_eq!(result.outcome, RunOutcome::Detected);
-    }
-}
+mod tests;

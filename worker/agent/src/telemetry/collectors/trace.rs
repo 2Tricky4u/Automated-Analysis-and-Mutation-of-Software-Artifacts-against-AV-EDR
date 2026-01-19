@@ -5,7 +5,7 @@
 ///
 /// **Async Implementation**: Uses tokio::net::windows::named_pipe for fully async I/O
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -14,9 +14,9 @@ use tracing::{debug, error, info, warn};
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone)]
 struct InstRecordHeader {
-    magic: u32,       // 0x49535452 ('ISTR')
+    magic: u32, // 0x49535452 ('ISTR')
     version: u16,
-    event_type: u16,  // 1=line, 2=func, 3=syscall, 4=bb
+    event_type: u16, // 1=line, 2=func, 3=syscall, 4=bb
     thread_id: u32,
     seq_no: u64,
     ts_us: u64,
@@ -60,7 +60,10 @@ impl TraceCollector {
         use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
         use tokio::net::windows::named_pipe::ServerOptions;
 
-        info!("Starting async trace collector on named pipe: {}", self.pipe_name);
+        info!(
+            "Starting async trace collector on named pipe: {}",
+            self.pipe_name
+        );
 
         // Create the first pipe instance with retry logic (pipe may already exist from previous run)
         let mut server = None;
@@ -71,13 +74,16 @@ impl TraceCollector {
                 // Don't require first_pipe_instance - allows reconnection even if pipe still exists
                 // .first_pipe_instance(true)  // REMOVED
                 // Increase buffer sizes to handle high-frequency line tracing (loops)
-                .in_buffer_size(1024 * 1024)   // 1MB input buffer (default is 4KB)
-                .out_buffer_size(1024 * 1024)  // 1MB output buffer
+                .in_buffer_size(1024 * 1024) // 1MB input buffer (default is 4KB)
+                .out_buffer_size(1024 * 1024) // 1MB output buffer
                 .create(&self.pipe_name)
             {
                 Ok(s) => {
                     server = Some(s);
-                    info!("Named pipe created: {} (supports Base64 + binary) on attempt {}", self.pipe_name, attempt);
+                    info!(
+                        "Named pipe created: {} (supports Base64 + binary) on attempt {}",
+                        self.pipe_name, attempt
+                    );
                     break;
                 }
                 Err(e) if attempt < max_retries => {
@@ -89,7 +95,10 @@ impl TraceCollector {
                     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
                 }
                 Err(e) => {
-                    error!("Failed to create named pipe after {} attempts: {}", max_retries, e);
+                    error!(
+                        "Failed to create named pipe after {} attempts: {}",
+                        max_retries, e
+                    );
                     return Err(e).context("Failed to create named pipe after retries");
                 }
             }
@@ -115,8 +124,9 @@ impl TraceCollector {
             let mut peek_buf = [0u8; 4];
             let read_result = tokio::time::timeout(
                 tokio::time::Duration::from_secs(2),
-                server.read_exact(&mut peek_buf)
-            ).await;
+                server.read_exact(&mut peek_buf),
+            )
+            .await;
 
             match read_result {
                 Ok(Ok(_)) => {
@@ -129,7 +139,10 @@ impl TraceCollector {
                             warn!("Binary stream read error: {}", e);
                         }
                     } else {
-                        info!("Detected Base64 text protocol (first bytes: {:?})", peek_buf);
+                        info!(
+                            "Detected Base64 text protocol (first bytes: {:?})",
+                            peek_buf
+                        );
                         // Process text stream
                         if let Err(e) = self.read_text_stream(&mut server, peek_buf).await {
                             warn!("Text stream read error: {}", e);
@@ -140,7 +153,9 @@ impl TraceCollector {
                     debug!("Client disconnected before sending data: {}", e);
                 }
                 Err(_) => {
-                    warn!("Timeout waiting for trace data (2s) - artifact connected but sent nothing");
+                    warn!(
+                        "Timeout waiting for trace data (2s) - artifact connected but sent nothing"
+                    );
                 }
             }
 
@@ -177,7 +192,10 @@ impl TraceCollector {
     {
         use tokio::io::AsyncReadExt;
 
-        debug!("Binary stream: reading first header (expecting {} more bytes)", HEADER_SIZE - 4);
+        debug!(
+            "Binary stream: reading first header (expecting {} more bytes)",
+            HEADER_SIZE - 4
+        );
 
         // Read rest of header (we already have first 4 bytes = magic)
         let mut header_rest = vec![0u8; HEADER_SIZE - 4];
@@ -187,7 +205,7 @@ impl TraceCollector {
             }
             Err(e) => {
                 warn!("Binary stream: failed to read header rest: {}", e);
-                return Ok(());  // Not fatal - artifact disconnected
+                return Ok(()); // Not fatal - artifact disconnected
             }
         }
 
@@ -196,9 +214,8 @@ impl TraceCollector {
         header_bytes.extend_from_slice(&first_bytes);
         header_bytes.extend_from_slice(&header_rest);
 
-        let hdr: InstRecordHeader = unsafe {
-            std::ptr::read_unaligned(header_bytes.as_ptr() as *const _)
-        };
+        let hdr: InstRecordHeader =
+            unsafe { std::ptr::read_unaligned(header_bytes.as_ptr() as *const _) };
 
         // Read fields using ptr::read_unaligned to avoid alignment issues with packed struct
         let magic = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.magic)) };
@@ -211,15 +228,20 @@ impl TraceCollector {
             return Ok(());
         }
 
-        debug!("Binary stream: received record (type={}, payload_len={}, seq={})",
-               event_type, payload_len, seq_no);
+        debug!(
+            "Binary stream: received record (type={}, payload_len={}, seq={})",
+            event_type, payload_len, seq_no
+        );
 
         // Read first payload
         let mut payload = vec![0u8; payload_len as usize];
         match stream.read_exact(&mut payload).await {
             Ok(_) => {
-                debug!("Binary stream: successfully read payload ({} bytes)", payload.len());
-            },
+                debug!(
+                    "Binary stream: successfully read payload ({} bytes)",
+                    payload.len()
+                );
+            }
             Err(e) => {
                 warn!("Binary stream: failed to read first payload: {}", e);
                 return Ok(());
@@ -252,18 +274,19 @@ impl TraceCollector {
             // Read full header (32 bytes with packed struct) in one shot
             let mut full_header = vec![0u8; HEADER_SIZE];
             match stream.read_exact(&mut full_header).await {
-                Ok(_) => {},
-                Err(_) => break,  // Client disconnected
+                Ok(_) => {}
+                Err(_) => break, // Client disconnected
             }
 
             // Parse header with unaligned reads (packed struct)
-            let hdr: InstRecordHeader = unsafe {
-                std::ptr::read_unaligned(full_header.as_ptr() as *const _)
-            };
+            let hdr: InstRecordHeader =
+                unsafe { std::ptr::read_unaligned(full_header.as_ptr() as *const _) };
 
             let magic = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.magic)) };
-            let event_type = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.event_type)) };
-            let payload_len = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.payload_len)) };
+            let event_type =
+                unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.event_type)) };
+            let payload_len =
+                unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.payload_len)) };
             let seq_no = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.seq_no)) };
 
             // Validate magic
@@ -272,18 +295,23 @@ impl TraceCollector {
                 break;
             }
 
-            debug!("Binary stream: received record (type={}, payload_len={}, seq={})",
-                   event_type, payload_len, seq_no);
+            debug!(
+                "Binary stream: received record (type={}, payload_len={}, seq={})",
+                event_type, payload_len, seq_no
+            );
 
             // Read payload
             let mut payload = vec![0u8; payload_len as usize];
             match stream.read_exact(&mut payload).await {
                 Ok(_) => {
-                    debug!("Binary stream: successfully read payload ({} bytes)", payload.len());
-                },
+                    debug!(
+                        "Binary stream: successfully read payload ({} bytes)",
+                        payload.len()
+                    );
+                }
                 Err(e) => {
                     warn!("Binary stream: failed to read payload: {}", e);
-                    break;  // Client disconnected
+                    break; // Client disconnected
                 }
             }
 
@@ -331,7 +359,7 @@ impl TraceCollector {
         let mut buf = [0u8; 1];
         loop {
             match stream.read(&mut buf).await {
-                Ok(0) => break,  // EOF
+                Ok(0) => break, // EOF
                 Ok(_) => {
                     if buf[0] == b'\n' {
                         break;
@@ -367,8 +395,8 @@ impl TraceCollector {
     /// Handle binary line trace (event_type=1)
     fn handle_binary_line_trace(&self, hdr: &InstRecordHeader, payload: &[u8]) -> Result<()> {
         // Parse payload: "file:line:func"
-        let payload_str = String::from_utf8(payload.to_vec())
-            .context("Payload is not valid UTF-8")?;
+        let payload_str =
+            String::from_utf8(payload.to_vec()).context("Payload is not valid UTF-8")?;
 
         let parts: Vec<&str> = payload_str.splitn(3, ':').collect();
         if parts.len() < 2 {
@@ -389,7 +417,10 @@ impl TraceCollector {
             ts_us,
         };
 
-        debug!("Binary trace: {}:{}:{} (thread={})", event.file, event.line, event.func, event.thread_id);
+        debug!(
+            "Binary trace: {}:{}:{} (thread={})",
+            event.file, event.line, event.func, event.thread_id
+        );
 
         // Send to gRPC stream
         if let Err(e) = self.event_tx.try_send(event) {
@@ -400,9 +431,14 @@ impl TraceCollector {
     }
 
     /// Handle artifact status events (checkpoint, success, failure)
-    fn handle_artifact_status(&self, hdr: &InstRecordHeader, payload: &[u8], event_type: u16) -> Result<()> {
-        let payload_str = String::from_utf8(payload.to_vec())
-            .context("Payload is not valid UTF-8")?;
+    fn handle_artifact_status(
+        &self,
+        hdr: &InstRecordHeader,
+        payload: &[u8],
+        event_type: u16,
+    ) -> Result<()> {
+        let payload_str =
+            String::from_utf8(payload.to_vec()).context("Payload is not valid UTF-8")?;
 
         // Read packed struct fields
         let seq_no = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.seq_no)) };
@@ -413,14 +449,18 @@ impl TraceCollector {
         let (event_label, log_message) = match event_type {
             2 => {
                 // CHECKPOINT: payload is just the checkpoint name
-                info!("[OK] CHECKPOINT reached: '{}' (seq={}, thread={}, ts={}µs)",
-                    payload_str, seq_no, thread_id, ts_us);
+                info!(
+                    "[OK] CHECKPOINT reached: '{}' (seq={}, thread={}, ts={}µs)",
+                    payload_str, seq_no, thread_id, ts_us
+                );
                 ("CHECKPOINT", format!("[OK] CHECKPOINT: {}", payload_str))
             }
             3 => {
                 // SUCCESS: payload is success message
-                info!("[SUCCESS] ARTIFACT SUCCESS: '{}' (seq={}, thread={}, ts={}µs)",
-                    payload_str, seq_no, thread_id, ts_us);
+                info!(
+                    "[SUCCESS] ARTIFACT SUCCESS: '{}' (seq={}, thread={}, ts={}µs)",
+                    payload_str, seq_no, thread_id, ts_us
+                );
                 ("SUCCESS", format!("SUCCESS: {}", payload_str))
             }
             4 => {
@@ -428,9 +468,14 @@ impl TraceCollector {
                 let parts: Vec<&str> = payload_str.splitn(2, '|').collect();
                 let message = parts.get(0).unwrap_or(&"unknown");
                 let error_code = parts.get(1).unwrap_or(&"0");
-                warn!("[ERROR] ARTIFACT FAILURE: '{}' (error_code={}, seq={}, thread={}, ts={}µs)",
-                    message, error_code, seq_no, thread_id, ts_us);
-                ("FAILURE", format!("[ERROR] FAILURE: {} (error_code={})", message, error_code))
+                warn!(
+                    "[ERROR] ARTIFACT FAILURE: '{}' (error_code={}, seq={}, thread={}, ts={}µs)",
+                    message, error_code, seq_no, thread_id, ts_us
+                );
+                (
+                    "FAILURE",
+                    format!("[ERROR] FAILURE: {} (error_code={})", message, error_code),
+                )
             }
             _ => {
                 warn!("Unknown status event_type: {}", event_type);
@@ -443,9 +488,9 @@ impl TraceCollector {
         let event = TraceEvent {
             seq: seq_no as u32,
             thread_id,
-            file: format!("__STATUS__:{}", event_label),  // Special marker
-            line: event_type as u32,  // Event type as line number
-            func: log_message,  // Full message in func field
+            file: format!("__STATUS__:{}", event_label), // Special marker
+            line: event_type as u32,                     // Event type as line number
+            func: log_message,                           // Full message in func field
             ts_us,
         };
 
@@ -478,8 +523,8 @@ impl TraceCollector {
             .decode(b64_data.trim())
             .context("Failed to decode Base64")?;
 
-        let decoded_str = String::from_utf8(decoded_bytes)
-            .context("Decoded data is not valid UTF-8")?;
+        let decoded_str =
+            String::from_utf8(decoded_bytes).context("Decoded data is not valid UTF-8")?;
 
         // Parse "line:file.c:42:main" or "line:source:42:" (AST format without func)
         let parts: Vec<&str> = decoded_str.splitn(4, ':').collect();
@@ -491,13 +536,11 @@ impl TraceCollector {
             seq: self
                 .sequence_counter
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-            thread_id: 0,  // Base64 format doesn't include thread_id
+            thread_id: 0, // Base64 format doesn't include thread_id
             file: parts[1].to_string(),
             line: parts[2].parse().context("Invalid line number")?,
             func: parts.get(3).unwrap_or(&"").to_string(), // Optional function name
-            ts_us: SystemTime::now()
-                .duration_since(UNIX_EPOCH)?
-                .as_micros() as u64,
+            ts_us: SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros() as u64,
         };
 
         debug!("Parsed trace: {}:{}:{}", event.file, event.line, event.func);

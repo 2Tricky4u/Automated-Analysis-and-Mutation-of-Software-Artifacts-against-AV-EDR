@@ -32,7 +32,7 @@ BUILD_RESPONSE=$(grpcurl -plaintext \
   -proto controller.proto \
   -d "{\"template_name\":\"$TEMPLATE\",\"source_file\":\"$SOURCE_FILE\",\"trace_mode\":\"all\"}" \
   $CONTROLLER_IP:$CONTROLLER_PORT \
-  edr.controller.Controller/BuildArtifact 2>&1)
+  automutate.controller.Controller/BuildArtifact 2>&1)
 
 # Check for errors
 if ! echo "$BUILD_RESPONSE" | jq -e . >/dev/null 2>&1; then
@@ -69,7 +69,7 @@ DEPLOY_RESPONSE=$(grpcurl -plaintext \
   -proto controller.proto \
   -d "{\"artifact_id\":\"$ARTIFACT_ID\",\"worker_address\":\"$WORKER_ADDRESS\"}" \
   $CONTROLLER_IP:$CONTROLLER_PORT \
-  edr.controller.Controller/DeployArtifact 2>&1)
+  automutate.controller.Controller/DeployArtifact 2>&1)
 
 if ! echo "$DEPLOY_RESPONSE" | jq -e . >/dev/null 2>&1; then
     echo "   ✗ ERROR: Deploy failed or invalid response"
@@ -110,7 +110,7 @@ EXECUTE_RESPONSE=$(grpcurl -plaintext \
   -max-time 30 \
   -d "{\"job_id\":\"$JOB_ID\",\"artifact_id\":\"$ARTIFACT_ID\",\"timeout_seconds\":10,\"enable_etw\":true}" \
   $WORKER_IP:$WORKER_PORT \
-  edr.worker.WorkerAgent/RunSample 2>&1)
+  automutate.worker.WorkerAgent/RunSample 2>&1)
 
 # Check response (may timeout or be killed by EDR)
 if ! echo "$EXECUTE_RESPONSE" | jq -e . >/dev/null 2>&1; then

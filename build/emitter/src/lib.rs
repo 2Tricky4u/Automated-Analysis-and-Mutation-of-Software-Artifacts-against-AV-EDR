@@ -70,7 +70,7 @@ impl Default for BuildConfig {
         Self {
             target: "x86_64-pc-windows-msvc".to_string(),
             optimization: "2".to_string(),
-            trace_mode: TraceMode::ApiPlusBB,
+            trace_mode: TraceMode::Lines,
             deterministic: true,
             xwin_path: dirs::home_dir().unwrap().join(".xwin"),
             llvm_passes: vec![],
@@ -136,8 +136,8 @@ impl ArtifactBuilder {
         let abs_output = output_path.canonicalize().unwrap_or_else(|_| output_path.to_path_buf());
         eprintln!("[BUILD] Source: {:?}", abs_source);
         eprintln!("[BUILD] Output: {:?}", abs_output);
-        info!("Building artifact from: {:?}", abs_source);
-        info!("Applying {} mutations", mutations.len());
+        debug!("Building artifact from: {:?}", abs_source);
+        debug!("Applying {} mutations", mutations.len());
 
         // Create temp directory for intermediate files
         let temp_dir = tempfile::tempdir()?;
@@ -280,7 +280,7 @@ impl ArtifactBuilder {
 
     /// Compile source to LLVM IR
     async fn compile_to_ir(&self, source: &Path, output: &Path) -> Result<()> {
-        info!("Compiling to LLVM IR...");
+        debug!("Compiling to LLVM IR...");
 
         let xwin = &self.config.xwin_path;
 
@@ -367,7 +367,7 @@ impl ArtifactBuilder {
 
     /// Compile LLVM IR to object file
     async fn compile_to_obj(&self, ir: &Path, output: &Path) -> Result<()> {
-        info!("Compiling IR to object file...");
+        debug!("Compiling IR to object file...");
 
         let mut cmd = Command::new("llc");
         cmd.arg(format!("-mtriple={}", self.config.target))
@@ -393,7 +393,7 @@ impl ArtifactBuilder {
 
     /// Compile instrumentation runtime library to object file
     async fn compile_runtime_library(&self, temp_dir: &Path) -> Result<PathBuf> {
-        info!("Compiling instrumentation runtime library...");
+        debug!("Compiling instrumentation runtime library...");
 
         // Path to runtime source - try multiple possible locations
         let possible_paths = vec![
@@ -412,7 +412,7 @@ impl ArtifactBuilder {
 
         let abs_runtime_source = std::fs::canonicalize(runtime_source).unwrap_or_else(|_| runtime_source.clone());
         eprintln!("[BUILD] Runtime source: {:?}", abs_runtime_source);
-        info!("Found runtime library at: {:?}", abs_runtime_source);
+        debug!("Found runtime library at: {:?}", abs_runtime_source);
 
         let runtime_obj = temp_dir.join("instrumentation_runtime.obj");
         eprintln!("[BUILD] Runtime object path: {:?}", runtime_obj);
@@ -443,13 +443,13 @@ impl ArtifactBuilder {
             );
         }
 
-        info!("Runtime library compiled: {:?}", runtime_obj);
+        debug!("Runtime library compiled: {:?}", runtime_obj);
         Ok(runtime_obj)
     }
 
     /// Compile minimal runtime library to object file (ALWAYS linked, even with trace=off)
     async fn compile_minimal_runtime(&self, temp_dir: &Path) -> Result<PathBuf> {
-        info!("Compiling minimal runtime library...");
+        debug!("Compiling minimal runtime library...");
 
         // Path to minimal runtime source - try multiple possible locations
         let possible_paths = vec![
@@ -468,7 +468,7 @@ impl ArtifactBuilder {
 
         let abs_runtime_source = std::fs::canonicalize(runtime_source).unwrap_or_else(|_| runtime_source.clone());
         eprintln!("[BUILD] Minimal runtime source: {:?}", abs_runtime_source);
-        info!("Found minimal runtime library at: {:?}", abs_runtime_source);
+        debug!("Found minimal runtime library at: {:?}", abs_runtime_source);
 
         let runtime_obj = temp_dir.join("minimal_runtime.obj");
         eprintln!("[BUILD] Minimal runtime object path: {:?}", runtime_obj);
@@ -499,13 +499,13 @@ impl ArtifactBuilder {
             );
         }
 
-        info!("Minimal runtime library compiled: {:?}", runtime_obj);
+        debug!("Minimal runtime library compiled: {:?}", runtime_obj);
         Ok(runtime_obj)
     }
 
     /// Link object files to PE executable
     async fn link_to_pe(&self, obj_files: &[PathBuf], output: &Path) -> Result<()> {
-        info!("Linking to PE executable...");
+        debug!("Linking to PE executable...");
 
         let crt_lib_path = self.config.xwin_path.join("crt/lib/x86_64");
         let sdk_um_lib_path = self.config.xwin_path.join("sdk/lib/um/x86_64");
@@ -549,7 +549,7 @@ impl ArtifactBuilder {
             );
         }
 
-        info!("PE executable generated: {:?}", output);
+        debug!("PE executable generated: {:?}", output);
         Ok(())
     }
 

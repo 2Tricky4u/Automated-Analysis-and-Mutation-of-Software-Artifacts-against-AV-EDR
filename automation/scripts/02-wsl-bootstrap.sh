@@ -423,38 +423,6 @@ echo "Containers will automatically start when WSL starts (systemd service enabl
 echo "WSL will stay alive as long as the systemd service is running"
 echo ""
 
-# Build Controller binaries
-cd "$PROJECT_ROOT"
-echo "[i] Building Controller binaries..."
-cargo build --release -p scheduler -p selector \
-    --target-dir "$PROJECT_ROOT/target"
-
-if [ $? -eq 0 ]; then
-    echo "[OK] Controller binaries built: $PROJECT_ROOT/target/release/"
-else
-    echo "[WARN] Build failed. Check Cargo.toml and dependencies."
-    exit 1
-fi
-
-# Create config files
-mkdir -p "$PROJECT_ROOT/config"
-cat > "$PROJECT_ROOT/config/controller.toml" <<'EOF'
-[server]
-bind_address = "0.0.0.0:50051"
-max_connections = 100
-
-[elasticsearch]
-url = "http://localhost:$ES_PORT"
-index_prefix = "etw-"
-bulk_size = 100
-bulk_timeout_ms = 5000
-
-[triage]
-confidence_threshold = 0.7
-EOF
 
 echo "[OK] WSL2 bootstrap complete"
 echo ""
-echo "Start controller:"
-echo "  cd $PROJECT_ROOT"
-echo "  ./target/release/scheduler --config config/controller.toml"

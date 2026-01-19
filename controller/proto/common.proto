@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package edr.common;
+package automutate.common;
 
 // Common types shared across services
 
@@ -112,4 +112,150 @@ enum RunType {
   RUN_TYPE_UNSPECIFIED = 0;
   RUN_TYPE_BASELINE = 1;       // No instrumentation
   RUN_TYPE_INSTRUMENTED = 2;   // Full tracing
+}
+
+// ===== Worker/Tool Metadata (shared between controller and worker) =====
+
+// Tool version information
+message ToolVersions {
+  string rededr_version = 1;     // e.g., "1.2.3" or empty if not installed
+  string defender_version = 2;   // e.g., "4.18.2106.1" or empty
+  string etw_version = 3;        // e.g., "native" (always available on Windows)
+  string llvm_version = 4;       // e.g., "17.0.6" or empty
+}
+
+// Worker registration (sent by worker on startup or via bidirectional stream)
+message WorkerRegistration {
+  string worker_id = 1;             // e.g., "win10-worker-01"
+  string ip_address = 2;            // e.g., "10.200.200.100"
+  string os_version = 3;            // e.g., "windows10", "windows11"
+  repeated string capabilities = 4;  // ["rededr", "defender", "etw", "gpu"]
+  map<string, string> metadata = 5;  // {"cpu_cores": "8", "ram_gb": "32"}
+  ToolVersions tools = 6;
+}
+
+// ===== Artifact Transfer Messages (used by both controller and worker) =====
+
+// Artifact transfer chunk
+message ArtifactChunk {
+  string artifact_id = 1;     // SHA256 hash
+  bytes data = 2;             // Binary chunk (4MB max per message)
+  uint32 chunk_index = 3;     // 0-based chunk sequence
+  uint32 total_chunks = 4;    // Total number of chunks
+  string sha256 = 5;          // Expected SHA256 for verification
+}
+
+// Sample execution request
+message SampleRequest {
+  string job_id = 1;
+  string artifact_id = 2;  // Reference to transferred artifact
+  int32 timeout_seconds = 3;
+  bool enable_etw = 4;
+}
+
+// Sample execution response
+message SampleResponse {
+  string job_id = 1;
+  bool success = 2;
+  int32 exit_code = 3;
+  string output = 4;
+  repeated string telemetry_ids = 5;
+  string run_id = 6;  // Unique run identifier for response matching (matches RunSampleCommand.request_id)
+}
+
+// ===== Bidirectional Stream Messages (Phase 2) =====
+
+// Messages sent from controller to worker via bidirectional stream
+message ControllerMessage {
+  oneof payload {
+    RunSampleCommand run_sample = 1;
+    ArtifactChunkBatch artifact_chunks = 2;
+    HealthCheckRequest health_check = 3;
+    Heartbeat heartbeat = 4;
+    Ack ack = 5;
+    DisconnectNotice disconnect = 6;
+  }
+}
+
+// Messages sent from worker to controller via bidirectional stream
+message WorkerMessage {
+  oneof payload {
+    WorkerRegistration registration = 1;       // Sent once on connect
+    StatusReport status = 2;                   // Periodic heartbeats
+    TelemetryBatch telemetry = 3;             // Stream telemetry events
+    SampleResponse sample_response = 4;        // Execution results
+    Ack ack = 5;
+    ExecutionStatusReport execution_status = 6; // Detailed execution monitoring
+  }
+}
+
+// Controller command to run sample (via stream)
+message RunSampleCommand {
+  string request_id = 1;
+  SampleRequest request = 2;
+}
+
+// Batch of artifact chunks (for streaming large artifacts via bidirectional stream)
+message ArtifactChunkBatch {
+  string artifact_id = 1;
+  repeated ArtifactChunk chunks = 2;
+}
+
+// Health check request via stream
+message HealthCheckRequest {
+  string request_id = 1;
+}
+
+// Heartbeat to keep connection alive
+message Heartbeat {
+  int64 timestamp = 1;
+}
+
+// Acknowledgement message
+message Ack {
+  string request_id = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+// Disconnect notification (sent by controller before closing stream)
+message DisconnectNotice {
+  string reason = 1;  // "controller_shutdown", "session_timeout", "manual_disconnect", etc.
+  bool reconnect_allowed = 2;  // Whether worker should attempt reconnection
+}
+
+// Status report (periodic heartbeat from worker)
+message StatusReport {
+  string worker_id = 1;
+  string worker_ip = 2;
+  int32 cpu_percent = 3;
+  int32 memory_mb = 4;
+  int32 active_jobs = 5;
+  string event_type = 6;  // "heartbeat", "job_start", "job_complete"
+  string current_job_id = 7;
+}
+
+// Detailed execution status report (from ExecutionMonitor during sample execution)
+message ExecutionStatusReport {
+  string worker_id = 1;
+  string worker_ip = 2;
+  string job_id = 3;
+  string run_id = 4;
+  string artifact_name = 5;
+  int32 pid = 6;
+  int32 elapsed_seconds = 7;
+  bool process_alive = 8;
+  int32 telemetry_events_count = 9;
+  string event_type = 10;  // "started", "heartbeat", "stuck", "approaching_timeout", "terminated"
+  int32 cpu_percent = 11;
+  int32 memory_mb = 12;
+  string details = 13;
+}
+
+// Batch of telemetry events
+message TelemetryBatch {
+  string job_id = 1;
+  string run_id = 2;
+  repeated TelemetryData events = 3;
+  bool is_final = 4;  // True if this is the last batch for this job
 }
