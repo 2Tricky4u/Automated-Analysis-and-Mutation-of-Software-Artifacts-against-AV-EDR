@@ -351,11 +351,11 @@ impl SchedulerCore {
         debug!("  Mutations: {}", job.mutations.len());
 
         // Create builder with default config
-        let builder_config = builder::BuilderConfig::default();
-        let artifact_builder = builder::ArtifactBuilder::new(builder_config)?;
+        let builder_config = build::BuilderConfig::default();
+        let artifact_builder = build::ArtifactBuilder::new(builder_config)?;
 
         // Convert scheduler mutations to builder mutations
-        let mutations: Vec<builder::mutator::MutationSpec> = job
+        let mutations: Vec<build::mutator::MutationSpec> = job
             .mutations
             .iter()
             .map(|m| {
@@ -372,7 +372,7 @@ impl SchedulerCore {
                     })
                     .unwrap_or_default(); // Empty HashMap if no params
 
-                builder::mutator::MutationSpec {
+                build::mutator::MutationSpec {
                     id: m.id.clone(),
                     params,
                 }
@@ -381,7 +381,7 @@ impl SchedulerCore {
 
         // Build the artifact
         let built = artifact_builder
-            .build(builder::BuildInput::SourceFile {
+            .build(build::BuildInput::SourceFile {
                 template_name: job.template_name.clone(),
                 source_file: job.source_file.clone(),
                 mutations,
@@ -404,7 +404,7 @@ impl SchedulerCore {
         let artifact_id = job.artifact_id.as_ref().ok_or_else(|| anyhow!("No artifact ID"))?;
 
         // 1. Read artifact from disk
-        let builder_config = builder::BuilderConfig::default();
+        let builder_config = build::BuilderConfig::default();
         let artifact_path = builder_config
             .output_dir
             .join(format!("{}.exe", artifact_id));

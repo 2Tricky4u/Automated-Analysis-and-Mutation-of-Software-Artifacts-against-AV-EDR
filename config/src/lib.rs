@@ -330,17 +330,6 @@ pub struct LastSeenConfig {
     pub ring_buffer_size: usize,
     pub flush_on_abnormal_exit: bool,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ExternalTelemetryConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub cortex: CortexConfig,
-    #[serde(default)]
-    pub mde: MdeConfig,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CortexConfig {
     #[serde(default)]
@@ -532,11 +521,6 @@ impl WorkerConfig {
             return config_path;
         }
 
-        // 4. Local development
-        if Path::new("config/worker.toml").exists() {
-            return "config/worker.toml".to_string();
-        }
-
         // 5. Template fallback (first worker config found)
         "automation/generated/win10-worker-01.toml".to_string()
     }
@@ -615,26 +599,9 @@ impl ControllerConfig {
         Self {
             server: ServerConfig {
                 bind_address: "0.0.0.0:50051".to_string(),
-                // max_connections: 100,
-                // request_timeout_secs: 300,
-                // tls_enabled: false,
-                // tls_cert_path: None,
-                // tls_key_path: None,
-                // require_client_cert: false,
-                // client_ca_cert_path: None,
             },
             elasticsearch: ElasticsearchConfig {
                 url: "http://localhost:9200".to_string(),
-                //index_prefix: "automutate-".to_string(),
-                //etw_index: "etw-*".to_string(),
-                //rededr_index: "rededr-*".to_string(),
-                //runs_index: "runs".to_string(),
-                //bulk_size: 100,
-                //bulk_timeout_ms: 5000,
-                //bulk_max_retries: 3,
-                //ilm_enabled: true,
-                //ilm_max_age_days: 90,
-                //ilm_max_size_gb: 50,
             },
             //triage: TriageConfig {
             //    model_type: "forest".to_string(),
@@ -677,45 +644,15 @@ impl ControllerConfig {
             //    },
             //},
             scheduler: SchedulerConfig {
-                //queue_capacity: 1000,
                 max_concurrent_runs_per_worker: 1,
                 run_timeout_secs: 300,
-                //max_retries: 3,
-                //retry_backoff_secs: 30,
                 poll_interval_ms: 500,
                 health_timeout_seconds: 30,
                 workers: vec![],
             },
-            //corpus: CorpusConfig {
-            //    storage_path: "/var/lib/automutate/corpus".to_string(),
-            //    max_size: 10000,
-            //    prioritization: "hybrid".to_string(),
-            //    novelty_threshold: 0.1,
-            //},
             logging: LoggingConfig {
                 level: "info".to_string(),
-                //format: "json".to_string(),
-                //file_enabled: true,
-                //file_path: Some("/var/log/automutate/controller.log".to_string()),
-                //file_rotation: Some("daily".to_string()),
-                //file_retention_days: Some(30),
             },
-            //metrics: MetricsConfig {
-            //    metrics_enabled: true,
-            //    metrics_bind_address: "0.0.0.0:9090".to_string(),
-            //},
-            //telemetry: TelemetryConfig {
-            //    collection_interval_ms: 100,
-            //    rededr_enabled: true,
-            //    rededr_data_path: "C:\\RedEDR\\Data".to_string(),
-            //    api_tracing_enabled: true,
-            //    api_trace_format: "newline-json".to_string(),
-            //    bb_coverage_enabled: true,
-            //    bb_bitmap_size: 65536,
-            //    line_tracing_enabled: false,
-            //    line_trace_targeted: false,
-            //    line_trace_around_bb: vec![],
-            //},
             //differential: DifferentialConfig {
             //    enabled: true,
             //    layers: vec![
@@ -726,12 +663,6 @@ impl ControllerConfig {
             //    ],
             //    lift_threshold: 1.2,
             //    min_confidence: 0.5,
-            //},
-            //experiments: ExperimentsConfig {
-            //    track_experiments: true,
-            //    experiment_metadata_required: true,
-            //    require_deterministic_seeds: true,
-            //    require_artifact_ids: true,
             //},
         }
     }
@@ -754,161 +685,19 @@ impl WorkerConfig {
                 os_version: "windows11".to_string(),
                 listen_port: 50052,
             },
-            //controller: Some(ControllerEndpointConfig {
-            //    controller_address: "192.168.200.1:50051".to_string(),
-            //    connect_timeout_secs: 30,
-            //    request_timeout_secs: 300,
-            //    keepalive_interval_secs: 30,
-            //    tls_enabled: false,
-            //    tls_ca_cert_path: None,
-            //}),
-            //harness: HarnessConfig {
-            //    working_directory: "C:\\AutoMutate\\runs".to_string(),
-            //    execution_timeout_secs: 120,
-            //    cleanup_enabled: true,
-            //    sandbox_enabled: true,
-            //    sandbox_low_integrity: true,
-            //    sandbox_job_object: true,
-            //    monitor_children: true,
-            //    max_child_depth: 3,
-            //},
             telemetry: WorkerTelemetryConfig {
-                //    stream_buffer_size: 10000,
-                //    flush_interval_ms: 1000,
-                //    etw: EtwConfig {
-                //        enabled: true,
-                //        buffer_size_kb: 1024,
-                //        lost_event_threshold: 100,
-                //        providers: vec![
-                //            "Microsoft-Windows-Kernel-Process".to_string(),
-                //            "Microsoft-Windows-Kernel-File".to_string(),
-                //            "Microsoft-Windows-Kernel-Network".to_string(),
-                //            "Microsoft-Windows-Threat-Intelligence".to_string(),
-                //        ],
-                //    },
-                //    eventlog: EventLogConfig {
-                //        enabled: true,
-                //        channels: vec![
-                //            "Security".to_string(),
-                //            "System".to_string(),
-                //            "Application".to_string(),
-                //            "Microsoft-Windows-Windows Defender/Operational".to_string(),
-                //        ],
-                //    },
-                //    defender: DefenderConfig {
-                //        enabled: true,
-                //        alert_polling_interval_ms: 500,
-                //        scan_timeout_secs: 60,
-                //    },
                 rededr: RedEdrConfig {
-                    //        enabled: true,
                     base_url: "http://localhost:8080".to_string(),
-                    //        data_path: "C:\\RedEDR\\Data".to_string(),
-                    //        file_watch_enabled: true,
                 },
-                //    api_tracing: ApiTracingConfig {
-                //        enabled: true,
-                //        per_thread: true,
-                //        output_format: "newline-json".to_string(),
-                //        output_path: "C:\\AutoMutate\\traces".to_string(),
-                //    },
-                //    bb_coverage: BbCoverageConfig {
-                //        enabled: true,
-                //        bitmap_size: 65536,
-                //        output_path: "C:\\AutoMutate\\coverage".to_string(),
-                //    },
-                //    line_tracing: LineTracingConfig {
-                //        enabled: false,
-                //        mode: "off".to_string(),
-                //        output_path: "C:\\AutoMutate\\lines".to_string(),
-                //    },
-                //    last_seen: LastSeenConfig {
-                //        enabled: true,
-                //        ring_buffer_size: 100,
-                //        flush_on_abnormal_exit: true,
-                //    },
-                //    external: ExternalTelemetryConfig::default(),
-                //},
-                //build: BuildConfig {
-                //    rust_toolchain: "stable".to_string(),
-                //    llvm_version: "17".to_string(),
-                //    default_trace_mode: "api+bb".to_string(),
-                //    optimization_level: "2".to_string(),
-                //    debug_info: false,
-                //    strip_symbols: true,
             },
             storage: StorageConfig {
                 artifacts_path: "C:\\AutoMutate\\artifacts".to_string(),
                 results_path: "C:\\AutoMutate\\results".to_string(),
                 logs_path: "C:\\AutoMutate\\logs".to_string(),
-                //    max_artifact_age_days: 7,
-                //    max_log_age_days: 30,
-                //    max_storage_gb: 50,
             },
             logging: LoggingConfig {
                 level: "info".to_string(),
-                //format: "json".to_string(),
-                //file_enabled: false,
-                //file_path: Some("C:\\AutoMutate\\logs\\worker.log".to_string()),
-                //file_rotation: Some("daily".to_string()),
-                //file_retention_days: Some(14),
             },
-            //health: HealthConfig {
-            //    health_check_interval_secs: 60,
-            //    max_cpu_percent: 90,
-            //    max_memory_percent: 80,
-            //    max_disk_percent: 90,
-            //    auto_revert_on_hang: true,
-            //    hang_detection_timeout_secs: 600,
-            //},
-            //security: SecurityConfig {
-            //    disable_network: false,
-            //    block_internet: true,
-            //    allow_controller_only: true,
-            //    allowed_ips: vec![],
-            //    verify_dep: true,
-            //    verify_aslr: true,
-            //    verify_cfg: false,
-            //},
-        }
-    }
-}
-
-// === External Telemetry Defaults ===
-
-impl Default for CortexConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            endpoint: String::new(),
-            bearer_token: String::new(),
-            use_mtls: false,
-            tls_cert_path: String::new(),
-            tls_key_path: String::new(),
-            tls_ca_path: String::new(),
-            batch_size: 1000,
-            flush_interval_secs: 10,
-            retry_attempts: 3,
-            timeout_secs: 30,
-        }
-    }
-}
-
-impl Default for MdeConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            endpoint: "https://api.securitycenter.microsoft.com".to_string(),
-            tenant_id: String::new(),
-            client_id: String::new(),
-            client_secret: String::new(),
-            use_cert_auth: false,
-            cert_path: String::new(),
-            cert_password: String::new(),
-            batch_size: 100,
-            flush_interval_secs: 30,
-            retry_attempts: 3,
-            timeout_secs: 60,
         }
     }
 }

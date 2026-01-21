@@ -27,7 +27,7 @@ pub struct ExecutionMonitor {
     pub start_time: Instant,
     pub timeout_seconds: i32,
     client: reqwest::Client,
-    sys: std::sync::Arc<tokio::sync::Mutex<sysinfo::System>>,
+    sys: Arc<tokio::sync::Mutex<sysinfo::System>>,
 }
 
 impl ExecutionMonitor {
@@ -342,15 +342,19 @@ impl ExecutionMonitor {
         &self,
         pid: u32,
     ) -> Result<(i32, i32), Box<dyn std::error::Error + Send + Sync>> {
-        use sysinfo::{Pid, ProcessRefreshKind};
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate};
 
         let pid_obj = Pid::from_u32(pid);
 
         // Lock the shared System instance and refresh only the specific process
         let mut sys = self.sys.lock().await;
 
-        // Refresh only this specific process (efficient)
-        sys.refresh_process_specifics(pid_obj, ProcessRefreshKind::everything());
+        // Refresh only this PID
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid_obj]),
+            /* remove_dead_processes */ false,
+            ProcessRefreshKind::everything(),
+        );
 
         if let Some(process) = sys.process(pid_obj) {
             // CPU usage (percentage, 0-100 per core, so can be > 100 on multi-core)

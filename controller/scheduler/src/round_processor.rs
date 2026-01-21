@@ -354,11 +354,11 @@ impl RoundProcessor {
         let start_time = Instant::now();
 
         // Step 1: Build artifact (modular or legacy mode)
-        let builder_config = builder::BuilderConfig::default();
-        let artifact_builder = builder::ArtifactBuilder::new(builder_config.clone())?;
+        let builder_config = build::BuilderConfig::default();
+        let artifact_builder = build::ArtifactBuilder::new(builder_config.clone())?;
 
         // Convert mutations to builder format
-        let builder_mutations: Vec<builder::mutator::MutationSpec> = mutations
+        let builder_mutations: Vec<build::mutator::MutationSpec> = mutations
             .iter()
             .map(|m| {
                 let params = m
@@ -372,7 +372,7 @@ impl RoundProcessor {
                         })
                     })
                     .unwrap_or_default();
-                builder::mutator::MutationSpec {
+                build::mutator::MutationSpec {
                     id: m.id.clone(),
                     params,
                 }
@@ -388,7 +388,7 @@ impl RoundProcessor {
             );
 
             // Convert module selection to builder format
-            let modules = builder::assembler::ModuleSelection {
+            let modules = build::ModuleSelection {
                 carrier: modular.modules.carrier.clone(),
                 decoder: modular.modules.decoder.clone(),
                 antiemulation: modular.modules.antiemulation.clone(),
@@ -398,11 +398,11 @@ impl RoundProcessor {
             };
 
             // Parse encoding type
-            let encoding = builder::payload::EncodingType::from_str(&modular.encoding)
-                .unwrap_or(builder::payload::EncodingType::Xor);
+            let encoding = build::EncodingType::from_str(&modular.encoding)
+                .unwrap_or(build::EncodingType::Xor);
 
             artifact_builder
-                .build(builder::BuildInput::ModularTemplate {
+                .build(build::BuildInput::ModularTemplate {
                     modules,
                     payload: modular.payload.clone(),
                     encoding,
@@ -418,7 +418,7 @@ impl RoundProcessor {
             );
 
             artifact_builder
-                .build(builder::BuildInput::SourceFile {
+                .build(build::BuildInput::SourceFile {
                     template_name: template_name.to_string(),
                     source_file: source_file.to_string(),
                     mutations: builder_mutations,

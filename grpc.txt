@@ -1,0 +1,36 @@
+# List all services the server exposes
+grpcurl -plaintext <SERVER_IP>:50051 list
+
+# Inspect available RPCs under Controller
+grpcurl -plaintext <SERVER_IP>:50051 describe edr.controller.Controller
+
+# View the JobRequest structure
+grpcurl -plaintext <SERVER_IP>:50051 describe edr.controller.JobRequest
+
+
+grpcurl -plaintext -d '{
+  "name": "test-malware",
+  "artifact_type": "exe",
+  "source": "/samples/test.exe",
+  "mutation_strategies": ["string_obfuscation"],
+  "priority": 1
+}' 10.200.200.1:50051 edr.controller.Controller/ScheduleJob
+
+
+grpcurl -plaintext -d '{
+  "message": "test-malware"
+}' 10.200.200.100:50052 edr.worker.WorkerAgent/Ping
+
+
+grpcurl -plaintext \
+    -d '{
+      "job_id": "job-000001",
+      "artifact_id": "test-artifact-123",
+      "timeout_seconds": 30,
+      "enable_etw": true
+    }' \
+    10.200.200.100:50052 \
+    edr.worker.WorkerAgent/RunSample
+
+
+wsl sh -c "curl -sSL https://github.com/fullstorydev/grpcurl/releases/download/v1.8.6/grpcurl_1.8.6_linux_x86_64.tar.gz | tar -xz -C /usr/local/bin"
