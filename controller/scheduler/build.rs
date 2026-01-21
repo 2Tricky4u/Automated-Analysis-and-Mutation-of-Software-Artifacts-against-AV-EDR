@@ -1,11 +1,11 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Paths are relative to the crate root where build.rs lives
     let protos = &[
-        "../proto/common.proto",
-        "../proto/controller.proto",
-        "../proto/worker.proto",
+        "../../proto/common.proto",
+        "../../proto/controller.proto",
+        "../../proto/worker.proto",
     ];
-    let includes = &["../proto"];
+    let includes = &["../../proto"];
 
     // file descriptor set for reflection in OUT_DIR
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR")?);

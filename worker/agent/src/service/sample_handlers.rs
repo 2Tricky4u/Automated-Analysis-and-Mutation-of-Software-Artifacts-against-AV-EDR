@@ -3,8 +3,11 @@ use crate::execution::guards::{DELAY, MonitorGuard, ProcessGuard, RedEdrGuard};
 use crate::service::helpers;
 use crate::{WorkerAgentService, telemetry};
 use std::time::{Duration, Instant};
+use tokio::io::AsyncRead;
+use tokio::task::JoinHandle;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
+use windows::Win32::Foundation::NTSTATUS;
 
 const ARTIFACTS_PATH: &str = "C:\\temp\\artifacts"; //TODO read from config.storage.artifact_path
 
@@ -76,7 +79,7 @@ pub async fn run_sample(
     // Setup with RAII guards for automatic cleanup
     // ====================================================================
 
-    // 1. Resolve artifact_id to local path
+    // Resolve artifact_id to local path
     let artifact_path =
         std::path::Path::new(ARTIFACTS_PATH).join(format!("{}.exe", req.artifact_id));
 
@@ -89,7 +92,7 @@ pub async fn run_sample(
 
     info!("Resolved artifact to path: {:?}", artifact_path);
 
-    // 2. Create RedEDR collector with guard (cleanup on any error/panic)
+    // Create RedEDR collector with guard (cleanup on any error/panic)
     let collector = telemetry::collectors::rededr::RedEdrCollector::new(
         telemetry::collectors::rededr::RedEdrCollectorConfig {
             base_url: service.config.telemetry.rededr.base_url.clone(),
@@ -102,21 +105,18 @@ pub async fn run_sample(
     //collector.acquire_lock().await.expect("TODO: panic message");
     let rededr_guard = RedEdrGuard::new(collector);
 
-    // 4. Sanity check RedEDR should be clean (no leftover events from previous run)
+    // Sanity check RedEDR should be clean (no leftover events from previous run)
     info!("Performing pre-run sanity check: RedEDR should be empty");
-    let pre_run_events = match rededr_guard.collector().collect_all("sanity-check").await {
-        Ok(events) => events,
-        Err(e) => {
-            warn!(
+    let pre_run_events = rededr_guard.collector().collect_all("sanity-check").await.unwrap_or_else(|e| {
+        warn!(
                 "Failed to collect pre-run events during sanity check: {}",
                 e
             );
-            warn!(
+        warn!(
                 "This might be due to malformed initialization event - treating as empty and continuing"
             );
-            Vec::new() // Treat collection failure as empty (no contamination)
-        }
-    };
+        Vec::new() // Treat collection failure as empty (no contamination)
+    });
 
     let leftover_count = pre_run_events.len();
 
@@ -160,11 +160,11 @@ pub async fn run_sample(
             })
             .collect();
         warn!(
-            "{} contaminated events detected but not sent (controller will pull via GetTelemetry)",
+            "{} contaminated events detected but not sent", //TODO send them (if needed)
             leftover_count
         );
 
-        // CRITICAL: Start tracing the NEW artifact BEFORE resetting
+        // Start tracing the NEW artifact BEFORE resetting
         // This ensures RedEDR switches to watching the new process instead of the old one
         info!(
             "Setting RedEDR to trace new artifact: {} (before reset)",
@@ -199,7 +199,7 @@ pub async fn run_sample(
         info!("[+] Pre-run sanity check passed: RedEDR is clean");
     }
 
-    // 5. Start RedEDR tracing if not already started (normal path when no real contamination)
+    // Start RedEDR tracing if not already started (normal path when no real contamination)
     if !has_real_contamination {
         rededr_guard
             .collector()
@@ -213,7 +213,7 @@ pub async fn run_sample(
         info!("RedEDR tracing started for artifact: {}", artifact_name);
     }
 
-    // 4. Spawn process with guard ensures kill if error occurs
+    // Spawn process with guard ensures kill if error occurs
     // Create artifact-specific telemetry directory to avoid cross-contamination
     let artifacts_base = std::path::Path::new(ARTIFACTS_PATH);
     let telemetry_dir = artifacts_base.join(format!("telemetry_{}", req.artifact_id));
@@ -232,7 +232,7 @@ pub async fn run_sample(
         telemetry_dir
     );
 
-    // 5. Start line-level trace collector with streaming to file
+    // Start line-level trace collector with streaming to file
     // Stream events to file during execution
     let trace_events_file = telemetry_dir.join("trace_events.jsonl");
     let trace_events_file_clone = trace_events_file.clone();
@@ -352,29 +352,9 @@ pub async fn run_sample(
     let stderr = process_guard.child_mut().stderr.take();
 
     // Spawn tasks to capture output streams
-    let stdout_handle = tokio::spawn(async move {
-        if let Some(stdout) = stdout {
-            use tokio::io::AsyncReadExt;
-            let mut reader = tokio::io::BufReader::new(stdout);
-            let mut output = String::new();
-            let _ = reader.read_to_string(&mut output).await;
-            output
-        } else {
-            String::new()
-        }
-    });
+    let stdout_handle = get_handle(stdout);
 
-    let stderr_handle = tokio::spawn(async move {
-        if let Some(stderr) = stderr {
-            use tokio::io::AsyncReadExt;
-            let mut reader = tokio::io::BufReader::new(stderr);
-            let mut output = String::new();
-            let _ = reader.read_to_string(&mut output).await;
-            output
-        } else {
-            String::new()
-        }
-    });
+    let stderr_handle = get_handle(stderr);
 
     // ====================================================================
     // Start monitoring with guard
@@ -383,7 +363,7 @@ pub async fn run_sample(
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
 
-    // Retrieve StreamHandler if available (set by establish_stream)
+    // Retrieve StreamHandler if available
     let stream_handler = {
         let handler_lock = service.stream_handler.read().await;
         handler_lock.clone()
@@ -395,7 +375,7 @@ pub async fn run_sample(
         info!("ExecutionMonitor running without StreamHandler (worker-only mode)");
     }
 
-    // Clone for ExecutionMonitor (we need to keep a copy for telemetry streaming later)
+    // Clone for ExecutionMonitor
     let stream_handler_for_monitor = stream_handler.clone();
 
     let monitor = crate::execution::monitor::ExecutionMonitor::new(
@@ -406,7 +386,7 @@ pub async fn run_sample(
         artifact_name.clone(),
         pid,
         service.config.telemetry.rededr.base_url.clone(),
-        stream_handler_for_monitor, // Pass cloned StreamHandler to monitor
+        stream_handler_for_monitor,
         req.timeout_seconds,
     );
 
@@ -1130,26 +1110,7 @@ pub async fn run_sample(
     } else {
         // Error exit code - provide detailed information
         // Windows NTSTATUS codes can be negative (signed) or positive (unsigned representation)
-        let error_type = match exit_code {
-            // Special internal exit codes
-            -2 => "Killed by AV/EDR (external termination)",
-            -1 => "Process Wait Failed",
-            // Signed NTSTATUS codes (negative)
-            -1073741510 => "Access Violation (0xC0000005)",
-            -1073741819 => "Access Denied (0xC0000022)",
-            -1073741502 => "Invalid Image Format (0xC000007B)",
-            -1073741515 => "DLL Not Found (0xC0000135)",
-            -1073741701 => "Ordinal Not Found (0xC0000138)",
-            -1073741571 => "Stack Overflow (0xC00000FD)",
-            -1073740791 => "Application Error (0xC0000409)",
-            // Common positive exit codes
-            1 => "Generic Error",
-            _ if exit_code < 0 => {
-                // Negative exit codes are usually Windows NTSTATUS codes
-                &format!("Windows Error (NTSTATUS: 0x{:08X})", exit_code as u32)
-            }
-            _ => "Unknown Error",
-        };
+        let error_type = describe_exit(exit_code);
 
         // Include stderr output if available
         let error_msg = if !stderr_output.is_empty() {
@@ -1258,7 +1219,7 @@ pub async fn run_sample(
         // Error is logged but we don't fail the RPC
     }
 
-    // 10. Prepare output (include stderr if error occurred)
+    // Prepare output
     let output = if timed_out {
         format!("Execution timed out after {}s", req.timeout_seconds)
     } else if exit_code == 0 {
@@ -1304,4 +1265,103 @@ pub async fn run_sample(
         telemetry_ids: vec![run_id.clone()],
         run_id: String::new(), // Empty for legacy RPC (will be populated by stream handler if called via stream)
     }))
+}
+
+#[cfg(target_os = "windows")]
+fn ntstatus_to_message(status: u32) -> Option<String> {
+    use windows::core::PWSTR;
+    use core::ffi::c_void;
+    use windows::Win32::Foundation::{GetLastError, HLOCAL, LocalFree, RtlNtStatusToDosError, NTSTATUS};
+    use windows::Win32::System::Diagnostics::Debug::{
+        FormatMessageW, FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM,
+        FORMAT_MESSAGE_IGNORE_INSERTS,
+    };
+
+    let dos: u32 = unsafe { RtlNtStatusToDosError(NTSTATUS(status as i32)) };
+    if dos == 0 {
+        return None;
+    }
+
+    let flags = FORMAT_MESSAGE_FROM_SYSTEM
+        | FORMAT_MESSAGE_IGNORE_INSERTS
+        | FORMAT_MESSAGE_ALLOCATE_BUFFER;
+
+    let mut buf: PWSTR = PWSTR::null();
+
+    let len = unsafe {
+        FormatMessageW(
+            flags,
+            None,
+            dos,
+            0,
+            PWSTR(buf.0),
+            0,
+            None,
+        )
+    };
+
+    if len == 0 || buf.is_null() {
+        let _ = unsafe { GetLastError() };
+        return None;
+    }
+
+    let slice = unsafe { std::slice::from_raw_parts(buf.0, len as usize) };
+    let s = String::from_utf16_lossy(slice).trim().to_string();
+
+    unsafe {
+        let _ = LocalFree(Option::from(HLOCAL(buf.0 as _)));
+    }
+
+    Some(s)
+}
+
+fn describe_exit(exit_code: i32) -> String {
+    // sentinels first
+    match exit_code {
+        -2 => return "Externally terminated (heuristic)".to_string(),
+        -1 => return "wait() failed".to_string(),
+        _ => {}
+    }
+
+    // Normalize
+    let code_u32 = exit_code as u32;
+
+    // Normal success
+    if code_u32 == 0 {
+        return "Success".to_string();
+    }
+
+    // Try to interpret as NTSTATUS
+    if looks_like_ntstatus(code_u32) {
+        if let Some(msg) = ntstatus_to_message(code_u32) {
+            return format!("NTSTATUS 0x{code_u32:08X}: {msg}");
+        }
+        return format!("NTSTATUS 0x{code_u32:08X}");
+    }
+
+    // Otherwise, generic exit code
+    format!("Exit code {code_u32} (0x{code_u32:08X})")
+}
+
+//most NTSTATUS values have the top bits set
+fn looks_like_ntstatus(code: u32) -> bool {
+    (code & 0x8000_0000) != 0
+}
+
+fn get_handle<R>(stream: Option<R>) -> JoinHandle<String>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        if let Some(stream) = stream {
+            use tokio::io::AsyncReadExt;
+
+            let mut reader = tokio::io::BufReader::new(stream);
+            let mut output = String::new();
+            let _ = reader.read_to_string(&mut output).await;
+            output
+        } else {
+            String::new()
+        }
+    })
 }

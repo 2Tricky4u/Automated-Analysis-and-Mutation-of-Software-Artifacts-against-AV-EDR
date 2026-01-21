@@ -3,9 +3,7 @@ resolver = "2"
 members = [
     # Controller components
     "controller/scheduler",
-    "controller/builder",
     "controller/selector",
-    "controller/mutator",
     "controller/triage-engine",
     "controller/rule-manager",
     "controller/differential-analyzer",
@@ -14,8 +12,8 @@ members = [
     # Worker components
     "worker/agent",
 
-    # Build system
-    "build/emitter",
+    # Build system (unified)
+    "build",
 
     # UI
     "ui/backend",

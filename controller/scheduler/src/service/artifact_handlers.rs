@@ -25,17 +25,17 @@ pub async fn build_artifact(
     );
 
     // Create builder with default config
-    let builder_config = builder::BuilderConfig::default();
-    let artifact_builder = builder::ArtifactBuilder::new(builder_config).map_err(|e| {
+    let builder_config = build::BuilderConfig::default();
+    let artifact_builder = build::ArtifactBuilder::new(builder_config).map_err(|e| {
         error!("Failed to create artifact builder: {}", e);
         Status::internal(format!("Failed to create builder: {}", e))
     })?;
 
-    // Convert proto mutations to builder::mutator::MutationSpec
-    let mutations: Vec<builder::mutator::MutationSpec> = req
+    // Convert proto mutations to build::mutator::MutationSpec
+    let mutations: Vec<build::mutator::MutationSpec> = req
         .mutations
         .into_iter()
-        .map(|m| builder::mutator::MutationSpec {
+        .map(|m| build::mutator::MutationSpec {
             id: m.id,
             params: m.params,
         })
@@ -51,7 +51,7 @@ pub async fn build_artifact(
     // Build the artifact with mutations
     // NOTE: trace_mode is passed to builder; emitter support pending
     let built = artifact_builder
-        .build(builder::BuildInput::SourceFile {
+        .build(build::BuildInput::SourceFile {
             template_name: req.template_name.clone(),
             source_file: req.source_file.clone(),
             mutations,
@@ -99,7 +99,7 @@ pub async fn deploy_artifact(
     );
 
     // 1. Read artifact from disk
-    let builder_config = builder::BuilderConfig::default();
+    let builder_config = build::BuilderConfig::default();
     let artifact_path = builder_config
         .output_dir
         .join(format!("{}.exe", req.artifact_id));

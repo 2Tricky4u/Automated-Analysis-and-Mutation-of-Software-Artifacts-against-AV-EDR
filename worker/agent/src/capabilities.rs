@@ -124,13 +124,6 @@ pub async fn detect_capabilities() -> Result<WorkerCapabilities> {
         }
     }
 
-    // ETW is always available on Windows
-    #[cfg(windows)]
-    {
-        capabilities.push("etw".to_string());
-        tools.insert("etw_version".to_string(), "native".to_string());
-    }
-
     // System metadata
     metadata.insert("hostname".to_string(), get_hostname());
     metadata.insert("cpu_cores".to_string(), get_cpu_cores().to_string());

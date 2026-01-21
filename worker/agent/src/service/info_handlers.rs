@@ -36,13 +36,13 @@ pub async fn health_check(
     // Refresh system information
     let mut sys = service.system_info.lock().await;
     sys.refresh_specifics(
-        RefreshKind::new()
+        RefreshKind::nothing()
             .with_cpu(CpuRefreshKind::everything())
             .with_memory(MemoryRefreshKind::everything()),
     );
 
     // Calculate average CPU usage across all cores
-    let cpu_percent = sys.global_cpu_info().cpu_usage() as i32;
+    let cpu_percent = sys.global_cpu_usage() as i32;
 
     // Calculate memory usage percentage
     let total_memory = sys.total_memory();
@@ -104,7 +104,7 @@ pub async fn get_worker_info(
 
     // Get system health metrics
     let mut sys = System::new_with_specifics(
-        RefreshKind::new()
+        RefreshKind::nothing()
             .with_cpu(CpuRefreshKind::everything())
             .with_memory(MemoryRefreshKind::everything()),
     );

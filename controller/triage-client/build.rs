@@ -1,11 +1,11 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Paths are relative to the crate root where build.rs lives
     let protos = &[
-        "../proto/common.proto",
-        "../proto/controller.proto",
-        "../proto/worker.proto",
+        "../../proto/common.proto",
+        "../../proto/controller.proto",
+        "../../proto/worker.proto",
     ];
-    let includes = &["../proto"];
+    let includes = &["../../proto"];
 
     tonic_prost_build::configure()
         .build_server(true)

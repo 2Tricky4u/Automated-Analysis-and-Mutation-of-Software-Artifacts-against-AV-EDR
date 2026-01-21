@@ -23,7 +23,12 @@ target-wsl
 #.idea/
 
 # CMake build directories
+# Ignore all build directories everywhere
 **/build/
+
+# But keep the root build directory and everything inside it
+!/build/
+!/build/**
 **/cmake-build-*/
 
 # Docker volumes and data

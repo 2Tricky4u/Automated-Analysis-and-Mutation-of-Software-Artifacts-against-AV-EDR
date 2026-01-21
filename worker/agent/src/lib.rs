@@ -35,7 +35,7 @@ pub struct WorkerAgentService {
     /// Single execution lock needed for rededr
     /// This ensures clean telemetry collection with no cross-contamination
     pub(crate) execution_lock: Arc<Mutex<ExecutionState>>,
-    /// StreamHandler for bidirectional communication (set when establish_stream is called)
+    /// StreamHandler for bidirectional communication
     pub(crate) stream_handler: Arc<tokio::sync::RwLock<Option<Arc<stream_handler::StreamHandler>>>>,
 }
 
