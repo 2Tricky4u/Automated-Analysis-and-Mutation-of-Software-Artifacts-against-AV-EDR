@@ -227,8 +227,8 @@ message StatusAck {
 
 // Build artifact request (Phase 1: Build-Deploy-Execute Pipeline)
 message BuildRequest {
-  string template_name = 1;  // e.g., "rwx_direct"
-  string source_file = 2;    // e.g., "rwx_direct.c"
+  string template_name = 1;  // e.g., "rwx_direct" (legacy mode)
+  string source_file = 2;    // e.g., "rwx_direct.c" (legacy mode)
   repeated string compiler_flags = 3;  // Optional custom flags
   repeated automutate.common.Mutation mutations = 4;  // Optional mutations to apply
 
@@ -236,6 +236,45 @@ message BuildRequest {
   // Values: "off" | "lines" | "api" | "bb" | "api+bb" | "all" | "lines-around-bb=<id>"
   // Default: "api+bb" (if not specified)
   string trace_mode = 5;
+
+  // === MODULAR TEMPLATE BUILD (new preferred mode) ===
+  // When modular_build is set, template_name/source_file are ignored
+  ModularBuildSpec modular_build = 6;
+}
+
+// Modular template build specification
+// Uses @MODULE marker system for assembly and @MUTATE markers for AST transforms
+message ModularBuildSpec {
+  // Module selection for assembly (which modules to combine)
+  ModuleSelection modules = 1;
+
+  // Raw payload bytes (will be encoded)
+  bytes payload = 2;
+
+  // Payload encoding type: "xor" | "english"
+  string encoding = 3;
+}
+
+// Module selection for template assembly
+// Each field selects which variant to use for that module category
+message ModuleSelection {
+  // Carrier module: "alloc_rw_rx", "change_rw_rx", "peb_walk"
+  string carrier = 1;
+
+  // Decoder module: "xor", "english"
+  string decoder = 2;
+
+  // Anti-emulation module: "none", "sirallocalot", "timeraw"
+  string antiemulation = 3;
+
+  // Guardrail module: "none", "env"
+  string guardrail = 4;
+
+  // VirtualProtect module: "standard", "undersized"
+  string virtualprotect = 5;
+
+  // Decoy module: "none", "winexec"
+  string decoy = 6;
 }
 
 message BuildResponse {

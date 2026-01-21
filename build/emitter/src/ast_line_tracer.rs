@@ -25,18 +25,13 @@ impl SourceLanguage {
 }
 
 /// Trace output format
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TraceFormat {
     /// Base64-encoded text format (Lepori thesis format)
     Base64,
     /// Binary protocol with structured headers
+    #[default]
     Binary,
-}
-
-impl Default for TraceFormat {
-    fn default() -> Self {
-        TraceFormat::Binary // Phase 1: binary is the new default
-    }
 }
 
 /// Inject line tracing statements into C/C++ source code

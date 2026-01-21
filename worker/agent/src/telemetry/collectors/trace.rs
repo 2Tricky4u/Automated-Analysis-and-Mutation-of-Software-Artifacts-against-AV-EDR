@@ -57,7 +57,7 @@ impl TraceCollector {
     /// Auto-detects Base64 text vs binary protocol by peeking at first 4 bytes
     #[cfg(windows)]
     pub async fn start_server(&self) -> Result<()> {
-        use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+        use tokio::io::{AsyncReadExt};
         use tokio::net::windows::named_pipe::ServerOptions;
 
         info!(
@@ -249,25 +249,7 @@ impl TraceCollector {
         }
 
         // Handle first record
-        match event_type {
-            1 => {
-                // LINE_TRACE
-                if let Err(e) = self.handle_binary_line_trace(&hdr, &payload) {
-                    warn!("Failed to parse binary line trace: {}", e);
-                } else {
-                    debug!("Binary stream: successfully parsed line trace event");
-                }
-            }
-            2 | 3 | 4 => {
-                // CHECKPOINT (2), SUCCESS (3), FAILURE (4)
-                if let Err(e) = self.handle_artifact_status(&hdr, &payload, event_type) {
-                    warn!("Failed to parse artifact status event: {}", e);
-                }
-            }
-            _ => {
-                debug!("Unknown event_type: {}", event_type);
-            }
-        }
+        self.parse_on_event_type(&hdr, event_type, &mut payload);
 
         // Now read subsequent records (full header each time, no peeking)
         loop {
@@ -316,28 +298,32 @@ impl TraceCollector {
             }
 
             // Parse based on event_type
-            match event_type {
-                1 => {
-                    // LINE_TRACE: payload is "file:line:func" UTF-8 string
-                    if let Err(e) = self.handle_binary_line_trace(&hdr, &payload) {
-                        warn!("Failed to parse binary line trace: {}", e);
-                    } else {
-                        debug!("Binary stream: successfully parsed line trace event");
-                    }
-                }
-                2 | 3 | 4 => {
-                    // CHECKPOINT (2), SUCCESS (3), FAILURE (4)
-                    if let Err(e) = self.handle_artifact_status(&hdr, &payload, event_type) {
-                        warn!("Failed to parse artifact status event: {}", e);
-                    }
-                }
-                _ => {
-                    debug!("Unknown event_type: {}", event_type);
-                }
-            }
+            self.parse_on_event_type(&hdr, event_type, &mut payload);
         }
 
         Ok(())
+    }
+
+    fn parse_on_event_type(&self, hdr: &InstRecordHeader, event_type: u16, payload: &mut [u8]) {
+        match event_type {
+            1 => {
+                // LINE_TRACE: payload is "file:line:func" UTF-8 string
+                if let Err(e) = self.handle_binary_line_trace(hdr, payload) {
+                    warn!("Failed to parse binary line trace: {}", e);
+                } else {
+                    debug!("Binary stream: successfully parsed line trace event");
+                }
+            }
+            2..=4 => {
+                // CHECKPOINT (2), SUCCESS (3), FAILURE (4)
+                if let Err(e) = self.handle_artifact_status(hdr, payload, event_type) {
+                    warn!("Failed to parse artifact status event: {}", e);
+                }
+            }
+            _ => {
+                debug!("Unknown event_type: {}", event_type);
+            }
+        }
     }
 
     /// Read text-based (Base64) protocol stream
@@ -373,10 +359,9 @@ impl TraceCollector {
         line_start.push_str(&String::from_utf8_lossy(&rest_of_line));
 
         // Process first line
-        if !line_start.is_empty() {
-            if let Err(e) = self.handle_trace_line(&line_start) {
-                warn!("Failed to parse trace line: {} - {}", line_start, e);
-            }
+        if !line_start.is_empty() && let Err(e) = self.handle_trace_line(&line_start)
+        {
+            warn!("Failed to parse trace line: {} - {}", line_start, e);
         }
 
         // Now read remaining lines normally
@@ -466,7 +451,7 @@ impl TraceCollector {
             4 => {
                 // FAILURE: payload is "message|error_code"
                 let parts: Vec<&str> = payload_str.splitn(2, '|').collect();
-                let message = parts.get(0).unwrap_or(&"unknown");
+                let message = parts.first().unwrap_or(&"unknown");
                 let error_code = parts.get(1).unwrap_or(&"0");
                 warn!(
                     "[ERROR] ARTIFACT FAILURE: '{}' (error_code={}, seq={}, thread={}, ts={}µs)",

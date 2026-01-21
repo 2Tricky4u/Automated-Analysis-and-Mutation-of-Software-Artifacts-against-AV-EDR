@@ -34,11 +34,11 @@ pub async fn collect_bb_coverage(
 
         // Parse "BB_ID HIT_COUNT"
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 {
-            if let (Ok(bb_id), Ok(hit_count)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
-                bb_ids.push(bb_id);
-                hit_counts.push(hit_count);
-            }
+        if parts.len() >= 2
+            && let (Ok(bb_id), Ok(hit_count)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+        {
+            bb_ids.push(bb_id);
+            hit_counts.push(hit_count);
         }
     }
 
@@ -55,14 +55,16 @@ pub async fn collect_bb_coverage(
         timestamp: chrono::Utc::now().timestamp_millis(),
         payload: vec![], // Empty payload (data in typed_event)
         metadata: std::collections::HashMap::new(),
-        typed_event: Some(crate::automutate::common::telemetry_data::TypedEvent::Coverage(
-            crate::automutate::common::CoverageEvent {
-                bitmap: vec![], // Empty - we only send bb_ids and hit_counts from .txt
-                bb_ids,
-                hit_counts,
-                total_bbs,
-            },
-        )),
+        typed_event: Some(
+            crate::automutate::common::telemetry_data::TypedEvent::Coverage(
+                crate::automutate::common::CoverageEvent {
+                    bitmap: vec![], // Empty - we only send bb_ids and hit_counts from .txt
+                    bb_ids,
+                    hit_counts,
+                    total_bbs,
+                },
+            ),
+        ),
     })
 }
 
@@ -70,7 +72,8 @@ pub async fn collect_bb_coverage(
 pub async fn collect_api_checkpoints(
     checkpoints_path: &std::path::Path,
     job_id: &str,
-) -> Result<Vec<crate::automutate::common::TelemetryData>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Vec<crate::automutate::common::TelemetryData>, Box<dyn std::error::Error + Send + Sync>>
+{
     use tokio::fs;
 
     let checkpoints_text = fs::read_to_string(checkpoints_path).await?;
@@ -98,9 +101,11 @@ pub async fn collect_api_checkpoints(
                     timestamp: (ts_us / 1000) as i64, // Convert to milliseconds for consistency
                     payload: vec![],
                     metadata: std::collections::HashMap::new(),
-                    typed_event: Some(crate::automutate::common::telemetry_data::TypedEvent::Checkpoint(
-                        crate::automutate::common::CheckpointEvent { name, ts_us },
-                    )),
+                    typed_event: Some(
+                        crate::automutate::common::telemetry_data::TypedEvent::Checkpoint(
+                            crate::automutate::common::CheckpointEvent { name, ts_us },
+                        ),
+                    ),
                 });
             }
             Err(e) => {

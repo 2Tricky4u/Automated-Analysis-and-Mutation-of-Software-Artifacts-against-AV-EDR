@@ -1,4 +1,3 @@
-use std::error::Error;
 /// Validation example for worker.toml template
 ///
 /// This binary validates that automation/templates/worker.toml parses correctly.

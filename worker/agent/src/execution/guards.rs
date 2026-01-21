@@ -140,20 +140,20 @@ impl ProcessGuard {
 
 impl Drop for ProcessGuard {
     fn drop(&mut self) {
-        if self.should_kill {
-            if let Some(mut child) = self.child.take() {
-                // Spawn blocking task to kill process
-                std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
-                    rt.block_on(async {
-                        if let Err(e) = child.kill().await {
-                            eprintln!("Failed to kill process in Drop: {}", e);
-                        } else {
-                            eprintln!("Process killed in Drop (error path)");
-                        }
-                    });
+        if self.should_kill
+            && let Some(mut child) = self.child.take()
+        {
+            // Spawn blocking task to kill process
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    if let Err(e) = child.kill().await {
+                        eprintln!("Failed to kill process in Drop: {}", e);
+                    } else {
+                        eprintln!("Process killed in Drop (error path)");
+                    }
                 });
-            }
+            });
         }
     }
 }

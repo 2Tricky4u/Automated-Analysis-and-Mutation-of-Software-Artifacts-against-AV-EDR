@@ -1,11 +1,11 @@
-///! Build/Emitter: Multi-level mutation + cross-compilation pipeline
-///!
-///! Takes C/C++ source templates → applies mutations → builds Windows PE
-///!
-///! Architecture:
-///!   Source → AST mutations → LLVM IR → IR mutations → Instrumentation → PE
-///!
-///! See: automation/BUILD-PIPELINE.md for detailed design
+//! Build/Emitter: Multi-level mutation + cross-compilation pipeline
+//!
+//! Takes C/C++ source templates → applies mutations → builds Windows PE
+//!
+//! Architecture:
+//!   Source → AST mutations → LLVM IR → IR mutations → Instrumentation → PE
+//!
+//! See: automation/BUILD-PIPELINE.md for detailed design
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

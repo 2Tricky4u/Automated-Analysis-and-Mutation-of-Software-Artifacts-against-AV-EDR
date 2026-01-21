@@ -163,10 +163,10 @@ impl MdeExporter {
         let mut cache = self.token_cache.lock().await;
 
         // Return cached token if still valid
-        if let (Some(token), Some(expires_at)) = (&cache.token, cache.expires_at) {
-            if SystemTime::now() < expires_at {
-                return Ok(token.clone());
-            }
+        if let (Some(token), Some(expires_at)) = (&cache.token, cache.expires_at)
+            && SystemTime::now() < expires_at
+        {
+            return Ok(token.clone());
         }
 
         // Acquire new token
