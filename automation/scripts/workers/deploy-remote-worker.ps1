@@ -161,121 +161,16 @@ ip_address = "$RemoteHost"
 os_version = "$OsVersion"
 listen_port = 50052  # Phase 1: Worker listens for controller connections
 
-# DEPRECATED: Phase 1 removes worker->controller connections
-# Controller now dials to worker's listen_port
-# Uncomment this section only if you need backward compatibility
-# [controller]
-# controller_address = "$ControllerAddress"
-# connect_timeout_secs = 30
-# request_timeout_secs = 300
-# keepalive_interval_secs = 30
-# tls_enabled = false
-
-[harness]
-working_directory = "C:\\\\AutoMutate\\\\runs"
-execution_timeout_secs = 120
-cleanup_enabled = true
-sandbox_enabled = true
-sandbox_low_integrity = true
-sandbox_job_object = true
-monitor_children = true
-max_child_depth = 3
-
-[telemetry]
-stream_buffer_size = 10000
-flush_interval_ms = 1000
-
-[telemetry.etw]
-enabled = true
-buffer_size_kb = 1024
-lost_event_threshold = 100
-providers = [
-    "Microsoft-Windows-Kernel-Process",
-    "Microsoft-Windows-Kernel-File",
-    "Microsoft-Windows-Kernel-Network",
-    "Microsoft-Windows-Threat-Intelligence"
-]
-
-[telemetry.eventlog]
-enabled = true
-channels = [
-    "Security",
-    "System",
-    "Application",
-    "Microsoft-Windows-Windows Defender/Operational"
-]
-
-[telemetry.defender]
-enabled = true
-alert_polling_interval_ms = 500
-scan_timeout_secs = 60
-
 [telemetry.rededr]
-enabled = true
 base_url = "http://localhost:8081"
-data_path = "C:\\\\RedEDR\\\\Data"
-file_watch_enabled = true
-
-[telemetry.api_tracing]
-enabled = true
-per_thread = true
-output_format = "newline-json"
-output_path = "C:\\AutoMutate\\traces"
-
-[telemetry.bb_coverage]
-enabled = true
-bitmap_size = 65536
-output_path = "C:\\AutoMutate\\coverage"
-
-[telemetry.line_tracing]
-enabled = false
-mode = "off"
-output_path = "C:\\AutoMutate\\lines"
-
-[telemetry.last_seen]
-enabled = true
-ring_buffer_size = 100
-flush_on_abnormal_exit = true
-
-[build]
-rust_toolchain = "stable"
-llvm_version = "17"
-default_trace_mode = "api+bb"
-optimization_level = "2"
-debug_info = false
-strip_symbols = true
 
 [storage]
 artifacts_path = "C:\\AutoMutate\\artifacts"
 results_path = "C:\\AutoMutate\\results"
 logs_path = "C:\\AutoMutate\\logs"
-max_artifact_age_days = 7
-max_log_age_days = 30
-max_storage_gb = 50
 
 [logging]
 level = "INFO"
-format = "json"
-file_enabled = false
-file_path = "C:\\AutoMutate\\logs\\worker.log"
-file_rotation = "daily"
-file_retention_days = 14
-
-[health]
-health_check_interval_secs = 60
-max_cpu_percent = 90
-max_memory_percent = 80
-max_disk_percent = 90
-auto_revert_on_hang = true
-hang_detection_timeout_secs = 600
-
-[security]
-disable_network = false
-block_internet = true
-allow_controller_only = true
-verify_dep = true
-verify_aslr = true
-verify_cfg = false
 "@
 
     Set-Content -Path $WorkerConfigPath -Value $configTemplate -NoNewline
@@ -564,19 +459,20 @@ Remove-Item '$remoteTempKey' -Force -ErrorAction SilentlyContinue
         # Special handling for Administrator users on Windows OpenSSH
         Write-Info "Checking if Administrator-specific setup is needed..."
         $checkAdminScript = @"
-`$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (`$isAdmin) {
-    `$adminKeyFile = 'C:\ProgramData\ssh\administrators_authorized_keys'
-    `$userKeyFile = "`$env:USERPROFILE\.ssh\authorized_keys"
-    if (Test-Path `$userKeyFile) {
-        Get-Content `$userKeyFile | Set-Content `$adminKeyFile -Force
-        icacls `$adminKeyFile /inheritance:r /grant 'SYSTEM:(F)' /grant 'Administrators:(F)' | Out-Null
-        Write-Host 'ADMIN_KEY_INSTALLED'
-    }
+`$adminKeyFile = 'C:\ProgramData\ssh\administrators_authorized_keys'
+`$userKeyFile  = "`$env:USERPROFILE\.ssh\authorized_keys"
+
+if (Test-Path `$userKeyFile) {
+    New-Item -ItemType Directory -Path 'C:\ProgramData\ssh' -Force | Out-Null
+    Get-Content `$userKeyFile | Set-Content `$adminKeyFile -Force
+
+    cmd.exe /c 'icacls "C:\ProgramData\ssh\administrators_authorized_keys" /inheritance:r /grant "SYSTEM:(F)" /grant "Administrators:(F)"'
+    Write-Host 'ADMIN_KEY_INSTALLED'
 } else {
-    Write-Host 'NOT_ADMIN'
+    Write-Host 'NO_USER_KEY'
 }
 "@
+
         $adminCheckBytes = [System.Text.Encoding]::Unicode.GetBytes($checkAdminScript)
         $adminCheckEncoded = [Convert]::ToBase64String($adminCheckBytes)
         $adminCheckCmd = "powershell.exe -NoProfile -NonInteractive -EncodedCommand $adminCheckEncoded"
@@ -606,7 +502,24 @@ if (`$isAdmin) {
         "-o", "ConnectTimeout=10"
         "-o", "StrictHostKeyChecking=no"
         "-o", "IdentitiesOnly=yes"
+        "-o", "PreferredAuthentications=publickey"
+        "-o", "PasswordAuthentication=no"
+        "-o", "KbdInteractiveAuthentication=no"
+        "-o", "NumberOfPasswordPrompts=0"
     )
+
+    Write-Info "[2.5/6] Ensuring C:\AutoMutate exists on remote..."
+    $sshTarget = "$Username@$RemoteHost"
+
+    $mkAutoMutateCmd = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force -Path ''C:\AutoMutate''" >NUL 2>NUL'
+
+
+    ssh @sshOpts $sshTarget $mkAutoMutateCmd
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Failed to create C:\AutoMutate on remote host"
+        exit 1
+    }
+    Write-Success "Remote directory ensured: C:\AutoMutate"
 
     # Copy worker binary (using SSH key - no password needed)
     Write-Info "[3/6] Copying worker binary ($(((Get-Item $workerBinary).Length / 1MB).ToString('0.0')) MB)..."
