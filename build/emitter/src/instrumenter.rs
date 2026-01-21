@@ -1,24 +1,24 @@
-///! Instrumentation injection at LLVM IR level
-///!
-///! Injects telemetry collection code:
-///! - Basic-block coverage (LLVM SanitizerCoverage - accurate CFG-aware detection)
-///! - Thread-aware API tracing (WINNIE-style)
-///! - Line-level tracing (diagnostic mode, Base64-encoded to named pipe)
-///! - Checkpoint markers for key operations
-///!
-///! Architecture:
-///!   1. Use LLVM's `opt` tool with SanitizerCoverage pass for BB coverage
-///!   2. Parse LLVM IR for API tracing injection (text-based, selective)
-///!   3. Link with runtime library (instrumentation_runtime.obj)
-///!
-///! BB Coverage uses LLVM SanitizerCoverage (industry standard, used by AFL++/libFuzzer):
-///!   - Accurate: Uses proper LLVM BasicBlock API (not text parsing)
-///!   - Complete: Detects ALL basic blocks including implicit ones
-///!   - Efficient: ~3-5% overhead
+//! Instrumentation injection at LLVM IR level
+//!
+//! Injects telemetry collection code:
+//! - Basic-block coverage (LLVM SanitizerCoverage - accurate CFG-aware detection)
+//! - Thread-aware API tracing (WINNIE-style)
+//! - Line-level tracing (diagnostic mode, Base64-encoded to named pipe)
+//! - Checkpoint markers for key operations
+//!
+//! Architecture:
+//!   1. Use LLVM's `opt` tool with SanitizerCoverage pass for BB coverage
+//!   2. Parse LLVM IR for API tracing injection (text-based, selective)
+//!   3. Link with runtime library (instrumentation_runtime.obj)
+//!
+//! BB Coverage uses LLVM SanitizerCoverage (industry standard, used by AFL++/libFuzzer):
+//!   - Accurate: Uses proper LLVM BasicBlock API (not text parsing)
+//!   - Complete: Detects ALL basic blocks including implicit ones
+//!   - Efficient: ~3-5% overhead
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::Command;
-use tracing::{debug, info};
+use tracing::{debug};
 
 pub struct Instrumenter {
     bb_counter: u32,
@@ -168,7 +168,7 @@ impl Instrumenter {
         for line in ir.lines() {
             // Check if line contains a call to target API and insert checkpoint before it
             for api in &target_apis {
-                if line.contains(&format!("call ")) && line.contains(api) {
+                if line.contains(&"call ".to_string()) && line.contains(api) {
                     // Insert checkpoint before API call
                     let checkpoint_name = format!("api:{}", api);
                     let str_id = self.line_counter;

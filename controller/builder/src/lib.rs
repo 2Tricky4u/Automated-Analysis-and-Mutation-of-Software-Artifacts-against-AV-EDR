@@ -10,7 +10,13 @@ use std::path::{Path, PathBuf};
 use tracing::{error, info, warn, debug};
 use uuid::Uuid;
 
+pub mod assembler;
 pub mod mutator;
+pub mod payload;
+
+// Re-export key types for convenience
+pub use assembler::{Assembler, ModuleSelection, MutationMarker};
+pub use payload::{PayloadEncoder, EncodingType, EncodedPayload};
 
 /// Configuration for the artifact builder
 #[derive(Debug, Clone)]
@@ -25,6 +31,9 @@ pub struct BuilderConfig {
     pub runtime_src: PathBuf,
     /// Path to minimal runtime source (e.g., "build/emitter/runtime/minimal_runtime.c")
     pub minimal_runtime_src: PathBuf,
+    /// Path to modular template directory (e.g., "controller/builder/template")
+    /// Contains loader_template.c and modules/ subdirectory
+    pub modular_template_dir: PathBuf,
 }
 
 impl Default for BuilderConfig {
@@ -35,6 +44,7 @@ impl Default for BuilderConfig {
             xwin_dir: PathBuf::from("/root/.xwin"),
             runtime_src: PathBuf::from("build/emitter/runtime/instrumentation_runtime.c"),
             minimal_runtime_src: PathBuf::from("build/emitter/runtime/minimal_runtime.c"),
+            modular_template_dir: PathBuf::from("controller/builder/template"),
         }
     }
 }
@@ -104,6 +114,20 @@ pub enum BuildInput {
     SourceCode {
         source_code: Vec<u8>,
         artifact_name: String,
+        mutations: Vec<mutator::MutationSpec>,
+        /// Instrumentation mode
+        trace_mode: String,
+    },
+    /// Build from modular template assembly
+    /// This is the preferred method for new artifacts - uses @MODULE markers
+    ModularTemplate {
+        /// Module selection (carrier, decoder, antiemulation, etc.)
+        modules: ModuleSelection,
+        /// Raw payload bytes to encode
+        payload: Vec<u8>,
+        /// Encoding type for the payload
+        encoding: EncodingType,
+        /// AST mutations to apply at @MUTATE marker locations
         mutations: Vec<mutator::MutationSpec>,
         /// Instrumentation mode
         trace_mode: String,
@@ -201,6 +225,22 @@ impl ArtifactBuilder {
                 );
 
                 self.build_from_source_code_with_mutations(&source_code, &artifact_name, &mutations)
+                    .await
+            }
+
+            BuildInput::ModularTemplate {
+                modules,
+                payload,
+                encoding,
+                mutations,
+                trace_mode,
+            } => {
+                debug!(
+                    "Building modular template with carrier={}, decoder={}, trace_mode={}",
+                    modules.carrier, modules.decoder, trace_mode
+                );
+
+                self.build_modular_template(modules, &payload, encoding, &mutations, &trace_mode)
                     .await
             }
         }
@@ -399,7 +439,7 @@ impl ArtifactBuilder {
                 .join(template_name)
                 .join(&ir_filename);
 
-            self.compile_source_to_ir(&temp_source_path, &ir_path, template_name)
+            self.compile_source_to_ir(&temp_source_path, &ir_path)
                 .await?;
 
             // Clean up temp source
@@ -918,8 +958,7 @@ impl ArtifactBuilder {
     async fn compile_source_to_ir(
         &self,
         source_path: &Path,
-        ir_path: &Path,
-        template_name: &str,
+        ir_path: &Path
     ) -> Result<()> {
         let xwin_root = PathBuf::from("/root/.xwin");
         let crt_include = xwin_root.join("crt/include");
@@ -937,7 +976,7 @@ impl ArtifactBuilder {
             .to_str()
             .context("Runtime include path is not valid UTF-8")?;
 
-        let mut args = vec![
+        let args = vec![
             "-target",
             "x86_64-pc-windows-msvc",
             "-isystem",
@@ -1362,7 +1401,7 @@ impl ArtifactBuilder {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        self.compile_source_to_ir(&source_for_compilation, &ir_path, template_name)
+        self.compile_source_to_ir(&source_for_compilation, &ir_path)
             .await
             .context("Failed to compile source to IR for instrumentation")?;
 
@@ -1682,6 +1721,192 @@ impl ArtifactBuilder {
         }
 
         Ok(())
+    }
+
+    /// Build artifact from modular template assembly
+    ///
+    /// This is the preferred method for new artifacts. It uses the two-level mutation system:
+    /// 1. @MODULE markers in loader_template.c are replaced with selected module code
+    /// 2. @MUTATE markers within modules guide AST transformations
+    ///
+    /// # Arguments
+    /// * `modules` - Module selection (carrier, decoder, antiemulation, etc.)
+    /// * `payload` - Raw payload bytes to encode
+    /// * `encoding` - Encoding type for the payload (XOR or English)
+    /// * `mutations` - AST mutations to apply at @MUTATE marker locations
+    /// * `trace_mode` - Instrumentation mode
+    ///
+    /// # Returns
+    /// Metadata about the built artifact
+    async fn build_modular_template(
+        &self,
+        modules: ModuleSelection,
+        payload: &[u8],
+        encoding: EncodingType,
+        mutations: &[mutator::MutationSpec],
+        trace_mode: &str,
+    ) -> Result<BuiltArtifact> {
+        // Step 1: Encode the payload
+        let encoder = PayloadEncoder::new();
+        let encoded = encoder.encode(payload, encoding);
+        let payload_header = encoder.generate_c_header(&encoded);
+
+        debug!(
+            "Encoded payload: {} bytes -> {} encoded bytes ({})",
+            payload.len(),
+            encoded.data.len(),
+            match encoding {
+                EncodingType::Xor => "XOR",
+                EncodingType::English => "English",
+            }
+        );
+
+        // Step 2: Use template directory from config
+        let template_dir = &self.config.modular_template_dir;
+
+        if !template_dir.exists() {
+            anyhow::bail!(
+                "Modular template directory not found at {:?}. \
+                Make sure controller/builder/template/ exists with loader_template.c and modules/",
+                template_dir
+            );
+        }
+
+        // Step 3: Assemble the template with selected modules
+        let mut assembler = Assembler::new(&template_dir)
+            .context("Failed to create assembler")?;
+
+        let assembled_source = assembler
+            .assemble(&modules, &payload_header)
+            .context("Failed to assemble template")?;
+
+        info!(
+            "Assembled template: {} bytes (carrier={}, decoder={}, antiemulation={}, guardrail={})",
+            assembled_source.len(),
+            modules.carrier,
+            modules.decoder,
+            modules.antiemulation,
+            modules.guardrail
+        );
+
+        // Step 4: Apply AST mutations or strip @MUTATE markers
+        let final_source = if !mutations.is_empty() {
+            // Apply AST mutations at @MUTATE marker locations
+            let source_bytes = assembled_source.as_bytes().to_vec();
+            let (mutated, applied) = mutator::Mutator::apply(&source_bytes, mutations)?;
+
+            debug!("Applied {} mutations: {:?}", applied.len(), applied);
+
+            // Strip remaining @MUTATE markers (ones not matched by mutations)
+            assembler::strip_mutation_markers(&String::from_utf8_lossy(&mutated))
+        } else {
+            // No mutations - just strip all @MUTATE markers for clean compilation
+            assembler::strip_mutation_markers(&assembled_source)
+        };
+
+        // Step 5: Build the assembled source using existing infrastructure
+        // Create a unique artifact name based on module selection
+        let artifact_name = format!(
+            "modular_{}_{}_{}",
+            modules.carrier,
+            modules.decoder,
+            Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown")
+        );
+
+        // Write assembled source to temp file
+        let temp_source = self
+            .config
+            .output_dir
+            .join(format!("{}.c", artifact_name));
+
+        tokio::fs::write(&temp_source, &final_source)
+            .await
+            .context("Failed to write assembled source")?;
+
+        debug!(
+            "Wrote assembled source to {:?} ({} bytes)",
+            temp_source,
+            final_source.len()
+        );
+
+        // Determine if we need runtime linking
+        let needs_runtime = trace_mode != "off" && !trace_mode.is_empty();
+
+        // Build using invoke_clang
+        let unique_id = Uuid::new_v4();
+        let temp_output = self
+            .config
+            .output_dir
+            .join(format!("{}.{}.exe", artifact_name, unique_id));
+
+        // Use "modular" as template name for library lookup (no extra libs needed)
+        self.invoke_clang_internal("modular", &temp_source, &temp_output, needs_runtime)
+            .await
+            .context("Failed to compile assembled template")?;
+
+        // Clean up temp source
+        let _ = tokio::fs::remove_file(&temp_source).await;
+
+        // Read artifact and compute hash
+        let artifact_data = tokio::fs::read(&temp_output)
+            .await
+            .context("Failed to read built artifact")?;
+
+        let artifact_id = self.compute_sha256(&artifact_data);
+
+        // Move to artifacts directory
+        let final_output = self.config.output_dir.join(format!("{}.exe", artifact_id));
+        tokio::fs::rename(&temp_output, &final_output)
+            .await
+            .context("Failed to move artifact to output directory")?;
+
+        info!(
+            "Modular artifact built: {} ({} bytes) -> {:?}",
+            artifact_id,
+            artifact_data.len(),
+            final_output
+        );
+
+        // Collect mutation info for metadata
+        let mutations_applied: Vec<String> = mutations.iter().map(|m| m.id.clone()).collect();
+
+        let compiler_version = self.get_clang_version()?;
+
+        // Create initial artifact metadata
+        let built = BuiltArtifact {
+            artifact_id: artifact_id.clone(),
+            source_path: temp_source.clone(), // We'll use this for instrumentation
+            output_path: final_output,
+            size_bytes: artifact_data.len() as u64,
+            sha256: artifact_id,
+            build_timestamp: chrono::Utc::now(),
+            compiler_version,
+            compiler_flags: self.get_compiler_flags("modular"),
+            mutations_applied,
+        };
+
+        // Apply instrumentation if needed
+        if needs_runtime {
+            // For modular templates, we need to save the source for instrumentation
+            // Re-write the source since we cleaned it up
+            tokio::fs::write(&temp_source, &final_source)
+                .await
+                .context("Failed to re-write source for instrumentation")?;
+
+            let mut built_with_source = built;
+            built_with_source.source_path = temp_source;
+
+            let instrumented = self
+                .apply_instrumentation(built_with_source, trace_mode)
+                .await?;
+
+            // Clean up source file after instrumentation
+            let _ = tokio::fs::remove_file(&instrumented.source_path).await;
+
+            Ok(instrumented)
+        } else {
+            Ok(built)
+        }
     }
 
     /// Verify that the runtime object file contains required symbols for the trace mode

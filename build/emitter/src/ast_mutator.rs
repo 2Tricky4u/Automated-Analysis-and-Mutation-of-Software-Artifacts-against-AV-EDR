@@ -1,11 +1,11 @@
-///! AST-level mutations using Tree-sitter
-///!
-///! Transformations applied to source code before LLVM IR generation:
-///! - Control-flow jitter (add random branches)
-///! - Constant encoding (XOR, stack strings)
-///! - Import reshaping (delay-load, hash-based resolution)
-///! - Function inlining/outlining
-///! - Line-level tracing (preprocessor-based, no debug info)
+//! AST-level mutations using Tree-sitter
+//!
+//! Transformations applied to source code before LLVM IR generation:
+//! - Control-flow jitter (add random branches)
+//! - Constant encoding (XOR, stack strings)
+//! - Import reshaping (delay-load, hash-based resolution)
+//! - Function inlining/outlining
+//! - Line-level tracing (preprocessor-based, no debug info)
 use anyhow::Result;
 use std::path::Path;
 
@@ -103,7 +103,7 @@ impl AstMutator {
 
         // Add delay if specified (Lepori thesis Section 6.4.2 - helps pinpoint exact detection line)
         if delay_us > 0 {
-            result.push_str(&format!("    volatile long __inst_wait = 1; \\\n"));
+            result.push_str("    volatile long __inst_wait = 1; \\\n");
             result.push_str(&format!("    for (; __inst_wait < {}; __inst_wait += 2) {{}} \\\n", delay_us * 10));
         }
 

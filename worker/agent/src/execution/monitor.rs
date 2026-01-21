@@ -78,8 +78,8 @@ impl ExecutionMonitor {
         let mut last_event_count = 0;
         let mut idle_count = 0;
 
-        let TIMEOUT_THR = 5;
-        let IDLE_COUNT_THR = 3;
+        let timeout_thr = 5;
+        let idle_count_thr = 3;
 
         // Send initial "started" event
         let started_details = format!("Process started: pid={}", self.pid);
@@ -124,11 +124,11 @@ impl ExecutionMonitor {
                             last_event_count = event_count;
 
                             // Detect approaching timeout (within 5 seconds of timeout threshold)
-                            let approaching_timeout = status.elapsed_seconds >= (self.timeout_seconds - TIMEOUT_THR);
+                            let approaching_timeout = status.elapsed_seconds >= (self.timeout_seconds - timeout_thr);
 
                             let event_type = if approaching_timeout && process_is_alive {
                                 "approaching_timeout".to_string()
-                            } else if idle_count >= IDLE_COUNT_THR && status.elapsed_seconds > 0{
+                            } else if idle_count >= idle_count_thr && status.elapsed_seconds > 0{
                                 "stuck".to_string()
                             } else if process_is_alive {
                                 "heartbeat".to_string()

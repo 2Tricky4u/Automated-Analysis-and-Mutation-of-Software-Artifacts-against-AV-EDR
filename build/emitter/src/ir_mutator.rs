@@ -1,10 +1,10 @@
-///! LLVM IR-level mutations
-///!
-///! Semantic-preserving transformations applied to LLVM IR:
-///! - Opaque predicates (always-true/false branches)
-///! - CFG flattening (dispatcher-based control flow)
-///! - API call indirection (via function pointers)
-///! - Bogus control flow insertion
+//! LLVM IR-level mutations
+//!
+//! Semantic-preserving transformations applied to LLVM IR:
+//! - Opaque predicates (always-true/false branches)
+//! - CFG flattening (dispatcher-based control flow)
+//! - API call indirection (via function pointers)
+//! - Bogus control flow insertion
 use anyhow::Result;
 use std::path::Path;
 

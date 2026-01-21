@@ -58,8 +58,8 @@ async fn test_named_pipe_trace_collection() {
                 )
             };
 
-            if handle.is_ok() {
-                pipe_handle = Some(handle.unwrap());
+            if let Ok(h) = handle {
+                pipe_handle = Some(h);
                 println!("   Artifact: Connected on attempt {}", attempt);
                 break;
             }

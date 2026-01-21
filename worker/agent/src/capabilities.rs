@@ -22,7 +22,7 @@ pub struct WorkerState {
     pub tools: Option<ToolVersions>,
     pub health: HealthMetrics,
     pub current_job_id: Option<String>,
-    pub current_run_id: Option<String>,  // Current execution run_id (from controller's request_id)
+    pub current_run_id: Option<String>, // Current execution run_id (from controller's request_id)
     pub last_controller_heartbeat: Option<i64>,
     pub controller_disconnected: bool,
     pub disconnect_reason: Option<String>,
@@ -171,10 +171,10 @@ async fn get_rededr_version() -> Option<String> {
         .build()
         .unwrap();
 
-    if let Ok(response) = client.get("http://localhost:8081/api/version").send().await {
-        if let Ok(text) = response.text().await {
-            return Some(text.trim().to_string());
-        }
+    if let Ok(response) = client.get("http://localhost:8081/api/version").send().await
+        && let Ok(text) = response.text().await
+    {
+        return Some(text.trim().to_string());
     }
     None
 }
@@ -184,7 +184,7 @@ fn check_defender_available() -> bool {
     #[cfg(windows)]
     {
         use std::process::Command;
-        match Command::new("sc").args(&["query", "WinDefend"]).output() {
+        match Command::new("sc").args(["query", "WinDefend"]).output() {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 stdout.contains("RUNNING")
@@ -201,7 +201,7 @@ fn get_defender_version() -> Option<String> {
     {
         use std::process::Command;
         if let Ok(output) = Command::new("powershell")
-            .args(&[
+            .args([
                 "-Command",
                 "(Get-MpComputerStatus).AMProductVersion 2>$null",
             ])

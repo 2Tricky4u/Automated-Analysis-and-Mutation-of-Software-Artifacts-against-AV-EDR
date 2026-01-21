@@ -569,10 +569,10 @@ impl WorkerConfig {
             if let Some(filename) = path.file_name() {
                 let filename_str = filename.to_string_lossy().to_lowercase();
                 // Check if filename (without .toml) matches hostname
-                if let Some(stem) = filename_str.strip_suffix(".toml") {
-                    if stem == hostname_lower {
-                        return Some(path.to_string_lossy().to_string());
-                    }
+                if let Some(stem) = filename_str.strip_suffix(".toml")
+                    && stem == hostname_lower
+                {
+                    return Some(path.to_string_lossy().to_string());
                 }
             }
         }
@@ -773,77 +773,77 @@ impl WorkerConfig {
             //    max_child_depth: 3,
             //},
             telemetry: WorkerTelemetryConfig {
-            //    stream_buffer_size: 10000,
-            //    flush_interval_ms: 1000,
-            //    etw: EtwConfig {
-            //        enabled: true,
-            //        buffer_size_kb: 1024,
-            //        lost_event_threshold: 100,
-            //        providers: vec![
-            //            "Microsoft-Windows-Kernel-Process".to_string(),
-            //            "Microsoft-Windows-Kernel-File".to_string(),
-            //            "Microsoft-Windows-Kernel-Network".to_string(),
-            //            "Microsoft-Windows-Threat-Intelligence".to_string(),
-            //        ],
-            //    },
-            //    eventlog: EventLogConfig {
-            //        enabled: true,
-            //        channels: vec![
-            //            "Security".to_string(),
-            //            "System".to_string(),
-            //            "Application".to_string(),
-            //            "Microsoft-Windows-Windows Defender/Operational".to_string(),
-            //        ],
-            //    },
-            //    defender: DefenderConfig {
-            //        enabled: true,
-            //        alert_polling_interval_ms: 500,
-            //        scan_timeout_secs: 60,
-            //    },
+                //    stream_buffer_size: 10000,
+                //    flush_interval_ms: 1000,
+                //    etw: EtwConfig {
+                //        enabled: true,
+                //        buffer_size_kb: 1024,
+                //        lost_event_threshold: 100,
+                //        providers: vec![
+                //            "Microsoft-Windows-Kernel-Process".to_string(),
+                //            "Microsoft-Windows-Kernel-File".to_string(),
+                //            "Microsoft-Windows-Kernel-Network".to_string(),
+                //            "Microsoft-Windows-Threat-Intelligence".to_string(),
+                //        ],
+                //    },
+                //    eventlog: EventLogConfig {
+                //        enabled: true,
+                //        channels: vec![
+                //            "Security".to_string(),
+                //            "System".to_string(),
+                //            "Application".to_string(),
+                //            "Microsoft-Windows-Windows Defender/Operational".to_string(),
+                //        ],
+                //    },
+                //    defender: DefenderConfig {
+                //        enabled: true,
+                //        alert_polling_interval_ms: 500,
+                //        scan_timeout_secs: 60,
+                //    },
                 rededr: RedEdrConfig {
-            //        enabled: true,
+                    //        enabled: true,
                     base_url: "http://localhost:8080".to_string(),
-            //        data_path: "C:\\RedEDR\\Data".to_string(),
-            //        file_watch_enabled: true,
+                    //        data_path: "C:\\RedEDR\\Data".to_string(),
+                    //        file_watch_enabled: true,
                 },
-            //    api_tracing: ApiTracingConfig {
-            //        enabled: true,
-            //        per_thread: true,
-            //        output_format: "newline-json".to_string(),
-            //        output_path: "C:\\AutoMutate\\traces".to_string(),
-            //    },
-            //    bb_coverage: BbCoverageConfig {
-            //        enabled: true,
-            //        bitmap_size: 65536,
-            //        output_path: "C:\\AutoMutate\\coverage".to_string(),
-            //    },
-            //    line_tracing: LineTracingConfig {
-            //        enabled: false,
-            //        mode: "off".to_string(),
-            //        output_path: "C:\\AutoMutate\\lines".to_string(),
-            //    },
-            //    last_seen: LastSeenConfig {
-            //        enabled: true,
-            //        ring_buffer_size: 100,
-            //        flush_on_abnormal_exit: true,
-            //    },
-            //    external: ExternalTelemetryConfig::default(),
-            //},
-            //build: BuildConfig {
-            //    rust_toolchain: "stable".to_string(),
-            //    llvm_version: "17".to_string(),
-            //    default_trace_mode: "api+bb".to_string(),
-            //    optimization_level: "2".to_string(),
-            //    debug_info: false,
-            //    strip_symbols: true,
+                //    api_tracing: ApiTracingConfig {
+                //        enabled: true,
+                //        per_thread: true,
+                //        output_format: "newline-json".to_string(),
+                //        output_path: "C:\\AutoMutate\\traces".to_string(),
+                //    },
+                //    bb_coverage: BbCoverageConfig {
+                //        enabled: true,
+                //        bitmap_size: 65536,
+                //        output_path: "C:\\AutoMutate\\coverage".to_string(),
+                //    },
+                //    line_tracing: LineTracingConfig {
+                //        enabled: false,
+                //        mode: "off".to_string(),
+                //        output_path: "C:\\AutoMutate\\lines".to_string(),
+                //    },
+                //    last_seen: LastSeenConfig {
+                //        enabled: true,
+                //        ring_buffer_size: 100,
+                //        flush_on_abnormal_exit: true,
+                //    },
+                //    external: ExternalTelemetryConfig::default(),
+                //},
+                //build: BuildConfig {
+                //    rust_toolchain: "stable".to_string(),
+                //    llvm_version: "17".to_string(),
+                //    default_trace_mode: "api+bb".to_string(),
+                //    optimization_level: "2".to_string(),
+                //    debug_info: false,
+                //    strip_symbols: true,
             },
             storage: StorageConfig {
                 artifacts_path: "C:\\AutoMutate\\artifacts".to_string(),
                 results_path: "C:\\AutoMutate\\results".to_string(),
                 logs_path: "C:\\AutoMutate\\logs".to_string(),
-            //    max_artifact_age_days: 7,
-            //    max_log_age_days: 30,
-            //    max_storage_gb: 50,
+                //    max_artifact_age_days: 7,
+                //    max_log_age_days: 30,
+                //    max_storage_gb: 50,
             },
             logging: LoggingConfig {
                 level: "info".to_string(),

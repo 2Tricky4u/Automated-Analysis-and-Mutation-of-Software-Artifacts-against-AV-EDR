@@ -1,4 +1,4 @@
-use crate::job::{Job, MutationSpec};
+use crate::job::{Job, ModularBuildSpec, MutationSpec};
 use crate::round::{BehaviorComparison, Feedback, Round, RoundStatus, RoundSummary, RunType};
 use crate::run_result::{RunOutcome, RunResult};
 use crate::worker_pool::WorkerPool;
@@ -125,6 +125,9 @@ impl RoundProcessor {
             );
         }
 
+        // Get modular build spec reference (if any)
+        let modular_build_ref = job.modular_build.as_ref();
+
         let (baseline_result, instrumented_result) = if same_worker {
             // SEQUENTIAL execution: run baseline, WAIT for completion, then run instrumented
             // This prevents "Worker is busy" errors when only one worker is available
@@ -145,6 +148,7 @@ impl RoundProcessor {
                     pool,
                     worker_manager,
                     Some(&baseline_worker_id),
+                    modular_build_ref,
                 )
                 .await?;
 
@@ -165,6 +169,7 @@ impl RoundProcessor {
                     pool,
                     worker_manager,
                     Some(&instrumented_worker_id),
+                    modular_build_ref,
                 )
                 .await?;
 
@@ -188,6 +193,7 @@ impl RoundProcessor {
                     pool,
                     worker_manager,
                     Some(&baseline_worker_id),
+                    modular_build_ref,
                 ),
                 self.execute_run(
                     &job.id,
@@ -200,6 +206,7 @@ impl RoundProcessor {
                     pool,
                     worker_manager,
                     Some(&instrumented_worker_id),
+                    modular_build_ref,
                 )
             )?
         };
@@ -313,7 +320,7 @@ impl RoundProcessor {
     /// Execute a single run (baseline or instrumented)
     ///
     /// # Workflow (following test-e2e-eicar.sh pattern):
-    /// 1. Build artifact using builder crate
+    /// 1. Build artifact using builder crate (modular or legacy mode)
     /// 2. Use specified worker (or select from pool if None)
     /// 3. Deploy artifact to worker via gRPC streaming
     /// 4. Execute artifact on worker via RunSample RPC (BLOCKING)
@@ -321,6 +328,7 @@ impl RoundProcessor {
     ///
     /// # Parameters
     /// - `specific_worker_id`: If Some, use this specific worker (for OS-matching)
+    /// - `modular_build`: If Some, use modular template build; otherwise legacy SourceFile
     ///
     /// # Returns
     /// RunResult with execution outcome
@@ -335,7 +343,8 @@ impl RoundProcessor {
         trace_mode: &str,
         pool: &WorkerPool,
         worker_manager: &std::sync::Arc<crate::worker_manager::WorkerManager>,
-        specific_worker_id: Option<&str>, // NEW: specific worker for OS-matching
+        specific_worker_id: Option<&str>,
+        modular_build: Option<&ModularBuildSpec>, // NEW: modular build specification
     ) -> Result<RunResult> {
         use crate::automutate::common::SampleRequest;
         use crate::automutate::worker::worker_agent_client::WorkerAgentClient;
@@ -344,16 +353,11 @@ impl RoundProcessor {
         let run_id = format!("{}/{}/{}", job_id, round_id, run_type.as_str());
         let start_time = Instant::now();
 
-        // Step 1: Build artifact
-        info!(
-            "[{}] Building artifact (template: {}, trace_mode: {})",
-            run_id, template_name, trace_mode
-        );
-
+        // Step 1: Build artifact (modular or legacy mode)
         let builder_config = builder::BuilderConfig::default();
         let artifact_builder = builder::ArtifactBuilder::new(builder_config.clone())?;
 
-        // Convert mutations
+        // Convert mutations to builder format
         let builder_mutations: Vec<builder::mutator::MutationSpec> = mutations
             .iter()
             .map(|m| {
@@ -375,14 +379,53 @@ impl RoundProcessor {
             })
             .collect();
 
-        let built = artifact_builder
-            .build(builder::BuildInput::SourceFile {
-                template_name: template_name.to_string(),
-                source_file: source_file.to_string(),
-                mutations: builder_mutations,
-                trace_mode: trace_mode.to_string(),
-            })
-            .await?;
+        // Choose build mode based on modular_build parameter
+        let built = if let Some(modular) = modular_build {
+            // NEW: Modular template build using @MODULE marker system
+            info!(
+                "[{}] Building artifact (MODULAR: carrier={}, decoder={}, encoding={}, trace_mode={})",
+                run_id, modular.modules.carrier, modular.modules.decoder, modular.encoding, trace_mode
+            );
+
+            // Convert module selection to builder format
+            let modules = builder::assembler::ModuleSelection {
+                carrier: modular.modules.carrier.clone(),
+                decoder: modular.modules.decoder.clone(),
+                antiemulation: modular.modules.antiemulation.clone(),
+                guardrail: modular.modules.guardrail.clone(),
+                virtualprotect: modular.modules.virtualprotect.clone(),
+                decoy: modular.modules.decoy.clone(),
+            };
+
+            // Parse encoding type
+            let encoding = builder::payload::EncodingType::from_str(&modular.encoding)
+                .unwrap_or(builder::payload::EncodingType::Xor);
+
+            artifact_builder
+                .build(builder::BuildInput::ModularTemplate {
+                    modules,
+                    payload: modular.payload.clone(),
+                    encoding,
+                    mutations: builder_mutations,
+                    trace_mode: trace_mode.to_string(),
+                })
+                .await?
+        } else {
+            // Legacy: SourceFile build mode
+            info!(
+                "[{}] Building artifact (LEGACY: template={}, trace_mode={})",
+                run_id, template_name, trace_mode
+            );
+
+            artifact_builder
+                .build(builder::BuildInput::SourceFile {
+                    template_name: template_name.to_string(),
+                    source_file: source_file.to_string(),
+                    mutations: builder_mutations,
+                    trace_mode: trace_mode.to_string(),
+                })
+                .await?
+        };
 
         let artifact_id = built.artifact_id.clone();
         info!(

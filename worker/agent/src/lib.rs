@@ -2,7 +2,6 @@
 ///
 /// This allows integration tests to access internal modules like
 /// telemetry collectors without duplicating code.
-
 pub mod automutate {
     pub mod common {
         tonic::include_proto!("automutate.common");
@@ -61,7 +60,7 @@ impl WorkerAgentService {
     }
 
     pub fn truncate_middle_output(stdout_output: &String) -> String {
-        let formatted = if stdout_output.len() > 1000 {
+        if stdout_output.len() > 1000 {
             // Show first 400 chars and last 400 chars, truncate middle
             let first_part = &stdout_output[..400];
             let last_part = &stdout_output[stdout_output.len() - 400..];
@@ -72,8 +71,7 @@ impl WorkerAgentService {
                 last_part
             )
         } else {
-            stdout_output.clone()
-        };
-        formatted
+            stdout_output.to_owned()
+        }
     }
 }

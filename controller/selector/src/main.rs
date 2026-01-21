@@ -275,7 +275,7 @@ impl Selector for SelectorService {
             // Store outcome in history
             let job_id = result.worker_id.map(|wid| wid.value).unwrap_or_default();
             let mut history = self.outcome_history.lock().unwrap();
-            let job_history = history.entry(job_id).or_insert_with(Vec::new);
+            let job_history = history.entry(job_id).or_default();
 
             for mutation in mutations {
                 job_history.push(OutcomeRecord {

@@ -18,19 +18,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //   5. automation/generated/win10-worker-01.toml (fallback)
     let config = WorkerConfig::load().unwrap_or_else(|e| {
         eprintln!("Failed to load worker config: {}", e);
-        eprintln!("");
+        eprintln!();
         eprintln!(
             "Hostname: {}",
             std::env::var("COMPUTERNAME").unwrap_or_else(|_| "UNKNOWN".to_string())
         );
-        eprintln!("");
+        eprintln!();
         eprintln!("Config search order:");
         eprintln!("  1. AUTOMUTATE_WORKER_CONFIG env var");
         eprintln!("  2. C:\\AutoMutate\\worker.toml");
         eprintln!("  3. automation/generated/<hostname>.toml (auto-detect)");
         eprintln!("  4. config/worker.toml");
         eprintln!("  5. automation/generated/win10-worker-01.toml");
-        eprintln!("");
+        eprintln!();
         eprintln!("Solutions:");
         eprintln!("  - Run: .\\automation\\scripts\\generate-configs.ps1");
         eprintln!("  - Deploy: Copy <hostname>.toml to C:\\AutoMutate\\worker.toml");
