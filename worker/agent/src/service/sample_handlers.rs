@@ -1284,7 +1284,7 @@ fn ntstatus_to_message(status: u32) -> Option<String> {
         | FORMAT_MESSAGE_IGNORE_INSERTS
         | FORMAT_MESSAGE_ALLOCATE_BUFFER;
 
-    let buf: PWSTR = PWSTR::null();
+    let mut buf: PWSTR = PWSTR::null();
 
     let len = unsafe {
         FormatMessageW(
@@ -1311,6 +1311,11 @@ fn ntstatus_to_message(status: u32) -> Option<String> {
     }
 
     Some(s)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ntstatus_to_message(_status: u32) -> Option<String> {
+    None
 }
 
 fn describe_exit(exit_code: i32) -> String {
@@ -1341,9 +1346,14 @@ fn describe_exit(exit_code: i32) -> String {
     format!("Exit code {code_u32} (0x{code_u32:08X})")
 }
 
-//most NTSTATUS values have the top bits set
+#[cfg(target_os = "windows")]
 fn looks_like_ntstatus(code: u32) -> bool {
     (code & 0x8000_0000) != 0
+}
+
+#[cfg(not(target_os = "windows"))]
+fn looks_like_ntstatus(_code: u32) -> bool {
+    false
 }
 
 fn get_handle<R>(stream: Option<R>) -> JoinHandle<String>
