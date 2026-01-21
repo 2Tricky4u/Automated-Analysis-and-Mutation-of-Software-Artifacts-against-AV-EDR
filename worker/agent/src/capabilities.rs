@@ -123,7 +123,12 @@ pub async fn detect_capabilities() -> Result<WorkerCapabilities> {
             tools.insert("defender_version".to_string(), version);
         }
     }
-
+    // Check for MDE onboarding (MDE EDR signal, not Defender AV)
+    if is_mde_onboarded() {
+        capabilities.push("mde".to_string());
+    }else {
+        capabilities.push("cortex".to_string());
+    }
     // System metadata
     metadata.insert("hostname".to_string(), get_hostname());
     metadata.insert("cpu_cores".to_string(), get_cpu_cores().to_string());
@@ -188,6 +193,37 @@ fn check_defender_available() -> bool {
     #[cfg(not(windows))]
     false
 }
+
+#[cfg(windows)]
+fn is_mde_onboarded() -> bool {
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
+    use winreg::RegValue;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+
+    let key = match hklm.open_subkey_with_flags(
+        r"SOFTWARE\Microsoft\Windows Advanced Threat Protection",
+        KEY_READ,
+    ) {
+        Ok(k) => k,
+        Err(_) => return false,
+    };
+
+    // OnboardingInfo is commonly REG_BINARY; read bytes and ensure non-empty.
+    let value: RegValue = match key.get_raw_value("OnboardedInfo") {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    !value.bytes.is_empty()
+}
+
+#[cfg(not(windows))]
+fn is_mde_onboarded() -> bool {
+    false
+}
+
 
 fn get_defender_version() -> Option<String> {
     #[cfg(windows)]

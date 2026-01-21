@@ -104,7 +104,7 @@ echo ""
 # Submit job via grpcurl
 # Note: Requires grpcurl to be installed (go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest)
 RESPONSE=$(grpcurl -plaintext \
-    -import-path controller/proto \
+    -import-path proto \
     -proto controller.proto \
     -d "{
         \"name\": \"$NAME\",
