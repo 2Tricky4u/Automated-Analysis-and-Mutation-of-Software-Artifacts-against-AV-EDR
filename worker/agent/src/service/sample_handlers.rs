@@ -7,7 +7,6 @@ use tokio::io::AsyncRead;
 use tokio::task::JoinHandle;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
-use windows::Win32::Foundation::NTSTATUS;
 
 const ARTIFACTS_PATH: &str = "C:\\temp\\artifacts"; //TODO read from config.storage.artifact_path
 
@@ -1270,7 +1269,6 @@ pub async fn run_sample(
 #[cfg(target_os = "windows")]
 fn ntstatus_to_message(status: u32) -> Option<String> {
     use windows::core::PWSTR;
-    use core::ffi::c_void;
     use windows::Win32::Foundation::{GetLastError, HLOCAL, LocalFree, RtlNtStatusToDosError, NTSTATUS};
     use windows::Win32::System::Diagnostics::Debug::{
         FormatMessageW, FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM,
@@ -1286,7 +1284,7 @@ fn ntstatus_to_message(status: u32) -> Option<String> {
         | FORMAT_MESSAGE_IGNORE_INSERTS
         | FORMAT_MESSAGE_ALLOCATE_BUFFER;
 
-    let mut buf: PWSTR = PWSTR::null();
+    let buf: PWSTR = PWSTR::null();
 
     let len = unsafe {
         FormatMessageW(
