@@ -39,6 +39,17 @@ pub struct HealthMetrics {
     pub uptime_seconds: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct WindowsVersionInfo {
+    pub product_name: Option<String>,
+    pub edition_id: Option<String>,
+    pub display_version: Option<String>,
+    pub release_id: Option<String>,
+    pub build: Option<u32>,
+    pub ubr: Option<u32>,
+    pub is_windows_11: Option<bool>,
+}
+
 impl WorkerState {
     /// Create new worker state from config and detected capabilities
     pub fn new(worker_id: String, capabilities: WorkerCapabilities) -> Self {
@@ -123,7 +134,7 @@ pub async fn detect_capabilities() -> Result<WorkerCapabilities> {
             tools.insert("defender_version".to_string(), version);
         }
     }
-    // Check for MDE onboarding (MDE EDR signal, not Defender AV)
+    // Check for MDE 
     if is_mde_onboarded() {
         capabilities.push("mde".to_string());
     }else {
@@ -133,6 +144,19 @@ pub async fn detect_capabilities() -> Result<WorkerCapabilities> {
     metadata.insert("hostname".to_string(), get_hostname());
     metadata.insert("cpu_cores".to_string(), get_cpu_cores().to_string());
     metadata.insert("ram_gb".to_string(), get_total_ram_gb().to_string());
+    
+    #[cfg(windows)]
+    {
+        let w = get_windows_version_info();
+        let is_win11 = w.is_windows_11.unwrap_or(false);
+        let build = w.build.unwrap_or(0);
+        
+        metadata.insert(
+            "os_key".to_string(),
+            format!("win{}-build-{}", if is_win11 { 11 } else { 10 }, build),
+        );
+        metadata.insert("os_build".to_string(), build.to_string());
+    }
 
     debug!("Detected capabilities: {:?}", capabilities);
     debug!("Detected tools: {:?}", tools);
@@ -222,6 +246,71 @@ fn is_mde_onboarded() -> bool {
 #[cfg(not(windows))]
 fn is_mde_onboarded() -> bool {
     false
+}
+
+#[cfg(windows)]
+pub fn get_windows_version_info() -> WindowsVersionInfo {
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let key = match hklm.open_subkey_with_flags(
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+        KEY_READ,
+    ) {
+        Ok(k) => k,
+        Err(_) => {
+            return WindowsVersionInfo {
+                product_name: None,
+                edition_id: None,
+                display_version: None,
+                release_id: None,
+                build: None,
+                ubr: None,
+                is_windows_11: None,
+            }
+        }
+    };
+
+    let product_name: Option<String> = key.get_value("ProductName").ok();
+    let edition_id: Option<String> = key.get_value("EditionID").ok();
+    let display_version: Option<String> = key.get_value("DisplayVersion").ok();
+    let release_id: Option<String> = key.get_value("ReleaseId").ok();
+
+    // CurrentBuildNumber is stored as a string
+    let build: Option<u32> = key
+        .get_value::<String, _>("CurrentBuildNumber")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok());
+
+    // UBR is a DWORD
+    let ubr: Option<u32> = key.get_value("UBR").ok();
+
+    // Practical rule: Windows 11 builds start at 22000+
+    let is_windows_11 = build.map(|b| b >= 22000);
+
+    WindowsVersionInfo {
+        product_name,
+        edition_id,
+        display_version,
+        release_id,
+        build,
+        ubr,
+        is_windows_11,
+    }
+}
+
+#[cfg(not(windows))]
+pub fn get_windows_version_info() -> WindowsVersionInfo {
+    WindowsVersionInfo {
+        product_name: None,
+        edition_id: None,
+        display_version: None,
+        release_id: None,
+        build: None,
+        ubr: None,
+        is_windows_11: None,
+    }
 }
 
 

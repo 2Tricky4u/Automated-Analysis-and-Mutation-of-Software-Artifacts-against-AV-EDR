@@ -115,6 +115,11 @@ pub struct Job {
     /// If None, scheduler will auto-assign based on first available worker
     pub target_os: Option<String>,
 
+    /// Required capabilities for worker selection (e.g., ["mde"], ["cortex"])
+    /// Workers must have ALL listed capabilities to be selected
+    /// If empty, no capability filtering is applied
+    pub required_capabilities: Vec<String>,
+
     /// Priority (higher = earlier execution)
     pub priority: i32,
 
@@ -175,6 +180,7 @@ impl Job {
             mutations,
             trace_mode,
             target_os: None,
+            required_capabilities: Vec::new(),
             priority,
             current_round: 0,
             max_rounds,
@@ -209,6 +215,7 @@ impl Job {
             mutations,
             trace_mode,
             target_os: None,
+            required_capabilities: Vec::new(),
             priority,
             current_round: 0,
             max_rounds,

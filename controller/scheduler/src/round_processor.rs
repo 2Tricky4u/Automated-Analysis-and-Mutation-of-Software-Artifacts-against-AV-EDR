@@ -88,18 +88,37 @@ impl RoundProcessor {
         );
 
         // Step 2 & 3: Execute baseline AND instrumented runs
-        // OS-aware worker selection: ensure both runs use workers with SAME OS
+        // OS-aware and capability-aware worker selection:
+        // - Ensure both runs use workers with SAME OS AND required capabilities
+        // - If job.required_capabilities is ["mde"], only select workers with MDE
+        // - If job.required_capabilities is ["cortex"], only select workers with Cortex
         //
         // Strategy:
         // - BUILDS always run in PARALLEL (major speedup, no conflicts with UUID temp files)
         // - EXECUTION runs in PARALLEL if different workers, SEQUENTIAL if same worker
 
-        // Select workers with matching OS
-        let workers_by_os = pool.get_available_workers_by_os().await;
+        // Select workers with matching OS AND capabilities
+        let workers_by_os = pool
+            .get_available_workers_by_os_and_capabilities(&job.required_capabilities)
+            .await;
+
+        if !job.required_capabilities.is_empty() {
+            info!(
+                "[{}][{}] Filtering workers by capabilities: {:?}",
+                job.id, round.round_id, job.required_capabilities
+            );
+        }
+
         let (baseline_worker_id, instrumented_worker_id, selected_os) =
             Self::select_os_matched_workers(&workers_by_os)?;
 
         let same_worker = baseline_worker_id == instrumented_worker_id;
+
+        let caps_str = if job.required_capabilities.is_empty() {
+            "any".to_string()
+        } else {
+            job.required_capabilities.join(",")
+        };
 
         if same_worker {
             warn!(
@@ -107,8 +126,8 @@ impl RoundProcessor {
                 job.id, round.round_id
             );
             info!(
-                "[{}][{}]   Worker: {} (OS: {})",
-                job.id, round.round_id, baseline_worker_id, selected_os
+                "[{}][{}]   Worker: {} (OS: {}, Caps: {})",
+                job.id, round.round_id, baseline_worker_id, selected_os, caps_str
             );
         } else {
             info!(
@@ -116,12 +135,12 @@ impl RoundProcessor {
                 job.id, round.round_id
             );
             info!(
-                "[{}][{}]   Baseline worker:     {} (OS: {})",
-                job.id, round.round_id, baseline_worker_id, selected_os
+                "[{}][{}]   Baseline worker:     {} (OS: {}, Caps: {})",
+                job.id, round.round_id, baseline_worker_id, selected_os, caps_str
             );
             info!(
-                "[{}][{}]   Instrumented worker: {} (OS: {})",
-                job.id, round.round_id, instrumented_worker_id, selected_os
+                "[{}][{}]   Instrumented worker: {} (OS: {}, Caps: {})",
+                job.id, round.round_id, instrumented_worker_id, selected_os, caps_str
             );
         }
 
@@ -288,8 +307,6 @@ impl RoundProcessor {
     fn select_os_matched_workers(
         workers_by_os: &std::collections::HashMap<String, Vec<String>>,
     ) -> Result<(String, String, String)> {
-        use anyhow::Context;
-
         if workers_by_os.is_empty() {
             return Err(anyhow::anyhow!("No available workers in pool"));
         }

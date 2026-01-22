@@ -47,6 +47,9 @@ pub async fn schedule_job(
     let stop_on_evasion = req.stop_on_evasion;
     let stop_on_detection = req.stop_on_detection;
 
+    // Get required capabilities from request (for worker selection)
+    let required_capabilities = req.required_capabilities.clone();
+
     // Submit job to scheduler queue
     match scheduler_core.queue().submit_job(
         req.artifact_type.clone(), // template_name
@@ -57,6 +60,7 @@ pub async fn schedule_job(
         max_rounds,
         stop_on_evasion,
         stop_on_detection,
+        required_capabilities,
     ) {
         Ok(job_id) => {
             info!(

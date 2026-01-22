@@ -14,6 +14,7 @@ fn test_queue_submit() {
             10,    // max_rounds
             false, // stop_on_evasion
             false, // stop_on_detection
+            vec![]
         )
         .unwrap();
 
@@ -37,6 +38,7 @@ fn test_queue_pop_fifo() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
     queue
@@ -49,6 +51,7 @@ fn test_queue_pop_fifo() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
     queue
@@ -61,6 +64,7 @@ fn test_queue_pop_fifo() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
 
@@ -84,6 +88,7 @@ fn test_queue_update() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
 
@@ -111,6 +116,7 @@ fn test_queue_filter() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
     let job_id2 = queue
@@ -123,6 +129,7 @@ fn test_queue_filter() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
 
@@ -193,6 +200,7 @@ fn test_list_jobs_no_filter() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
     queue
@@ -205,6 +213,7 @@ fn test_list_jobs_no_filter() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
 
@@ -227,6 +236,7 @@ fn test_status_counts() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
     let job_id2 = queue
@@ -239,6 +249,7 @@ fn test_status_counts() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
     let job_id3 = queue
@@ -251,6 +262,7 @@ fn test_status_counts() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
 
@@ -301,6 +313,7 @@ fn test_job_id_generation() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
 
@@ -314,6 +327,7 @@ fn test_job_id_generation() {
             10,
             false,
             false,
+            vec![]
         )
         .unwrap();
 
@@ -335,6 +349,7 @@ fn test_stop_conditions_preserved() {
             10,
             true,  // stop_on_evasion
             false, // stop_on_detection
+            vec![]
         )
         .unwrap();
 
@@ -357,20 +372,12 @@ fn test_pop_next_skips_non_queued() {
             10,
             false,
             false,
+            vec![],
         )
         .unwrap();
 
     let job_id2 = queue
-        .submit_job(
-            "test2".to_string(),
-            "test2.c".to_string(),
-            vec![],
-            "api+bb".to_string(),
-            0,
-            10,
-            false,
-            false,
-        )
+        .submit_job("test2".to_string(), "test2.c".to_string(), vec![], "api+bb".to_string(), 0, 10, false, false, vec![])
         .unwrap();
 
     // Mark first job as running
