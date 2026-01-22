@@ -8,6 +8,7 @@ use crate::round_processor::RoundProcessor;
 use crate::round::Round;
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::time::{Duration, sleep};
@@ -109,7 +110,10 @@ impl SchedulerCore {
     }
 
     /// Discover workers from automation/generated/win*-worker-*.toml files
-    /// returns Vec<WorkerConfig> for syncing with WorkerManager
+    /// Returns Vec<WorkerConfig> for syncing with WorkerManager
+    ///
+    /// Deduplicates by IP address - if multiple configs have the same IP,
+    /// only the first one is registered and others are logged as duplicates.
     async fn discover_and_register_workers(pool: &WorkerPool) -> Result<Vec<crate::worker_manager::WorkerConfig>> {
         let generated_dir = Path::new("automation/generated");
 
@@ -122,7 +126,12 @@ impl SchedulerCore {
         // Find all win*-worker-*.toml files
         let entries = std::fs::read_dir(generated_dir)?;
         let mut worker_count = 0;
+        let mut duplicate_count = 0;
         let mut discovered_workers = Vec::new();
+
+        // Track registered IPs to detect duplicates
+        // Key: IP address, Value: (worker_id, config_filename)
+        let mut registered_ips: HashMap<String, (String, String)> = HashMap::new();
 
         for entry in entries {
             let entry = entry?;
@@ -133,9 +142,25 @@ impl SchedulerCore {
                 if filename.starts_with("win") && filename.contains("-worker-") && filename.ends_with(".toml") {
                     match Self::load_worker_config(&path) {
                         Ok((worker_id, address)) => {
+                            // Extract IP from address (address is "ip:port")
+                            let ip = address.split(':').next().unwrap_or(&address).to_string();
+
+                            // Check for duplicate IP
+                            if let Some((existing_id, existing_file)) = registered_ips.get(&ip) {
+                                warn!(
+                                    "Duplicate IP detected: {} in '{}' (worker: {}) - already registered from '{}' (worker: {}). Skipping.",
+                                    ip, filename, worker_id, existing_file, existing_id
+                                );
+                                duplicate_count += 1;
+                                continue;
+                            }
+
                             // Register in WorkerPool
                             pool.register_worker(worker_id.clone(), address.clone(), true).await?;
                             info!("  Registered worker: {} at {}", worker_id, address);
+
+                            // Track this IP as registered
+                            registered_ips.insert(ip, (worker_id.clone(), filename.to_string()));
 
                             // Add to discovered list for WorkerManager sync
                             discovered_workers.push(crate::worker_manager::WorkerConfig {
@@ -154,11 +179,15 @@ impl SchedulerCore {
             }
         }
 
+        if duplicate_count > 0 {
+            warn!("{} duplicate worker config(s) were skipped (same IP)", duplicate_count);
+        }
+
         if worker_count == 0 {
             warn!("No workers registered! Scheduler will not be able to execute jobs.");
             warn!("Create worker configs in automation/generated/ (e.g., win10-worker-01.toml)");
         } else {
-            info!("Worker pool initialized with {} workers", worker_count);
+            info!("Worker pool initialized with {} unique workers", worker_count);
         }
 
         Ok(discovered_workers)
