@@ -304,6 +304,53 @@ impl WorkerPool {
             .collect()
     }
 
+    /// Get available workers grouped by OS, filtered by required capabilities
+    ///
+    /// # Parameters
+    /// - `required_capabilities`: List of capabilities the worker must have (e.g., ["mde"] or ["cortex"])
+    ///   If empty, no capability filtering is applied.
+    ///
+    /// # Returns
+    /// HashMap<os_version, Vec<worker_id>> - workers grouped by OS that have ALL required capabilities
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Get workers with MDE capability, grouped by OS
+    /// let workers = pool.get_available_workers_by_os_and_capabilities(&["mde".to_string()]).await;
+    /// // Returns: {"win10": ["worker-01"], "win11": ["worker-02"]}
+    /// ```
+    pub async fn get_available_workers_by_os_and_capabilities(
+        &self,
+        required_capabilities: &[String],
+    ) -> HashMap<String, Vec<String>> {
+        let state = self.state.read().await;
+        let mut by_os: HashMap<String, Vec<String>> = HashMap::new();
+
+        for worker in state.workers.values() {
+            // Worker must be available, enabled, AND connected
+            if worker.status != WorkerStatus::Available || !worker.enabled || !worker.connected {
+                continue;
+            }
+
+            // Check capabilities if any are required
+            if !required_capabilities.is_empty() {
+                let has_all_capabilities = required_capabilities.iter().all(|req| {
+                    worker.capabilities.iter().any(|cap| cap.eq_ignore_ascii_case(req))
+                });
+                if !has_all_capabilities {
+                    continue;
+                }
+            }
+
+            // Group by OS version
+            by_os.entry(worker.os_version.clone())
+                .or_insert_with(Vec::new)
+                .push(worker.id.clone());
+        }
+
+        by_os
+    }
+
     /// Assign a job to a worker (marks worker as busy)
     pub async fn assign_worker(&self, worker_id: &str, job_id: &str) -> Result<String> {
         let mut state = self.state.write().await;

@@ -44,6 +44,7 @@ impl JobQueue {
         max_rounds: u32,
         stop_on_evasion: bool,
         stop_on_detection: bool,
+        required_capabilities: Vec<String>,
     ) -> Result<String> {
         let mut state = self.state.lock().unwrap();
 
@@ -65,6 +66,9 @@ impl JobQueue {
         // Set stopping conditions
         job.stop_on_evasion = stop_on_evasion;
         job.stop_on_detection = stop_on_detection;
+
+        // Set required capabilities for worker selection
+        job.required_capabilities = required_capabilities;
 
         // Add to queue
         state.jobs.push(job);

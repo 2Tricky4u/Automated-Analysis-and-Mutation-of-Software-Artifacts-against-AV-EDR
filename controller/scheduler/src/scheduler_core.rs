@@ -50,11 +50,6 @@ struct WorkerInfo {
     ip_address: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct ControllerInfo {
-    controller_address: String,
-}
-
 /// Scheduler core managing the scheduling loop
 pub struct SchedulerCore {
     /// Job queue (high-level: multi-round tasks)

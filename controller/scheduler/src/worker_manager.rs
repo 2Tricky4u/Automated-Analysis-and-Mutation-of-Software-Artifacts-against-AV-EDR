@@ -10,7 +10,7 @@ use tokio::time::{Duration, timeout};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tonic::transport::{Channel, Endpoint};
-use tonic::{Request, Streaming};
+use tonic::{Request};
 use tracing::{info, warn, error, debug};
 use futures::stream::{self, StreamExt};
 
