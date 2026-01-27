@@ -1,6 +1,9 @@
 // Scheduler library exports
 // Provides job queue, worker pool, and scheduler core functionality
 
+pub mod dispatch_coordinator;
+pub mod dispatcher;
+pub mod executor;
 pub mod job;
 pub mod queue;
 pub mod round;
@@ -25,6 +28,9 @@ pub mod automutate {
 }
 
 // Re-export commonly used types
+pub use dispatch_coordinator::{CoordinatorStats, DispatchCoordinator};
+pub use dispatcher::run_dispatcher;
+pub use executor::{Executor, ProductionExecutor};
 pub use job::{Job, JobStatus, MutationSpec};
 pub use queue::JobQueue;
 pub use round::{BehaviorComparison, Feedback, Round, RoundStatus, RoundSummary, RunType};

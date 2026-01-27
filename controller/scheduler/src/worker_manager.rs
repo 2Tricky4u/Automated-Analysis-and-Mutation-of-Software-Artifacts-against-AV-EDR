@@ -34,7 +34,7 @@ use crate::automutate::common::{
     SampleResponse,
     ArtifactChunk,
 };
-use crate::automutate::common::worker_message::Payload;
+// Payload import removed - message handling is in main.rs event loop
 
 /// Events emitted by WorkerManager to central orchestration loop
 /// Mirror of worker's outgoing message types
@@ -305,18 +305,12 @@ impl WorkerManager {
     /// Get worker metadata by calling GetWorkerInfo RPC
     pub async fn get_worker_info(&self, worker_id: &str) -> Result<WorkerInfoResponse> {
         // Get or create channel
-        let channel = {
-            let mut connections = self.connections.lock().unwrap();
-            let connection = connections.get_mut(worker_id)
-                .ok_or_else(|| anyhow!("Worker {} not found in manager", worker_id))?;
-
-            connection.get_channel().await?
-        };
+        let channel = self.get_channel(worker_id).await?;
 
         // Create client and make RPC call
         let mut client = WorkerAgentClient::new(channel.clone());
 
-        let request = tonic::Request::new(WorkerInfoRequest {});
+        let request = Request::new(WorkerInfoRequest {});
 
         let response = timeout(
             self.rpc_timeout,
@@ -337,18 +331,12 @@ impl WorkerManager {
         max_events: i32,
     ) -> Result<Vec<TelemetryData>> {
         // Get or create channel
-        let channel = {
-            let mut connections = self.connections.lock().unwrap();
-            let connection = connections.get_mut(worker_id)
-                .ok_or_else(|| anyhow!("Worker {} not found in manager", worker_id))?;
-
-            connection.get_channel().await?
-        };
+        let channel = self.get_channel(worker_id).await?;
 
         // Create client and make RPC call
         let mut client = WorkerAgentClient::new(channel.clone());
 
-        let request = tonic::Request::new(TelemetryRequest {
+        let request = Request::new(TelemetryRequest {
             job_id: job_id.to_string(),
             since_timestamp,
             max_events,
@@ -375,6 +363,17 @@ impl WorkerManager {
               telemetry_events.len(), worker_id, job_id);
 
         Ok(telemetry_events)
+    }
+
+    async fn get_channel(&self, worker_id: &str) -> Result<Channel, Error> {
+        let channel = {
+            let mut connections = self.connections.lock().unwrap();
+            let connection = connections.get_mut(worker_id)
+                .ok_or_else(|| anyhow!("Worker {} not found in manager", worker_id))?;
+
+            connection.get_channel().await?
+        };
+        Ok(channel)
     }
 
     /// Query worker metadata from all managed workers

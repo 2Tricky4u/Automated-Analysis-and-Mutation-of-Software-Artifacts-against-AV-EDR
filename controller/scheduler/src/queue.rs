@@ -79,7 +79,7 @@ impl JobQueue {
     /// Get next queued job (FIFO ordering in Phase 1)
     /// Returns None if no jobs are queued
     pub fn pop_next(&self) -> Option<Job> {
-        let mut state = self.state.lock().unwrap();
+        let state = self.state.lock().unwrap();
 
         // Find first queued job (FIFO)
         // Phase 2: Will use BinaryHeap for priority ordering

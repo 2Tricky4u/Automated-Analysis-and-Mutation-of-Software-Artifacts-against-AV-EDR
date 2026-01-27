@@ -22,7 +22,7 @@ fn test_run_type_display() {
 fn test_round_creation() {
     let round = Round::new("job-000001".to_string(), 1);
 
-    assert_eq!(round.round_id, "round-1");
+    assert_eq!(round.id, "round-1");
     assert_eq!(round.job_id, "job-000001");
     assert_eq!(round.round_number, 1);
     assert_eq!(round.status, RoundStatus::InProgress);

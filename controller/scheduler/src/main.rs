@@ -2,10 +2,16 @@ use edr_config::ControllerConfig;
 use elasticsearch::{Elasticsearch, http::transport::Transport};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tonic::{transport::Server};
 use tracing::{debug, error, info, warn};
+use std::fs::OpenOptions;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::Layer;
 
+mod dispatch_coordinator;
+mod dispatcher;
+mod executor;
 mod job;
 mod queue;
 mod round;
@@ -34,40 +40,23 @@ pub mod automutate {
 
 use crate::automutate::controller::controller_server::ControllerServer;
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct Job {
-    id: String,
-    name: String,
-    status: String,
-    progress: i32,
-    phase: String,
-    logs: Vec<String>,
-}
-
-#[derive(Debug, Default)]
-struct SchedulerState {
-    jobs: HashMap<String, Job>,
-    job_counter: u64,
-}
-
 #[derive(Clone)]
 pub struct SchedulerService {
-    state: Arc<Mutex<SchedulerState>>,
     es_client: Elasticsearch,
     controller_ip: String,
     scheduler_core: Option<Arc<scheduler_core::SchedulerCore>>,
     worker_manager: Option<Arc<worker_manager::WorkerManager>>,
+    coordinator: Option<Arc<dispatch_coordinator::DispatchCoordinator>>,
 }
 
 impl SchedulerService {
     pub fn new(es_client: Elasticsearch, controller_ip: String) -> Self {
         Self {
-            state: Arc::new(Mutex::new(SchedulerState::default())),
             es_client,
             controller_ip,
             scheduler_core: None,
             worker_manager: None,
+            coordinator: None,
         }
     }
 
@@ -77,6 +66,10 @@ impl SchedulerService {
 
     pub fn set_worker_manager(&mut self, manager: Arc<worker_manager::WorkerManager>) {
         self.worker_manager = Some(manager);
+    }
+
+    pub fn set_coordinator(&mut self, coord: Arc<dispatch_coordinator::DispatchCoordinator>) {
+        self.coordinator = Some(coord);
     }
 }
 
@@ -111,9 +104,9 @@ fn detect_controller_ip() -> Option<String> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load generated TOML
     let config = ControllerConfig::load().unwrap_or_else(|e| {
-        eprintln!("Failed to load controller.toml: {}", e);
-        eprintln!("Run 'automation/scripts/generate-configs.ps1' to create config files");
-        eprintln!("Or set AUTOMUTATE_CONTROLLER_CONFIG environment variable");
+        error!("Failed to load controller.toml: {}", e);
+        error!("Run 'automation/scripts/generate-configs.ps1' to create config files");
+        error!("Or set AUTOMUTATE_CONTROLLER_CONFIG environment variable");
         std::process::exit(1);
     });
 
@@ -125,13 +118,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "WARN" => tracing::Level::WARN,
         "ERROR" => tracing::Level::ERROR,
         _ => {
-            eprintln!("Invalid log level '{}', defaulting to INFO", config.logging.level);
+            warn!("Invalid log level '{}', defaulting to INFO", config.logging.level);
             tracing::Level::INFO
         }
     };
 
-    tracing_subscriber::fmt()
-        .with_max_level(log_level)
+    let level_filter = LevelFilter::from_level(log_level);
+
+    // Console layer
+    let console_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(true)
+        .with_filter(level_filter);
+
+    // File layer
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("scheduler.log")?;
+
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(file)
+        .with_ansi(true)
+        .with_filter(level_filter);
+
+    tracing_subscriber::registry()
+        .with(console_layer)
+        .with(file_layer)
         .init();
 
     info!(
@@ -208,11 +221,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Set scheduler core in service (for gRPC methods)
             scheduler.set_scheduler_core(Arc::clone(&scheduler_core));
 
-            // Spawn scheduler core in background task
-            debug!("Spawning scheduler core run loop...");
+            // Create RunQueue and DispatchCoordinator for signal-based dispatch
+            let run_queue = run_queue::RunQueue::new();
+            let coordinator = Arc::new(dispatch_coordinator::DispatchCoordinator::new(
+                run_queue,
+                scheduler_core.pool().clone(),
+            ));
+
+            // Store coordinator in service for event loop access
+            scheduler.set_coordinator(Arc::clone(&coordinator));
+
+            // Spawn scheduler core in background task with coordinator
+            debug!("Spawning scheduler core run loop (signal-based)...");
+            let sched_coord = Arc::clone(&coordinator);
             tokio::spawn(async move {
                 debug!("Scheduler core task started - beginning job processing loop");
-                scheduler_core.run().await;
+                scheduler_core.run(sched_coord).await;
                 warn!("Scheduler core run loop exited unexpectedly");
             });
             debug!("Scheduler core task spawned successfully");
@@ -223,18 +247,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Query worker info on startup (optional, non-blocking)
-    info!("Querying worker metadata...");
+    // Query worker info on startup
+    // TODO: This blocks gRPC startup. See FIXME-WORKER-INIT.md for background task solution.
+    debug!("Querying worker metadata (may take time if workers are offline)...");
     let worker_infos = worker_manager.query_all_workers().await;
     for (worker_id, info) in worker_infos {
-        info!(
+        debug!(
             "Worker {} - OS: {}, Capabilities: {:?}",
             worker_id, info.os_version, info.capabilities
         );
     }
 
     // Establish bidirectional streams with all workers for real-time communication
-    info!("Establishing bidirectional streams with workers...");
+    debug!("Establishing bidirectional streams with workers...");
     let stream_results = worker_manager.establish_all_streams().await;
 
     let mut streams_established = 0;
@@ -243,7 +268,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (worker_id, result) in stream_results {
         match result {
             Ok(()) => {
-                info!("Stream established with worker: {}", worker_id);
+                debug!("Stream established with worker: {}", worker_id);
                 streams_established += 1;
             }
             Err(e) => {
@@ -257,13 +282,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     debug!(
-        "Stream establishment complete: {} successful, {} failed",
+        "Worker initialization complete: {} streams established, {} failed",
         streams_established, streams_failed
     );
-
-    if streams_established > 0 {
-        debug!("Workers connected - real-time communication active");
-    }
 
     // Set worker manager in scheduler service
     scheduler.set_worker_manager(Arc::clone(&worker_manager));
@@ -275,9 +296,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Clone scheduler for orchestration loop
     let scheduler_for_events = scheduler.clone();
 
-    // Cache for tracking telemetry counts per run_id (populated when TelemetryBatch arrives)
-    let telemetry_counts: Arc<tokio::sync::RwLock<std::collections::HashMap<String, i32>>> =
-        Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+    // Cache for tracking telemetry counts per run_id
+    let telemetry_counts: Arc<tokio::sync::RwLock<HashMap<String, i32>>> =
+        Arc::new(tokio::sync::RwLock::new(HashMap::new()));
     let telemetry_counts_for_loop = Arc::clone(&telemetry_counts);
 
     // Spawn orchestration loop to consume worker events
@@ -307,6 +328,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             warn!("Failed to update health for worker {}: {}", worker_id, e);
                         }
                     }
+
+                    // Signal dispatcher that a worker is now available
+                    if let Some(coord) = &scheduler_for_events.coordinator {
+                        coord.signal_worker_available();
+                        debug!("[SIGNAL] Worker available signal sent for {}", worker_id);
+                    }
                 }
 
                 // Message event handler
@@ -322,7 +349,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             // Convert ToolVersions proto to HashMap
                             let tools = if let Some(tool_versions) = reg.tools {
-                                let mut tools_map = std::collections::HashMap::new();
+                                let mut tools_map = HashMap::new();
                                 if !tool_versions.rededr_version.is_empty() {
                                     tools_map.insert("rededr".to_string(), tool_versions.rededr_version);
                                 }
@@ -337,7 +364,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 tools_map
                             } else {
-                                std::collections::HashMap::new()
+                                HashMap::new()
                             };
 
                             // Log tool versions if present
@@ -368,6 +395,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             reg.os_version,
                                             reg.capabilities.len()
                                         );
+
+                                        // Signal dispatcher that a worker may now be available
+                                        if let Some(coord) = &scheduler_for_events.coordinator {
+                                            coord.signal_worker_available();
+                                            debug!("[SIGNAL] Worker available signal sent after registration for {}", worker_id);
+                                        }
                                     }
                                     Err(e) => {
                                         warn!(
@@ -609,7 +642,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                 // Store with 5s timeout
                                 match timeout(Duration::from_secs(5), async {
-                                    use elasticsearch::{IndexParts, http::StatusCode};
+                                    use elasticsearch::IndexParts;
 
                                     let response = scheduler_clone.es_client
                                         .index(IndexParts::Index(&index_name))
@@ -647,7 +680,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             });
 
                             // NOTE: Job status is managed by round_processor via execute_artifact_stream()
-                            // The stream-based execution now uses response channels (Option 3 implemented)
+                            // The stream-based execution now uses response channels
                             // - Controller sends RunSampleCommand via stream
                             // - Worker executes and sends SampleResponse via stream
                             // - Response routed via channel to waiting round_processor
@@ -792,7 +825,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         None => {
                             warn!("[WORKER-EVENT] Worker {} sent empty message", worker_id);
                         }
-                        _ => {}
                     }
                 }
 
@@ -889,11 +921,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .build_v1()?;
 
+    debug!("=== gRPC server starting on {} ===", addr);
+    debug!("Signal-based scheduler active - workers connecting in background");
+
     Server::builder()
         .add_service(ControllerServer::new(scheduler))
         .add_service(reflection_service)
         .serve(addr)
         .await?;
+
+    // Note: This only executes on graceful shutdown
+    debug!("gRPC server shutdown complete");
 
     Ok(())
 }

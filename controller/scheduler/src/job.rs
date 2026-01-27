@@ -33,58 +33,6 @@ impl std::fmt::Display for JobStatus {
     }
 }
 
-/// Mutation specification to apply at build stage
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MutationSpec {
-    /// Mutation ID (e.g., "ast.import_reshape")
-    pub id: String,
-    /// Mutation parameters (optional)
-    pub params: Option<serde_json::Value>,
-}
-
-/// Module selection for modular template builds
-/// Each field selects which variant to use for that module category
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ModuleSelectionSpec {
-    /// Carrier module: "alloc_rw_rx", "change_rw_rx", "peb_walk"
-    pub carrier: String,
-    /// Decoder module: "xor", "english"
-    pub decoder: String,
-    /// Anti-emulation module: "none", "sirallocalot", "timeraw"
-    pub antiemulation: String,
-    /// Guardrail module: "none", "env"
-    pub guardrail: String,
-    /// VirtualProtect module: "standard", "undersized"
-    pub virtualprotect: String,
-    /// Decoy module: "none", "winexec"
-    pub decoy: String,
-}
-
-impl ModuleSelectionSpec {
-    /// Create default module selection
-    pub fn new() -> Self {
-        Self {
-            carrier: "alloc_rw_rx".to_string(),
-            decoder: "xor".to_string(),
-            antiemulation: "none".to_string(),
-            guardrail: "none".to_string(),
-            virtualprotect: "standard".to_string(),
-            decoy: "none".to_string(),
-        }
-    }
-}
-
-/// Modular build specification for the new @MODULE marker system
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModularBuildSpec {
-    /// Module selection for assembly
-    pub modules: ModuleSelectionSpec,
-    /// Raw payload bytes (will be encoded)
-    pub payload: Vec<u8>,
-    /// Payload encoding type: "xor" or "english"
-    pub encoding: String,
-}
-
 /// Job structure containing all information about a build/execute task
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
@@ -93,23 +41,6 @@ pub struct Job {
 
     /// Current job status
     pub status: JobStatus,
-
-    /// Template name (e.g., "rwx_direct", "eicar") - used for legacy SourceFile builds
-    pub template_name: String,
-
-    /// Source file path (e.g., "rwx_direct.c") - used for legacy SourceFile builds
-    pub source_file: String,
-
-    /// Modular build specification (new preferred mode)
-    /// When set, template_name and source_file are ignored
-    /// Uses @MODULE marker system for assembly
-    pub modular_build: Option<ModularBuildSpec>,
-
-    /// Mutations to apply at build stage
-    pub mutations: Vec<MutationSpec>,
-
-    /// Trace mode ("api+bb", "lines", "all", etc.)
-    pub trace_mode: String,
 
     /// Target OS for execution (e.g., "win10", "win11", "ubuntu")
     /// If None, scheduler will auto-assign based on first available worker
@@ -120,9 +51,6 @@ pub struct Job {
     /// If empty, no capability filtering is applied
     pub required_capabilities: Vec<String>,
 
-    /// Priority (higher = earlier execution)
-    pub priority: i32,
-
     /// Current round number (1-indexed, 0 means not started)
     pub current_round: u32,
 
@@ -131,22 +59,10 @@ pub struct Job {
 
     /// Stop condition: evasion goal
     pub stop_on_evasion: bool, // If true, stop when not_detected
-
-    /// Stop condition: detection goal (for testing)
-    pub stop_on_detection: bool, // If true, stop when detected
-
+    
     /// History of completed rounds
     pub rounds: Vec<RoundSummary>,
-
-    /// Assigned worker ID (None if not assigned yet)
-    pub worker_id: Option<String>,
-
-    /// Artifact ID after build (SHA256)
-    pub artifact_id: Option<String>,
-
-    /// Run ID during execution (UUID)
-    pub run_id: Option<String>,
-
+    
     /// Job creation timestamp
     pub created_at: SystemTime,
 
@@ -164,80 +80,26 @@ impl Job {
     /// Create a new job with given parameters (legacy SourceFile mode)
     pub fn new(
         id: String,
-        template_name: String,
-        source_file: String,
-        mutations: Vec<MutationSpec>,
-        trace_mode: String,
-        priority: i32,
         max_rounds: u32,
     ) -> Self {
         Job {
             id,
             status: JobStatus::Queued,
-            template_name,
-            source_file,
-            modular_build: None, // Legacy mode - no modular build
-            mutations,
-            trace_mode,
             target_os: None,
             required_capabilities: Vec::new(),
-            priority,
             current_round: 0,
             max_rounds,
             stop_on_evasion: false,
-            stop_on_detection: false,
             rounds: Vec::new(),
-            worker_id: None,
-            artifact_id: None,
-            run_id: None,
             created_at: SystemTime::now(),
             started_at: None,
             completed_at: None,
             error: None,
         }
     }
-
-    /// Create a new job with modular build specification (new preferred mode)
-    pub fn new_modular(
-        id: String,
-        modular_build: ModularBuildSpec,
-        mutations: Vec<MutationSpec>,
-        trace_mode: String,
-        priority: i32,
-        max_rounds: u32,
-    ) -> Self {
-        Job {
-            id,
-            status: JobStatus::Queued,
-            template_name: String::new(), // Not used for modular builds
-            source_file: String::new(),   // Not used for modular builds
-            modular_build: Some(modular_build),
-            mutations,
-            trace_mode,
-            target_os: None,
-            required_capabilities: Vec::new(),
-            priority,
-            current_round: 0,
-            max_rounds,
-            stop_on_evasion: false,
-            stop_on_detection: false,
-            rounds: Vec::new(),
-            worker_id: None,
-            artifact_id: None,
-            run_id: None,
-            created_at: SystemTime::now(),
-            started_at: None,
-            completed_at: None,
-            error: None,
-        }
-    }
-
-    /// Check if this job uses modular build mode
-    pub fn is_modular_build(&self) -> bool {
-        self.modular_build.is_some()
-    }
-
-    /// Start job execution (transition to Running)
+    
+    /// Start job execution 
+    /// Marks running and set started time
     pub fn start_running(&mut self) {
         self.status = JobStatus::Running;
         if self.started_at.is_none() {
@@ -246,12 +108,14 @@ impl Job {
     }
 
     /// Transition job to Completed state
+    /// Marks completed and set completed_at
     pub fn mark_completed(&mut self) {
         self.status = JobStatus::Completed;
         self.completed_at = Some(SystemTime::now());
     }
 
     /// Transition job to Failed state with error message
+    /// Marks failed and set completed_at
     pub fn mark_failed(&mut self, error: String) {
         self.status = JobStatus::Failed;
         self.error = Some(error);
@@ -259,6 +123,7 @@ impl Job {
     }
 
     /// Transition job to Stopped state (user request)
+    /// Marks Stopped and set completed_at
     pub fn mark_stopped(&mut self) {
         self.status = JobStatus::Stopped;
         self.completed_at = Some(SystemTime::now());
@@ -285,17 +150,13 @@ impl Job {
             if self.stop_on_evasion && !last_round.detected {
                 return false;
             }
-
-            // Stop if detection occurred and flag is set (for testing)
-            if self.stop_on_detection && last_round.detected {
-                return false;
-            }
         }
 
         true
     }
 
     /// Start a new round
+    /// Increase current round and put in running state
     pub fn start_round(&mut self) {
         self.current_round += 1;
         if self.status == JobStatus::Queued {

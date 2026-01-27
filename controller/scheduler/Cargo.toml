@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 edr-config = { path = "../../config" }
 build = { path = "../../build" }
+async-trait = "0.1"
 tokio.workspace = true
 tokio-stream = "0.1"
 tonic.workspace = true

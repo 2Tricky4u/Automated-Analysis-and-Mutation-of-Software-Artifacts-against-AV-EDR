@@ -225,7 +225,7 @@ impl WorkerPool {
     /// # Example
     /// Worker IDs like "win10-worker-01", "win11-worker-02" are grouped by OS prefix
     /// Returns: HashMap<"win10", vec!["win10-worker-01", "win10-worker-02"]>
-    pub async fn get_available_workers_by_os(&self) -> std::collections::HashMap<String, Vec<String>> {
+    pub async fn get_available_workers_by_os(&self) -> HashMap<String, Vec<String>> {
         use std::collections::HashMap;
 
         let state = self.state.read().await;
@@ -600,6 +600,41 @@ impl WorkerPool {
     pub async fn total_count(&self) -> usize {
         let state = self.state.read().await;
         state.workers.len()
+    }
+
+    /// Get all available workers as full WorkerState objects
+    /// Used by dispatcher to get complete worker info for capability matching
+    pub async fn get_all_available(&self) -> Vec<WorkerState> {
+        let state = self.state.read().await;
+        state
+            .workers
+            .values()
+            .filter(|w| w.status == WorkerStatus::Available && w.enabled && w.connected)
+            .cloned()
+            .collect()
+    }
+
+    /// Reserve worker for a run (marks busy without job assignment)
+    /// Used by dispatcher when matching run to worker
+    pub async fn reserve_worker(&self, worker_id: &str) -> Result<()> {
+        let mut state = self.state.write().await;
+
+        let worker = state
+            .workers
+            .get_mut(worker_id)
+            .ok_or_else(|| anyhow!("Worker not found: {}", worker_id))?;
+
+        if worker.status != WorkerStatus::Available {
+            return Err(anyhow!(
+                "Worker {} not available (status: {})",
+                worker_id,
+                worker.status
+            ));
+        }
+
+        worker.status = WorkerStatus::Busy;
+        info!("Worker {} reserved for run execution", worker_id);
+        Ok(())
     }
 }
 

@@ -74,22 +74,6 @@ pub struct BehaviorComparison {
     pub confidence: f64,
 }
 
-/// Feedback for next round selection
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Feedback {
-    /// Was artifact detected?
-    pub detected: bool,
-
-    /// Features to avoid (from triage analysis)
-    pub avoid_features: Vec<String>,
-
-    /// Features to seek (coverage-based)
-    pub seek_features: Vec<String>,
-
-    /// Evasion score (0.0 = detected, 1.0 = not detected)
-    pub evasion_score: f64,
-}
-
 /// Summary of a completed round (stored in Job.rounds)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoundSummary {
@@ -102,13 +86,21 @@ pub struct RoundSummary {
     pub completed_at: SystemTime,
 }
 
-use crate::job::MutationSpec;
+
+/// Mutation specification to apply at build stage
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MutationSpec {
+    /// Mutation ID (e.g., "ast.import_reshape")
+    pub id: String,
+    /// Mutation parameters (optional)
+    pub params: Option<serde_json::Value>,
+}
 
 /// Complete round with dual-run protocol
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Round {
     /// Round identifier (e.g., "round-1")
-    pub round_id: String,
+    pub id: String,
 
     /// Parent job ID
     pub job_id: String,
@@ -125,9 +117,6 @@ pub struct Round {
     /// Behavior comparison result
     pub behavior_match: Option<BehaviorComparison>,
 
-    /// Feedback from triage/differential analysis
-    pub feedback: Option<Feedback>,
-
     /// Round start timestamp
     pub started_at: SystemTime,
 
@@ -142,13 +131,13 @@ impl Round {
     /// Create a new round
     pub fn new(job_id: String, round_number: u32) -> Self {
         Round {
-            round_id: format!("round-{}", round_number),
+            id: format!("round-{}", round_number),
             job_id,
             round_number,
+            modular_build: ModularBuildSpec,
             mutations: Vec::new(),
             status: RoundStatus::InProgress,
             behavior_match: None,
-            feedback: None,
             started_at: SystemTime::now(),
             completed_at: None,
             error: None,
@@ -171,7 +160,7 @@ impl Round {
     /// Create summary for storage in Job
     pub fn to_summary(&self) -> RoundSummary {
         RoundSummary {
-            round_id: self.round_id.clone(),
+            round_id: self.id.clone(),
             round_number: self.round_number,
             mutations: self.mutations.iter().map(|m| m.id.clone()).collect(),
             detected: self.feedback.as_ref().map(|f| f.detected).unwrap_or(false),

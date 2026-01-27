@@ -12,11 +12,11 @@
 // - No blocking on worker availability during round execution
 // - Better worker utilization (workers pull work when ready)
 
-use crate::job::MutationSpec;
-use crate::round::RunType; // Use existing RunType from round.rs
+use crate::round::RunType;
 use anyhow::Result;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 /// Pending run waiting for worker execution
@@ -34,21 +34,16 @@ pub struct PendingRun {
     /// Run type (baseline or instrumented)
     pub run_type: RunType,
 
-    /// Template name for build
-    pub template_name: String,
-
-    /// Source file for build
-    pub source_file: String,
-
-    /// Mutations to apply
-    pub mutations: Vec<MutationSpec>,
-
     /// Trace mode ("off", "lines", etc.)
     pub trace_mode: String,
 
     /// Required OS (e.g., "win10", "win11")
     /// Worker MUST match this OS
     pub required_os: String,
+
+    /// Required capabilities (e.g., ["mde"], ["cortex"])
+    /// Worker must have ALL listed capabilities
+    pub required_capabilities: Vec<String>,
 
     /// Oneshot channel to send result back to submitter
     /// This allows async/await on run completion
@@ -105,9 +100,11 @@ impl RunQueue {
         run_type: RunType,
         template_name: String,
         source_file: String,
+        modular_build: Option<ModularBuildSpec>,
         mutations: Vec<MutationSpec>,
         trace_mode: String,
         required_os: String,
+        required_capabilities: Vec<String>,
     ) -> (String, oneshot::Receiver<RunResult>) {
         let mut state = self.state.lock().unwrap();
 
@@ -124,11 +121,11 @@ impl RunQueue {
             job_id,
             round_id,
             run_type,
-            template_name,
-            source_file,
+            modular_build,
             mutations,
             trace_mode,
             required_os: required_os.clone(),
+            required_capabilities,
             result_tx: Some(tx),
         };
 
@@ -167,6 +164,74 @@ impl RunQueue {
 
         // Remove from pending map
         state.pending.remove(&run_id)
+    }
+
+    /// Get next pending run matching worker's OS AND capabilities
+    /// Returns None if no matching runs available
+    ///
+    /// Unlike pop_for_os, this checks capability requirements
+    pub fn pop_for_worker(&self, worker_os: &str, worker_capabilities: &[String]) -> Option<PendingRun> {
+        let mut state = self.state.lock().unwrap();
+
+        // Get runs for this OS
+        let os_runs = state.by_os.get(worker_os)?;
+
+        // Collect run_ids first to avoid borrow conflict
+        let run_ids: Vec<String> = os_runs.iter().cloned().collect();
+
+        // Find first run where worker has all required capabilities
+        let mut matched_position = None;
+        for (position, run_id) in run_ids.iter().enumerate() {
+            if let Some(run) = state.pending.get(run_id) {
+                let matches = if run.required_capabilities.is_empty() {
+                    // Empty capabilities = matches any worker
+                    true
+                } else {
+                    // Check all required caps (case-insensitive)
+                    run.required_capabilities.iter().all(|req| {
+                        worker_capabilities
+                            .iter()
+                            .any(|w_cap| w_cap.eq_ignore_ascii_case(req))
+                    })
+                };
+                if matches {
+                    matched_position = Some(position);
+                    break;
+                }
+            }
+        }
+
+        let position = matched_position?;
+        let run_id = run_ids.get(position)?.clone();
+
+        // Now get mutable access and remove
+        let os_runs = state.by_os.get_mut(worker_os)?;
+        os_runs.remove(position);
+
+        // Clean up empty OS bucket
+        if os_runs.is_empty() {
+            state.by_os.remove(worker_os);
+        }
+
+        // Remove and return from pending map
+        state.pending.remove(&run_id)
+    }
+
+    /// Put run back in queue (e.g., worker reservation failed)
+    pub fn requeue(&self, run: PendingRun) {
+        let mut state = self.state.lock().unwrap();
+        let run_id = run.run_id.clone();
+        let os = run.required_os.clone();
+
+        // Add back to pending
+        state.pending.insert(run_id.clone(), run);
+
+        // Add back to OS queue at front (since it was already waiting)
+        state
+            .by_os
+            .entry(os)
+            .or_insert_with(VecDeque::new)
+            .push_front(run_id);
     }
 
     /// Complete a run with result

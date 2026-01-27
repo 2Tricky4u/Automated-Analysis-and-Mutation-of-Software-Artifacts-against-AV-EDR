@@ -68,6 +68,12 @@ pub async fn schedule_job(
                 job_id, req.name, req.artifact_type
             );
 
+            // Signal scheduler that a new job was submitted
+            if let Some(ref coordinator) = service.coordinator {
+                coordinator.signal_job_submitted();
+                debug!("Signaled job_submitted for job {}", job_id);
+            }
+
             // Index job to Elasticsearch
             if let Some(job) = scheduler_core.queue().get_job(&job_id) {
                 if let Err(e) = service.index_job(&job).await {
