@@ -293,15 +293,6 @@ impl WorkerManager {
         Ok(())
     }
 
-    /// Get list of registered worker addresses for discovery sync
-    /// Returns (worker_id, address) pairs
-    pub fn get_worker_addresses(&self) -> Vec<(String, String)> {
-        let connections = self.connections.lock().unwrap();
-        connections.iter()
-            .map(|(id, conn)| (id.clone(), conn.address.clone()))
-            .collect()
-    }
-
     /// Get worker metadata by calling GetWorkerInfo RPC
     pub async fn get_worker_info(&self, worker_id: &str) -> Result<WorkerInfoResponse> {
         // Get or create channel
@@ -328,55 +319,6 @@ impl WorkerManager {
         Ok(response.into_inner())
     }
 
-    /// Get telemetry from worker by calling GetTelemetry RPC (streaming)
-    pub async fn get_telemetry(
-        &self,
-        worker_id: &str,
-        job_id: &str,
-        since_timestamp: i64,
-        max_events: i32,
-    ) -> Result<Vec<TelemetryData>> {
-        // Get or create channel
-        let channel = {
-            let mut connections = self.connections.lock().unwrap();
-            let connection = connections.get_mut(worker_id)
-                .ok_or_else(|| anyhow!("Worker {} not found in manager", worker_id))?;
-
-            connection.get_channel().await?
-        };
-
-        // Create client and make RPC call
-        let mut client = WorkerAgentClient::new(channel.clone());
-
-        let request = tonic::Request::new(TelemetryRequest {
-            job_id: job_id.to_string(),
-            since_timestamp,
-            max_events,
-        });
-
-        // Stream telemetry data
-        let mut stream = timeout(
-            self.rpc_timeout,
-            client.get_telemetry(request)
-        ).await
-            .map_err(|_| anyhow!("GetTelemetry RPC timeout for worker {}", worker_id))?
-            .map_err(|e| anyhow!("GetTelemetry RPC failed for worker {}: {}", worker_id, e))?
-            .into_inner();
-
-        // Collect all telemetry events from stream
-        let mut telemetry_events = Vec::new();
-
-        while let Some(event) = stream.message().await
-            .map_err(|e| anyhow!("Error reading telemetry stream from worker {}: {}", worker_id, e))? {
-            telemetry_events.push(event);
-        }
-
-        info!("Collected {} telemetry events from worker {} for job {}",
-              telemetry_events.len(), worker_id, job_id);
-
-        Ok(telemetry_events)
-    }
-
     /// Query worker metadata from all managed workers
     /// Returns map of worker_id -> WorkerInfoResponse
     pub async fn query_all_workers(&self) -> HashMap<String, WorkerInfoResponse> {
@@ -384,7 +326,6 @@ impl WorkerManager {
             let connections = self.connections.lock().unwrap();
             connections.keys().cloned().collect()
         };
-
         let mut results = HashMap::new();
 
         for worker_id in worker_ids {
@@ -404,33 +345,6 @@ impl WorkerManager {
         }
 
         results
-    }
-
-    /// Check if worker connection is healthy (channel exists and recent)
-    /// Check if worker has active session (streaming connection)
-    ///
-    /// # Staleness Check
-    /// Returns false if session exists but hasn't sent messages in 5 minutes
-    pub fn is_worker_connected(&self, worker_id: &str) -> bool {
-        // Check for active session first
-        if let Some(session) = self.sessions.get(worker_id) {
-            return !session.is_stale(300);  // 5 min timeout
-        }
-
-        // Fallback: Check legacy connection
-        let connections = self.connections.lock().unwrap();
-        if let Some(connection) = connections.get(worker_id) {
-            if connection.channel.is_some() {
-                if let Some(last_connected) = connection.last_connected {
-                    let elapsed = std::time::SystemTime::now()
-                        .duration_since(last_connected)
-                        .unwrap_or(Duration::from_secs(999));
-                    return elapsed < Duration::from_secs(300);
-                }
-            }
-        }
-
-        false
     }
 
     /// Get list of all worker IDs
@@ -462,19 +376,6 @@ impl WorkerManager {
             let retry_count = conn.retry_count;
             (connected, retry_count)
         })
-    }
-
-    /// Force reconnection for a worker (clears existing channel)
-    pub fn force_reconnect(&self, worker_id: &str) -> Result<()> {
-        let mut connections = self.connections.lock().unwrap();
-
-        let connection = connections.get_mut(worker_id)
-            .ok_or_else(|| anyhow!("Worker {} not found", worker_id))?;
-
-        connection.clear_channel();
-        info!("Cleared connection for worker {} - will reconnect on next RPC", worker_id);
-
-        Ok(())
     }
 
     // ===== Bidirectional Streaming Support =====
@@ -677,49 +578,6 @@ impl WorkerManager {
         Ok(())
     }
 
-    /// Handle incoming message from worker via stream
-    async fn handle_worker_message(worker_id: &str, msg: WorkerMessage) -> Result<()> {
-        match msg.payload {
-            Some(worker_message::Payload::Registration(reg)) => {
-                info!(
-                    "Worker {} registered - OS: {}, Capabilities: {:?}",
-                    worker_id, reg.os_version, reg.capabilities
-                );
-                // TODO: Store worker metadata in state
-            }
-            Some(worker_message::Payload::Status(status)) => {
-                debug!(
-                    "Status from {}: CPU {}%, Memory {}MB, Jobs: {}",
-                    worker_id, status.cpu_percent, status.memory_mb, status.active_jobs
-                );
-                // TODO: Update worker health metrics
-            }
-            Some(worker_message::Payload::Telemetry(batch)) => {
-                info!(
-                    "Received {} telemetry events from {} (job: {}, final: {})",
-                    batch.events.len(), worker_id, batch.job_id, batch.is_final
-                );
-                // TODO: Forward to Elasticsearch
-            }
-            Some(worker_message::Payload::SampleResponse(response)) => {
-                info!(
-                    "Sample execution completed on {}: job_id={}, success={}",
-                    worker_id, response.job_id, response.success
-                );
-                // TODO: Notify job completion handler
-            }
-            Some(worker_message::Payload::Ack(ack)) => {
-                debug!("Ack from {}: request_id={}, success={}", worker_id, ack.request_id, ack.success);
-            }
-            None => {
-                warn!("Received empty message from worker {}", worker_id);
-            }
-            _ => {}
-        }
-
-        Ok(())
-    }
-
     /// Send a command to worker via stream
     /// Send command to worker via stream
     ///
@@ -728,6 +586,7 @@ impl WorkerManager {
     /// - Automatically removes dead sessions on send failure
     /// - Emits Disconnected event for orchestration loop
     pub async fn send_command(&self, worker_id: &str, msg: ControllerMessage) -> Result<()> {
+        warn!("send_command to {}({:?})", worker_id, msg);
         // Get session (no lock held after this line)
         let session = self.sessions.get(worker_id)
             .ok_or_else(|| anyhow!("Worker {} not found or stream not established", worker_id))?;
@@ -753,39 +612,6 @@ impl WorkerManager {
                 Err(anyhow!("Worker {} disconnected (send failed)", worker_id))
             }
         }
-    }
-
-    /// Send RunSample command to worker via stream
-    pub async fn send_run_sample(&self, worker_id: &str, request: SampleRequest) -> Result<()> {
-        let request_id = uuid::Uuid::new_v4().to_string();
-
-        info!("Sending RunSample command to worker {} (request_id: {}, job_id: {})",
-              worker_id, request_id, request.job_id);
-
-        let cmd = ControllerMessage {
-            payload: Some(controller_message::Payload::RunSample(RunSampleCommand {
-                request_id,
-                request: Some(request),
-            })),
-        };
-
-        self.send_command(worker_id, cmd).await
-    }
-
-    /// Send heartbeat to worker via stream
-    pub async fn send_heartbeat(&self, worker_id: &str) -> Result<()> {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        let heartbeat = ControllerMessage {
-            payload: Some(controller_message::Payload::Heartbeat(Heartbeat {
-                timestamp,
-            })),
-        };
-
-        self.send_command(worker_id, heartbeat).await
     }
 
     /// Broadcast message to all connected workers
@@ -842,14 +668,6 @@ impl WorkerManager {
 
         // Clear all sessions
         self.sessions.clear();
-    }
-
-    /// Check if worker has active stream
-    pub fn has_active_stream(&self, worker_id: &str) -> bool {
-        let connections = self.connections.lock().unwrap();
-        connections.get(worker_id)
-            .map(|conn| conn.stream_active)
-            .unwrap_or(false)
     }
 
     /// Establish streams with all workers
@@ -953,41 +771,6 @@ impl WorkerManager {
 
             channel
         })
-    }
-
-    /// Execute artifact on worker and return execution result
-    ///
-    /// Makes a blocking RPC call (waits for execution to complete).
-    /// Reuses existing connection (no new client creation).
-    ///
-    /// # Arguments
-    /// * `worker_id` - Target worker ID
-    /// * `request` - SampleRequest containing job_id, artifact_id, timeout, etc.
-    ///
-    /// # Returns
-    /// * `Ok(SampleResponse)` - Execution result with success, exit_code, telemetry_ids
-    /// * `Err(_)` - Execution failed (network, timeout, or worker error)
-    pub async fn execute_artifact(&self, worker_id: &str, request: SampleRequest) -> Result<SampleResponse> {
-        info!("[{}] Executing artifact {} on worker {}...",
-            request.job_id, request.artifact_id, worker_id);
-
-        // Get worker channel (reuse existing connection)
-        // Split lock acquisition from async operations to avoid Send bound issues
-        let channel = self.get_channel_from_worker(worker_id).await?;
-
-        // Create client from existing channel
-        let mut client = WorkerAgentClient::new(channel.clone());
-
-        // Make blocking RPC call (waits for execution to complete)
-        let response = client.run_sample(tonic::Request::new(request.clone())).await
-            .map_err(|e| anyhow!("Execution RPC to worker {} failed: {}", worker_id, e))?;
-
-        let exec_result = response.into_inner();
-
-        info!("[{}] Execution complete on worker {}: success={}, exit_code={}, telemetry_events={}",
-            request.job_id, worker_id, exec_result.success, exec_result.exit_code, exec_result.telemetry_ids.len());
-
-        Ok(exec_result)
     }
 
     /// Execute artifact on worker via bidirectional stream (NON-BLOCKING, awaits stream response)

@@ -170,31 +170,3 @@ async fn test_list_workers_hybrid() {
     assert!(workers.contains(&"legacy-worker".to_string()));
     assert!(workers.contains(&"streaming-worker".to_string()));
 }
-
-// Test is_worker_connected with sessions
-#[tokio::test]
-async fn test_is_worker_connected_with_session() {
-    let (events_tx, _events_rx) = mpsc::channel(10);
-    let manager = WorkerManager::new(30, events_tx);
-
-    // Worker not added yet
-    assert!(!manager.is_worker_connected("test-worker"));
-
-    // Add session
-    let (tx, _rx) = mpsc::channel(10);
-    manager.sessions.insert("test-worker".to_string(), SessionHandle::new(
-        "test-worker".to_string(),
-        tx,
-    ));
-
-    // Should be connected (fresh session)
-    assert!(manager.is_worker_connected("test-worker"));
-
-    // Make session stale
-    if let Some(mut session) = manager.sessions.get_mut("test-worker") {
-        session.last_seen = std::time::SystemTime::now() - Duration::from_secs(400);
-    }
-
-    // Should be disconnected (stale session > 5 min)
-    assert!(!manager.is_worker_connected("test-worker"));
-}
