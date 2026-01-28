@@ -1,10 +1,9 @@
 // Unified Target Manager - combines worker pool state and connection management
 //
-// Replaces both worker_pool.rs and worker_manager.rs with a single manager
-// that handles:
+// Handles:
 // - Target registration (from TOML or dynamic)
 // - gRPC connection/stream management
-// - Target state (available, busy, offline)
+// - Target state (Available/Busy/Offline)
 // - Artifact deployment and execution
 // - Event emission for orchestration loop
 
@@ -31,15 +30,13 @@ use crate::automutate::worker::{worker_agent_client::WorkerAgentClient, WorkerIn
 // Types
 // ============================================================================
 
-/// Target status (worker availability)
+/// Target status - single source of truth for availability
+/// Offline = not connected (no separate `connected` bool)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetStatus {
-    /// Ready to accept jobs
-    Available,
-    /// Currently running a job
-    Busy,
-    /// Not responding / disconnected
-    Offline,
+    Available,  // Connected and ready
+    Busy,       // Connected but running a job
+    Offline,    // Not connected
 }
 
 impl std::fmt::Display for TargetStatus {
@@ -55,52 +52,29 @@ impl std::fmt::Display for TargetStatus {
 /// How target was registered
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RegistrationType {
-    /// Loaded from TOML config
-    Static,
-    /// Registered via RPC/stream
-    Dynamic,
+    Static,   // From TOML config
+    Dynamic,  // From stream registration
 }
 
 /// Events emitted by TargetManager to orchestration loop
 #[derive(Debug, Clone)]
 pub enum TargetEvent {
-    /// Target connected and sent Registration
     Connected {
         target_id: String,
         os_version: String,
         capabilities: Vec<String>,
     },
-    /// Target disconnected
-    Disconnected { target_id: String, reason: String },
-    /// Target sent a message
-    Message { target_id: String, msg: WorkerMessage },
+    Disconnected {
+        target_id: String,
+        reason: String,
+    },
+    Message {
+        target_id: String,
+        msg: WorkerMessage,
+    },
 }
 
-impl TargetEvent {
-    pub fn connected(id: impl Into<String>, os: impl Into<String>, caps: Vec<String>) -> Self {
-        TargetEvent::Connected {
-            target_id: id.into(),
-            os_version: os.into(),
-            capabilities: caps,
-        }
-    }
-
-    pub fn disconnected(id: impl Into<String>, reason: impl Into<String>) -> Self {
-        TargetEvent::Disconnected {
-            target_id: id.into(),
-            reason: reason.into(),
-        }
-    }
-
-    pub fn message(id: impl Into<String>, msg: WorkerMessage) -> Self {
-        TargetEvent::Message {
-            target_id: id.into(),
-            msg,
-        }
-    }
-}
-
-/// Target configuration (for registration)
+/// Target configuration (for static registration)
 #[derive(Debug, Clone)]
 pub struct TargetConfig {
     pub id: String,
@@ -108,7 +82,7 @@ pub struct TargetConfig {
     pub enabled: bool,
 }
 
-/// Complete target state (worker + connection)
+/// Complete target state (worker info + connection state in one struct)
 #[derive(Clone)]
 pub struct Target {
     // Identity
@@ -121,22 +95,20 @@ pub struct Target {
     pub metadata: HashMap<String, String>,
     pub tools: HashMap<String, String>,
 
-    // State
+    // State (single source of truth)
     pub status: TargetStatus,
     pub enabled: bool,
     pub registration_type: RegistrationType,
-    pub registered_at: SystemTime,
-
-    // Job assignment
     pub current_job: Option<String>,
-
-    // Connection state
-    pub connected: bool,
     pub last_seen: SystemTime,
+
+    // Connection (embedded - no separate map)
+    channel: Option<Channel>,
+    stream_tx: Option<mpsc::Sender<ControllerMessage>>,
 }
 
 impl Target {
-    fn new(id: String, address: String, registration_type: RegistrationType) -> Self {
+    fn new(id: String, address: String) -> Self {
         Self {
             id,
             address,
@@ -144,34 +116,22 @@ impl Target {
             capabilities: Vec::new(),
             metadata: HashMap::new(),
             tools: HashMap::new(),
-            status: TargetStatus::Available,
+            status: TargetStatus::Offline, // Start offline until connected
             enabled: true,
-            registration_type,
-            registered_at: SystemTime::now(),
+            registration_type: RegistrationType::Static,
             current_job: None,
-            connected: false,
             last_seen: SystemTime::now(),
+            channel: None,
+            stream_tx: None,
         }
     }
 
     fn touch(&mut self) {
         self.last_seen = SystemTime::now();
     }
-}
 
-/// Internal: gRPC channel + stream state for a target
-#[derive(Clone)]
-struct TargetConnection {
-    channel: Option<Channel>,
-    stream_tx: Option<mpsc::Sender<ControllerMessage>>,
-}
-
-impl TargetConnection {
-    fn new() -> Self {
-        Self {
-            channel: None,
-            stream_tx: None,
-        }
+    fn is_connected(&self) -> bool {
+        self.status != TargetStatus::Offline
     }
 }
 
@@ -179,13 +139,10 @@ impl TargetConnection {
 // TargetManager
 // ============================================================================
 
-/// Unified manager for all target (worker) state and connections
+/// Unified manager for all target state and connections
 pub struct TargetManager {
-    /// Target state (id -> Target)
+    /// Single map: id -> Target (state + connection)
     targets: DashMap<String, Target>,
-
-    /// Connection state (separate from Target for interior mutability)
-    connections: DashMap<String, TargetConnection>,
 
     /// Event bus for target events
     events_tx: mpsc::Sender<TargetEvent>,
@@ -193,27 +150,21 @@ pub struct TargetManager {
     /// Pending responses for stream-based execution
     pending_responses: Arc<Mutex<HashMap<String, oneshot::Sender<SampleResponse>>>>,
 
-    /// RPC timeout
+    /// RPC timeout for initial queries
     rpc_timeout: Duration,
-
-    /// Health check timeout
-    health_timeout: Duration,
 }
 
 impl TargetManager {
-    /// Create new TargetManager
     pub fn new(
         rpc_timeout_secs: u64,
-        health_timeout_secs: u64,
+        _health_timeout_secs: u64, // kept for API compat, unused
         events_tx: mpsc::Sender<TargetEvent>,
     ) -> Self {
         Self {
             targets: DashMap::new(),
-            connections: DashMap::new(),
             events_tx,
             pending_responses: Arc::new(Mutex::new(HashMap::new())),
             rpc_timeout: Duration::from_secs(rpc_timeout_secs),
-            health_timeout: Duration::from_secs(health_timeout_secs),
         }
     }
 
@@ -221,32 +172,22 @@ impl TargetManager {
     // Registration
     // ========================================================================
 
-    /// Register a target from TOML config (static registration)
+    /// Register a target from TOML config
     pub fn register(&self, config: TargetConfig) -> Result<()> {
         let id = config.id.clone();
 
-        if self.targets.contains_key(&id) {
-            info!("Target {} re-registering", id);
-        }
-
-        let mut target = Target::new(id.clone(), config.address.clone(), RegistrationType::Static);
+        let mut target = Target::new(id.clone(), config.address.clone());
         target.enabled = config.enabled;
         if !config.enabled {
             target.status = TargetStatus::Offline;
         }
 
-        info!(
-            "Registering target {} at {} (static)",
-            id, config.address
-        );
-
-        self.targets.insert(id.clone(), target);
-        self.connections.insert(id, TargetConnection::new());
-
+        info!("Registering target {} at {}", id, config.address);
+        self.targets.insert(id, target);
         Ok(())
     }
 
-    /// Register/update target with full metadata (dynamic registration from stream)
+    /// Update target with metadata from stream registration
     pub fn register_with_metadata(
         &self,
         id: String,
@@ -256,41 +197,30 @@ impl TargetManager {
         metadata: HashMap<String, String>,
         tools: HashMap<String, String>,
     ) -> Result<()> {
-        // Preserve connected state if re-registering
-        let (existing_connected, existing_status) = self
-            .targets
-            .get(&id)
-            .map(|t| (t.connected, t.status))
-            .unwrap_or((false, TargetStatus::Available));
-
-        let mut target = Target::new(id.clone(), address.clone(), RegistrationType::Dynamic);
-        target.os_version = os_version.clone();
-        target.capabilities = capabilities.clone();
-        target.metadata = metadata;
-        target.tools = tools;
-        target.connected = existing_connected;
-        target.status = existing_status;
+        // Update existing or create new
+        if let Some(mut target) = self.targets.get_mut(&id) {
+            // Update in place, preserve status
+            target.os_version = os_version.clone();
+            target.capabilities = capabilities.clone();
+            target.metadata = metadata;
+            target.tools = tools;
+            target.registration_type = RegistrationType::Dynamic;
+            target.touch();
+        } else {
+            // Create new
+            let mut target = Target::new(id.clone(), address);
+            target.os_version = os_version.clone();
+            target.capabilities = capabilities.clone();
+            target.metadata = metadata;
+            target.tools = tools;
+            target.registration_type = RegistrationType::Dynamic;
+            self.targets.insert(id.clone(), target);
+        }
 
         info!(
-            "Target {} registered dynamically: OS={}, caps={:?}",
+            "Target {} updated: OS={}, caps={:?}",
             id, os_version, capabilities
         );
-
-        self.targets.insert(id.clone(), target);
-
-        // Ensure connection entry exists
-        if !self.connections.contains_key(&id) {
-            self.connections.insert(id, TargetConnection::new());
-        }
-
-        Ok(())
-    }
-
-    /// Register multiple targets from configs (bulk registration)
-    pub fn register_all(&self, configs: Vec<TargetConfig>) -> Result<()> {
-        for config in configs {
-            self.register(config)?;
-        }
         Ok(())
     }
 
@@ -298,43 +228,32 @@ impl TargetManager {
     // Queries
     // ========================================================================
 
-    /// Get target by ID
     pub fn get(&self, id: &str) -> Option<Target> {
         self.targets.get(id).map(|t| t.clone())
     }
 
-    /// List all target IDs
     pub fn list_ids(&self) -> Vec<String> {
         self.targets.iter().map(|e| e.key().clone()).collect()
     }
 
-    /// List all targets
     pub fn list_all(&self) -> Vec<Target> {
         self.targets.iter().map(|e| e.clone()).collect()
     }
 
-    /// Get count
     pub fn count(&self) -> usize {
         self.targets.len()
     }
 
-    /// Get available targets (for job scheduling)
+    /// Get available (connected + not busy) target IDs
     pub fn get_available(&self) -> Vec<String> {
         self.targets
             .iter()
-            .filter(|t| t.status == TargetStatus::Available && t.enabled && t.connected)
+            .filter(|t| t.status == TargetStatus::Available && t.enabled)
             .map(|t| t.id.clone())
             .collect()
     }
 
     /// Get available targets grouped by OS, filtered by required capabilities
-    ///
-    /// Returns HashMap<os_version, Vec<target_id>>
-    /// Only includes targets that:
-    /// - status == Available
-    /// - enabled == true
-    /// - connected == true
-    /// - have ALL required capabilities (case-insensitive)
     pub fn get_available_by_os_and_capabilities(
         &self,
         required_capabilities: &[String],
@@ -344,49 +263,38 @@ impl TargetManager {
         for entry in self.targets.iter() {
             let t = entry.value();
 
-            // Must be available, enabled, and connected
-            if t.status != TargetStatus::Available || !t.enabled || !t.connected {
+            // Must be available and enabled
+            if t.status != TargetStatus::Available || !t.enabled {
                 continue;
             }
 
             // Check capabilities if any required
             if !required_capabilities.is_empty() {
                 let has_all = required_capabilities.iter().all(|req| {
-                    t.capabilities
-                        .iter()
-                        .any(|cap| cap.eq_ignore_ascii_case(req))
+                    t.capabilities.iter().any(|cap| cap.eq_ignore_ascii_case(req))
                 });
                 if !has_all {
                     continue;
                 }
             }
 
-            by_os
-                .entry(t.os_version.clone())
-                .or_default()
-                .push(t.id.clone());
+            by_os.entry(t.os_version.clone()).or_default().push(t.id.clone());
         }
 
         by_os
     }
 
     // ========================================================================
-    // State management
+    // State Management (consolidated)
     // ========================================================================
 
-    /// Reserve target for a job (marks busy)
+    /// Reserve target for a job (Available -> Busy)
     pub fn reserve(&self, id: &str) -> Result<()> {
-        let mut target = self
-            .targets
-            .get_mut(id)
+        let mut target = self.targets.get_mut(id)
             .ok_or_else(|| anyhow!("Target not found: {}", id))?;
 
         if target.status != TargetStatus::Available {
-            return Err(anyhow!(
-                "Target {} not available (status: {})",
-                id,
-                target.status
-            ));
+            return Err(anyhow!("Target {} not available (status: {})", id, target.status));
         }
 
         target.status = TargetStatus::Busy;
@@ -394,12 +302,14 @@ impl TargetManager {
         Ok(())
     }
 
-    /// Release target (marks available)
+    /// Release target (Busy -> Available)
     pub fn release(&self, id: &str) -> Result<()> {
-        let mut target = self
-            .targets
-            .get_mut(id)
+        let mut target = self.targets.get_mut(id)
             .ok_or_else(|| anyhow!("Target not found: {}", id))?;
+
+        if target.status == TargetStatus::Offline {
+            return Err(anyhow!("Target {} is offline, cannot release", id));
+        }
 
         target.status = TargetStatus::Available;
         target.current_job = None;
@@ -407,106 +317,63 @@ impl TargetManager {
         Ok(())
     }
 
-    /// Assign job to target
-    pub fn assign_job(&self, target_id: &str, job_id: &str) -> Result<String> {
-        let mut target = self
-            .targets
-            .get_mut(target_id)
-            .ok_or_else(|| anyhow!("Target not found: {}", target_id))?;
-
-        if target.status != TargetStatus::Available {
-            return Err(anyhow!(
-                "Target {} not available (status: {})",
-                target_id,
-                target.status
-            ));
-        }
-
-        target.status = TargetStatus::Busy;
-        target.current_job = Some(job_id.to_string());
-
-        Ok(target.address.clone())
-    }
-
-    /// Mark target as connected
+    /// Mark target as connected (Offline -> Available)
     pub fn mark_connected(&self, id: &str) -> Result<()> {
-        let mut target = self
-            .targets
-            .get_mut(id)
+        let mut target = self.targets.get_mut(id)
             .ok_or_else(|| anyhow!("Target not found: {}", id))?;
 
-        target.connected = true;
+        if target.status == TargetStatus::Offline {
+            target.status = TargetStatus::Available;
+        }
         target.touch();
-        info!("Target {} marked connected", id);
+        info!("Target {} connected", id);
         Ok(())
     }
 
-    /// Mark target as disconnected
-    pub fn mark_disconnected(&self, id: &str) -> Result<()> {
-        let mut target = self
-            .targets
-            .get_mut(id)
-            .ok_or_else(|| anyhow!("Target not found: {}", id))?;
-
-        target.connected = false;
-        info!("Target {} marked disconnected", id);
-        Ok(())
-    }
-
-    /// Mark target as offline (for graceful deregistration)
+    /// Mark target as offline (Any -> Offline), clears stream
     pub fn mark_offline(&self, id: &str) -> Result<()> {
-        let mut target = self
-            .targets
-            .get_mut(id)
+        let mut target = self.targets.get_mut(id)
             .ok_or_else(|| anyhow!("Target not found: {}", id))?;
 
         if target.status == TargetStatus::Busy {
-            warn!(
-                "Target {} going offline while busy (job: {:?})",
-                id, target.current_job
-            );
+            warn!("Target {} going offline while busy (job: {:?})", id, target.current_job);
         }
 
         target.status = TargetStatus::Offline;
         target.current_job = None;
-        info!("Target {} marked offline", id);
+        target.stream_tx = None;
+        info!("Target {} offline", id);
         Ok(())
     }
 
-    /// Update target health (last_seen timestamp)
+    /// Alias for mark_offline (API compat)
+    pub fn mark_disconnected(&self, id: &str) -> Result<()> {
+        self.mark_offline(id)
+    }
+
+    /// Update health timestamp
     pub fn update_health(&self, id: &str) -> Result<()> {
-        let mut target = self
-            .targets
-            .get_mut(id)
+        let mut target = self.targets.get_mut(id)
             .ok_or_else(|| anyhow!("Target not found: {}", id))?;
-
         target.touch();
-
-        // If was offline and now responding, mark available
-        if target.status == TargetStatus::Offline && target.enabled {
-            target.status = TargetStatus::Available;
-        }
-
         Ok(())
     }
 
     // ========================================================================
-    // Connection management
+    // Connection Management
     // ========================================================================
 
     /// Get or create gRPC channel for target
     async fn get_channel(&self, id: &str) -> Result<Channel> {
         // Check for existing channel
-        if let Some(conn) = self.connections.get(id) {
-            if let Some(ref channel) = conn.channel {
+        if let Some(target) = self.targets.get(id) {
+            if let Some(ref channel) = target.channel {
                 return Ok(channel.clone());
             }
         }
 
-        // Get target address
-        let address = self
-            .targets
-            .get(id)
+        // Get address
+        let address = self.targets.get(id)
             .map(|t| t.address.clone())
             .ok_or_else(|| anyhow!("Target not found: {}", id))?;
 
@@ -522,8 +389,8 @@ impl TargetManager {
         let channel = endpoint.connect().await?;
 
         // Store channel
-        if let Some(mut conn) = self.connections.get_mut(id) {
-            conn.channel = Some(channel.clone());
+        if let Some(mut target) = self.targets.get_mut(id) {
+            target.channel = Some(channel.clone());
         }
 
         info!("Connected to target {}", id);
@@ -547,16 +414,18 @@ impl TargetManager {
 
         debug!("Stream established with target {}", id);
 
-        // Store stream sender
-        if let Some(mut conn) = self.connections.get_mut(id) {
-            conn.stream_tx = Some(tx.clone());
+        // Store stream sender and mark available
+        if let Some(mut target) = self.targets.get_mut(id) {
+            target.stream_tx = Some(tx.clone());
+            if target.status == TargetStatus::Offline {
+                target.status = TargetStatus::Available;
+            }
         }
 
         // Spawn message handler
         let id_clone = id.to_string();
         let events_tx = self.events_tx.clone();
         let targets = self.targets.clone();
-        let connections = self.connections.clone();
 
         tokio::spawn(async move {
             info!("Stream handler started for target {}", id_clone);
@@ -569,31 +438,27 @@ impl TargetManager {
                         if let Some(mut t) = targets.get_mut(&id_clone) {
                             t.touch();
 
-                            // Handle registration
+                            // Handle first registration message
                             if !registration_received {
-                                if let Some(worker_message::Payload::Registration(ref reg)) =
-                                    msg.payload
-                                {
+                                if let Some(worker_message::Payload::Registration(ref reg)) = msg.payload {
                                     t.capabilities = reg.capabilities.clone();
                                     t.os_version = reg.os_version.clone();
                                     registration_received = true;
 
-                                    let _ = events_tx
-                                        .send(TargetEvent::connected(
-                                            &id_clone,
-                                            &reg.os_version,
-                                            reg.capabilities.clone(),
-                                        ))
-                                        .await;
+                                    let _ = events_tx.send(TargetEvent::Connected {
+                                        target_id: id_clone.clone(),
+                                        os_version: reg.os_version.clone(),
+                                        capabilities: reg.capabilities.clone(),
+                                    }).await;
                                 }
                             }
                         }
 
                         // Forward message to event bus
-                        if let Err(e) = events_tx
-                            .send(TargetEvent::message(&id_clone, msg))
-                            .await
-                        {
+                        if let Err(e) = events_tx.send(TargetEvent::Message {
+                            target_id: id_clone.clone(),
+                            msg,
+                        }).await {
                             error!("Failed to forward message: {}", e);
                             break;
                         }
@@ -608,13 +473,15 @@ impl TargetManager {
             // Cleanup on disconnect
             info!("Stream closed for target {}", id_clone);
 
-            if let Some(mut conn) = connections.get_mut(&id_clone) {
-                conn.stream_tx = None;
+            if let Some(mut target) = targets.get_mut(&id_clone) {
+                target.stream_tx = None;
+                target.status = TargetStatus::Offline;
             }
 
-            let _ = events_tx
-                .send(TargetEvent::disconnected(&id_clone, "Stream closed"))
-                .await;
+            let _ = events_tx.send(TargetEvent::Disconnected {
+                target_id: id_clone.clone(),
+                reason: "Stream closed".to_string(),
+            }).await;
 
             warn!("Target {} disconnected", id_clone);
         });
@@ -631,14 +498,13 @@ impl TargetManager {
             loop {
                 interval.tick().await;
 
-                // Check if target still exists and is connected
-                let exists = targets_hb
-                    .get(&id_heartbeat)
-                    .map(|t| t.connected)
+                // Check if target still connected
+                let connected = targets_hb.get(&id_heartbeat)
+                    .map(|t| t.status != TargetStatus::Offline)
                     .unwrap_or(false);
 
-                if !exists {
-                    info!("Target {} gone, stopping heartbeat", id_heartbeat);
+                if !connected {
+                    info!("Target {} offline, stopping heartbeat", id_heartbeat);
                     break;
                 }
 
@@ -680,27 +546,27 @@ impl TargetManager {
 
     /// Send command to target via stream
     pub async fn send_command(&self, id: &str, msg: ControllerMessage) -> Result<()> {
-        let tx = self
-            .connections
-            .get(id)
-            .and_then(|conn| conn.stream_tx.clone())
-            .ok_or_else(|| anyhow!("Target {} not connected or stream not established", id))?;
+        let tx = self.targets.get(id)
+            .and_then(|t| t.stream_tx.clone())
+            .ok_or_else(|| anyhow!("Target {} not connected", id))?;
 
         match tx.send(msg).await {
             Ok(()) => Ok(()),
             Err(_) => {
-                warn!("Send to target {} failed, marking disconnected", id);
+                warn!("Send to target {} failed", id);
 
-                if let Some(mut conn) = self.connections.get_mut(id) {
-                    conn.stream_tx = None;
+                // Mark offline
+                if let Some(mut target) = self.targets.get_mut(id) {
+                    target.stream_tx = None;
+                    target.status = TargetStatus::Offline;
                 }
 
-                let _ = self
-                    .events_tx
-                    .send(TargetEvent::disconnected(id, "Send failed"))
-                    .await;
+                let _ = self.events_tx.send(TargetEvent::Disconnected {
+                    target_id: id.to_string(),
+                    reason: "Send failed".to_string(),
+                }).await;
 
-                Err(anyhow!("Target {} disconnected (send failed)", id))
+                Err(anyhow!("Target {} disconnected", id))
             }
         }
     }
@@ -735,14 +601,15 @@ impl TargetManager {
 
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        // Clear all stream senders
-        for mut conn in self.connections.iter_mut() {
-            conn.stream_tx = None;
+        // Clear all streams
+        for mut target in self.targets.iter_mut() {
+            target.stream_tx = None;
+            target.status = TargetStatus::Offline;
         }
     }
 
     // ========================================================================
-    // Artifact operations
+    // Artifact Operations
     // ========================================================================
 
     /// Send artifact to target
@@ -771,10 +638,7 @@ impl TargetManager {
             })
             .collect();
 
-        info!(
-            "[{}] Sending {} chunks to target {}",
-            artifact_id, total_chunks, id
-        );
+        info!("[{}] Sending {} chunks to target {}", artifact_id, total_chunks, id);
 
         client.send_artifact(stream::iter(chunks)).await?;
 
@@ -783,27 +647,15 @@ impl TargetManager {
     }
 
     /// Execute artifact on target via stream
-    ///
-    /// Non-blocking: sends command, awaits response via channel
-    pub async fn execute_artifact(
-        &self,
-        id: &str,
-        request: SampleRequest,
-    ) -> Result<SampleResponse> {
-        info!(
-            "[{}] Executing artifact {} on target {} via stream",
-            request.job_id, request.artifact_id, id
-        );
+    pub async fn execute_artifact(&self, id: &str, request: SampleRequest) -> Result<SampleResponse> {
+        info!("[{}] Executing artifact {} on target {}", request.job_id, request.artifact_id, id);
 
         // Generate run_id for response matching
         let run_id = format!(
             "{}-{}-{}",
             request.job_id,
             request.artifact_id,
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()
         );
 
         // Register pending execution
@@ -819,48 +671,36 @@ impl TargetManager {
 
         self.send_command(id, command).await?;
 
-        info!(
-            "[{}] Sent RunSampleCommand to target {} [run_id: {}]",
-            request.job_id, id, run_id
-        );
+        info!("[{}] Sent RunSampleCommand [run_id: {}]", request.job_id, run_id);
 
         // Await response
         let timeout_duration = Duration::from_secs(request.timeout_seconds as u64 + 30);
 
         match tokio::time::timeout(timeout_duration, rx).await {
             Ok(Ok(response)) => {
-                info!(
-                    "[{}] Execution complete: success={}, exit_code={}",
-                    request.job_id, response.success, response.exit_code
-                );
+                info!("[{}] Execution complete: success={}, exit_code={}",
+                    request.job_id, response.success, response.exit_code);
                 Ok(response)
             }
             Ok(Err(_)) => Err(anyhow!(
                 "Response channel closed for run_id: {} (target {} disconnected?)",
-                run_id,
-                id
+                run_id, id
             )),
             Err(_) => Err(anyhow!(
                 "Timeout waiting for response from target {} [run_id: {}, timeout: {}s]",
-                id,
-                run_id,
-                timeout_duration.as_secs()
+                id, run_id, timeout_duration.as_secs()
             )),
         }
     }
 
-    /// Register pending execution (for stream response routing)
     fn register_pending_execution(&self, run_id: String) -> oneshot::Receiver<SampleResponse> {
         let (tx, rx) = oneshot::channel();
-
         let mut pending = self.pending_responses.lock().unwrap();
         pending.insert(run_id.clone(), tx);
-
         debug!("Registered pending execution: {}", run_id);
         rx
     }
 
-    /// Complete pending execution (called by event handler when SampleResponse arrives)
     pub fn complete_pending_execution(&self, run_id: &str, response: SampleResponse) -> Result<()> {
         let mut pending = self.pending_responses.lock().unwrap();
 
@@ -875,10 +715,9 @@ impl TargetManager {
     }
 
     // ========================================================================
-    // Info queries (legacy RPC, for initial metadata fetch)
+    // Info Queries (legacy RPC)
     // ========================================================================
 
-    /// Get worker info via RPC (for initial metadata fetch)
     pub async fn get_worker_info(&self, id: &str) -> Result<WorkerInfoResponse> {
         let channel = self.get_channel(id).await?;
         let mut client = WorkerAgentClient::new(channel);
@@ -894,19 +733,14 @@ impl TargetManager {
         Ok(response.into_inner())
     }
 
-    /// Query metadata from all targets
     pub async fn query_all_info(&self) -> HashMap<String, WorkerInfoResponse> {
         let ids = self.list_ids();
         let mut results = HashMap::new();
 
         for id in ids {
             match self.get_worker_info(&id).await {
-                Ok(info) => {
-                    results.insert(id, info);
-                }
-                Err(e) => {
-                    warn!("Failed to query target {}: {}", id, e);
-                }
+                Ok(info) => { results.insert(id, info); }
+                Err(e) => { warn!("Failed to query target {}: {}", id, e); }
             }
         }
 
@@ -930,18 +764,15 @@ mod tests {
         let (tx, _rx) = mpsc::channel(100);
         let manager = TargetManager::new(30, 30, tx);
 
-        manager
-            .register(TargetConfig {
-                id: "test-1".to_string(),
-                address: "127.0.0.1:50052".to_string(),
-                enabled: true,
-            })
-            .unwrap();
+        manager.register(TargetConfig {
+            id: "test-1".to_string(),
+            address: "127.0.0.1:50052".to_string(),
+            enabled: true,
+        }).unwrap();
 
         let target = manager.get("test-1").unwrap();
         assert_eq!(target.id, "test-1");
-        assert_eq!(target.status, TargetStatus::Available);
-        assert!(!target.connected);
+        assert_eq!(target.status, TargetStatus::Offline); // Starts offline
     }
 
     #[tokio::test]
@@ -949,22 +780,21 @@ mod tests {
         let (tx, _rx) = mpsc::channel(100);
         let manager = TargetManager::new(30, 30, tx);
 
-        manager
-            .register(TargetConfig {
-                id: "test-1".to_string(),
-                address: "127.0.0.1:50052".to_string(),
-                enabled: true,
-            })
-            .unwrap();
+        manager.register(TargetConfig {
+            id: "test-1".to_string(),
+            address: "127.0.0.1:50052".to_string(),
+            enabled: true,
+        }).unwrap();
+
+        // Must be connected first
+        manager.mark_connected("test-1").unwrap();
+        assert_eq!(manager.get("test-1").unwrap().status, TargetStatus::Available);
 
         manager.reserve("test-1").unwrap();
         assert_eq!(manager.get("test-1").unwrap().status, TargetStatus::Busy);
 
         manager.release("test-1").unwrap();
-        assert_eq!(
-            manager.get("test-1").unwrap().status,
-            TargetStatus::Available
-        );
+        assert_eq!(manager.get("test-1").unwrap().status, TargetStatus::Available);
     }
 
     #[tokio::test]
@@ -972,46 +802,38 @@ mod tests {
         let (tx, _rx) = mpsc::channel(100);
         let manager = TargetManager::new(30, 30, tx);
 
-        // Register two targets
-        manager
-            .register(TargetConfig {
-                id: "win10-1".to_string(),
-                address: "127.0.0.1:50052".to_string(),
-                enabled: true,
-            })
-            .unwrap();
+        // Register and connect two targets
+        manager.register(TargetConfig {
+            id: "win10-1".to_string(),
+            address: "127.0.0.1:50052".to_string(),
+            enabled: true,
+        }).unwrap();
 
-        manager
-            .register(TargetConfig {
-                id: "win11-1".to_string(),
-                address: "127.0.0.1:50053".to_string(),
-                enabled: true,
-            })
-            .unwrap();
+        manager.register(TargetConfig {
+            id: "win11-1".to_string(),
+            address: "127.0.0.1:50053".to_string(),
+            enabled: true,
+        }).unwrap();
 
-        // Update metadata and mark connected
-        manager
-            .register_with_metadata(
-                "win10-1".to_string(),
-                "127.0.0.1:50052".to_string(),
-                "win10".to_string(),
-                vec!["mde".to_string(), "rededr".to_string()],
-                HashMap::new(),
-                HashMap::new(),
-            )
-            .unwrap();
+        // Update metadata
+        manager.register_with_metadata(
+            "win10-1".to_string(),
+            "127.0.0.1:50052".to_string(),
+            "win10".to_string(),
+            vec!["mde".to_string(), "rededr".to_string()],
+            HashMap::new(),
+            HashMap::new(),
+        ).unwrap();
         manager.mark_connected("win10-1").unwrap();
 
-        manager
-            .register_with_metadata(
-                "win11-1".to_string(),
-                "127.0.0.1:50053".to_string(),
-                "win11".to_string(),
-                vec!["defender".to_string()],
-                HashMap::new(),
-                HashMap::new(),
-            )
-            .unwrap();
+        manager.register_with_metadata(
+            "win11-1".to_string(),
+            "127.0.0.1:50053".to_string(),
+            "win11".to_string(),
+            vec!["defender".to_string()],
+            HashMap::new(),
+            HashMap::new(),
+        ).unwrap();
         manager.mark_connected("win11-1").unwrap();
 
         // Query with no caps - should get both
@@ -1024,9 +846,36 @@ mod tests {
         assert!(with_mde.contains_key("win10"));
 
         // Query with defender cap - only win11
-        let with_defender =
-            manager.get_available_by_os_and_capabilities(&["defender".to_string()]);
+        let with_defender = manager.get_available_by_os_and_capabilities(&["defender".to_string()]);
         assert_eq!(with_defender.len(), 1);
         assert!(with_defender.contains_key("win11"));
+    }
+
+    #[tokio::test]
+    async fn test_offline_means_disconnected() {
+        let (tx, _rx) = mpsc::channel(100);
+        let manager = TargetManager::new(30, 30, tx);
+
+        manager.register(TargetConfig {
+            id: "test-1".to_string(),
+            address: "127.0.0.1:50052".to_string(),
+            enabled: true,
+        }).unwrap();
+
+        // Starts offline
+        assert_eq!(manager.get("test-1").unwrap().status, TargetStatus::Offline);
+
+        // Connect
+        manager.mark_connected("test-1").unwrap();
+        assert_eq!(manager.get("test-1").unwrap().status, TargetStatus::Available);
+
+        // Disconnect (via mark_offline)
+        manager.mark_offline("test-1").unwrap();
+        assert_eq!(manager.get("test-1").unwrap().status, TargetStatus::Offline);
+
+        // mark_disconnected is alias
+        manager.mark_connected("test-1").unwrap();
+        manager.mark_disconnected("test-1").unwrap();
+        assert_eq!(manager.get("test-1").unwrap().status, TargetStatus::Offline);
     }
 }
