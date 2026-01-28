@@ -14,8 +14,6 @@ mod run_queue;
 mod run_result;
 mod scheduler_core;
 mod target_manager;
-mod worker_manager;
-mod worker_pool;
 mod service;
 mod storage;
 
