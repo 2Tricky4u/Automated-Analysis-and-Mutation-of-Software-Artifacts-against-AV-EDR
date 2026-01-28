@@ -398,12 +398,12 @@ pub async fn report_status(
         .unwrap_or_else(|| "unknown".to_string());
     let report = request.into_inner();
 
-    // Update worker health and job status in scheduler core (if available)
+    // Update target health and job status in scheduler core (if available)
     if let Some(ref scheduler_core) = service.scheduler_core {
-        // Update worker health timestamp
-        if let Err(e) = scheduler_core.pool().update_health(&report.worker_id).await {
+        // Update target health timestamp
+        if let Err(e) = scheduler_core.targets().update_health(&report.worker_id) {
             warn!(
-                "Failed to update worker health for {}: {}",
+                "Failed to update target health for {}: {}",
                 report.worker_id, e
             );
         }
@@ -414,20 +414,20 @@ pub async fn report_status(
                 "success" => {
                     job.mark_completed();
                     let _ = scheduler_core.queue().update_job(&job);
-                    // Release worker
-                    let _ = scheduler_core.pool().release_worker(&report.worker_id);
+                    // Release target
+                    let _ = scheduler_core.targets().release(&report.worker_id);
                 }
                 "error" => {
                     job.mark_failed(report.details.clone());
                     let _ = scheduler_core.queue().update_job(&job);
-                    // Release worker
-                    let _ = scheduler_core.pool().release_worker(&report.worker_id);
+                    // Release target
+                    let _ = scheduler_core.targets().release(&report.worker_id);
                 }
                 "timeout" => {
                     job.mark_failed("Execution timeout".to_string());
                     let _ = scheduler_core.queue().update_job(&job);
-                    // Release worker
-                    let _ = scheduler_core.pool().release_worker(&report.worker_id);
+                    // Release target
+                    let _ = scheduler_core.targets().release(&report.worker_id);
                 }
                 _ => {
                     // Heartbeat or other status - job is still running, just update

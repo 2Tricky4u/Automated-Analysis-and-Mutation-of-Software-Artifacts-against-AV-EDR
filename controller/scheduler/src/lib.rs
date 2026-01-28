@@ -8,6 +8,7 @@ pub mod round_processor;
 pub mod run_queue;
 pub mod run_result;
 pub mod scheduler_core;
+pub mod target_manager;
 pub mod worker_manager;
 pub mod worker_pool;
 
@@ -32,5 +33,6 @@ pub use round_processor::RoundProcessor;
 pub use run_queue::{PendingRun, RunQueue, RunResult as QueuedRunResult};
 pub use run_result::{RunOutcome, RunResult};
 pub use scheduler_core::{SchedulerConfig, SchedulerCore, create_scheduler_core};
+pub use target_manager::{Target, TargetConfig, TargetEvent, TargetManager, TargetStatus};
 pub use worker_manager::{WorkerConfig, WorkerManager};
 pub use worker_pool::{WorkerPool, WorkerState, WorkerStatus};
