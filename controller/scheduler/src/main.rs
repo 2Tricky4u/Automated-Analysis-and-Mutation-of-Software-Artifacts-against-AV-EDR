@@ -174,12 +174,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create Elasticsearch index templates
     info!("Creating Elasticsearch index templates...");
-    if let Err(e) = scheduler.create_jobs_index_template().await {
-        warn!("Failed to create jobs index template: {}", e);
-    }
-    if let Err(e) = scheduler.create_rounds_index_template().await {
-        warn!("Failed to create rounds index template: {}", e);
-    }
+   // if let Err(e) = scheduler.create_jobs_index_template().await {
+   //     warn!("Failed to create jobs index template: {}", e);
+   // }
+   // if let Err(e) = scheduler.create_rounds_index_template().await {
+   //     warn!("Failed to create rounds index template: {}", e);
+   // }
 
     info!("Controller/Scheduler starting...");
 
