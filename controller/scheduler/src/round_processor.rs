@@ -1,9 +1,8 @@
 use crate::job::{Job, ModularBuildSpec, MutationSpec};
 use crate::round::{BehaviorComparison, Feedback, Round, RoundStatus, RoundSummary, RunType};
 use crate::run_result::{RunOutcome, RunResult};
-use crate::worker_pool::WorkerPool;
+use crate::target_manager::TargetManager;
 use anyhow::{Context, Result};
-use tracing::error;
 use tracing::{info, warn};
 
 /// Round processor orchestrates dual-run protocol for each round
@@ -40,8 +39,7 @@ impl RoundProcessor {
         &self,
         round: &mut Round,
         job: &Job,
-        pool: &WorkerPool,
-        worker_manager: &std::sync::Arc<crate::worker_manager::WorkerManager>,
+        targets: &TargetManager,
     ) -> Result<RoundSummary> {
         info!("[{}][{}] Starting round processor", job.id, round.round_id);
 
@@ -88,31 +86,29 @@ impl RoundProcessor {
         );
 
         // Step 2 & 3: Execute baseline AND instrumented runs
-        // OS-aware and capability-aware worker selection:
-        // - Ensure both runs use workers with SAME OS AND required capabilities
-        // - If job.required_capabilities is ["mde"], only select workers with MDE
-        // - If job.required_capabilities is ["cortex"], only select workers with Cortex
+        // OS-aware and capability-aware target selection:
+        // - Ensure both runs use targets with SAME OS AND required capabilities
+        // - If job.required_capabilities is ["mde"], only select targets with MDE
+        // - If job.required_capabilities is ["cortex"], only select targets with Cortex
         //
         // Strategy:
         // - BUILDS always run in PARALLEL (major speedup, no conflicts with UUID temp files)
-        // - EXECUTION runs in PARALLEL if different workers, SEQUENTIAL if same worker
+        // - EXECUTION runs in PARALLEL if different targets, SEQUENTIAL if same target
 
-        // Select workers with matching OS AND capabilities
-        let workers_by_os = pool
-            .get_available_workers_by_os_and_capabilities(&job.required_capabilities)
-            .await;
+        // Select targets with matching OS AND capabilities
+        let targets_by_os = targets.get_available_by_os_and_capabilities(&job.required_capabilities);
 
         if !job.required_capabilities.is_empty() {
             info!(
-                "[{}][{}] Filtering workers by capabilities: {:?}",
+                "[{}][{}] Filtering targets by capabilities: {:?}",
                 job.id, round.round_id, job.required_capabilities
             );
         }
 
-        let (baseline_worker_id, instrumented_worker_id, selected_os) =
-            Self::select_os_matched_workers(&workers_by_os)?;
+        let (baseline_target_id, instrumented_target_id, selected_os) =
+            Self::select_os_matched_targets(&targets_by_os)?;
 
-        let same_worker = baseline_worker_id == instrumented_worker_id;
+        let same_target = baseline_target_id == instrumented_target_id;
 
         let caps_str = if job.required_capabilities.is_empty() {
             "any".to_string()
@@ -120,36 +116,36 @@ impl RoundProcessor {
             job.required_capabilities.join(",")
         };
 
-        if same_worker {
+        if same_target {
             warn!(
-                "[{}][{}] Using SAME worker for both runs - execution will be SEQUENTIAL",
+                "[{}][{}] Using SAME target for both runs - execution will be SEQUENTIAL",
                 job.id, round.round_id
             );
             info!(
-                "[{}][{}]   Worker: {} (OS: {}, Caps: {})",
-                job.id, round.round_id, baseline_worker_id, selected_os, caps_str
+                "[{}][{}]   Target: {} (OS: {}, Caps: {})",
+                job.id, round.round_id, baseline_target_id, selected_os, caps_str
             );
         } else {
             info!(
-                "[{}][{}] Using DIFFERENT workers - execution will be PARALLEL",
+                "[{}][{}] Using DIFFERENT targets - execution will be PARALLEL",
                 job.id, round.round_id
             );
             info!(
-                "[{}][{}]   Baseline worker:     {} (OS: {}, Caps: {})",
-                job.id, round.round_id, baseline_worker_id, selected_os, caps_str
+                "[{}][{}]   Baseline target:     {} (OS: {}, Caps: {})",
+                job.id, round.round_id, baseline_target_id, selected_os, caps_str
             );
             info!(
-                "[{}][{}]   Instrumented worker: {} (OS: {}, Caps: {})",
-                job.id, round.round_id, instrumented_worker_id, selected_os, caps_str
+                "[{}][{}]   Instrumented target: {} (OS: {}, Caps: {})",
+                job.id, round.round_id, instrumented_target_id, selected_os, caps_str
             );
         }
 
         // Get modular build spec reference (if any)
         let modular_build_ref = job.modular_build.as_ref();
 
-        let (baseline_result, instrumented_result) = if same_worker {
+        let (baseline_result, instrumented_result) = if same_target {
             // SEQUENTIAL execution: run baseline, WAIT for completion, then run instrumented
-            // This prevents "Worker is busy" errors when only one worker is available
+            // This prevents "Target is busy" errors when only one target is available
             info!(
                 "[{}][{}] Starting SEQUENTIAL dual-run execution",
                 job.id, round.round_id
@@ -164,9 +160,8 @@ impl RoundProcessor {
                     &job.source_file,
                     &round.mutations,
                     "off", // No tracing for baseline
-                    pool,
-                    worker_manager,
-                    Some(&baseline_worker_id),
+                    targets,
+                    Some(&baseline_target_id),
                     modular_build_ref,
                 )
                 .await?;
@@ -185,16 +180,15 @@ impl RoundProcessor {
                     &job.source_file,
                     &round.mutations,
                     "lines", // Full tracing for instrumented
-                    pool,
-                    worker_manager,
-                    Some(&instrumented_worker_id),
+                    targets,
+                    Some(&instrumented_target_id),
                     modular_build_ref,
                 )
                 .await?;
 
             (baseline, instrumented)
         } else {
-            // PARALLEL execution: both workers available, run concurrently
+            // PARALLEL execution: both targets available, run concurrently
             info!(
                 "[{}][{}] Starting PARALLEL dual-run execution",
                 job.id, round.round_id
@@ -209,9 +203,8 @@ impl RoundProcessor {
                     &job.source_file,
                     &round.mutations,
                     "off", // No tracing for baseline
-                    pool,
-                    worker_manager,
-                    Some(&baseline_worker_id),
+                    targets,
+                    Some(&baseline_target_id),
                     modular_build_ref,
                 ),
                 self.execute_run(
@@ -222,9 +215,8 @@ impl RoundProcessor {
                     &job.source_file,
                     &round.mutations,
                     "lines", // Full tracing for instrumented
-                    pool,
-                    worker_manager,
-                    Some(&instrumented_worker_id),
+                    targets,
+                    Some(&instrumented_target_id),
                     modular_build_ref,
                 )
             )?
@@ -232,7 +224,7 @@ impl RoundProcessor {
 
         round.status = RoundStatus::BaselineComplete;
 
-        let exec_mode = if same_worker {
+        let exec_mode = if same_target {
             "SEQUENTIAL"
         } else {
             "PARALLEL"
@@ -295,56 +287,56 @@ impl RoundProcessor {
         Ok(round.to_summary())
     }
 
-    /// Select two workers with matching OS for dual-run protocol
+    /// Select two targets with matching OS for dual-run protocol
     ///
     /// # Strategy
-    /// 1. Prefer OS with 2+ workers (true parallel execution)
-    /// 2. Fallback to OS with 1 worker (sequential execution, but same OS)
-    /// 3. Return (baseline_worker, instrumented_worker, os_name)
+    /// 1. Prefer OS with 2+ targets (true parallel execution)
+    /// 2. Fallback to OS with 1 target (sequential execution, but same OS)
+    /// 3. Return (baseline_target, instrumented_target, os_name)
     ///
     /// # Returns
-    /// (baseline_worker_id, instrumented_worker_id, os)
-    fn select_os_matched_workers(
-        workers_by_os: &std::collections::HashMap<String, Vec<String>>,
+    /// (baseline_target_id, instrumented_target_id, os)
+    fn select_os_matched_targets(
+        targets_by_os: &std::collections::HashMap<String, Vec<String>>,
     ) -> Result<(String, String, String)> {
-        if workers_by_os.is_empty() {
-            return Err(anyhow::anyhow!("No available workers in pool"));
+        if targets_by_os.is_empty() {
+            return Err(anyhow::anyhow!("No available targets"));
         }
 
-        // Strategy 1: Find OS with 2+ workers (best case - true parallelism)
-        if let Some((os, workers)) = workers_by_os.iter().find(|(_, workers)| workers.len() >= 2) {
+        // Strategy 1: Find OS with 2+ targets (best case - true parallelism)
+        if let Some((os, targets)) = targets_by_os.iter().find(|(_, targets)| targets.len() >= 2) {
             info!(
-                "Found OS '{}' with {} workers - enabling true parallel execution",
+                "Found OS '{}' with {} targets - enabling true parallel execution",
                 os,
-                workers.len()
+                targets.len()
             );
-            return Ok((workers[0].clone(), workers[1].clone(), os.clone()));
+            return Ok((targets[0].clone(), targets[1].clone(), os.clone()));
         }
 
-        // Strategy 2: Fallback to any OS with 1 worker (same OS, sequential execution)
-        if let Some((os, workers)) = workers_by_os.iter().next() {
-            // Note: Caller will detect same worker and run sequentially
+        // Strategy 2: Fallback to any OS with 1 target (same OS, sequential execution)
+        if let Some((os, targets)) = targets_by_os.iter().next() {
+            // Note: Caller will detect same target and run sequentially
             return Ok((
-                workers[0].clone(),
-                workers[0].clone(), // Same worker for both
+                targets[0].clone(),
+                targets[0].clone(), // Same target for both
                 os.clone(),
             ));
         }
 
-        Err(anyhow::anyhow!("No workers available"))
+        Err(anyhow::anyhow!("No targets available"))
     }
 
     /// Execute a single run (baseline or instrumented)
     ///
     /// # Workflow (following test-e2e-eicar.sh pattern):
     /// 1. Build artifact using builder crate (modular or legacy mode)
-    /// 2. Use specified worker (or select from pool if None)
-    /// 3. Deploy artifact to worker via gRPC streaming
-    /// 4. Execute artifact on worker via RunSample RPC (BLOCKING)
+    /// 2. Use specified target (or select from available if None)
+    /// 3. Deploy artifact to target via gRPC streaming
+    /// 4. Execute artifact on target via RunSample RPC (BLOCKING)
     /// 5. Parse response and populate RunResult
     ///
     /// # Parameters
-    /// - `specific_worker_id`: If Some, use this specific worker (for OS-matching)
+    /// - `specific_target_id`: If Some, use this specific target (for OS-matching)
     /// - `modular_build`: If Some, use modular template build; otherwise legacy SourceFile
     ///
     /// # Returns
@@ -358,13 +350,11 @@ impl RoundProcessor {
         source_file: &str,
         mutations: &[MutationSpec],
         trace_mode: &str,
-        pool: &WorkerPool,
-        worker_manager: &std::sync::Arc<crate::worker_manager::WorkerManager>,
-        specific_worker_id: Option<&str>,
-        modular_build: Option<&ModularBuildSpec>, // NEW: modular build specification
+        targets: &TargetManager,
+        specific_target_id: Option<&str>,
+        modular_build: Option<&ModularBuildSpec>,
     ) -> Result<RunResult> {
         use crate::automutate::common::SampleRequest;
-        use crate::automutate::worker::worker_agent_client::WorkerAgentClient;
         use std::time::Instant;
 
         let run_id = format!("{}/{}/{}", job_id, round_id, run_type.as_str());
@@ -450,41 +440,39 @@ impl RoundProcessor {
             run_id, artifact_id, built.size_bytes
         );
 
-        // Step 2: Select worker (use specific worker if provided, otherwise select from pool)
-        let worker_id_to_use = if let Some(worker_id) = specific_worker_id {
-            worker_id.to_string()
+        // Step 2: Select target (use specific target if provided, otherwise select from available)
+        let target_id_to_use = if let Some(target_id) = specific_target_id {
+            target_id.to_string()
         } else {
-            let worker_ids = pool.get_available_workers().await;
-            if worker_ids.is_empty() {
-                return Err(anyhow::anyhow!("No available workers in pool"));
+            let available = targets.get_available();
+            if available.is_empty() {
+                return Err(anyhow::anyhow!("No available targets"));
             }
-            worker_ids[0].clone()
+            available[0].clone()
         };
 
-        let worker = pool
-            .get_worker(&worker_id_to_use)
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Worker {} not found", worker_id_to_use))?;
-        let worker_address = worker.address.clone();
+        let target = targets
+            .get(&target_id_to_use)
+            .ok_or_else(|| anyhow::anyhow!("Target {} not found", target_id_to_use))?;
+
         info!(
-            "[{}] Using worker: {} at {}",
-            run_id, worker.id, worker_address
+            "[{}] Using target: {} at {}",
+            run_id, target.id, target.address
         );
 
-        // Step 3: Deploy artifact to worker via WorkerManager
-        info!("[{}] Deploying artifact to worker...", run_id);
+        // Step 3: Deploy artifact to target via TargetManager
+        info!("[{}] Deploying artifact to target...", run_id);
         let artifact_path = builder_config
             .output_dir
             .join(format!("{}.exe", artifact_id));
 
-        // Route artifact transfer through WorkerManager (reuses existing connection)
-        worker_manager
-            .send_artifact(&worker_id_to_use, &artifact_id, &artifact_path)
+        targets
+            .send_artifact(&target_id_to_use, &artifact_id, &artifact_path)
             .await?;
         info!("[{}] Deployment complete", run_id);
 
-        // Step 4: Execute artifact via WorkerManager (BLOCKING - wait for completion)
-        info!("[{}] Executing artifact on worker...", run_id);
+        // Step 4: Execute artifact via TargetManager (BLOCKING - wait for completion)
+        info!("[{}] Executing artifact on target...", run_id);
 
         let request = SampleRequest {
             job_id: run_id.clone(),
@@ -493,11 +481,9 @@ impl RoundProcessor {
             enable_etw: trace_mode != "off",
         };
 
-        // Route execution through WorkerManager via bidirectional stream
-        // Uses execute_artifact_stream (NEW) instead of execute_artifact (LEGACY RPC)
-        // Worker receives RunSampleCommand via stream, executes, sends SampleResponse back
-        let exec_result = worker_manager
-            .execute_artifact_stream(&worker_id_to_use, request)
+        // Route execution through TargetManager via bidirectional stream
+        let exec_result = targets
+            .execute_artifact(&target_id_to_use, request)
             .await?;
 
         let elapsed = start_time.elapsed().as_secs();
@@ -527,7 +513,7 @@ impl RoundProcessor {
         result.elapsed_seconds = elapsed;
         result.telemetry_events_count = exec_result.telemetry_ids.len() as u64;
         result.outcome = outcome;
-        result.worker_id = worker.id.clone();
+        result.worker_id = target.id.clone();
 
         info!(
             "[{}] Execution complete: detected={}, exit_code={}, elapsed={}s, telemetry_events={}",
@@ -710,83 +696,6 @@ impl RoundProcessor {
             .collect();
 
         Ok(mutations)
-    }
-
-    /// Pull telemetry from worker and forward to controller for Elasticsearch indexing
-    async fn pull_and_forward_telemetry(
-        worker_client: &mut crate::automutate::worker::worker_agent_client::WorkerAgentClient<
-            tonic::transport::Channel,
-        >,
-        run_id: &str,
-        worker: &crate::worker_pool::WorkerState,
-    ) -> Result<usize> {
-        use crate::automutate::common::TelemetryData;
-        use crate::automutate::controller::controller_client::ControllerClient;
-        use crate::automutate::worker::TelemetryRequest;
-        use futures::stream;
-        use tokio_stream::StreamExt;
-
-        // Step 1: Pull telemetry from worker via GetTelemetry RPC
-        let request = tonic::Request::new(TelemetryRequest {
-            job_id: run_id.to_string(),
-            since_timestamp: 0, // Get all events
-            max_events: 0,      // No limit
-        });
-
-        let mut telemetry_stream = worker_client
-            .get_telemetry(request)
-            .await
-            .context("Failed to call GetTelemetry RPC on worker")?
-            .into_inner();
-
-        // Step 2: Collect telemetry events from stream
-        let mut telemetry_events: Vec<TelemetryData> = Vec::new();
-        while let Some(event) = telemetry_stream.next().await {
-            match event {
-                Ok(telemetry_data) => {
-                    telemetry_events.push(telemetry_data);
-                }
-                Err(e) => {
-                    warn!("[{}] Error receiving telemetry event: {}", run_id, e);
-                    break;
-                }
-            }
-        }
-
-        let event_count = telemetry_events.len();
-        info!(
-            "[{}] Pulled {} telemetry events from worker {}",
-            run_id, event_count, worker.id
-        );
-
-        if telemetry_events.is_empty() {
-            return Ok(0);
-        }
-
-        // Step 3: Forward telemetry to controller's StreamTelemetry RPC for Elasticsearch indexing
-        // Connect to controller (loopback to ourselves)
-        let controller_addr = std::env::var("CONTROLLER_ADDRESS")
-            .unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
-
-        let mut controller_client = ControllerClient::connect(controller_addr)
-            .await
-            .context("Failed to connect to controller for telemetry forwarding")?;
-
-        // Stream telemetry to controller
-        let telemetry_stream = stream::iter(telemetry_events);
-        let request = tonic::Request::new(telemetry_stream);
-
-        controller_client
-            .stream_telemetry(request)
-            .await
-            .context("Failed to forward telemetry to controller")?;
-
-        info!(
-            "[{}] Successfully forwarded {} telemetry events to controller for indexing",
-            run_id, event_count
-        );
-
-        Ok(event_count)
     }
 }
 

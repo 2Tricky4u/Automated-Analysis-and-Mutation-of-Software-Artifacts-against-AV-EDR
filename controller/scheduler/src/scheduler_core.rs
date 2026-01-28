@@ -2,28 +2,27 @@
 
 use crate::job::Job;
 use crate::queue::JobQueue;
-use crate::run_queue::RunQueue;  // NEW: Async run queue
-use crate::worker_pool::WorkerPool;
-use crate::round_processor::RoundProcessor;
 use crate::round::Round;
-use anyhow::{Result, anyhow};
+use crate::round_processor::RoundProcessor;
+use crate::target_manager::{TargetConfig, TargetManager};
+use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::time::{Duration, sleep};
-use tracing::{error, info, warn, debug};
+use tokio::time::{sleep, Duration};
+use tracing::{debug, error, info, warn};
 
 /// Scheduler configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct SchedulerConfig {
-    /// Poll interval in seconds
+    /// Poll interval in milliseconds
     pub poll_interval_ms: u64,
     /// Maximum concurrent jobs
     pub max_concurrent_jobs: usize,
     /// Default timeout in seconds
     pub default_timeout_seconds: u64,
-    /// Health check timeout for workers in seconds
+    /// Health check timeout for targets in seconds
     pub health_timeout_seconds: u64,
 }
 
@@ -38,28 +37,24 @@ impl Default for SchedulerConfig {
     }
 }
 
-/// Worker configuration from individual worker TOML files
+/// Target configuration from individual worker TOML files
 #[derive(Debug, Clone, Deserialize)]
-struct WorkerTomlConfig {
-    worker: WorkerInfo,
+struct TargetTomlConfig {
+    worker: TargetInfo,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct WorkerInfo {
+struct TargetInfo {
     worker_id: String,
     ip_address: String,
 }
 
 /// Scheduler core managing the scheduling loop
 pub struct SchedulerCore {
-    /// Job queue (high-level: multi-round tasks)
+    /// Job queue
     queue: JobQueue,
-    /// Run queue (low-level: individual baseline/instrumented executions)
-    run_queue: RunQueue,
-    /// Worker pool
-    pool: WorkerPool,
-    /// Worker manager for communication
-    worker_manager: Arc<crate::worker_manager::WorkerManager>,
+    /// Target manager (unified worker pool + connection manager)
+    targets: Arc<TargetManager>,
     /// Round processor for iterative mutation
     round_processor: RoundProcessor,
     /// Scheduler configuration
@@ -68,64 +63,46 @@ pub struct SchedulerCore {
 
 impl SchedulerCore {
     /// Create a new scheduler core
-    /// Automatically discovers workers from automation/generated/win*-worker-*.toml files
-    pub async fn new(
-        config: SchedulerConfig,
-        worker_manager: Arc<crate::worker_manager::WorkerManager>,
-    ) -> Result<Self> {
+    /// Automatically discovers targets from automation/generated/win*-worker-*.toml files
+    pub async fn new(config: SchedulerConfig, targets: Arc<TargetManager>) -> Result<Self> {
         debug!("Initializing scheduler core");
         debug!("  Poll interval: {}ms", config.poll_interval_ms);
         debug!("  Max concurrent jobs: {}", config.max_concurrent_jobs);
         debug!("  Default timeout: {}s", config.default_timeout_seconds);
 
-        // Create queues and pool
+        // Create queue
         let queue = JobQueue::new();
-        let run_queue = RunQueue::new();
-        let pool = WorkerPool::new(config.health_timeout_seconds);
 
         // Create round processor
         let round_processor = RoundProcessor::new();
 
-        //Discover and register workers from automation/generated/*.toml
-        // Returns list of discovered workers for syncing with WorkerManager
-        let discovered_workers = Self::discover_and_register_workers(&pool).await?;
-
-        // Register same workers in WorkerManager (single source of truth)
-        worker_manager.register_from_pool(discovered_workers)?;
-        debug!("Worker registration synchronized between WorkerPool and WorkerManager");
+        // Discover and register targets from automation/generated/*.toml
+        Self::discover_and_register_targets(&targets).await?;
 
         Ok(SchedulerCore {
             queue,
-            run_queue,
-            pool,
-            worker_manager: Arc::clone(&worker_manager),
+            targets,
             round_processor,
             config,
         })
     }
 
-    /// Discover workers from automation/generated/win*-worker-*.toml files
-    /// Returns Vec<WorkerConfig> for syncing with WorkerManager
-    ///
-    /// Deduplicates by IP address - if multiple configs have the same IP,
-    /// only the first one is registered and others are logged as duplicates.
-    async fn discover_and_register_workers(pool: &WorkerPool) -> Result<Vec<crate::worker_manager::WorkerConfig>> {
+    /// Discover targets from automation/generated/win*-worker-*.toml files
+    async fn discover_and_register_targets(targets: &TargetManager) -> Result<()> {
         let generated_dir = Path::new("automation/generated");
 
         if !generated_dir.exists() {
-            warn!("automation/generated directory not found, no workers registered");
-            warn!("Run 'automation/scripts/generate-configs.ps1' to create worker configs");
-            return Ok(Vec::new());
+            warn!("automation/generated directory not found, no targets registered");
+            warn!("Run 'automation/scripts/generate-configs.ps1' to create target configs");
+            return Ok(());
         }
 
         // Find all win*-worker-*.toml files
         let entries = std::fs::read_dir(generated_dir)?;
-        let mut worker_count = 0;
+        let mut target_count = 0;
         let mut duplicate_count = 0;
-        let mut discovered_workers = Vec::new();
 
         // Track registered IPs to detect duplicates
-        // Key: IP address, Value: (worker_id, config_filename)
         let mut registered_ips: HashMap<String, (String, String)> = HashMap::new();
 
         for entry in entries {
@@ -134,40 +111,40 @@ impl SchedulerCore {
 
             if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                 // Match pattern: win*-worker-*.toml
-                if filename.starts_with("win") && filename.contains("-worker-") && filename.ends_with(".toml") {
-                    match Self::load_worker_config(&path) {
-                        Ok((worker_id, address)) => {
+                if filename.starts_with("win")
+                    && filename.contains("-worker-")
+                    && filename.ends_with(".toml")
+                {
+                    match Self::load_target_config(&path) {
+                        Ok((target_id, address)) => {
                             // Extract IP from address (address is "ip:port")
                             let ip = address.split(':').next().unwrap_or(&address).to_string();
 
                             // Check for duplicate IP
                             if let Some((existing_id, existing_file)) = registered_ips.get(&ip) {
                                 warn!(
-                                    "Duplicate IP detected: {} in '{}' (worker: {}) - already registered from '{}' (worker: {}). Skipping.",
-                                    ip, filename, worker_id, existing_file, existing_id
+                                    "Duplicate IP: {} in '{}' (target: {}) - already from '{}' (target: {}). Skipping.",
+                                    ip, filename, target_id, existing_file, existing_id
                                 );
                                 duplicate_count += 1;
                                 continue;
                             }
 
-                            // Register in WorkerPool
-                            pool.register_worker(worker_id.clone(), address.clone(), true).await?;
-                            info!("  Registered worker: {} at {}", worker_id, address);
-
-                            // Track this IP as registered
-                            registered_ips.insert(ip, (worker_id.clone(), filename.to_string()));
-
-                            // Add to discovered list for WorkerManager sync
-                            discovered_workers.push(crate::worker_manager::WorkerConfig {
-                                id: worker_id,
-                                address,
+                            // Register target
+                            targets.register(TargetConfig {
+                                id: target_id.clone(),
+                                address: address.clone(),
                                 enabled: true,
-                            });
+                            })?;
+                            info!("  Registered target: {} at {}", target_id, address);
 
-                            worker_count += 1;
+                            // Track this IP
+                            registered_ips
+                                .insert(ip, (target_id.clone(), filename.to_string()));
+                            target_count += 1;
                         }
                         Err(e) => {
-                            warn!("Failed to load worker config {}: {}", filename, e);
+                            warn!("Failed to load target config {}: {}", filename, e);
                         }
                     }
                 }
@@ -175,27 +152,29 @@ impl SchedulerCore {
         }
 
         if duplicate_count > 0 {
-            warn!("{} duplicate worker config(s) were skipped (same IP)", duplicate_count);
+            warn!(
+                "{} duplicate target config(s) were skipped (same IP)",
+                duplicate_count
+            );
         }
 
-        if worker_count == 0 {
-            warn!("No workers registered! Scheduler will not be able to execute jobs.");
-            warn!("Create worker configs in automation/generated/ (e.g., win10-worker-01.toml)");
+        if target_count == 0 {
+            warn!("No targets registered! Scheduler will not be able to execute jobs.");
+            warn!("Create target configs in automation/generated/ (e.g., win10-worker-01.toml)");
         } else {
-            info!("Worker pool initialized with {} unique workers", worker_count);
+            info!("Target pool initialized with {} unique targets", target_count);
         }
 
-        Ok(discovered_workers)
+        Ok(())
     }
 
-    /// Load worker configuration from individual worker TOML file
-    /// Returns (worker_id, grpc_address)
-    fn load_worker_config(path: &Path) -> Result<(String, String)> {
+    /// Load target configuration from individual worker TOML file
+    fn load_target_config(path: &Path) -> Result<(String, String)> {
         let content = std::fs::read_to_string(path)?;
-        let config: WorkerTomlConfig = toml::from_str(&content)?;
+        let config: TargetTomlConfig = toml::from_str(&content)?;
 
-        // Worker gRPC address is worker IP + port 50052 (standard worker port)
-        let address = format!("{}:50052", config.worker.ip_address); //todo put in config
+        // Target gRPC address is IP + port 50052 (standard worker port)
+        let address = format!("{}:50052", config.worker.ip_address);
 
         Ok((config.worker.worker_id, address))
     }
@@ -205,107 +184,92 @@ impl SchedulerCore {
         &self.queue
     }
 
-    /// Get reference to worker pool (for health checks)
-    pub fn pool(&self) -> &WorkerPool {
-        &self.pool
-    }
-
-    /// Get reference to worker manager (for job execution)
-    pub fn worker_manager(&self) -> &Arc<crate::worker_manager::WorkerManager> {
-        &self.worker_manager
+    /// Get reference to target manager
+    pub fn targets(&self) -> &Arc<TargetManager> {
+        &self.targets
     }
 
     /// Main scheduling loop
     /// Runs continuously until process exits
     pub async fn run(self: Arc<Self>) {
-        debug!("Scheduler core started (poll interval: {}ms)", self.config.poll_interval_ms);
-        debug!("Worker pool loaded: {} workers", self.pool.total_count().await);
+        debug!(
+            "Scheduler core started (poll interval: {}ms)",
+            self.config.poll_interval_ms
+        );
+        debug!("Target pool loaded: {} targets", self.targets.count());
         debug!("Ready to accept jobs");
 
         loop {
-            // 1. Check worker health (actively call HealthCheck RPC)
-            // DISABLED: Legacy health checks replaced by bidirectional stream heartbeats
-            // self.pool.check_worker_health().await;
+            // 1. Check for available targets
+            let available_targets = self.targets.get_available();
 
-            //debug!("=== Poll iteration starting ===");
-
-            // 2. Check for available workers
-            //debug!("About to call get_available_workers()...");
-            let available_workers = self.pool.get_available_workers().await;
-            //debug!("Poll iteration - available workers: {}", available_workers.len());
-
-            if available_workers.is_empty() {
-                //debug!("No available workers, sleeping {}ms", self.config.poll_interval_ms);
-                // No workers available, wait and retry
+            if available_targets.is_empty() {
+                // No targets available, wait and retry
                 sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
                 continue;
             }
 
-            // 3. Check if we can run more jobs
+            // 2. Check if we can run more jobs
             let running_count = self.queue.running_count();
-            //debug!("Running jobs: {} / {} max", running_count, self.config.max_concurrent_jobs);
             if running_count >= self.config.max_concurrent_jobs {
-                debug!("Max concurrent jobs reached, sleeping {}ms", self.config.poll_interval_ms);
-                // Already at max concurrent jobs
+                debug!(
+                    "Max concurrent jobs reached, sleeping {}ms",
+                    self.config.poll_interval_ms
+                );
                 sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
                 continue;
             }
 
-            // 4. Get next queued job
+            // 3. Get next queued job
             let job = match self.queue.pop_next() {
                 Some(job) => {
                     debug!("Found queued job: {}", job.id);
                     job
                 }
                 None => {
-                    //debug!("No queued jobs, sleeping {}ms", self.config.poll_interval_ms);
                     // No jobs in queue
                     sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
                     continue;
                 }
             };
 
-            info!("Processing job: {} (template: {})", job.id, job.template_name);
+            info!(
+                "Processing job: {} (template: {})",
+                job.id, job.template_name
+            );
 
-            // 5. Process job (iterative rounds)
+            // 4. Process job (iterative rounds)
             let job_id = job.id.clone();
             let queue = self.queue.clone();
-            let pool = self.pool.clone();
+            let targets = Arc::clone(&self.targets);
             let round_processor = self.round_processor.clone();
-            let worker_manager = Arc::clone(&self.worker_manager);
             let config = self.config.clone();
 
             // Spawn async task to process job
             tokio::spawn(async move {
-                if let Err(e) = Self::process_job(job, queue, pool, round_processor, worker_manager, config).await {
+                if let Err(e) = Self::process_job(job, queue, targets, round_processor, config).await
+                {
                     error!("Job {} failed: {}", job_id, e);
                 }
             });
 
-            // 6. Wait before checking for next job
+            // 5. Wait before checking for next job
             sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
         }
     }
 
     /// Process a single job through iterative rounds
-    ///
-    /// # Round-Based Iteration Protocol
-    /// 1. Mark job as running
-    /// 2. Loop through rounds (1 to max_rounds):
-    ///    a. Create new Round
-    ///    b. Call RoundProcessor.process_round() (dual-run protocol)
-    ///    c. Save round to job
-    ///    d. Check stopping conditions (stop_on_evasion, stop_on_detection, max_rounds)
-    /// 3. Mark job as completed
     async fn process_job(
         mut job: Job,
         queue: JobQueue,
-        pool: WorkerPool,
+        targets: Arc<TargetManager>,
         round_processor: RoundProcessor,
-        worker_manager: std::sync::Arc<crate::worker_manager::WorkerManager>,
         _config: SchedulerConfig,
     ) -> Result<()> {
-        debug!("[{}] Starting job (max_rounds: {})", job.id, job.max_rounds);
+        debug!(
+            "[{}] Starting job (max_rounds: {})",
+            job.id, job.max_rounds
+        );
         job.start_running();
         queue.update_job(&job)?;
 
@@ -313,13 +277,13 @@ impl SchedulerCore {
         while job.should_continue() {
             let round_number = job.current_round + 1;
 
-            info!("[{}][round-{}] Starting round {}/{}", job.id, round_number, round_number, job.max_rounds);
+            info!(
+                "[{}][round-{}] Starting round {}/{}",
+                job.id, round_number, round_number, job.max_rounds
+            );
 
             // Create new round
-            let mut round = Round::new(
-                job.id.clone(),
-                round_number,
-            );
+            let mut round = Round::new(job.id.clone(), round_number);
             let round_id = round.round_id.clone();
 
             // Start round in job
@@ -327,11 +291,12 @@ impl SchedulerCore {
             queue.update_job(&job)?;
 
             // Process round (dual-run protocol)
-            // Pass WorkerManager for artifact deployment and execution
-            match round_processor.process_round(&mut round, &job, &pool, &worker_manager).await {
+            match round_processor.process_round(&mut round, &job, &targets).await {
                 Ok(summary) => {
-                    info!("[{}][{}] Round complete: detected={}, behavior_match={}, evasion_score={:.2}",
-                        job.id, round_id, summary.detected, summary.behavior_match, summary.evasion_score);
+                    info!(
+                        "[{}][{}] Round complete: detected={}, behavior_match={}, evasion_score={:.2}",
+                        job.id, round_id, summary.detected, summary.behavior_match, summary.evasion_score
+                    );
 
                     // Complete round in job
                     job.complete_round(summary);
@@ -339,7 +304,10 @@ impl SchedulerCore {
 
                     // Check stopping conditions
                     if job.stop_on_evasion && !round.feedback.as_ref().unwrap().detected {
-                        info!("[{}] Stopping: artifact not detected (evasion success)", job.id);
+                        info!(
+                            "[{}] Stopping: artifact not detected (evasion success)",
+                            job.id
+                        );
                         break;
                     }
 
@@ -361,156 +329,11 @@ impl SchedulerCore {
         job.mark_completed();
         queue.update_job(&job)?;
 
-        info!("[{}] Job complete: {} rounds processed", job.id, job.rounds.len());
-
-        Ok(())
-    }
-
-    /// Build artifact using build/emitter
-    async fn build_artifact(job: &Job) -> Result<String> {
-        debug!("[{}] Build parameters:", job.id);
-        debug!("  Template: {}", job.template_name);
-        debug!("  Source: {}", job.source_file);
-        debug!("  Trace mode: {}", job.trace_mode);
-        debug!("  Mutations: {}", job.mutations.len());
-
-        // Create builder with default config
-        let builder_config = build::BuilderConfig::default();
-        let artifact_builder = build::ArtifactBuilder::new(builder_config)?;
-
-        // Convert scheduler mutations to builder mutations
-        let mutations: Vec<build::mutator::MutationSpec> = job
-            .mutations
-            .iter()
-            .map(|m| {
-                // Convert serde_json::Value params to HashMap<String, String>
-                let params = m.params.as_ref()
-                    .and_then(|v| {
-                        v.as_object().map(|obj| {
-                            obj.iter()
-                                .filter_map(|(k, v)| {
-                                    v.as_str().map(|s| (k.clone(), s.to_string()))
-                                })
-                                .collect::<std::collections::HashMap<String, String>>()
-                        })
-                    })
-                    .unwrap_or_default(); // Empty HashMap if no params
-
-                build::mutator::MutationSpec {
-                    id: m.id.clone(),
-                    params,
-                }
-            })
-            .collect();
-
-        // Build the artifact
-        let built = artifact_builder
-            .build(build::BuildInput::SourceFile {
-                template_name: job.template_name.clone(),
-                source_file: job.source_file.clone(),
-                mutations,
-                trace_mode: job.trace_mode.clone(),
-            })
-            .await?;
-
-        Ok(built.artifact_id)
-    }
-
-    /// Deploy artifact to worker via gRPC
-    async fn deploy_artifact(job: &Job, worker_address: &str) -> Result<()> {
-        use crate::automutate::common::ArtifactChunk;
-        use crate::automutate::worker::worker_agent_client::WorkerAgentClient;
-        use futures::stream;
-
-        debug!("[{}] Deploying to worker: {}", job.id, worker_address);
-        debug!("  Artifact: {:?}", job.artifact_id);
-
-        let artifact_id = job.artifact_id.as_ref().ok_or_else(|| anyhow!("No artifact ID"))?;
-
-        // 1. Read artifact from disk
-        let builder_config = build::BuilderConfig::default();
-        let artifact_path = builder_config
-            .output_dir
-            .join(format!("{}.exe", artifact_id));
-
-        if !artifact_path.exists() {
-            return Err(anyhow!("Artifact {} not found at {:?}", artifact_id, artifact_path));
-        }
-
-        let artifact_data = tokio::fs::read(&artifact_path).await?;
-
-        debug!("[{}] Read artifact: {} bytes", job.id, artifact_data.len());
-
-        // 2. Connect to worker
-        let worker_url = format!("http://{}", worker_address);
-        let endpoint = tonic::transport::Endpoint::try_from(worker_url.clone())?;
-        let mut client = WorkerAgentClient::connect(endpoint).await?;
-
-        // 3. Split into chunks (4MB per chunk)
-        let chunk_size = 4 * 1024 * 1024;
-        let total_chunks = ((artifact_data.len() + chunk_size - 1) / chunk_size) as u32;
-        let chunks: Vec<ArtifactChunk> = artifact_data
-            .chunks(chunk_size)
-            .enumerate()
-            .map(|(i, chunk)| ArtifactChunk {
-                artifact_id: artifact_id.clone(),
-                data: chunk.to_vec(),
-                chunk_index: i as u32,
-                total_chunks,
-                sha256: artifact_id.clone(), // SHA256 is the artifact_id
-            })
-            .collect();
-
-        // 4. Stream chunks to worker
-        let request_stream = stream::iter(chunks);
-        client.send_artifact(request_stream).await?;
-
-        info!("[{}] Deploy complete", job.id);
-
-        Ok(())
-    }
-
-    /// Execute artifact on worker via gRPC (non-blocking)
-    async fn execute_artifact(job: &Job, worker_address: &str) -> Result<()> {
-        use crate::automutate::common::SampleRequest;
-        use crate::automutate::worker::worker_agent_client::WorkerAgentClient;
-
-        debug!("[{}] Starting execution on worker: {}", job.id, worker_address);
-        debug!("  Run ID: {:?}", job.run_id);
-
-        let artifact_id = job.artifact_id.as_ref().ok_or_else(|| anyhow!("No artifact ID"))?;
-        let job_id = job.id.clone();
-
-        // Connect to worker
-        let worker_url = format!("http://{}", worker_address);
-        let endpoint = tonic::transport::Endpoint::try_from(worker_url)?;
-        let mut client = WorkerAgentClient::connect(endpoint).await?;
-
-        // Execute artifact via RunSample (worker agent service)
-        // NOTE: This is a BLOCKING call that waits for completion
-        // We spawn it in a background task so the scheduler can continue
-        let request = tonic::Request::new(SampleRequest {
-            job_id: job_id.clone(),
-            artifact_id: artifact_id.clone(),
-            timeout_seconds: 60, // todo take from config
-            enable_etw: true,
-        });
-
-        // Spawn execution in background task (fire-and-forget)
-        // Worker will report status via StatusReport gRPC calls
-        let job_id_clone = job_id.clone();
-        tokio::spawn(async move {
-            match client.run_sample(request).await {
-                Ok(response) => {
-                    debug!("[{}] Worker execution completed: success={}", job_id_clone, response.get_ref().success);
-                }
-                Err(e) => {
-                    error!("[{}] Worker execution RPC failed: {}", job_id_clone, e);
-                }
-            }
-        });
-
-        debug!("[{}] Execution request sent to worker", job_id);
+        info!(
+            "[{}] Job complete: {} rounds processed",
+            job.id,
+            job.rounds.len()
+        );
 
         Ok(())
     }
@@ -519,8 +342,8 @@ impl SchedulerCore {
 /// Helper to create a shared scheduler core instance
 pub async fn create_scheduler_core(
     config: SchedulerConfig,
-    worker_manager: Arc<crate::worker_manager::WorkerManager>,
+    targets: Arc<TargetManager>,
 ) -> Result<Arc<SchedulerCore>> {
-    let core = SchedulerCore::new(config, worker_manager).await?;
+    let core = SchedulerCore::new(config, targets).await?;
     Ok(Arc::new(core))
 }

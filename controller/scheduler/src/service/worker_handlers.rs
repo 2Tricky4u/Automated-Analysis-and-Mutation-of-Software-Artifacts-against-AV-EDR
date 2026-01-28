@@ -1,6 +1,6 @@
 use crate::automutate::common::{TelemetryAck, TelemetryData, ToolVersions};
 use crate::automutate::controller::{ListWorkersRequest, ListWorkersResponse, WorkerInfo};
-use crate::worker_pool;
+use crate::target_manager::RegistrationType;
 use crate::SchedulerService;
 use tonic::{Request, Response, Status};
 use tracing::{error, info, warn};
@@ -9,19 +9,20 @@ pub async fn list_workers(
     service: &SchedulerService,
     _request: Request<ListWorkersRequest>,
 ) -> Result<Response<ListWorkersResponse>, Status> {
-    let scheduler_core = match &service.scheduler_core {
-        Some(core) => core,
+    // Use targets from SchedulerService directly (since SchedulerCore.targets() isn't accessible)
+    let targets = match &service.targets {
+        Some(targets) => targets,
         None => {
-            return Err(Status::unavailable("Scheduler core not initialized"));
+            return Err(Status::unavailable("Target manager not initialized"));
         }
     };
 
-    let workers = scheduler_core.pool().list_workers().await;
+    let workers = targets.list_all();
     let worker_infos: Vec<WorkerInfo> = workers
         .iter()
         .map(|w| {
             let last_ping_secs = w
-                .last_ping
+                .last_seen
                 .elapsed()
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
@@ -33,23 +34,19 @@ pub async fn list_workers(
                 current_job_id: w.current_job.clone().unwrap_or_default(),
                 last_ping_seconds_ago: last_ping_secs,
                 enabled: w.enabled,
-                // NEW FIELDS for dynamic registration
+                // Fields for dynamic registration
                 os_version: w.os_version.clone(),
                 capabilities: w.capabilities.clone(),
                 metadata: w.metadata.clone(),
                 tools: Some(ToolVersions {
-                    rededr_version: w.tools.get("rededr_version").cloned().unwrap_or_default(),
-                    defender_version: w
-                        .tools
-                        .get("defender_version")
-                        .cloned()
-                        .unwrap_or_default(),
-                    etw_version: w.tools.get("etw_version").cloned().unwrap_or_default(),
-                    llvm_version: w.tools.get("llvm_version").cloned().unwrap_or_default(),
+                    rededr_version: w.tools.get("rededr").cloned().unwrap_or_default(),
+                    defender_version: w.tools.get("defender").cloned().unwrap_or_default(),
+                    etw_version: w.tools.get("etw").cloned().unwrap_or_default(),
+                    llvm_version: w.tools.get("llvm").cloned().unwrap_or_default(),
                 }),
                 registration_type: match w.registration_type {
-                    worker_pool::RegistrationType::Dynamic => "dynamic".to_string(),
-                    worker_pool::RegistrationType::Static => "static".to_string(),
+                    RegistrationType::Dynamic => "dynamic".to_string(),
+                    RegistrationType::Static => "static".to_string(),
                 },
             }
         })
@@ -64,7 +61,7 @@ pub async fn stream_telemetry(
     service: &SchedulerService,
     request: Request<tonic::Streaming<TelemetryData>>,
 ) -> Result<Response<TelemetryAck>, Status> {
-    use tokio::time::{Duration, timeout};
+    use tokio::time::{timeout, Duration};
 
     // Get remote_addr BEFORE into_inner() consumes the request
     let remote_addr = request
@@ -76,12 +73,9 @@ pub async fn stream_telemetry(
     let mut events_count = 0;
     let mut first_job_id = String::new();
     let mut batch = Vec::new();
-    const MAX_BATCH_SIZE: usize = 10000; // Prevent memory exhaustion
+    const MAX_BATCH_SIZE: usize = 10000;
 
-    info!(
-        "[RECV]  Telemetry stream opened from worker: {}",
-        remote_addr
-    );
+    info!("[RECV] Telemetry stream opened from: {}", remote_addr);
 
     // Collect all events from stream with timeout
     let collection_result = timeout(Duration::from_secs(30), async {
@@ -93,11 +87,10 @@ pub async fn stream_telemetry(
             events_count += 1;
             batch.push(telemetry);
 
-            // Prevent unbounded memory growth
             if batch.len() >= MAX_BATCH_SIZE {
                 warn!(
-                    "[WARN]  Telemetry batch size limit reached ({} events), stopping collection [worker: {}]",
-                    MAX_BATCH_SIZE, remote_addr
+                    "[WARN] Telemetry batch size limit reached ({} events)",
+                    MAX_BATCH_SIZE
                 );
                 break;
             }
@@ -109,82 +102,35 @@ pub async fn stream_telemetry(
     match collection_result {
         Ok(Ok(())) => {
             info!(
-                "[OK] Telemetry batch collected: job={}, events_count={}, worker={}",
-                first_job_id, events_count, remote_addr
+                "[OK] Telemetry batch collected: job={}, events={}",
+                first_job_id, events_count
             );
         }
         Ok(Err(e)) => {
-            error!(
-                "[ERROR] STREAM ERROR: Failed to collect telemetry from worker: {}",
-                remote_addr
-            );
-            error!("   Error details: {:?}", e);
-            error!("   Status code: {}, Message: {}", e.code(), e.message());
+            error!("[ERROR] Stream error: {:?}", e);
             return Err(e);
         }
         Err(_) => {
-            error!(
-                "[TIMEOUT]  TIMEOUT: Telemetry stream collection exceeded 30s limit [worker: {}]",
-                remote_addr
-            );
-            error!(
-                "   Collected {} events before timeout (partial batch)",
-                events_count
-            );
-            warn!("   Possible causes: slow network, large payload, worker stalled");
-            // Continue with partial batch rather than failing
+            error!("[TIMEOUT] Telemetry collection exceeded 30s");
         }
     }
 
-    // Index batch to Elasticsearch with timeout
+    // Index batch to Elasticsearch
     if !batch.is_empty() {
-        info!(
-            "[UPLOAD]Indexing {} events to Elasticsearch [job: {}]",
-            events_count, first_job_id
-        );
+        info!("[UPLOAD] Indexing {} events to Elasticsearch", events_count);
         match timeout(Duration::from_secs(10), service.index_telemetry_batch(&batch)).await {
             Ok(Ok(())) => {
-                info!(
-                    "[OK] Successfully indexed {} telemetry events to Elasticsearch [job: {}]",
-                    events_count, first_job_id
-                );
+                info!("[OK] Indexed {} telemetry events", events_count);
             }
             Ok(Err(e)) => {
-                error!("[ERROR] ELASTICSEARCH ERROR: Failed to index telemetry batch");
-                error!(
-                    "   Job: {}, Events: {}, Worker: {}",
-                    first_job_id, events_count, remote_addr
-                );
-                error!("   Error details: {}", e);
-                error!(
-                    "   [WARN]  Telemetry received but NOT INDEXED (Elasticsearch may be down/unreachable)"
-                );
-                warn!(
-                    "   Possible causes: Elasticsearch down, network issue, mapping conflict, disk full"
-                );
-                // Don't fail the RPC - telemetry was received, just not indexed
+                error!("[ERROR] Elasticsearch indexing failed: {}", e);
             }
             Err(_) => {
-                error!(
-                    "[TIMEOUT]  ELASTICSEARCH TIMEOUT: Indexing exceeded 10s limit [job: {}]",
-                    first_job_id
-                );
-                error!("   Events: {}, Worker: {}", events_count, remote_addr);
-                error!(
-                    "   [WARN]  Telemetry received but NOT INDEXED (Elasticsearch is slow/unavailable)"
-                );
-                warn!(
-                    "   Possible causes: Elasticsearch overloaded, slow disk I/O, large batch size"
-                );
-                // Don't fail the RPC - telemetry was received, just not indexed
+                error!("[TIMEOUT] Elasticsearch indexing exceeded 10s");
             }
         }
     } else {
-        warn!(
-            "[WARN]  Telemetry stream closed with ZERO events [worker: {}]",
-            remote_addr
-        );
-        warn!("   This may indicate: worker had no telemetry to send, or stream failed early");
+        warn!("[WARN] Telemetry stream closed with ZERO events");
     }
 
     Ok(Response::new(TelemetryAck {
