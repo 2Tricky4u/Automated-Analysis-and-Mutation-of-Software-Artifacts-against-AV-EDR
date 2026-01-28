@@ -9,8 +9,6 @@ pub mod run_queue;
 pub mod run_result;
 pub mod scheduler_core;
 pub mod target_manager;
-pub mod worker_manager;
-pub mod worker_pool;
 
 // Protobuf definitions (shared with main.rs)
 pub mod automutate {
