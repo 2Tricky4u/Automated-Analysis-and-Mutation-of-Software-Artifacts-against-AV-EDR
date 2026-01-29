@@ -55,7 +55,7 @@ impl Orchestrator {
 
     /// Main orchestrator loop
     pub async fn run(mut self) {
-        info!("[Orchestrator] Started");
+        info!("Orchestrator Started");
 
         loop {
             // Build list of worker event receivers for select
@@ -100,7 +100,7 @@ impl Orchestrator {
         cmd_tx: mpsc::Sender<WorkerCommand>,
         event_rx: mpsc::Receiver<WorkerEvent>,
     ) {
-        info!("[Orchestrator] Worker {} connected (os={}, caps={:?})",
+        info!("Worker {} connected (os={}, caps={:?})",
             worker_id, info.os, info.capabilities);
 
         let handle = WorkerHandle {
@@ -117,11 +117,11 @@ impl Orchestrator {
     }
 
     async fn unregister_worker(&mut self, worker_id: &WorkerId, reason: &str) {
-        info!("[Orchestrator] Worker {} disconnected: {}", worker_id, reason);
+        info!("Worker {} disconnected: {}", worker_id, reason);
 
         if let Some(handle) = self.workers.remove(worker_id) {
             if handle.has_active_job {
-                warn!("[Orchestrator] Worker {} had active job, job lost", worker_id);
+                warn!("Worker {} had active job, job lost", worker_id);
                 // Could implement job recovery here
             }
         }
@@ -132,7 +132,7 @@ impl Orchestrator {
     // ========================================================================
 
     async fn on_job_submitted(&mut self, job: JobSession) {
-        info!("[Orchestrator] Job {} submitted (os={:?}, caps={:?})",
+        info!("Job {} submitted (os={:?}, caps={:?})",
             job.id, job.target_os, job.required_capabilities);
 
         // Find compatible idle worker
@@ -143,7 +143,7 @@ impl Orchestrator {
                 self.assign_job(&worker_id, job).await;
             }
             None => {
-                debug!("[Orchestrator] No compatible worker, queueing job {}", job.id);
+                debug!("No compatible worker, queueing job {}", job.id);
                 self.pending_jobs.push_back(job);
             }
         }
@@ -162,18 +162,18 @@ impl Orchestrator {
         let handle = match self.workers.get_mut(worker_id) {
             Some(h) => h,
             None => {
-                warn!("[Orchestrator] Worker {} not found, requeueing job", worker_id);
+                warn!("Worker {} not found, requeueing job", worker_id);
                 self.pending_jobs.push_back(job);
                 return;
             }
         };
 
-        info!("[Orchestrator] Assigning job {} to worker {}", job.id, worker_id);
+        info!("Assigning job {} to worker {}", job.id, worker_id);
 
         handle.has_active_job = true;
 
         if let Err(e) = handle.cmd_tx.send(WorkerCommand::AssignJob(job)).await {
-            error!("[Orchestrator] Failed to send job to worker {}: {}", worker_id, e);
+            error!("Failed to send job to worker {}: {}", worker_id, e);
             handle.has_active_job = false;
         }
     }
@@ -201,7 +201,7 @@ impl Orchestrator {
     async fn on_worker_event(&mut self, worker_id: WorkerId, event: WorkerEvent) {
         match event {
             WorkerEvent::Available { worker_id } => {
-                debug!("[Orchestrator] Worker {} available", worker_id);
+                debug!("Worker {} available", worker_id);
                 if let Some(handle) = self.workers.get_mut(&worker_id) {
                     handle.has_active_job = false;
                 }
@@ -209,7 +209,7 @@ impl Orchestrator {
             }
 
             WorkerEvent::JobCompleted { worker_id, job_id, outcome } => {
-                info!("[Orchestrator] Job {} completed on worker {}: {:?}",
+                info!("Job {} completed on worker {}: {:?}",
                     job_id, worker_id, outcome);
 
                 if let Some(handle) = self.workers.get_mut(&worker_id) {
@@ -222,7 +222,7 @@ impl Orchestrator {
             }
 
             WorkerEvent::RunCompleted { worker_id, run_id, outcome } => {
-                debug!("[Orchestrator] Run {} completed on worker {}: detected={}",
+                debug!("Run {} completed on worker {}: detected={}",
                     run_id, worker_id, outcome.detected);
                 // Observability only
             }

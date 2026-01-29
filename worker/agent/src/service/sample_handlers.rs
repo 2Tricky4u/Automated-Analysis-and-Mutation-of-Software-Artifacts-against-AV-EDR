@@ -1263,6 +1263,8 @@ pub async fn run_sample(
         output,
         telemetry_ids: vec![run_id.clone()],
         run_id: String::new(), // Empty for legacy RPC (will be populated by stream handler if called via stream)
+        detected: false, // TODO: Determine from execution result (defender alerts, process termination)
+        error: String::new(),
     }))
 }
 

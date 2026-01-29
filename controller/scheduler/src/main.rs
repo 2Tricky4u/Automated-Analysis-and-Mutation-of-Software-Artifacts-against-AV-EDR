@@ -14,6 +14,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tonic::transport::Server;
+use std::fs::OpenOptions;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::Layer;
 use tracing::{debug, error, info, warn};
 
 mod dispatch;
@@ -190,7 +194,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => tracing::Level::INFO,
     };
 
-    tracing_subscriber::fmt().with_max_level(log_level).init();
+    let level_filter = LevelFilter::from_level(log_level);
+
+    // Console layer
+    let console_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(true)
+        .with_filter(level_filter);
+
+    // File layer
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("scheduler.log")?;
+
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(file)
+        .with_ansi(true)
+        .with_filter(level_filter);
+
+    tracing_subscriber::registry()
+        .with(console_layer)
+        .with(file_layer)
+        .init();
 
     info!("Scheduler starting (dispatch architecture)");
     info!("Config: {}", ControllerConfig::find_config_path());

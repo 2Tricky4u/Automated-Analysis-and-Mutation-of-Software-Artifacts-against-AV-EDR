@@ -160,6 +160,8 @@ impl StreamHandler {
                         output: format!("Execution error: {}", status.message()),
                         telemetry_ids: vec![],
                         run_id: request_id.clone(),
+                        detected: false,
+                        error: status.message().to_string(),
                     }
                 }
             };
