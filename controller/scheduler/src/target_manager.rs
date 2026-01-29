@@ -101,6 +101,33 @@ pub struct Target {
     stream_tx: Option<mpsc::Sender<ControllerMessage>>,
 }
 
+// ============================================================================
+// Target Discovery
+// ============================================================================
+
+/// Target configuration from individual worker TOML files
+#[derive(Debug, Clone, serde::Deserialize)]
+struct TargetTomlConfig {
+    worker: TargetInfo,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct TargetInfo {
+    worker_id: String,
+    ip_address: String,
+}
+
+/// Load target configuration from individual worker TOML file
+fn load_target_config(path: &std::path::Path) -> anyhow::Result<(String, String)> {
+    let content = std::fs::read_to_string(path)?;
+    let config: TargetTomlConfig = toml::from_str(&content)?;
+
+    // Target gRPC address is IP + port 50052 (standard worker port)
+    let address = format!("{}:50052", config.worker.ip_address);
+
+    Ok((config.worker.worker_id, address))
+}
+
 impl Target {
     fn new(id: String, address: String) -> Self {
         Self {
@@ -296,7 +323,7 @@ impl TargetManager {
             target.status = TargetStatus::Available;
         }
         target.touch();
-        info!("Target {} connected", id);
+        debug!("Target {} connected", id);
         Ok(())
     }
 
@@ -314,7 +341,7 @@ impl TargetManager {
         target.status = TargetStatus::Offline;
         target.current_job = None;
         target.stream_tx = None;
-        info!("Target {} offline", id);
+        debug!("Target {} offline", id);
         Ok(())
     }
 
@@ -362,7 +389,7 @@ impl TargetManager {
             target.channel = Some(channel.clone());
         }
 
-        info!("Connected to target {}", id);
+        debug!("Connected to target {}", id);
         Ok(channel)
     }
 
@@ -459,7 +486,7 @@ impl TargetManager {
         targets: DashMap<String, Target>,
         result_tx: mpsc::Sender<RemoteRunResult>,
     ) {
-        info!("Stream handler started for target {}", id);
+        debug!("Stream handler started for target {}", id);
         let mut registration_received = false;
 
         while let Some(result) = incoming.next().await {
@@ -521,7 +548,7 @@ impl TargetManager {
         }
 
         // Cleanup
-        info!("Stream closed for target {}", id);
+        debug!("Stream closed for target {}", id);
         if let Some(mut target) = targets.get_mut(&id) {
             target.stream_tx = None;
             target.status = TargetStatus::Offline;
@@ -632,7 +659,7 @@ impl TargetManager {
             })),
         };
         let sent = self.broadcast(msg).await;
-        info!("Sent disconnect to {}/{} targets", sent, self.count());
+        debug!("Sent disconnect to {}/{} targets", sent, self.count());
         tokio::time::sleep(Duration::from_millis(200)).await;
         for mut target in self.targets.iter_mut() {
             target.stream_tx = None;
@@ -708,6 +735,85 @@ impl TargetManager {
             }
         }
         results
+    }
+
+
+    /// Discover targets from automation/generated/win*-worker-*.toml files
+    pub async fn discover_and_register_targets(&self) {
+        use std::path::Path;
+        use std::collections::HashMap as StdHashMap;
+
+        let generated_dir = Path::new("automation/generated");
+
+        if !generated_dir.exists() {
+            warn!("automation/generated directory not found, no targets registered");
+            warn!("Run 'automation/scripts/generate-configs.ps1' to create target configs");
+            return;
+        }
+
+        let entries = match std::fs::read_dir(generated_dir) {
+            Ok(e) => e,
+            Err(e) => {
+                warn!("Failed to read automation/generated: {}", e);
+                return;
+            }
+        };
+
+        let mut target_count = 0;
+        let mut duplicate_count = 0;
+        let mut registered_ips: StdHashMap<String, (String, String)> = StdHashMap::new();
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+            // Match pattern: win*-worker-*.toml
+            if filename.starts_with("win") && filename.contains("-worker-") && filename.ends_with(".toml") {
+                match load_target_config(&path) {
+                    Ok((target_id, address)) => {
+                        let ip = address.split(':').next().unwrap_or(&address).to_string();
+
+                        // Check for duplicate IP
+                        if let Some((existing_id, existing_file)) = registered_ips.get(&ip) {
+                            warn!(
+                            "Duplicate IP: {} in '{}' (target: {}) - already from '{}' (target: {}). Skipping.",
+                            ip, filename, target_id, existing_file, existing_id
+                        );
+                            duplicate_count += 1;
+                            continue;
+                        }
+
+                        // Register target
+                        if let Err(e) = self.register(TargetConfig {
+                            id: target_id.clone(),
+                            address: address.clone(),
+                            enabled: true,
+                        }) {
+                            warn!("Failed to register target {}: {}", target_id, e);
+                            continue;
+                        }
+
+                        debug!("  Registered target: {} at {}", target_id, address);
+                        registered_ips.insert(ip, (target_id.clone(), filename.to_string()));
+                        target_count += 1;
+                    }
+                    Err(e) => {
+                        warn!("Failed to load target config {}: {}", filename, e);
+                    }
+                }
+            }
+        }
+
+        if duplicate_count > 0 {
+            warn!("{} duplicate target config(s) were skipped (same IP)", duplicate_count);
+        }
+
+        if target_count == 0 {
+            warn!("No targets registered! Scheduler will not be able to execute jobs.");
+            warn!("Create target configs in automation/generated/ (e.g., win10-worker-01.toml)");
+        } else {
+            info!("Target pool initialized with {} unique targets", target_count);
+        }
     }
 }
 
