@@ -179,7 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Spawn event handler loop
     tokio::spawn(async move {
-        info!("Event handler started");
+        debug!("Event handler started");
         handle_target_events(events_rx, targets_for_events, es_client_for_events).await;
         warn!("Event handler stopped");
     });
