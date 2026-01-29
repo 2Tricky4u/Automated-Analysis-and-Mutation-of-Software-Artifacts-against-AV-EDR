@@ -52,7 +52,7 @@ impl SchedulerService {
     /// Index telemetry events to Elasticsearch
     pub async fn index_telemetry_batch(
         &self,
-        events: &[crate::automutate::common::TelemetryData],
+        events: &[TelemetryData],
     ) -> anyhow::Result<()> {
         use elasticsearch::IndexParts;
         use serde_json::json;
@@ -173,20 +173,6 @@ impl Controller for SchedulerService {
         utility_handlers::ping(self, request).await
     }
 
-    async fn submit_triage(
-        &self,
-        request: Request<TriageRequest>,
-    ) -> Result<Response<TriageResponse>, Status> {
-        utility_handlers::submit_triage(self, request).await
-    }
-
-    async fn query_results(
-        &self,
-        request: Request<QueryRequest>,
-    ) -> Result<Response<QueryResponse>, Status> {
-        utility_handlers::query_results(self, request).await
-    }
-
     // Job handlers
     async fn schedule_job(
         &self,
@@ -202,32 +188,25 @@ impl Controller for SchedulerService {
         job_handlers::get_job_status(self, request).await
     }
 
-    async fn get_job_progress(
+    async fn submit_triage(
         &self,
-        request: Request<JobProgressRequest>,
-    ) -> Result<Response<JobProgressResponse>, Status> {
-        job_handlers::get_job_progress(self, request).await
+        request: Request<TriageRequest>,
+    ) -> Result<Response<TriageResponse>, Status> {
+        utility_handlers::submit_triage(self, request).await
     }
 
-    async fn stop_job(
+    async fn query_results(
         &self,
-        request: Request<StopJobRequest>,
-    ) -> Result<Response<StopJobResponse>, Status> {
-        job_handlers::stop_job(self, request).await
+        request: Request<QueryRequest>,
+    ) -> Result<Response<QueryResponse>, Status> {
+        utility_handlers::query_results(self, request).await
     }
 
-    async fn get_round(
+    async fn stream_telemetry(
         &self,
-        request: Request<GetRoundRequest>,
-    ) -> Result<Response<GetRoundResponse>, Status> {
-        job_handlers::get_round(self, request).await
-    }
-
-    async fn compare_runs(
-        &self,
-        request: Request<CompareRunsRequest>,
-    ) -> Result<Response<CompareRunsResponse>, Status> {
-        job_handlers::compare_runs(self, request).await
+        request: Request<tonic::Streaming<TelemetryData>>,
+    ) -> Result<Response<crate::automutate::common::TelemetryAck>, Status> {
+        worker_handlers::stream_telemetry(self, request).await
     }
 
     async fn report_status(
@@ -260,10 +239,31 @@ impl Controller for SchedulerService {
         worker_handlers::list_workers(self, request).await
     }
 
-    async fn stream_telemetry(
+    async fn get_job_progress(
         &self,
-        request: Request<tonic::Streaming<TelemetryData>>,
-    ) -> Result<Response<crate::automutate::common::TelemetryAck>, Status> {
-        worker_handlers::stream_telemetry(self, request).await
+        request: Request<JobProgressRequest>,
+    ) -> Result<Response<JobProgressResponse>, Status> {
+        job_handlers::get_job_progress(self, request).await
+    }
+
+    async fn stop_job(
+        &self,
+        request: Request<StopJobRequest>,
+    ) -> Result<Response<StopJobResponse>, Status> {
+        job_handlers::stop_job(self, request).await
+    }
+
+    async fn get_round(
+        &self,
+        request: Request<GetRoundRequest>,
+    ) -> Result<Response<GetRoundResponse>, Status> {
+        job_handlers::get_round(self, request).await
+    }
+
+    async fn compare_runs(
+        &self,
+        request: Request<CompareRunsRequest>,
+    ) -> Result<Response<CompareRunsResponse>, Status> {
+        job_handlers::compare_runs(self, request).await
     }
 }

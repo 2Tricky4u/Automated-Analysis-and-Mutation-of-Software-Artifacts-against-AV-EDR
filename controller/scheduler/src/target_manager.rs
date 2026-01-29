@@ -727,6 +727,13 @@ impl TargetManager {
         for id in ids {
             match self.get_worker_info(&id).await {
                 Ok(info) => {
+                    // Update target with queried info (so establish_stream has correct values)
+                    if let Some(mut target) = self.targets.get_mut(&id) {
+                        target.os_version = info.os_version.clone();
+                        target.capabilities = info.capabilities.clone();
+                        debug!("Updated target {} info: os={}, caps={:?}",
+                            id, info.os_version, info.capabilities);
+                    }
                     results.insert(id, info);
                 }
                 Err(e) => {
