@@ -529,38 +529,271 @@ This ensures:
 
 ## G) Integration with Existing target_manager
 
-### What target_manager provides (unchanged):
-- Spawns Worker loops when VM connects
-- Manages gRPC connection lifecycle
-- Emits `TargetEvent::Connected` / `TargetEvent::Disconnected`
+### Current target_manager.rs Analysis
 
-### New integration points:
+The existing `target_manager.rs` is **compatible** with this architecture and requires
+only moderate refactoring. Here's the detailed compatibility assessment:
+
+#### What Already Exists (Keep As-Is)
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| `TargetEvent` enum | ✅ Complete | Lines 59-75 |
+| Event bus (`events_tx`) | ✅ Complete | `mpsc::Sender<TargetEvent>` |
+| `TargetStatus` enum | ✅ Complete | `Available`, `Busy`, `Offline` |
+| gRPC channel management | ✅ Complete | `get_channel()` |
+| Stream establishment | ✅ Complete | `establish_stream()` |
+| State management | ✅ Complete | `reserve()`, `release()`, `mark_connected()`, `mark_offline()` |
+| Capability matching | ✅ Complete | `get_available_by_os_and_capabilities()` |
+| Artifact upload | ✅ Complete | `send_artifact()` with chunking |
+| Low-level send | ✅ Complete | `send_command()` |
+
+#### What Needs to Change
+
+| Current | New | Change Required |
+|---------|-----|-----------------|
+| Spawns message handler + heartbeat as separate tasks | Spawn single Worker task | Modify `establish_stream()` |
+| `execute_artifact()` owns execution logic | Worker owns execution | Move to Worker |
+| `pending_responses` for oneshot tracking | Worker tracks pending | Move to Worker |
+| Only emits `TargetEvent` | Also notify Orchestrator | Add `orchestrator_tx` channel |
+
+#### Responsibility Boundary Shift
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    STAYS in target_manager                       │
+├─────────────────────────────────────────────────────────────────┤
+│ • Target registration (register, register_with_metadata)        │
+│ • gRPC channel management (get_channel)                         │
+│ • Stream establishment (establish_stream - modified)            │
+│ • State queries (get, list_all, get_available_by_os_and_caps)  │
+│ • Low-level send (send_command, send_artifact)                  │
+│ • Connection state (mark_connected, mark_offline)               │
+│ • TargetEvent emission to event bus                             │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                     MOVES to Worker task                         │
+├─────────────────────────────────────────────────────────────────┤
+│ • execute_artifact() logic → Worker.dispatch_to_remote()        │
+│ • pending_responses tracking → Worker.pending_runs              │
+│ • Message handling (inline spawn) → Worker.on_remote_message()  │
+│ • reserve/release calls → Worker calls target_manager methods   │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                        NEW in Worker                             │
+├─────────────────────────────────────────────────────────────────┤
+│ • JobSession ownership                                          │
+│ • RoundSpec creation                                            │
+│ • RunEnvelope pool (VecDeque)                                   │
+│ • RoundAgg tracking                                             │
+│ • Dispatch logic (try_dispatch)                                 │
+│ • Backpressure control                                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Required Changes to target_manager.rs
+
+#### 1. Add Orchestrator channel
 
 ```rust
-// In target_manager, when connection established:
-impl TargetManager {
-    async fn on_connection(&self, worker_id: WorkerId, stream: ...) {
-        // Create worker handle with channels
-        let (cmd_tx, cmd_rx) = mpsc::channel(16);
-        let (event_tx, event_rx) = mpsc::channel(64);
+pub struct TargetManager {
+    targets: DashMap<String, Target>,
+    events_tx: mpsc::Sender<TargetEvent>,
 
-        let worker = Worker::new(
-            worker_id.clone(),
-            self.worker_info(&worker_id),
-            cmd_rx,
-            event_tx,
-            stream,
-        );
+    // NEW: Channel to notify Orchestrator of worker connections
+    orchestrator_tx: mpsc::Sender<OrchestratorEvent>,
 
-        // Spawn worker task
-        let handle = tokio::spawn(worker.run_loop());
+    // REMOVE: pending_responses moves to Worker
+    // pending_responses: Arc<Mutex<HashMap<String, oneshot::Sender<SampleResponse>>>>,
 
-        // Register with orchestrator
-        self.orchestrator_tx.send(OrchestratorEvent::WorkerConnected {
-            worker_id,
-            cmd_tx,
-            event_rx,
-        }).await;
+    rpc_timeout: Duration,
+}
+```
+
+#### 2. Modify establish_stream() to spawn Worker
+
+```rust
+pub async fn establish_stream(&self, id: &str) -> Result<()> {
+    let channel = self.get_channel(id).await?;
+    let mut client = WorkerAgentClient::new(channel);
+
+    // Create bidirectional stream
+    let (tx, rx) = mpsc::channel::<ControllerMessage>(100);
+    let outgoing = tokio_stream::wrappers::ReceiverStream::new(rx);
+    let response = client.establish_stream(Request::new(outgoing)).await?;
+    let incoming = response.into_inner();
+
+    // Store stream sender
+    if let Some(mut target) = self.targets.get_mut(id) {
+        target.stream_tx = Some(tx.clone());
+        if target.status == TargetStatus::Offline {
+            target.status = TargetStatus::Available;
+        }
+    }
+
+    // Get worker info for Worker task
+    let worker_info = self.get_worker_info_local(id);
+
+    // Create Worker channels
+    let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCommand>(16);
+    let (event_tx, event_rx) = mpsc::channel::<WorkerEvent>(64);
+
+    // Create channel for remote results (from stream handler to Worker)
+    let (remote_result_tx, remote_result_rx) = mpsc::channel::<RemoteRunResult>(64);
+
+    // Spawn stream message handler (forwards to remote_result_tx)
+    let id_clone = id.to_string();
+    let events_tx = self.events_tx.clone();
+    let targets = self.targets.clone();
+
+    tokio::spawn(async move {
+        Self::stream_handler(id_clone, incoming, events_tx, targets, remote_result_tx).await;
+    });
+
+    // Spawn Worker task
+    let worker = Worker::new(
+        WorkerId(id.to_string()),
+        worker_info,
+        cmd_rx,
+        event_tx,
+        tx.clone(),           // For sending commands to remote
+        remote_result_rx,     // For receiving results from remote
+    );
+    tokio::spawn(worker.run_loop());
+
+    // Notify Orchestrator
+    self.orchestrator_tx.send(OrchestratorEvent::WorkerConnected {
+        worker_id: WorkerId(id.to_string()),
+        cmd_tx,
+        event_rx,
+        os: worker_info.os.clone(),
+        capabilities: worker_info.capabilities.clone(),
+    }).await?;
+
+    // Spawn heartbeat (unchanged)
+    self.spawn_heartbeat(id, tx);
+
+    Ok(())
+}
+```
+
+#### 3. Extract stream handler (refactored from inline spawn)
+
+```rust
+async fn stream_handler(
+    id: String,
+    mut incoming: tonic::Streaming<WorkerMessage>,
+    events_tx: mpsc::Sender<TargetEvent>,
+    targets: DashMap<String, Target>,
+    remote_result_tx: mpsc::Sender<RemoteRunResult>,
+) {
+    while let Some(result) = incoming.next().await {
+        match result {
+            Ok(msg) => {
+                // Update last_seen
+                if let Some(mut t) = targets.get_mut(&id) {
+                    t.touch();
+                }
+
+                // Handle SampleResponse -> forward to Worker
+                if let Some(worker_message::Payload::SampleResponse(response)) = &msg.payload {
+                    let result = RemoteRunResult::from(response.clone());
+                    let _ = remote_result_tx.send(result).await;
+                }
+
+                // Forward all messages to event bus
+                let _ = events_tx.send(TargetEvent::Message {
+                    target_id: id.clone(),
+                    msg,
+                }).await;
+            }
+            Err(e) => {
+                error!("Stream error from target {}: {}", id, e);
+                break;
+            }
+        }
+    }
+
+    // Cleanup on disconnect
+    if let Some(mut target) = targets.get_mut(&id) {
+        target.stream_tx = None;
+        target.status = TargetStatus::Offline;
+    }
+
+    let _ = events_tx.send(TargetEvent::Disconnected {
+        target_id: id.clone(),
+        reason: "Stream closed".to_string(),
+    }).await;
+}
+```
+
+#### 4. Remove execute_artifact() (moves to Worker)
+
+```rust
+// DELETE: This entire method moves to Worker task
+// pub async fn execute_artifact(&self, id: &str, request: SampleRequest) -> Result<SampleResponse>
+
+// DELETE: These move to Worker
+// fn register_pending_execution(&self, run_id: String) -> oneshot::Receiver<SampleResponse>
+// pub fn complete_pending_execution(&self, run_id: &str, response: SampleResponse) -> Result<()>
+```
+
+### Worker's Use of target_manager
+
+Worker holds a reference to TargetManager for:
+
+```rust
+pub struct Worker {
+    id: WorkerId,
+    info: WorkerInfo,
+
+    // Reference to target_manager for state updates
+    target_manager: Arc<TargetManager>,
+
+    // Channels
+    cmd_rx: mpsc::Receiver<WorkerCommand>,
+    event_tx: mpsc::Sender<WorkerEvent>,
+    remote_tx: mpsc::Sender<ControllerMessage>,  // To send commands
+    remote_rx: mpsc::Receiver<RemoteRunResult>,  // To receive results
+
+    // ... rest of state
+}
+
+impl Worker {
+    fn dispatch_to_remote(&mut self, envelope: RunEnvelope) {
+        // Reserve target before dispatch
+        self.target_manager.reserve(&self.id.0).ok();
+
+        // Build command from envelope
+        let command = ControllerMessage {
+            payload: Some(controller_message::Payload::RunSample(RunSampleCommand {
+                request_id: envelope.run_id.0.clone(),
+                request: Some(SampleRequest {
+                    job_id: envelope.job_id.0.clone(),
+                    artifact_id: envelope.artifact.locator.clone(),
+                    // ... fill from envelope
+                }),
+            })),
+        };
+
+        // Track pending run
+        self.pending_runs.insert(envelope.run_id.clone(), envelope);
+
+        // Send via stream
+        let _ = self.remote_tx.try_send(command);
+    }
+
+    fn on_run_completed(&mut self, result: RemoteRunResult) {
+        self.in_flight -= 1;
+
+        // Release target if no more in-flight
+        if self.in_flight == 0 {
+            self.target_manager.release(&self.id.0).ok();
+        }
+
+        // ... rest of completion logic
     }
 }
 ```
@@ -597,17 +830,38 @@ impl TargetManager {
 ```
 controller/scheduler/src/
 ├── dispatch/
-│   ├── mod.rs
+│   ├── mod.rs              # Re-exports
 │   ├── worker.rs           # Worker task implementation
 │   ├── orchestrator.rs     # Job routing, pending queue
-│   ├── channels.rs         # Channel types and events
-│   └── backpressure.rs     # Backpressure config/logic
-├── job.rs                  # JobSession, JobRecord (existing data.rs content)
-├── round.rs                # RoundSpec, RoundAgg, RoundRecord
-├── run.rs                  # RunEnvelope, RunRecord
-├── target_manager.rs       # Existing (spawns workers)
+│   ├── channels.rs         # WorkerCommand, WorkerEvent, OrchestratorEvent
+│   ├── types.rs            # JobSession, RoundSpec, RoundAgg, RunEnvelope
+│   └── es_records.rs       # RunRecord, RoundRecord, JobRecord (ES docs)
+├── target_manager.rs       # Connection management (MODIFIED)
+│   │                       #   - Spawns Worker tasks
+│   │                       #   - Notifies Orchestrator
+│   │                       #   - REMOVES execute_artifact()
+├── service/
+│   ├── mod.rs
+│   └── job_handlers.rs     # gRPC handlers (submit via channel)
 └── main.rs                 # Wire up orchestrator + target_manager
+
+# REMOVED after migration:
+# - scheduler_core.rs       (merged into Worker/Orchestrator)
+# - round_processor.rs      (merged into Worker)
+# - run_queue.rs            (not used)
+# - job.rs                  (replaced by dispatch/types.rs)
+# - round.rs                (replaced by dispatch/types.rs)
 ```
+
+### File Responsibility Matrix
+
+| File | Creates | Owns State | Calls |
+|------|---------|------------|-------|
+| `main.rs` | Orchestrator, TargetManager | - | spawn tasks |
+| `target_manager.rs` | Worker, stream handlers | Target registry | gRPC, spawn Worker |
+| `dispatch/orchestrator.rs` | - | pending_jobs, worker_handles | assign jobs |
+| `dispatch/worker.rs` | RoundSpec, RunEnvelope | JobSession, run_pool, RoundAgg | target_manager.* |
+| `service/job_handlers.rs` | JobSession | - | orchestrator.submit() |
 
 ---
 
@@ -741,28 +995,101 @@ impl Orchestrator {
 ## K) Migration Path from Current Code
 
 ### Phase 1: Introduce data types
-- Add `dispatch/` module with `JobSession`, `RoundSpec`, `RunEnvelope` (from data.rs)
-- Keep existing `job.rs`, `round.rs` temporarily
+- Add `dispatch/` module with new data types
+- Create `dispatch/types.rs` with `JobSession`, `RoundSpec`, `RunEnvelope`, `RoundAgg`
+- Create `dispatch/channels.rs` with `WorkerCommand`, `WorkerEvent`, `OrchestratorEvent`
+- Keep existing `job.rs`, `round.rs` temporarily (for backwards compat during migration)
 
-### Phase 2: Implement Worker task
-- Create `dispatch/worker.rs` with dual-lane loop
-- Wire up to `target_manager` connection events
-- Test with single worker
+### Phase 2: Refactor target_manager.rs
 
-### Phase 3: Implement Orchestrator
+**Step 2a: Add orchestrator channel**
+```rust
+// In TargetManager::new()
+pub fn new(
+    rpc_timeout_secs: u64,
+    events_tx: mpsc::Sender<TargetEvent>,
+    orchestrator_tx: mpsc::Sender<OrchestratorEvent>,  // NEW
+) -> Self
+```
+
+**Step 2b: Extract stream_handler() as standalone function**
+- Move inline spawn logic to `async fn stream_handler(...)`
+- Add `remote_result_tx` parameter for forwarding SampleResponse to Worker
+
+**Step 2c: Modify establish_stream()**
+- Create Worker channels (cmd_tx/cmd_rx, event_tx/event_rx)
+- Create remote result channel (for stream → Worker communication)
+- Spawn stream_handler task
+- Spawn Worker task
+- Notify Orchestrator via orchestrator_tx
+- Keep heartbeat spawn unchanged
+
+**Step 2d: Remove execution methods**
+- Delete `execute_artifact()`
+- Delete `register_pending_execution()`
+- Delete `complete_pending_execution()`
+- Delete `pending_responses` field
+
+**Step 2e: Keep these methods unchanged**
+- `register()`, `register_with_metadata()`
+- `get()`, `list_all()`, `get_available()`, `get_available_by_os_and_capabilities()`
+- `reserve()`, `release()`, `mark_connected()`, `mark_offline()`
+- `get_channel()`, `send_command()`, `send_artifact()`
+- `broadcast()`, `disconnect_all()`
+
+### Phase 3: Implement Worker task
+- Create `dispatch/worker.rs`
+- Implement dual-lane select! loop
+- Implement `dispatch_to_remote()` using target_manager.send_command()
+- Implement `on_run_completed()` with RoundAgg updates
+- Implement `produce_round()` with build integration
+- Add backpressure control
+- Test with single worker + mock remote
+
+### Phase 4: Implement Orchestrator
 - Create `dispatch/orchestrator.rs`
-- Add job submission endpoint
-- Wire up pending queue logic
+- Implement job assignment with OS + capability matching
+- Implement pending_jobs queue
+- Implement worker registry with WorkerHandle
+- Merge worker event receivers using `futures::stream::select_all`
+- Wire up to gRPC SubmitJob endpoint
 
-### Phase 4: Replace main.rs orchestration
-- Remove old event loop from main.rs
-- Replace with Orchestrator spawn
+### Phase 5: Update main.rs
+- Remove old event loop (current lines 260-560)
+- Create orchestrator channels
+- Pass orchestrator_tx to TargetManager
+- Spawn Orchestrator task
 - Update SchedulerService to submit jobs via channel
+- Keep gRPC server setup
 
-### Phase 5: Cleanup
-- Remove old `scheduler_core.rs` (merged into Worker/Orchestrator)
-- Remove old `round_processor.rs` (merged into Worker)
-- Update tests
+### Phase 6: Cleanup
+- Remove old `scheduler_core.rs` (job processing merged into Worker)
+- Remove old `round_processor.rs` (round logic merged into Worker)
+- Remove old `job.rs`, `round.rs` if fully replaced
+- Remove `run_queue.rs` (not used in new architecture)
+- Update imports throughout
+- Run full test suite
+
+### Phase 7: Concurrent Enhancement (Post-Stabilization)
+- Replace `available: bool` with `max_concurrent: usize` + `in_flight: usize`
+- Update `try_dispatch()` to loop
+- Update `on_run_completed()` to decrement
+- Test with `max_concurrent = 2`
+
+### Migration Verification Checklist
+
+After each phase, verify:
+
+- [ ] `cargo build` succeeds
+- [ ] `cargo test` passes
+- [ ] Single worker can connect and receive registration
+- [ ] Job can be submitted via gRPC
+- [ ] Job is assigned to compatible worker
+- [ ] Rounds are produced and runs dispatched
+- [ ] Run results are received and RoundAgg updated
+- [ ] Round summaries indexed to ES
+- [ ] Worker emits JobCompleted when done
+- [ ] Orchestrator assigns next pending job
 
 ---
 
@@ -1045,3 +1372,118 @@ After implementing the concurrent enhancement:
 
 **Key property added:**
 - Concurrent run execution (configurable per worker)
+
+---
+
+## O) Consistency Verification
+
+This section verifies that all parts of the plan are internally consistent.
+
+### Channel Flow Verification
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CHANNEL TOPOLOGY                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  main.rs creates:                                                           │
+│    • events_tx/rx (TargetEvent) ────────────────────────┐                   │
+│    • orchestrator_tx/rx (OrchestratorEvent) ────────────│──┐                │
+│    • job_submit_tx/rx (JobSession) ─────────────────────│──│──┐             │
+│                                                         │  │  │             │
+│                                                         ▼  ▼  ▼             │
+│  ┌─────────────────┐                          ┌─────────────────────┐       │
+│  │  TargetManager  │                          │    Orchestrator     │       │
+│  │                 │                          │                     │       │
+│  │  events_tx ─────│──────────────────────────│→ (for TargetEvent)  │       │
+│  │  orchestrator_tx│──────────────────────────│→ orchestrator_rx    │       │
+│  │                 │                          │  job_submit_rx ←────│───────│
+│  └────────┬────────┘                          └──────────┬──────────┘       │
+│           │                                              │                  │
+│           │ establish_stream() creates per worker:       │                  │
+│           │  • cmd_tx/rx ────────────────────────────────│──┐               │
+│           │  • event_tx/rx ──────────────────────────────│──│──┐            │
+│           │  • remote_result_tx/rx ──────────┐           │  │  │            │
+│           │                                  │           │  │  │            │
+│           ▼                                  ▼           ▼  ▼  ▼            │
+│  ┌─────────────────┐                ┌─────────────────────────────────┐     │
+│  │ Stream Handler  │                │           Worker                │     │
+│  │                 │                │                                 │     │
+│  │ remote_result_tx│───────────────▶│ remote_rx                       │     │
+│  │                 │                │ cmd_rx ◄────── cmd_tx (from Orch)│     │
+│  └─────────────────┘                │ event_tx ─────▶ event_rx (Orch) │     │
+│                                     │ remote_tx ─────▶ gRPC stream    │     │
+│                                     └─────────────────────────────────┘     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### State Ownership Verification
+
+| State | Owner | Mutated By | Verified In |
+|-------|-------|------------|-------------|
+| `Target` registry | TargetManager | register, mark_*, reserve, release | Section G |
+| `pending_jobs` | Orchestrator | on_job_submitted, try_assign_pending | Section B, J |
+| `worker_handles` | Orchestrator | register_worker, unregister_worker | Section A, J |
+| `active_job` | Worker (exclusive) | start_job, finalize_job | Section C, E |
+| `run_pool` | Worker (exclusive) | submit_run, try_dispatch | Section C, D |
+| `round_aggs` | Worker (exclusive) | produce_round, on_run_completed | Section C |
+| `in_flight` | Worker (exclusive) | try_dispatch, on_run_completed | Section M |
+
+### Event Flow Verification
+
+| Event | Producer | Consumer | Action |
+|-------|----------|----------|--------|
+| `TargetEvent::Connected` | stream_handler | (observability) | Log connection |
+| `TargetEvent::Disconnected` | stream_handler | Orchestrator | Unregister worker |
+| `TargetEvent::Message` | stream_handler | (observability) | Log/debug |
+| `OrchestratorEvent::WorkerConnected` | TargetManager | Orchestrator | Register worker handle |
+| `OrchestratorEvent::WorkerDisconnected` | TargetManager | Orchestrator | Unregister, fail jobs |
+| `WorkerCommand::AssignJob` | Orchestrator | Worker | Start job session |
+| `WorkerCommand::Shutdown` | Orchestrator | Worker | Graceful cleanup |
+| `WorkerEvent::Available` | Worker | Orchestrator | Try assign pending job |
+| `WorkerEvent::JobCompleted` | Worker | Orchestrator | Index to ES, assign next |
+| `WorkerEvent::RunCompleted` | Worker | (observability) | Log/metrics |
+
+### Method Call Verification
+
+| Caller | Calls | Method | Purpose |
+|--------|-------|--------|---------|
+| Worker | TargetManager | `reserve(id)` | Mark target busy before dispatch |
+| Worker | TargetManager | `release(id)` | Mark target available after last run |
+| Worker | TargetManager | `send_command(id, msg)` | Send RunSampleCommand to remote |
+| Worker | TargetManager | `send_artifact(id, artifact_id, path)` | Upload artifact before run |
+| Orchestrator | WorkerHandle | `cmd_tx.send(AssignJob)` | Assign job to worker |
+| TargetManager | Worker | spawns task | On stream establishment |
+| TargetManager | Orchestrator | `orchestrator_tx.send(WorkerConnected)` | Notify of new worker |
+
+### Compatibility with Current target_manager.rs
+
+| Current Method | Disposition | Notes |
+|----------------|-------------|-------|
+| `new()` | MODIFY | Add `orchestrator_tx` parameter |
+| `register()` | KEEP | Unchanged |
+| `register_with_metadata()` | KEEP | Unchanged |
+| `get()`, `list_all()`, etc. | KEEP | Unchanged |
+| `reserve()`, `release()` | KEEP | Called by Worker |
+| `mark_connected()`, `mark_offline()` | KEEP | Unchanged |
+| `get_channel()` | KEEP | Unchanged |
+| `establish_stream()` | MODIFY | Spawn Worker, notify Orchestrator |
+| `send_command()` | KEEP | Called by Worker |
+| `send_artifact()` | KEEP | Called by Worker |
+| `broadcast()`, `disconnect_all()` | KEEP | Unchanged |
+| `execute_artifact()` | DELETE | Moves to Worker |
+| `register_pending_execution()` | DELETE | Moves to Worker |
+| `complete_pending_execution()` | DELETE | Moves to Worker |
+| `pending_responses` field | DELETE | Moves to Worker |
+| `get_worker_info()` | KEEP | For initial query |
+| `query_all_info()` | KEEP | For diagnostics |
+
+### Verified: Plan is Internally Consistent
+
+All sections reference the same:
+- Channel types and directions
+- State ownership boundaries
+- Event semantics
+- Method responsibilities
+- Migration steps align with architectural changes
