@@ -62,7 +62,7 @@ pub trait ArtifactSender: std::fmt::Debug {
         worker_id: &str,
         artifact_id: &str,
         path: &Path,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + '_>>;
+    ) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>;
 }
 
 impl Worker {
