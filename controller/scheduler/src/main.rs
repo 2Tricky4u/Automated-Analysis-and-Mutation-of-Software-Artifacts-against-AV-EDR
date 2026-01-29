@@ -44,111 +44,6 @@ use crate::automutate::common::worker_message;
 use crate::automutate::controller::controller_server::ControllerServer;
 
 // ============================================================================
-// Target Discovery (from scheduler_core_old.rs)
-// ============================================================================
-
-/// Target configuration from individual worker TOML files
-#[derive(Debug, Clone, serde::Deserialize)]
-struct TargetTomlConfig {
-    worker: TargetInfo,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-struct TargetInfo {
-    worker_id: String,
-    ip_address: String,
-}
-
-/// Discover targets from automation/generated/win*-worker-*.toml files
-async fn discover_and_register_targets(targets: &TargetManager) {
-    use std::path::Path;
-    use std::collections::HashMap as StdHashMap;
-
-    let generated_dir = Path::new("automation/generated");
-
-    if !generated_dir.exists() {
-        warn!("automation/generated directory not found, no targets registered");
-        warn!("Run 'automation/scripts/generate-configs.ps1' to create target configs");
-        return;
-    }
-
-    let entries = match std::fs::read_dir(generated_dir) {
-        Ok(e) => e,
-        Err(e) => {
-            warn!("Failed to read automation/generated: {}", e);
-            return;
-        }
-    };
-
-    let mut target_count = 0;
-    let mut duplicate_count = 0;
-    let mut registered_ips: StdHashMap<String, (String, String)> = StdHashMap::new();
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-        // Match pattern: win*-worker-*.toml
-        if filename.starts_with("win") && filename.contains("-worker-") && filename.ends_with(".toml") {
-            match load_target_config(&path) {
-                Ok((target_id, address)) => {
-                    let ip = address.split(':').next().unwrap_or(&address).to_string();
-
-                    // Check for duplicate IP
-                    if let Some((existing_id, existing_file)) = registered_ips.get(&ip) {
-                        warn!(
-                            "Duplicate IP: {} in '{}' (target: {}) - already from '{}' (target: {}). Skipping.",
-                            ip, filename, target_id, existing_file, existing_id
-                        );
-                        duplicate_count += 1;
-                        continue;
-                    }
-
-                    // Register target
-                    if let Err(e) = targets.register(TargetConfig {
-                        id: target_id.clone(),
-                        address: address.clone(),
-                        enabled: true,
-                    }) {
-                        warn!("Failed to register target {}: {}", target_id, e);
-                        continue;
-                    }
-
-                    info!("  Registered target: {} at {}", target_id, address);
-                    registered_ips.insert(ip, (target_id.clone(), filename.to_string()));
-                    target_count += 1;
-                }
-                Err(e) => {
-                    warn!("Failed to load target config {}: {}", filename, e);
-                }
-            }
-        }
-    }
-
-    if duplicate_count > 0 {
-        warn!("{} duplicate target config(s) were skipped (same IP)", duplicate_count);
-    }
-
-    if target_count == 0 {
-        warn!("No targets registered! Scheduler will not be able to execute jobs.");
-        warn!("Create target configs in automation/generated/ (e.g., win10-worker-01.toml)");
-    } else {
-        info!("Target pool initialized with {} unique targets", target_count);
-    }
-}
-
-/// Load target configuration from individual worker TOML file
-fn load_target_config(path: &std::path::Path) -> anyhow::Result<(String, String)> {
-    let content = std::fs::read_to_string(path)?;
-    let config: TargetTomlConfig = toml::from_str(&content)?;
-
-    // Target gRPC address is IP + port 50052 (standard worker port)
-    let address = format!("{}:50052", config.worker.ip_address);
-
-    Ok((config.worker.worker_id, address))
-}
-
-// ============================================================================
 // Helpers
 // ============================================================================
 
@@ -239,12 +134,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // Spawn Orchestrator
+    debug!("Orchestrator starting..");
     let orchestrator = Orchestrator::new(orchestrator_rx, job_rx);
     tokio::spawn(orchestrator.run());
-    info!("Orchestrator started");
+
 
     // Discover and register targets from automation/generated/*.toml
-    discover_and_register_targets(&targets).await;
+    targets.discover_and_register_targets().await;
     info!("Registered {} targets", targets.count());
 
     // Query target info
@@ -266,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (target_id, result) in stream_results {
         match result {
             Ok(()) => {
-                info!("Stream established: {}", target_id);
+                debug!("Stream established: {}", target_id);
                 ok_count += 1;
             }
             Err(e) => {
@@ -355,7 +251,7 @@ async fn handle_worker_message(
 ) {
     match msg.payload {
         Some(worker_message::Payload::Registration(reg)) => {
-            info!(
+            debug!(
                 "[EVENT] Registration: {} - OS: {}, Caps: {:?}",
                 target_id, reg.os_version, reg.capabilities
             );
