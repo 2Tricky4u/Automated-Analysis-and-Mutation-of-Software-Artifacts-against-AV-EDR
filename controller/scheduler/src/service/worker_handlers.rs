@@ -1,23 +1,18 @@
+//! Worker handlers - worker listing and telemetry streaming
+
 use crate::automutate::common::{TelemetryAck, TelemetryData, ToolVersions};
 use crate::automutate::controller::{ListWorkersRequest, ListWorkersResponse, WorkerInfo};
+use crate::service::SchedulerService;
 use crate::target_manager::RegistrationType;
-use crate::SchedulerService;
 use tonic::{Request, Response, Status};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
+/// List all registered workers
 pub async fn list_workers(
     service: &SchedulerService,
     _request: Request<ListWorkersRequest>,
 ) -> Result<Response<ListWorkersResponse>, Status> {
-    // Use targets from SchedulerService directly (since SchedulerCore.targets() isn't accessible)
-    let targets = match &service.targets {
-        Some(targets) => targets,
-        None => {
-            return Err(Status::unavailable("Target manager not initialized"));
-        }
-    };
-
-    let workers = targets.list_all();
+    let workers = service.targets.list_all();
     let worker_infos: Vec<WorkerInfo> = workers
         .iter()
         .map(|w| {
@@ -34,7 +29,6 @@ pub async fn list_workers(
                 current_job_id: w.current_job.clone().unwrap_or_default(),
                 last_ping_seconds_ago: last_ping_secs,
                 enabled: w.enabled,
-                // Fields for dynamic registration
                 os_version: w.os_version.clone(),
                 capabilities: w.capabilities.clone(),
                 metadata: w.metadata.clone(),
@@ -57,34 +51,34 @@ pub async fn list_workers(
     }))
 }
 
+/// Stream telemetry from workers
 pub async fn stream_telemetry(
     service: &SchedulerService,
     request: Request<tonic::Streaming<TelemetryData>>,
 ) -> Result<Response<TelemetryAck>, Status> {
     use tokio::time::{timeout, Duration};
 
-    // Get remote_addr BEFORE into_inner() consumes the request
     let remote_addr = request
         .remote_addr()
         .map(|a| a.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
     let mut stream = request.into_inner();
-    let mut events_count = 0;
+    let mut events_count: i32 = 0;
     let mut first_job_id = String::new();
     let mut batch = Vec::new();
     const MAX_BATCH_SIZE: usize = 10000;
 
     info!("[RECV] Telemetry stream opened from: {}", remote_addr);
 
-    // Collect all events from stream with timeout
+    // Collect events from stream
     let collection_result = timeout(Duration::from_secs(30), async {
         while let Some(telemetry) = stream.message().await? {
             if events_count == 0 {
                 first_job_id = telemetry.job_id.clone();
             }
 
-            events_count += 1;
+            events_count = events_count.saturating_add(1);
             batch.push(telemetry);
 
             if batch.len() >= MAX_BATCH_SIZE {
@@ -101,8 +95,8 @@ pub async fn stream_telemetry(
 
     match collection_result {
         Ok(Ok(())) => {
-            info!(
-                "[OK] Telemetry batch collected: job={}, events={}",
+            debug!(
+                "[OK] Telemetry collected: job={}, events={}",
                 first_job_id, events_count
             );
         }
@@ -115,22 +109,21 @@ pub async fn stream_telemetry(
         }
     }
 
-    // Index batch to Elasticsearch
+    // Index to Elasticsearch
     if !batch.is_empty() {
-        info!("[UPLOAD] Indexing {} events to Elasticsearch", events_count);
         match timeout(Duration::from_secs(10), service.index_telemetry_batch(&batch)).await {
             Ok(Ok(())) => {
                 info!("[OK] Indexed {} telemetry events", events_count);
             }
             Ok(Err(e)) => {
-                error!("[ERROR] Elasticsearch indexing failed: {}", e);
+                error!("[ERROR] ES indexing failed: {}", e);
             }
             Err(_) => {
-                error!("[TIMEOUT] Elasticsearch indexing exceeded 10s");
+                error!("[TIMEOUT] ES indexing exceeded 10s");
             }
         }
     } else {
-        warn!("[WARN] Telemetry stream closed with ZERO events");
+        warn!("[WARN] Telemetry stream closed with zero events");
     }
 
     Ok(Response::new(TelemetryAck {

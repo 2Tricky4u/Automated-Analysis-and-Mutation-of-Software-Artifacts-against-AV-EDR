@@ -1,16 +1,15 @@
-// Scheduler library exports
-// Provides job queue, worker pool, and scheduler core functionality
+// Scheduler library - Dispatch-based architecture
+//
+// Core modules:
+// - dispatch: Worker-VM-bound job execution (Worker, Orchestrator, JobSession)
+// - target_manager: Connection management and Worker spawning
+// - service: gRPC handler implementations
 
-pub mod job;
-pub mod queue;
-pub mod round;
-pub mod round_processor;
-pub mod run_queue;
-pub mod run_result;
-pub mod scheduler_core;
+pub mod dispatch;
+pub mod service;
 pub mod target_manager;
 
-// Protobuf definitions (shared with main.rs)
+// Protobuf definitions
 pub mod automutate {
     pub mod common {
         tonic::include_proto!("automutate.common");
@@ -23,12 +22,10 @@ pub mod automutate {
     }
 }
 
-// Re-export commonly used types
-pub use job::{Job, JobStatus, MutationSpec};
-pub use queue::JobQueue;
-pub use round::{BehaviorComparison, Feedback, Round, RoundStatus, RoundSummary, RunType};
-pub use round_processor::RoundProcessor;
-pub use run_queue::{PendingRun, RunQueue, RunResult as QueuedRunResult};
-pub use run_result::{RunOutcome, RunResult};
-pub use scheduler_core::{SchedulerConfig, SchedulerCore, create_scheduler_core};
+// Re-exports
+pub use dispatch::{
+    JobId, JobOutcome, JobSession, Orchestrator, OrchestratorEvent, RoundSpec, RunEnvelope,
+    RunId, RunOutcome, RunType, Worker, WorkerCommand, WorkerEvent, WorkerId, WorkerInfo,
+};
+pub use service::SchedulerService;
 pub use target_manager::{Target, TargetConfig, TargetEvent, TargetManager, TargetStatus};
