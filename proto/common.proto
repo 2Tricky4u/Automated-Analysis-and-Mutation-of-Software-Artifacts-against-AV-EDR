@@ -151,6 +151,7 @@ message SampleRequest {
   string artifact_id = 2;  // Reference to transferred artifact
   int32 timeout_seconds = 3;
   bool enable_etw = 4;
+  string trace_mode = 5;   // off, api, lines, all - controls instrumentation level
 }
 
 // Sample execution response
@@ -160,7 +161,9 @@ message SampleResponse {
   int32 exit_code = 3;
   string output = 4;
   repeated string telemetry_ids = 5;
-  string run_id = 6;  // Unique run identifier for response matching (matches RunSampleCommand.request_id)
+  string run_id = 6;       // Unique run identifier for response matching (matches RunSampleCommand.request_id)
+  bool detected = 7;       // True if EDR/AV detected the sample
+  string error = 8;        // Error message if execution failed
 }
 
 // ===== Bidirectional Stream Messages (Phase 2) =====

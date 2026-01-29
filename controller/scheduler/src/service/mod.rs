@@ -1,4 +1,8 @@
-// Service modules - RPC handler implementations
+//! Service module - gRPC handlers for Controller service
+//!
+//! Implements the Controller trait by delegating to handler modules.
+//! Uses dispatch-based architecture (JobSession -> Orchestrator -> Worker)
+
 pub mod artifact_handlers;
 pub mod job_handlers;
 pub mod utility_handlers;
@@ -6,17 +10,162 @@ pub mod worker_handlers;
 
 use crate::automutate::common::TelemetryData;
 use crate::automutate::controller::{
-    BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse, DeployRequest,
-    DeployResponse, GetRoundRequest, GetRoundResponse, JobProgressRequest, JobProgressResponse,
-    JobRequest, JobResponse, JobStatusRequest, JobStatusResponse, ListWorkersRequest,
-    ListWorkersResponse, PingRequest, PingResponse, QueryRequest, QueryResponse, StatusAck,
-    StatusReport, StopJobRequest, StopJobResponse, TriageRequest, TriageResponse,
-    controller_server::Controller,
+    controller_server::Controller, BuildRequest, BuildResponse, CompareRunsRequest,
+    CompareRunsResponse, DeployRequest, DeployResponse, GetRoundRequest, GetRoundResponse,
+    JobProgressRequest, JobProgressResponse, JobRequest, JobResponse, JobStatusRequest,
+    JobStatusResponse, ListWorkersRequest, ListWorkersResponse, PingRequest, PingResponse,
+    QueryRequest, QueryResponse, StatusAck, StatusReport, StopJobRequest, StopJobResponse,
+    TriageRequest, TriageResponse,
 };
-use crate::SchedulerService;
+use crate::dispatch::JobSession;
+use crate::target_manager::TargetManager;
+use elasticsearch::Elasticsearch;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 use tonic::{Request, Response, Status};
 
-/// Implement Controller trait for SchedulerService by delegating to handler modules
+// ============================================================================
+// SchedulerService
+// ============================================================================
+
+/// Main service struct holding shared state for gRPC handlers
+#[derive(Clone)]
+pub struct SchedulerService {
+    pub es_client: Elasticsearch,
+    pub job_tx: mpsc::Sender<JobSession>,
+    pub targets: Arc<TargetManager>,
+}
+
+impl SchedulerService {
+    pub fn new(
+        es_client: Elasticsearch,
+        job_tx: mpsc::Sender<JobSession>,
+        targets: Arc<TargetManager>,
+    ) -> Self {
+        Self {
+            es_client,
+            job_tx,
+            targets,
+        }
+    }
+
+    /// Index telemetry events to Elasticsearch
+    pub async fn index_telemetry_batch(
+        &self,
+        events: &[crate::automutate::common::TelemetryData],
+    ) -> anyhow::Result<()> {
+        use elasticsearch::IndexParts;
+        use serde_json::json;
+
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let index_name = format!("telemetry-{}", chrono::Utc::now().format("%Y.%m"));
+
+        // Index each event individually (simpler than bulk for now)
+        for event in events {
+            let doc = json!({
+                "event_type": event.event_type,
+                "timestamp": event.timestamp,
+                "job_id": event.job_id,
+                "metadata": event.metadata,
+            });
+
+            let response = self
+                .es_client
+                .index(IndexParts::Index(&index_name))
+                .body(doc)
+                .send()
+                .await?;
+
+            if !response.status_code().is_success() {
+                return Err(anyhow::anyhow!(
+                    "Index failed: {}",
+                    response.status_code()
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Index job metadata to Elasticsearch
+    pub async fn index_job(&self, job: &JobSession) -> anyhow::Result<()> {
+        use elasticsearch::IndexParts;
+        use serde_json::json;
+
+        let index_name = format!("jobs-{}", chrono::Utc::now().format("%Y.%m"));
+
+        let doc = json!({
+            "job_id": job.id.0,
+            "target_os": job.target_os,
+            "required_capabilities": job.required_capabilities,
+            "max_rounds": job.max_rounds,
+            "current_round": job.current_round,
+            "created_at": job.created_at.duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default().as_secs(),
+            "status": "queued",
+        });
+
+        let response = self
+            .es_client
+            .index(IndexParts::IndexId(&index_name, &job.id.0))
+            .body(doc)
+            .send()
+            .await?;
+
+        if !response.status_code().is_success() {
+            return Err(anyhow::anyhow!(
+                "Index failed: {}",
+                response.status_code()
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Store run result to Elasticsearch
+    pub async fn store_run_result(&self, report: &StatusReport) -> anyhow::Result<()> {
+        use elasticsearch::IndexParts;
+        use serde_json::json;
+
+        let index_name = format!("runs-{}", chrono::Utc::now().format("%Y.%m"));
+
+        let doc = json!({
+            "run_id": report.run_id,
+            "job_id": report.job_id,
+            "worker_id": report.worker_id,
+            "worker_ip": report.worker_ip,
+            "artifact_name": report.artifact_name,
+            "event_type": report.event_type,
+            "details": report.details,
+            "pid": report.pid,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+        });
+
+        let response = self
+            .es_client
+            .index(IndexParts::Index(&index_name))
+            .body(doc)
+            .send()
+            .await?;
+
+        if !response.status_code().is_success() {
+            return Err(anyhow::anyhow!(
+                "Index failed: {}",
+                response.status_code()
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Controller trait implementation
+// ============================================================================
+
 #[tonic::async_trait]
 impl Controller for SchedulerService {
     // Utility handlers
