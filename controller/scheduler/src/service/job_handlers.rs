@@ -4,12 +4,11 @@
 
 use crate::automutate::common::JobId;
 use crate::automutate::controller::{
-    BehaviorComparisonProto, CompareRunsRequest, CompareRunsResponse, GetRoundRequest,
-    GetRoundResponse, JobProgressRequest, JobProgressResponse, JobRequest, JobResponse,
-    JobStatusRequest, JobStatusResponse, RoundProto, RoundSummaryProto, StatusAck, StatusReport,
-    StopJobRequest, StopJobResponse,
+    CompareRunsRequest, CompareRunsResponse, GetRoundRequest, GetRoundResponse,
+    JobProgressRequest, JobProgressResponse, JobRequest, JobResponse, JobStatusRequest,
+    JobStatusResponse, StatusAck, StatusReport, StopJobRequest, StopJobResponse,
 };
-use crate::dispatch::JobSession;
+use crate::dispatch::{JobSession, ModularBuildSpec, ModuleSelectionSpec};
 use crate::service::SchedulerService;
 use std::path::PathBuf;
 use tonic::{Request, Response, Status};
@@ -25,6 +24,17 @@ pub async fn schedule_job(
     // Get max_rounds (default to 10)
     let max_rounds = if req.max_rounds == 0 { 10 } else { req.max_rounds };
 
+    // Validate source (payload path to .bin file)
+    if req.source.is_empty() {
+        return Ok(Response::new(JobResponse {
+            job_id: None,
+            accepted: false,
+            message: "source field required (path to .bin payload)".to_string(),
+            estimated_duration_seconds: 0,
+            max_rounds: 0,
+        }));
+    }
+
     // Generate job ID
     let job_id = format!(
         "job-{}-{}",
@@ -32,18 +42,39 @@ pub async fn schedule_job(
         &uuid::Uuid::new_v4().to_string()[..8]
     );
 
+    // Build module selection from proto (use defaults if empty)
+    let default_modules = ModuleSelectionSpec::default();
+    let modules = if let Some(m) = &req.modules {
+        ModuleSelectionSpec {
+            carrier: if m.carrier.is_empty() { default_modules.carrier } else { m.carrier.clone() },
+            decoder: if m.decoder.is_empty() { default_modules.decoder } else { m.decoder.clone() },
+            antiemulation: if m.antiemulation.is_empty() { default_modules.antiemulation } else { m.antiemulation.clone() },
+            guardrail: if m.guardrail.is_empty() { default_modules.guardrail } else { m.guardrail.clone() },
+            virtualprotect: if m.virtualprotect.is_empty() { default_modules.virtualprotect } else { m.virtualprotect.clone() },
+            decoy: if m.decoy.is_empty() { default_modules.decoy } else { m.decoy.clone() },
+        }
+    } else {
+        default_modules
+    };
+
+    // Get encoding (default to xor)
+    let encoding = if req.encoding.is_empty() { "xor".to_string() } else { req.encoding.clone() };
+
+    // Create build spec from request
+    let build_spec = ModularBuildSpec {
+        modules,
+        payload_path: PathBuf::from(&req.source),
+        encoding,
+    };
+
     info!(
-        "Job submission: {} (type={}, source={}, max_rounds={})",
-        job_id, req.artifact_type, req.source, max_rounds
+        "Job submission: {} (payload={}, carrier={}, decoder={}, encoding={}, max_rounds={})",
+        job_id, req.source, build_spec.modules.carrier, build_spec.modules.decoder,
+        build_spec.encoding, max_rounds
     );
 
-    // Create JobSession
-    let mut job = JobSession::new(&job_id, max_rounds);
-
-    // Set payload path from source
-    if !req.source.is_empty() {
-        job.payload_path = Some(PathBuf::from(&req.source));
-    }
+    // Create JobSession with build spec
+    let mut job = JobSession::new(&job_id, max_rounds, build_spec);
 
     // Set constraints
     job.required_capabilities = req.required_capabilities.clone();

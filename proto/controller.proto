@@ -82,7 +82,7 @@ message PingResponse {
 message JobRequest {
   string name = 1;
   string artifact_type = 2;  // exe, dll, shellcode
-  string source = 3;
+  string source = 3;         // Path to payload .bin file (required)
   // NEW: Iterative mutation parameters
   uint32 max_rounds = 6;              // Maximum rounds (default: 10)
   bool stop_on_evasion = 7;           // Stop when not_detected (default: false)
@@ -90,6 +90,9 @@ message JobRequest {
   // Workers must have ALL listed capabilities (e.g., ["mde"] or ["cortex"])
   // If empty, no capability filtering is applied
   repeated string required_capabilities = 9;
+  // NEW: Modular build configuration (uses defaults if not specified)
+  ModuleSelection modules = 10;       // Module selection (default: direct/xor_basic/none/...)
+  string encoding = 11;               // Payload encoding: "xor" or "english" (default: "xor")
 }
 
 message JobResponse {

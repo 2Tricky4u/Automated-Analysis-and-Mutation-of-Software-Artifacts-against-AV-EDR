@@ -106,6 +106,12 @@ impl SchedulerService {
             "created_at": job.created_at.duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default().as_secs(),
             "status": "queued",
+            "build_spec": {
+                "payload_path": job.build_spec.payload_path.display().to_string(),
+                "encoding": job.build_spec.encoding,
+                "carrier": job.build_spec.modules.carrier,
+                "decoder": job.build_spec.modules.decoder,
+            },
         });
 
         let response = self

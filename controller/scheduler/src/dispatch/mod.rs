@@ -14,7 +14,8 @@ pub mod worker;
 pub use channels::{OrchestratorEvent, RemoteRunResult, WorkerCommand, WorkerEvent};
 pub use orchestrator::{Orchestrator, WorkerHandle};
 pub use types::{
-    ArtifactRef, JobId, JobOutcome, JobSession, MutationSpec, RoundAgg, RoundId, RoundSpec,
-    RoundSummary, RunEnvelope, RunId, RunOutcome, RunType, WorkerId, WorkerInfo,
+    ArtifactRef, JobId, JobOutcome, JobSession, ModularBuildSpec, ModuleSelectionSpec,
+    MutationSpec, RoundAgg, RoundId, RoundSpec, RoundSummary, RunEnvelope, RunId, RunOutcome,
+    RunType, WorkerId, WorkerInfo,
 };
 pub use worker::{ArtifactSender, Worker};

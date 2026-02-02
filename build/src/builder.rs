@@ -1763,8 +1763,7 @@ impl ArtifactBuilder {
 
         if !template_dir.exists() {
             anyhow::bail!(
-                "Modular template directory not found at {:?}. \
-                Make sure controller/builder/template/ exists with loader_template.c and modules/",
+                "Modular template directory not found at {:?}.",
                 template_dir
             );
         }

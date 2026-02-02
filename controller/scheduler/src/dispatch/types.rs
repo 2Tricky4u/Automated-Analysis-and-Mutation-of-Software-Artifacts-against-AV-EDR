@@ -6,9 +6,67 @@
 //! RunEnvelope: dispatch envelope for the per-worker pool
 
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::SystemTime;
+
+// ============================================================================
+// Build Configuration
+// ============================================================================
+
+/// Module selection for modular template assembly
+/// Uses "none" for disabled optional modules (matches build crate)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleSelectionSpec {
+    pub carrier: String,
+    pub decoder: String,
+    #[serde(default = "default_none")]
+    pub antiemulation: String,
+    #[serde(default = "default_none")]
+    pub guardrail: String,
+    #[serde(default = "default_standard")]
+    pub virtualprotect: String,
+    #[serde(default = "default_none")]
+    pub decoy: String,
+}
+
+fn default_none() -> String {
+    "none".to_string()
+}
+
+fn default_standard() -> String {
+    "standard".to_string()
+}
+
+impl Default for ModuleSelectionSpec {
+    fn default() -> Self {
+        // Must match actual module files in build/templates/modules/
+        Self {
+            carrier: "alloc_rw_rx".to_string(),      // alloc_rw_rx, change_rw_rx, peb_walk
+            decoder: "xor".to_string(),              // xor, english
+            antiemulation: "none".to_string(),       // none, sirallocalot, timeraw
+            guardrail: "none".to_string(),           // none, env
+            virtualprotect: "standard".to_string(), // standard, undersized
+            decoy: "none".to_string(),               // none, calc, winexec
+        }
+    }
+}
+
+/// Modular build specification for the @MODULE marker system
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModularBuildSpec {
+    /// Module selection for assembly
+    pub modules: ModuleSelectionSpec,
+    /// Path to raw payload file (.bin)
+    pub payload_path: PathBuf,
+    /// Payload encoding type: "xor" or "english"
+    #[serde(default = "default_encoding")]
+    pub encoding: String,
+}
+
+fn default_encoding() -> String {
+    "xor".to_string()
+}
 
 // ============================================================================
 // IDs (newtype wrappers for type safety)
@@ -75,7 +133,9 @@ pub struct JobSession {
     // Constraints / config
     pub target_os: Option<String>,
     pub required_capabilities: Vec<String>,
-    pub payload_path: Option<PathBuf>,
+
+    // Build configuration
+    pub build_spec: ModularBuildSpec,
 
     // Progress
     pub current_round: u32,
@@ -92,12 +152,12 @@ pub struct JobSession {
 }
 
 impl JobSession {
-    pub fn new(id: impl Into<String>, max_rounds: u32) -> Self {
+    pub fn new(id: impl Into<String>, max_rounds: u32, build_spec: ModularBuildSpec) -> Self {
         Self {
             id: JobId(id.into()),
             target_os: None,
             required_capabilities: Vec::new(),
-            payload_path: None,
+            build_spec,
             current_round: 0,
             max_rounds,
             stop_on_evasion: false,
@@ -111,11 +171,6 @@ impl JobSession {
     pub fn with_constraints(mut self, os: Option<String>, caps: Vec<String>) -> Self {
         self.target_os = os;
         self.required_capabilities = caps;
-        self
-    }
-
-    pub fn with_payload(mut self, path: PathBuf) -> Self {
-        self.payload_path = Some(path);
         self
     }
 
@@ -294,9 +349,17 @@ pub enum JobOutcome {
 mod tests {
     use super::*;
 
+    fn test_build_spec() -> ModularBuildSpec {
+        ModularBuildSpec {
+            modules: ModuleSelectionSpec::default(),
+            payload_path: PathBuf::from("test.bin"),
+            encoding: "xor".to_string(),
+        }
+    }
+
     #[test]
     fn test_job_session_lifecycle() {
-        let mut job = JobSession::new("job-1", 5);
+        let mut job = JobSession::new("job-1", 5, test_build_spec());
         assert!(job.should_continue());
 
         let (num, id) = job.start_round();

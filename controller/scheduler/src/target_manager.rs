@@ -176,7 +176,7 @@ impl TargetManager {
             events_tx,
             orchestrator_tx,
             rpc_timeout: Duration::from_secs(rpc_timeout_secs),
-            max_concurrent_runs: 2, // baseline + instrumented
+            max_concurrent_runs: 1, // Worker-agent supports only one concurrent execution
         }
     }
 
