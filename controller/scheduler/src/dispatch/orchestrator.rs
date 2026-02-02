@@ -7,7 +7,7 @@
 //! - Listens to worker events
 
 use super::channels::{OrchestratorEvent, WorkerCommand, WorkerEvent};
-use super::types::{JobId, JobOutcome, JobSession, WorkerId, WorkerInfo};
+use super::types::{JobSession, WorkerId, WorkerInfo};
 use std::collections::{HashMap, VecDeque};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -291,6 +291,16 @@ async fn poll_worker_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dispatch::types::{ModularBuildSpec, ModuleSelectionSpec};
+    use std::path::PathBuf;
+
+    fn test_build_spec() -> ModularBuildSpec {
+        ModularBuildSpec {
+            modules: ModuleSelectionSpec::default(),
+            payload_path: PathBuf::from("test.bin"),
+            encoding: "xor".to_string(),
+        }
+    }
 
     #[test]
     fn test_compatibility_any_os() {
@@ -300,7 +310,7 @@ mod tests {
             capabilities: vec!["mde".into()],
         };
 
-        let job = JobSession::new("j1", 5);
+        let job = JobSession::new("j1", 5, test_build_spec());
         assert!(is_compatible(&worker, &job));
     }
 
@@ -312,7 +322,7 @@ mod tests {
             capabilities: vec!["mde".into()],
         };
 
-        let mut job = JobSession::new("j1", 5);
+        let mut job = JobSession::new("j1", 5, test_build_spec());
         job.target_os = Some("win10".into());
         assert!(is_compatible(&worker, &job));
 
@@ -328,7 +338,7 @@ mod tests {
             capabilities: vec!["mde".into(), "rededr".into()],
         };
 
-        let mut job = JobSession::new("j1", 5);
+        let mut job = JobSession::new("j1", 5, test_build_spec());
         job.required_capabilities = vec!["mde".into()];
         assert!(is_compatible(&worker, &job));
 

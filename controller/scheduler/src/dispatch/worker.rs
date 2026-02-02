@@ -6,14 +6,15 @@
 
 use super::channels::{RemoteRunResult, WorkerCommand, WorkerEvent};
 use super::types::{
-    ArtifactRef, JobId, JobOutcome, JobSession, MutationSpec, RoundAgg, RoundId, RoundSpec,
-    RoundSummary, RunEnvelope, RunId, RunOutcome, RunType, WorkerId, WorkerInfo,
+    ArtifactRef, JobOutcome, JobSession, RoundAgg, RoundId, RoundSpec, RunEnvelope, RunId,
+    RunOutcome, RunType, WorkerId, WorkerInfo,
 };
 use crate::automutate::common::{controller_message, ControllerMessage, RunSampleCommand, SampleRequest};
+use build::{ArtifactBuilder, BuilderConfig, BuildInput, BuiltArtifact, EncodingType, ModuleSelection};
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
-use std::time::SystemTime;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
@@ -210,42 +211,56 @@ impl Worker {
     }
 
     async fn produce_round(&mut self) {
-        let job = match &mut self.active_job {
-            Some(j) => j,
-            None => return,
-        };
+        // Extract data from job first (to avoid borrow conflicts)
+        let (round_num, round_id, job_id, build_spec) = {
+            let job = match &mut self.active_job {
+                Some(j) => j,
+                None => return,
+            };
 
-        // Start round
-        let (round_num, round_id) = job.start_round();
-        info!("[Worker:{}][{}] Producing round {}", self.id, job.id, round_num);
+            // Start round
+            let (round_num, round_id) = job.start_round();
+            info!("[Worker:{}][{}] Producing round {}", self.id, job.id, round_num);
+
+            (round_num, round_id, job.id.clone(), job.build_spec.clone())
+        };
 
         // Create round spec (simplified - no selector for now)
         let spec = RoundSpec {
             id: round_id.clone(),
-            job_id: job.id.clone(),
+            job_id: job_id.clone(),
             round_number: round_num,
             mutations: vec![], // TODO: integrate with mutation selector
         };
 
-        // Get artifact path
-        let artifact_path = match &job.payload_path {
-            Some(p) => p.clone(),
-            None => {
-                warn!("[Worker:{}] No payload path for job {}", self.id, job.id);
+        // Build baseline artifact (trace_mode = off)
+        let baseline_built = match self.build_artifact(&build_spec, "off", &spec).await {
+            Ok(built) => built,
+            Err(e) => {
+                error!("[Worker:{}] Failed to build baseline artifact: {}", self.id, e);
                 return;
             }
         };
 
-        // Create run envelopes for baseline and instrumented
+        // Build instrumented artifact (trace_mode = lines)
+        let instrumented_built = match self.build_artifact(&build_spec, "lines", &spec).await {
+            Ok(built) => built,
+            Err(e) => {
+                error!("[Worker:{}] Failed to build instrumented artifact: {}", self.id, e);
+                return;
+            }
+        };
+
+        // Create run envelopes with built artifacts
         let baseline_run = RunEnvelope {
             run_id: RunId(format!("{}-baseline", round_id.0)),
-            job_id: job.id.clone(),
+            job_id: job_id.clone(),
             round_id: round_id.clone(),
             round_number: round_num,
             run_type: RunType::Baseline,
             artifact: ArtifactRef {
-                path: artifact_path.clone(),
-                sha256: None,
+                path: baseline_built.output_path,
+                sha256: Some(baseline_built.sha256),
             },
             mutations: spec.mutations.iter().map(|m| m.id.clone()).collect(),
             timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
@@ -253,8 +268,16 @@ impl Worker {
 
         let instrumented_run = RunEnvelope {
             run_id: RunId(format!("{}-instrumented", round_id.0)),
+            job_id: job_id.clone(),
+            round_id: round_id.clone(),
+            round_number: round_num,
             run_type: RunType::Instrumented,
-            ..baseline_run.clone()
+            artifact: ArtifactRef {
+                path: instrumented_built.output_path,
+                sha256: Some(instrumented_built.sha256),
+            },
+            mutations: spec.mutations.iter().map(|m| m.id.clone()).collect(),
+            timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
         };
 
         // Create round aggregator
@@ -268,9 +291,78 @@ impl Worker {
         self.round_aggs.insert(round_id.clone(), agg);
 
         // Add to pool
-        debug!("[Worker:{}] Enqueuing runs for round {}", self.id, round_id);
+        info!(
+            "[Worker:{}] Built and enqueued runs for round {} (baseline={}, instrumented={})",
+            self.id, round_id, baseline_built.artifact_id, instrumented_built.artifact_id
+        );
         self.run_pool.push_back(baseline_run);
         self.run_pool.push_back(instrumented_run);
+    }
+
+    /// Build an artifact using the modular template system
+    async fn build_artifact(
+        &self,
+        build_spec: &super::types::ModularBuildSpec,
+        trace_mode: &str,
+        round_spec: &RoundSpec,
+    ) -> anyhow::Result<BuiltArtifact> {
+        // Create builder with default system paths
+        let builder = ArtifactBuilder::new(BuilderConfig::default())?;
+
+        // Read payload from file
+        let payload = tokio::fs::read(&build_spec.payload_path).await
+            .map_err(|e| anyhow::anyhow!("Failed to read payload {}: {}", build_spec.payload_path.display(), e))?;
+
+        // Convert module selection
+        let modules = ModuleSelection {
+            carrier: build_spec.modules.carrier.clone(),
+            decoder: build_spec.modules.decoder.clone(),
+            antiemulation: build_spec.modules.antiemulation.clone(),
+            guardrail: build_spec.modules.guardrail.clone(),
+            virtualprotect: build_spec.modules.virtualprotect.clone(),
+            decoy: build_spec.modules.decoy.clone(),
+        };
+
+        // Parse encoding type
+        let encoding = EncodingType::from_str(&build_spec.encoding)
+            .unwrap_or(EncodingType::Xor);
+
+        // Convert mutations to builder format
+        let mutations: Vec<build::mutator::MutationSpec> = round_spec.mutations
+            .iter()
+            .map(|m| build::mutator::MutationSpec {
+                id: m.id.clone(),
+                params: m.params.as_ref()
+                    .and_then(|v| v.as_object())
+                    .map(|obj| {
+                        obj.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect();
+
+        debug!(
+            "[Worker:{}] Building artifact (carrier={}, decoder={}, encoding={}, trace_mode={})",
+            self.id, modules.carrier, modules.decoder, build_spec.encoding, trace_mode
+        );
+
+        // Build using modular template
+        let built = builder.build(BuildInput::ModularTemplate {
+            modules,
+            payload,
+            encoding,
+            mutations,
+            trace_mode: trace_mode.to_string(),
+        }).await?;
+
+        info!(
+            "[Worker:{}] Build complete: artifact_id={}, size={} bytes",
+            self.id, built.artifact_id, built.size_bytes
+        );
+
+        Ok(built)
     }
 
     // ========================================================================
@@ -319,8 +411,11 @@ impl Worker {
         debug!("[Worker:{}] Dispatching run {} ({})",
             self.id, envelope.run_id, envelope.run_type);
 
-        // Upload artifact first
-        let artifact_id = format!("{}-{}", envelope.run_id.0, envelope.run_type);
+        // Use the real artifact SHA256 as the artifact_id
+        let artifact_id = envelope.artifact.sha256.clone()
+            .ok_or_else(|| anyhow::anyhow!("Artifact missing SHA256"))?;
+
+        // Upload artifact
         self.artifact_sender
             .send_artifact(&self.id.0, &artifact_id, &envelope.artifact.path)
             .await?;

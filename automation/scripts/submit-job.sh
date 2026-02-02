@@ -1,111 +1,210 @@
 #!/bin/bash
 # Submit a job to the scheduler via gRPC
-# Usage: ./submit-job.sh --template <template> --source <source> [--mutations <mutations>] [--priority <priority>]
+# Usage: ./submit-job.sh --payload <path> [--carrier <module>] [--decoder <module>] ...
 
 set -e
 
 # Default values
 CONTROLLER_ADDRESS="${CONTROLLER_ADDRESS:-10.200.200.1:50051}"
-# CONTROLLER_ADDRESS="${CONTROLLER_ADDRESS:-localhost:50051}"
-TEMPLATE=""
-SOURCE=""
-MUTATIONS=""
+PAYLOAD=""
 NAME=""
+MAX_ROUNDS=""
+STOP_ON_EVASION=""
+
+# Module defaults (empty = use server defaults)
+CARRIER=""
+DECODER=""
+ANTIEMULATION=""
+GUARDRAIL=""
+VIRTUALPROTECT=""
+DECOY=""
+ENCODING=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --template)
-            TEMPLATE="$2"
-            shift 2
-            ;;
-        --source)
-            SOURCE="$2"
-            shift 2
-            ;;
-        --mutations)
-            MUTATIONS="$2"
+        --payload|--source)
+            PAYLOAD="$2"
             shift 2
             ;;
         --name)
             NAME="$2"
             shift 2
             ;;
+        --max-rounds)
+            MAX_ROUNDS="$2"
+            shift 2
+            ;;
+        --stop-on-evasion)
+            STOP_ON_EVASION="true"
+            shift
+            ;;
+        --carrier)
+            CARRIER="$2"
+            shift 2
+            ;;
+        --decoder)
+            DECODER="$2"
+            shift 2
+            ;;
+        --antiemulation)
+            ANTIEMULATION="$2"
+            shift 2
+            ;;
+        --guardrail)
+            GUARDRAIL="$2"
+            shift 2
+            ;;
+        --virtualprotect)
+            VIRTUALPROTECT="$2"
+            shift 2
+            ;;
+        --decoy)
+            DECOY="$2"
+            shift 2
+            ;;
+        --encoding)
+            ENCODING="$2"
+            shift 2
+            ;;
         --controller)
             CONTROLLER_ADDRESS="$2"
             shift 2
             ;;
+        --help|-h)
+            echo "Usage: $0 --payload <path> [options]"
+            echo ""
+            echo "Required:"
+            echo "  --payload <path>        Path to payload .bin file"
+            echo ""
+            echo "Optional - Job settings:"
+            echo "  --name <name>           Job name (default: auto-generated)"
+            echo "  --max-rounds <n>        Maximum mutation rounds (default: 10)"
+            echo "  --stop-on-evasion       Stop when evasion achieved"
+            echo "  --controller <addr>     Controller address (default: 10.200.200.1:50051)"
+            echo ""
+            echo "Optional - Module selection (defaults shown):"
+            echo "  --carrier <module>      Carrier module (default: alloc_rw_rx)"
+            echo "                          Options: alloc_rw_rx, change_rw_rx, peb_walk"
+            echo "  --decoder <module>      Decoder module (default: xor)"
+            echo "                          Options: xor, english"
+            echo "  --antiemulation <mod>   Anti-emulation module (default: none)"
+            echo "                          Options: none, sirallocalot, timeraw"
+            echo "  --guardrail <module>    Guardrail module (default: none)"
+            echo "                          Options: none, env"
+            echo "  --virtualprotect <mod>  VirtualProtect module (default: standard)"
+            echo "                          Options: standard, undersized"
+            echo "  --decoy <module>        Decoy module (default: none)"
+            echo "                          Options: none, calc, winexec"
+            echo "  --encoding <type>       Payload encoding (default: xor)"
+            echo "                          Options: xor, english"
+            echo ""
+            echo "Examples:"
+            echo "  # Simple job with defaults"
+            echo "  $0 --payload calc.bin"
+            echo ""
+            echo "  # Custom modules"
+            echo "  $0 --payload calc.bin --carrier alloc_rw_rx --decoder xor_rolling"
+            echo ""
+            echo "  # Full customization"
+            echo "  $0 --payload calc.bin \\"
+            echo "     --carrier change_rw_rx \\"
+            echo "     --antiemulation sirallocalot \\"
+            echo "     --encoding english \\"
+            echo "     --max-rounds 20 \\"
+            echo "     --stop-on-evasion"
+            exit 0
+            ;;
         *)
             echo "Unknown option: $1"
+            echo "Use --help for usage information"
             exit 1
             ;;
     esac
 done
 
 # Validate required arguments
-if [ -z "$TEMPLATE" ]; then
-    echo "Error: --template is required"
-    echo ""
-    echo "Usage: $0 --template <template> --source <source> [options]"
-    echo ""
-    echo "Required:"
-    echo "  --template <name>     Template name (e.g., 'rwx_direct', 'eicar')"
-    echo "  --source <file>       Source file path (e.g., 'rwx_direct.c')"
-    echo ""
-    echo "Optional:"
-    echo "  --mutations <list>    Comma-separated mutations (e.g., 'ast.import_reshape,beh.preamble.fs')"
-    echo "  --priority <n>        Job priority (default: 0, higher = earlier)"
-    echo "  --name <name>         Job name (default: template name)"
-    echo "  --controller <addr>   Controller address (default: 10.200.200.1:50051)"
-    echo ""
-    echo "Examples:"
-    echo "  # Simple job (no mutations)"
-    echo "  $0 --template rwx_direct --source rwx_direct.c"
-    echo ""
-    echo "  # With mutations"
-    echo "  $0 --template rwx_direct --source rwx_direct.c \\"
-    echo "     --mutations 'ast.import_reshape,beh.preamble.fs' \\"
-    echo "     --priority 10"
+if [ -z "$PAYLOAD" ]; then
+    echo "Error: --payload is required"
+    echo "Use --help for usage information"
     exit 1
 fi
 
-if [ -z "$SOURCE" ]; then
-    echo "Error: --source is required"
-    exit 1
-fi
-
-# Default name to template if not specified
+# Default name if not specified
 if [ -z "$NAME" ]; then
-    NAME="$TEMPLATE"
+    NAME="job-$(basename "$PAYLOAD" .bin)"
 fi
 
-# Build mutation array for JSON
-if [ -z "$MUTATIONS" ]; then
-    MUTATION_ARRAY="[]"
-else
-    # Convert comma-separated list to JSON array
-    # e.g., "ast.import_reshape,beh.preamble.fs" -> ["ast.import_reshape", "beh.preamble.fs"]
-    MUTATION_ARRAY=$(echo "$MUTATIONS" | jq -R 'split(",") | map(select(length > 0))')
+# Build modules JSON (only include non-empty fields)
+MODULES_JSON="{"
+FIRST=true
+if [ -n "$CARRIER" ]; then
+    MODULES_JSON+="\"carrier\": \"$CARRIER\""
+    FIRST=false
 fi
+if [ -n "$DECODER" ]; then
+    [ "$FIRST" = false ] && MODULES_JSON+=", "
+    MODULES_JSON+="\"decoder\": \"$DECODER\""
+    FIRST=false
+fi
+if [ -n "$ANTIEMULATION" ]; then
+    [ "$FIRST" = false ] && MODULES_JSON+=", "
+    MODULES_JSON+="\"antiemulation\": \"$ANTIEMULATION\""
+    FIRST=false
+fi
+if [ -n "$GUARDRAIL" ]; then
+    [ "$FIRST" = false ] && MODULES_JSON+=", "
+    MODULES_JSON+="\"guardrail\": \"$GUARDRAIL\""
+    FIRST=false
+fi
+if [ -n "$VIRTUALPROTECT" ]; then
+    [ "$FIRST" = false ] && MODULES_JSON+=", "
+    MODULES_JSON+="\"virtualprotect\": \"$VIRTUALPROTECT\""
+    FIRST=false
+fi
+if [ -n "$DECOY" ]; then
+    [ "$FIRST" = false ] && MODULES_JSON+=", "
+    MODULES_JSON+="\"decoy\": \"$DECOY\""
+    FIRST=false
+fi
+MODULES_JSON+="}"
+
+# Build request JSON
+REQUEST_JSON="{\"name\": \"$NAME\", \"source\": \"$PAYLOAD\""
+if [ -n "$MAX_ROUNDS" ]; then
+    REQUEST_JSON+=", \"maxRounds\": $MAX_ROUNDS"
+fi
+if [ "$STOP_ON_EVASION" = "true" ]; then
+    REQUEST_JSON+=", \"stopOnEvasion\": true"
+fi
+if [ "$MODULES_JSON" != "{}" ]; then
+    REQUEST_JSON+=", \"modules\": $MODULES_JSON"
+fi
+if [ -n "$ENCODING" ]; then
+    REQUEST_JSON+=", \"encoding\": \"$ENCODING\""
+fi
+REQUEST_JSON+="}"
 
 echo "[*] Submitting job to scheduler"
 echo "    Controller: $CONTROLLER_ADDRESS"
-echo "    Template: $TEMPLATE"
-echo "    Source: $SOURCE"
-echo "    Mutations: $MUTATIONS"
-echo "    Priority: $PRIORITY"
+echo "    Payload: $PAYLOAD"
+echo "    Name: $NAME"
+[ -n "$CARRIER" ] && echo "    Carrier: $CARRIER"
+[ -n "$DECODER" ] && echo "    Decoder: $DECODER"
+[ -n "$ANTIEMULATION" ] && echo "    Antiemulation: $ANTIEMULATION"
+[ -n "$GUARDRAIL" ] && echo "    Guardrail: $GUARDRAIL"
+[ -n "$VIRTUALPROTECT" ] && echo "    VirtualProtect: $VIRTUALPROTECT"
+[ -n "$DECOY" ] && echo "    Decoy: $DECOY"
+[ -n "$ENCODING" ] && echo "    Encoding: $ENCODING"
+[ -n "$MAX_ROUNDS" ] && echo "    Max Rounds: $MAX_ROUNDS"
+[ "$STOP_ON_EVASION" = "true" ] && echo "    Stop on Evasion: yes"
 echo ""
 
 # Submit job via grpcurl
-# Note: Requires grpcurl to be installed (go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest)
 RESPONSE=$(grpcurl -plaintext \
     -import-path proto \
     -proto controller.proto \
-    -d "{
-        \"name\": \"$NAME\",
-        \"artifact_type\": \"$TEMPLATE\",
-        \"source\": \"$SOURCE\"
-    }" \
+    -d "$REQUEST_JSON" \
     "$CONTROLLER_ADDRESS" \
     automutate.controller.Controller/ScheduleJob)
 
