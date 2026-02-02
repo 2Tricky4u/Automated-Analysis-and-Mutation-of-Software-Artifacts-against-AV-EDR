@@ -122,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Elasticsearch: {}", config.elasticsearch.url);
 
     // Create channels
-    let (events_tx, mut events_rx) = mpsc::channel::<TargetEvent>(1000);
+    let (events_tx, events_rx) = mpsc::channel::<TargetEvent>(1000);
     let (orchestrator_tx, orchestrator_rx) = mpsc::channel::<OrchestratorEvent>(100);
     let (job_tx, job_rx) = mpsc::channel::<JobSession>(100);
 
@@ -147,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Querying target metadata...");
     let target_infos = targets.query_all_info().await;
     for (target_id, info) in target_infos {
-        info!(
+        debug!(
             "Target {} - OS: {}, Caps: {:?}",
             target_id, info.os_version, info.capabilities
         );

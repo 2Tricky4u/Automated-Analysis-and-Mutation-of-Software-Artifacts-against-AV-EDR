@@ -33,7 +33,7 @@ pub async fn schedule_job(
     );
 
     info!(
-        "Job submission: {} (template={}, source={}, max_rounds={})",
+        "Job submission: {} (type={}, source={}, max_rounds={})",
         job_id, req.artifact_type, req.source, max_rounds
     );
 

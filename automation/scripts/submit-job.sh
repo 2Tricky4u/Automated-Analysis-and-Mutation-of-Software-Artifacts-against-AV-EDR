@@ -10,7 +10,6 @@ CONTROLLER_ADDRESS="${CONTROLLER_ADDRESS:-10.200.200.1:50051}"
 TEMPLATE=""
 SOURCE=""
 MUTATIONS=""
-PRIORITY=0
 NAME=""
 
 # Parse arguments
@@ -26,10 +25,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --mutations)
             MUTATIONS="$2"
-            shift 2
-            ;;
-        --priority)
-            PRIORITY="$2"
             shift 2
             ;;
         --name)
@@ -109,8 +104,7 @@ RESPONSE=$(grpcurl -plaintext \
     -d "{
         \"name\": \"$NAME\",
         \"artifact_type\": \"$TEMPLATE\",
-        \"source\": \"$SOURCE\",
-        \"priority\": $PRIORITY
+        \"source\": \"$SOURCE\"
     }" \
     "$CONTROLLER_ADDRESS" \
     automutate.controller.Controller/ScheduleJob)

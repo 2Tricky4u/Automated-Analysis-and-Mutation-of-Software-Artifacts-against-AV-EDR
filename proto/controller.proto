@@ -83,17 +83,9 @@ message JobRequest {
   string name = 1;
   string artifact_type = 2;  // exe, dll, shellcode
   string source = 3;
-
-  // REMOVED: repeated string mutation_strategies = 4;
-  // Mutations now selected per-round by Selector
-
-  int32 priority = 5;
-
   // NEW: Iterative mutation parameters
   uint32 max_rounds = 6;              // Maximum rounds (default: 10)
   bool stop_on_evasion = 7;           // Stop when not_detected (default: false)
-  bool stop_on_detection = 8;         // Stop when detected (default: false)
-
   // NEW: Required capabilities for worker selection
   // Workers must have ALL listed capabilities (e.g., ["mde"] or ["cortex"])
   // If empty, no capability filtering is applied
