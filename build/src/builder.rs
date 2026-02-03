@@ -831,30 +831,45 @@ impl ArtifactBuilder {
                 .display()
         );
 
-        // Base flags (from build_all.sh COMMON_FLAGS + BASE_LIBS)
+        // Base flags
         let mut args = vec![
-            "-target",
-            "x86_64-pc-windows-msvc",
-            "-isystem",
-            crt_include.as_str(),
-            "-isystem",
-            sdk_ucrt_include.as_str(),
-            "-isystem",
-            sdk_shared_include.as_str(),
-            "-isystem",
-            sdk_um_include.as_str(),
-            "-isystem",
-            sdk_winrt_include.as_str(),
-            "-L",
-            crt_lib.as_str(),
-            "-L",
-            sdk_ucrt_lib.as_str(),
-            "-L",
-            sdk_um_lib.as_str(),
+            "-target", "x86_64-pc-windows-msvc",
+
+            "-isystem", crt_include.as_str(),
+            "-isystem", sdk_ucrt_include.as_str(),
+            "-isystem", sdk_shared_include.as_str(),
+            "-isystem", sdk_um_include.as_str(),
+            "-isystem", sdk_winrt_include.as_str(),
+
+            "-L", crt_lib.as_str(),
+            "-L", sdk_ucrt_lib.as_str(),
+            "-L", sdk_um_lib.as_str(),
+
+            // TODO could use MSVC linker (link.exe , WINE?), not lld-link
+            //"-fuse-ld=link",
             "-fuse-ld=lld",
-            "-Wl,/subsystem:console",
+            // Codegen
             "-O2",
+
+            // --- link.exe flags for "MSVC-ish" release ---
+            "-Wl,/subsystem:console",
+
+            // no debug directory / no PDB
+            "-Wl,/DEBUG:NONE",
+
+            // reproducible-ish + no incremental
+            "-Wl,/Brepro",
+            "-Wl,/INCREMENTAL:NO",
+
+            // typical release link opts
+            "-Wl,/OPT:REF",
+            "-Wl,/OPT:ICF",
+
+            // Keep consistent runtime model: /MT == libcmt (static CRT)
+            // (If you prefer /MD, replace libcmt with msvcrt and ensure matching libs everywhere.)
             "-Wl,-defaultlib:libcmt",
+
+            // Keep the system libs you truly need
             "-Wl,-defaultlib:kernel32",
         ];
 
@@ -868,7 +883,7 @@ impl ArtifactBuilder {
         }
 
         // Add template-specific libraries (format for clang wrapper: -Wl,-defaultlib:name)
-        let extra_libs = get_template_libs(template_name);
+        let extra_libs = get_template_libs(template_name); //TODO normaly not needed anymore
         let mut formatted_lib_args: Vec<String> = Vec::new();
         for lib in extra_libs {
             formatted_lib_args.push(format!("-Wl,-defaultlib:{}", lib));
