@@ -1,27 +1,17 @@
 //! Channel types and events for dispatch system.
 //!
 //! Defines the messages that flow between:
-//! - Orchestrator <-> Worker (commands and events)
+//! - Worker -> Orchestrator (events via aggregated bus)
 //! - TargetManager -> Orchestrator (worker lifecycle)
+//!
+//! Graceful shutdown is handled via CancellationToken in PoolGroup,
+//! not per-worker command channels.
 
-use super::types::{JobId, JobOutcome, JobSession, RunId, RunOutcome, WorkerId, WorkerInfo};
-use tokio::sync::mpsc;
+use super::types::{JobId, JobOutcome, RunId, RunOutcome, WorkerId, WorkerInfo};
 
 // ============================================================================
-// Worker <-> Orchestrator
+// Worker -> Orchestrator (Aggregated Event Bus)
 // ============================================================================
-
-/// Commands sent from Orchestrator to Worker
-/// TODO: Currently unused - jobs go directly to PoolGroup.
-/// TODO: Use Shutdown variant for graceful shutdown (call from disconnect_all)
-#[derive(Debug)]
-#[allow(dead_code)]
-pub enum WorkerCommand {
-    /// Assign a job to this worker
-    AssignJob(JobSession),
-    /// Graceful shutdown
-    Shutdown,
-}
 
 /// Events sent from Worker to Orchestrator via shared event bus.
 /// All workers send to a single aggregated channel for O(1) receive.
@@ -54,7 +44,6 @@ pub enum OrchestratorEvent {
     WorkerConnected {
         worker_id: WorkerId,
         info: WorkerInfo,
-        cmd_tx: mpsc::Sender<WorkerCommand>,
     },
     /// Worker disconnected
     WorkerDisconnected {

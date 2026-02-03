@@ -19,7 +19,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::time::{interval, Duration};
-use tracing::{debug, error, info};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 // ============================================================================
 // Configuration
@@ -116,7 +117,8 @@ pub struct PoolGroup {
     metrics: Mutex<PoolMetrics>,
 
     // === Shutdown ===
-    shutdown: Notify,
+    /// Cancellation token for graceful shutdown of workers and producer
+    shutdown_token: CancellationToken,
 }
 
 impl PoolGroup {
@@ -131,7 +133,7 @@ impl PoolGroup {
             pending_jobs: Mutex::new(VecDeque::new()),
             event_tx,
             metrics: Mutex::new(PoolMetrics::default()),
-            shutdown: Notify::new(),
+            shutdown_token: CancellationToken::new(),
         }
     }
 
@@ -393,8 +395,8 @@ impl PoolGroup {
             tokio::select! {
                 biased;
 
-                // Shutdown signal
-                _ = self.shutdown.notified() => {
+                // Shutdown signal (via cancellation token)
+                _ = self.shutdown_token.cancelled() => {
                     info!("[Pool:{}] Producer task shutting down", self.id);
                     break;
                 }
@@ -623,10 +625,24 @@ impl PoolGroup {
     // Lifecycle (public API for graceful shutdown and monitoring)
     // ========================================================================
 
-    /// Signal shutdown to producer task.
-    #[allow(dead_code)]
+    /// Get cancellation token for workers to monitor shutdown.
+    /// Workers should check this in their select! loop.
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.shutdown_token.clone()
+    }
+
+    /// Check if shutdown has been requested.
+    pub fn is_shutdown(&self) -> bool {
+        self.shutdown_token.is_cancelled()
+    }
+
+    /// Signal graceful shutdown to all workers and producer task.
+    /// Workers will exit after completing their current run.
     pub fn shutdown(&self) {
-        self.shutdown.notify_waiters();
+        warn!("[Pool:{}] Shutdown requested", self.id);
+        self.shutdown_token.cancel();
+        // Also wake any waiting workers so they can check cancellation
+        self.runs_available.notify_waiters();
     }
 
     /// Get current metrics.
@@ -831,9 +847,10 @@ impl PoolGroupRegistry {
         self.groups.read().await.len()
     }
 
-    /// Shutdown all pool groups.
-    #[allow(dead_code)]
+    /// Shutdown all pool groups (workers and producers).
+    /// Called from TargetManager::disconnect_all() for graceful shutdown.
     pub async fn shutdown_all(&self) {
+        info!("Shutting down all pool groups");
         let groups = self.groups.read().await;
         for pool in groups.values() {
             pool.shutdown();

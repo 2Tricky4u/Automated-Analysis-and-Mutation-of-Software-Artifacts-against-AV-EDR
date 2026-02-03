@@ -28,7 +28,7 @@ use crate::automutate::worker::{
     worker_agent_client::WorkerAgentClient, WorkerInfoRequest, WorkerInfoResponse,
 };
 use crate::dispatch::{
-    ArtifactSender, OrchestratorEvent, RemoteRunResult, RunId, Worker, WorkerCommand, WorkerEvent,
+    ArtifactSender, OrchestratorEvent, RemoteRunResult, RunId, Worker, WorkerEvent,
     WorkerId, WorkerInfo,
 };
 use crate::dispatch::pool_group::PoolGroupRegistry;
@@ -435,7 +435,6 @@ impl TargetManager {
         }
 
         // Create channels for Worker
-        let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCommand>(16);
         let (result_tx, result_rx) = mpsc::channel::<RemoteRunResult>(64);
 
         // Clone the shared worker event channel (all workers send to same bus)
@@ -475,12 +474,11 @@ impl TargetManager {
             pool.group_id()
         );
 
-        // Spawn Worker task
+        // Spawn Worker task (gets cancellation token from pool automatically)
         let worker = Worker::new(
             WorkerId(id.to_string()),
             worker_info.clone(),
             pool,
-            cmd_rx,
             worker_event_tx,
             stream_tx.clone(),
             result_rx,
@@ -494,7 +492,6 @@ impl TargetManager {
             .send(OrchestratorEvent::WorkerConnected {
                 worker_id: WorkerId(id.to_string()),
                 info: worker_info,
-                cmd_tx,
             })
             .await;
 
@@ -681,6 +678,14 @@ impl TargetManager {
 
     pub async fn disconnect_all(&self, reason: &str, reconnect_allowed: bool) {
         info!("Disconnecting all targets: {}", reason);
+
+        // First, signal graceful shutdown to all workers via pool cancellation tokens
+        self.pool_registry.shutdown_all().await;
+
+        // Give workers a moment to finish current runs
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Send disconnect notice to VMs
         let msg = ControllerMessage {
             payload: Some(controller_message::Payload::Disconnect(DisconnectNotice {
                 reason: reason.to_string(),
@@ -689,7 +694,9 @@ impl TargetManager {
         };
         let sent = self.broadcast(msg).await;
         debug!("Sent disconnect to {}/{} targets", sent, self.count());
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Mark all targets offline
         for mut target in self.targets.iter_mut() {
             target.stream_tx = None;
             target.status = TargetStatus::Offline;

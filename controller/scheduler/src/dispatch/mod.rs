@@ -18,7 +18,7 @@ pub mod types;
 pub mod worker;
 
 // Re-exports for public API
-pub use channels::{OrchestratorEvent, RemoteRunResult, WorkerCommand, WorkerEvent};
+pub use channels::{OrchestratorEvent, RemoteRunResult, WorkerEvent};
 pub use orchestrator::Orchestrator;
 pub use pool_group::{PoolEvent, PoolGroupRegistry};
 pub use types::{

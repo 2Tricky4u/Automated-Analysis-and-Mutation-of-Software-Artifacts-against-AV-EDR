@@ -8,14 +8,17 @@
 //! - Upload artifacts to VM
 //! - Send execution commands to VM
 //! - Report results back to pool
+//!
+//! Graceful shutdown is handled via CancellationToken from PoolGroup.
 
-use super::channels::{RemoteRunResult, WorkerCommand, WorkerEvent};
+use super::channels::{RemoteRunResult, WorkerEvent};
 use super::pool_group::PoolGroup;
 use super::types::{JobId, RunEnvelope, RunId, RunOutcome, WorkerId, WorkerInfo};
 use crate::automutate::common::{controller_message, ControllerMessage, RunSampleCommand, SampleRequest};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 // ============================================================================
@@ -43,6 +46,8 @@ pub trait ArtifactSender: std::fmt::Debug {
 /// It pulls runs from the shared PoolGroup and dispatches them to its VM.
 /// The worker does NOT own the run pool or perform artifact building -
 /// that's handled by the PoolGroup.
+///
+/// Graceful shutdown is triggered via CancellationToken from the pool.
 pub struct Worker {
     /// Worker identity
     id: WorkerId,
@@ -51,8 +56,8 @@ pub struct Worker {
     /// Reference to shared pool group
     pool: Arc<PoolGroup>,
 
-    /// Commands from orchestrator (shutdown, etc.)
-    cmd_rx: mpsc::Receiver<WorkerCommand>,
+    /// Cancellation token for graceful shutdown (from pool)
+    shutdown_token: CancellationToken,
 
     /// Events to orchestrator (for observability)
     event_tx: mpsc::Sender<WorkerEvent>,
@@ -80,21 +85,23 @@ struct InFlightRun {
 
 impl Worker {
     /// Create a new worker.
+    ///
+    /// The cancellation token is obtained from the pool for graceful shutdown.
     pub fn new(
         id: WorkerId,
         info: WorkerInfo,
         pool: Arc<PoolGroup>,
-        cmd_rx: mpsc::Receiver<WorkerCommand>,
         event_tx: mpsc::Sender<WorkerEvent>,
         remote_tx: mpsc::Sender<ControllerMessage>,
         remote_rx: mpsc::Receiver<RemoteRunResult>,
         artifact_sender: Arc<dyn ArtifactSender + Send + Sync>,
     ) -> Self {
+        let shutdown_token = pool.cancellation_token();
         Self {
             id,
             info,
             pool,
-            cmd_rx,
+            shutdown_token,
             event_tx,
             remote_tx,
             remote_rx,
@@ -104,7 +111,7 @@ impl Worker {
     }
 
     /// Main worker loop.
-    /// Signal-driven: waits for pool notification or VM result.
+    /// Signal-driven: waits for pool notification, VM result, or shutdown.
     pub async fn run(mut self) {
         info!(
             "[Worker:{}] Started (os={}, caps={:?}, pool={})",
@@ -118,23 +125,20 @@ impl Worker {
             tokio::select! {
                 biased;
 
-                // Priority 1: Commands from orchestrator
-                Some(cmd) = self.cmd_rx.recv() => {
-                    match cmd {
-                        WorkerCommand::AssignJob(_) => {
-                            // Jobs are now assigned to PoolGroup, not Worker
-                            warn!("[Worker:{}] Received AssignJob but jobs go to PoolGroup", self.id);
-                        }
-                        WorkerCommand::Shutdown => {
-                            info!("[Worker:{}] Shutdown requested", self.id);
-                            break;
-                        }
-                    }
+                // Priority 1: Graceful shutdown via cancellation token
+                _ = self.shutdown_token.cancelled() => {
+                    info!("[Worker:{}] Shutdown requested", self.id);
+                    break;
                 }
 
                 // Priority 2: Results from remote VM (when in-flight)
                 Some(result) = self.remote_rx.recv(), if self.in_flight.is_some() => {
                     self.on_result_received(result).await;
+
+                    // Check shutdown before taking more work
+                    if self.shutdown_token.is_cancelled() {
+                        break;
+                    }
 
                     // Immediately try to get more work (no wait needed)
                     if let Some(run) = self.pool.try_take_run().await {
@@ -146,6 +150,11 @@ impl Worker {
 
                 // Priority 3: Wait for pool signal when idle
                 _ = self.pool.wait_for_runs(), if self.in_flight.is_none() => {
+                    // Check shutdown after wakeup (pool.shutdown() also notifies)
+                    if self.shutdown_token.is_cancelled() {
+                        break;
+                    }
+
                     // Woken by signal - try to grab a run
                     // Might fail if another worker grabbed it first
                     if let Some(run) = self.pool.try_take_run().await {
@@ -336,7 +345,6 @@ mod tests {
             pool_event_tx,
         ));
 
-        let (cmd_tx, cmd_rx) = mpsc::channel(16);
         let (worker_event_tx, _) = mpsc::channel(64);
         let (remote_tx, _) = mpsc::channel(100);
         let (_, remote_rx) = mpsc::channel(100);
@@ -349,7 +357,6 @@ mod tests {
                 capabilities: vec!["defender".into()],
             },
             pool,
-            cmd_rx,
             worker_event_tx,
             remote_tx,
             remote_rx,

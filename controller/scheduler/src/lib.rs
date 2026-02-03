@@ -25,7 +25,7 @@ pub mod automutate {
 // Re-exports
 pub use dispatch::{
     JobId, JobOutcome, JobSession, Orchestrator, OrchestratorEvent, RoundSpec, RunEnvelope,
-    RunId, RunOutcome, RunType, Worker, WorkerCommand, WorkerEvent, WorkerId, WorkerInfo,
+    RunId, RunOutcome, RunType, Worker, WorkerEvent, WorkerId, WorkerInfo,
 };
 pub use service::SchedulerService;
 pub use target_manager::{Target, TargetConfig, TargetEvent, TargetManager, TargetStatus};

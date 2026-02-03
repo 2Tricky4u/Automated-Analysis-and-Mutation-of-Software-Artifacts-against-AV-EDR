@@ -6,7 +6,7 @@
 //! - Handle worker connect/disconnect
 //! - Forward pool events
 
-use super::channels::{OrchestratorEvent, WorkerCommand, WorkerEvent};
+use super::channels::{OrchestratorEvent, WorkerEvent};
 use super::group_id::GroupId;
 use super::pool_group::{PoolEvent, PoolGroup};
 use super::types::{JobSession, WorkerId, WorkerInfo};
@@ -22,7 +22,6 @@ use tracing::{debug, info, warn};
 /// Handle to a connected worker.
 pub struct WorkerHandle {
     pub info: WorkerInfo,
-    pub cmd_tx: mpsc::Sender<WorkerCommand>,
     pub group_id: GroupId,
 }
 
@@ -91,8 +90,8 @@ impl Orchestrator {
                 // Orchestrator events (worker connect/disconnect)
                 Some(event) = self.orchestrator_rx.recv() => {
                     match event {
-                        OrchestratorEvent::WorkerConnected { worker_id, info, cmd_tx } => {
-                            self.on_worker_connected(worker_id, info, cmd_tx).await;
+                        OrchestratorEvent::WorkerConnected { worker_id, info } => {
+                            self.on_worker_connected(worker_id, info).await;
                         }
                         OrchestratorEvent::WorkerDisconnected { worker_id, reason } => {
                             self.on_worker_disconnected(&worker_id, &reason).await;
@@ -133,12 +132,7 @@ impl Orchestrator {
     // Worker Management
     // ========================================================================
 
-    async fn on_worker_connected(
-        &mut self,
-        worker_id: WorkerId,
-        info: WorkerInfo,
-        cmd_tx: mpsc::Sender<WorkerCommand>,
-    ) {
+    async fn on_worker_connected(&mut self, worker_id: WorkerId, info: WorkerInfo) {
         let group_id = GroupId::from_worker_info(&info);
 
         info!(
@@ -150,7 +144,6 @@ impl Orchestrator {
         // Just store the worker handle
         let handle = WorkerHandle {
             info,
-            cmd_tx,
             group_id: group_id.clone(),
         };
         self.workers.insert(worker_id.clone(), handle);
