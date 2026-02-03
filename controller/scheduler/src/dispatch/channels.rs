@@ -12,8 +12,10 @@ use tokio::sync::mpsc;
 // ============================================================================
 
 /// Commands sent from Orchestrator to Worker
+/// TODO: Currently unused - jobs go directly to PoolGroup.
+/// TODO: Use Shutdown variant for graceful shutdown (call from disconnect_all)
 #[derive(Debug)]
-#[allow(dead_code)] // Variants kept for graceful shutdown and job assignment API
+#[allow(dead_code)]
 pub enum WorkerCommand {
     /// Assign a job to this worker
     AssignJob(JobSession),
@@ -22,12 +24,14 @@ pub enum WorkerCommand {
 }
 
 /// Events sent from Worker to Orchestrator
+/// TODO: Worker sends these events but Orchestrator poll_worker_events() is disabled
+/// TODO: Enable polling in Orchestrator.run() or remove this channel
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // JobCompleted variant kept for future direct job assignment
+#[allow(dead_code)]
 pub enum WorkerEvent {
     /// Worker is idle and can accept a job
     Available { worker_id: WorkerId },
-    /// Job completed (success or failure)
+    /// Job completed (success or failure) - unused in pool architecture
     JobCompleted {
         worker_id: WorkerId,
         job_id: JobId,
@@ -47,9 +51,10 @@ pub enum WorkerEvent {
 
 /// Events sent from TargetManager to Orchestrator
 #[derive(Debug)]
-#[allow(dead_code)] // WorkerDisconnected variant kept for reconnection handling
+#[allow(dead_code)]
 pub enum OrchestratorEvent {
     /// New worker connected
+    /// TODO: cmd_tx and event_rx are passed but never used by Orchestrator
     WorkerConnected {
         worker_id: WorkerId,
         info: WorkerInfo,
@@ -57,6 +62,7 @@ pub enum OrchestratorEvent {
         event_rx: mpsc::Receiver<WorkerEvent>,
     },
     /// Worker disconnected
+    /// TODO: TargetManager never sends this - add to stream_handler on disconnect
     WorkerDisconnected {
         worker_id: WorkerId,
         reason: String,
