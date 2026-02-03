@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 
 /// Commands sent from Orchestrator to Worker
 #[derive(Debug)]
+#[allow(dead_code)] // Variants kept for graceful shutdown and job assignment API
 pub enum WorkerCommand {
     /// Assign a job to this worker
     AssignJob(JobSession),
@@ -22,6 +23,7 @@ pub enum WorkerCommand {
 
 /// Events sent from Worker to Orchestrator
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // JobCompleted variant kept for future direct job assignment
 pub enum WorkerEvent {
     /// Worker is idle and can accept a job
     Available { worker_id: WorkerId },
@@ -45,6 +47,7 @@ pub enum WorkerEvent {
 
 /// Events sent from TargetManager to Orchestrator
 #[derive(Debug)]
+#[allow(dead_code)] // WorkerDisconnected variant kept for reconnection handling
 pub enum OrchestratorEvent {
     /// New worker connected
     WorkerConnected {
@@ -66,6 +69,7 @@ pub enum OrchestratorEvent {
 
 /// Result from remote VM execution
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // success field kept for protocol compatibility
 pub struct RemoteRunResult {
     pub run_id: RunId,
     pub detected: bool,

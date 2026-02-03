@@ -68,8 +68,11 @@ pub async fn schedule_job(
     };
 
     info!(
-        "Job submission: {} (payload={}, carrier={}, decoder={}, encoding={}, max_rounds={})",
-        job_id, req.source, build_spec.modules.carrier, build_spec.modules.decoder,
+        "Job submission: {} (payload={}, target_os={}, caps={:?}, carrier={}, decoder={}, encoding={}, max_rounds={})",
+        job_id, req.source,
+        if req.target_os.is_empty() { "any" } else { &req.target_os },
+        req.required_capabilities,
+        build_spec.modules.carrier, build_spec.modules.decoder,
         build_spec.encoding, max_rounds
     );
 
@@ -77,6 +80,7 @@ pub async fn schedule_job(
     let mut job = JobSession::new(&job_id, max_rounds, build_spec);
 
     // Set constraints
+    job.target_os = if req.target_os.is_empty() { None } else { Some(req.target_os.clone()) };
     job.required_capabilities = req.required_capabilities.clone();
     job.stop_on_evasion = req.stop_on_evasion;
 

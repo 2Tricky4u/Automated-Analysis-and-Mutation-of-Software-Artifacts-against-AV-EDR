@@ -31,6 +31,7 @@ use crate::dispatch::{
     ArtifactSender, OrchestratorEvent, RemoteRunResult, RunId, Worker, WorkerCommand, WorkerEvent,
     WorkerId, WorkerInfo,
 };
+use crate::dispatch::pool_group::PoolGroupRegistry;
 
 // ============================================================================
 // Types
@@ -162,7 +163,8 @@ pub struct TargetManager {
     events_tx: mpsc::Sender<TargetEvent>,
     orchestrator_tx: mpsc::Sender<OrchestratorEvent>,
     rpc_timeout: Duration,
-    max_concurrent_runs: usize,
+    /// Shared pool group registry (workers with same capabilities share a pool)
+    pool_registry: Arc<PoolGroupRegistry>,
 }
 
 impl TargetManager {
@@ -170,14 +172,21 @@ impl TargetManager {
         rpc_timeout_secs: u64,
         events_tx: mpsc::Sender<TargetEvent>,
         orchestrator_tx: mpsc::Sender<OrchestratorEvent>,
+        pool_registry: Arc<PoolGroupRegistry>,
     ) -> Self {
         Self {
             targets: DashMap::new(),
             events_tx,
             orchestrator_tx,
             rpc_timeout: Duration::from_secs(rpc_timeout_secs),
-            max_concurrent_runs: 1, // Worker-agent supports only one concurrent execution
+            pool_registry,
         }
+    }
+
+    /// Get the pool registry (for Orchestrator to use).
+    #[allow(dead_code)]
+    pub fn pool_registry(&self) -> Arc<PoolGroupRegistry> {
+        Arc::clone(&self.pool_registry)
     }
 
     // ========================================================================
@@ -226,9 +235,10 @@ impl TargetManager {
     }
 
     // ========================================================================
-    // Queries
+    // Queries (public API for management/monitoring)
     // ========================================================================
 
+    #[allow(dead_code)]
     pub fn get(&self, id: &str) -> Option<Target> {
         self.targets.get(id).map(|t| t.clone())
     }
@@ -245,6 +255,7 @@ impl TargetManager {
         self.targets.len()
     }
 
+    #[allow(dead_code)]
     pub fn get_available(&self) -> Vec<String> {
         self.targets
             .iter()
@@ -253,6 +264,7 @@ impl TargetManager {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub fn get_available_by_os_and_capabilities(
         &self,
         required_capabilities: &[String],
@@ -449,16 +461,24 @@ impl TargetManager {
                 manager: Arc::clone(self),
             });
 
+        // Get or create pool group for this worker
+        let pool = self.pool_registry.get_or_create(&worker_info).await;
+        debug!(
+            "Worker {} assigned to pool group {}",
+            id,
+            pool.group_id()
+        );
+
         // Spawn Worker task
         let worker = Worker::new(
             WorkerId(id.to_string()),
             worker_info.clone(),
+            pool,
             cmd_rx,
             event_tx,
             stream_tx.clone(),
             result_rx,
             artifact_sender,
-            self.max_concurrent_runs,
         );
         tokio::spawn(worker.run());
 
@@ -850,6 +870,15 @@ impl ArtifactSender for TargetArtifactSender {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dispatch::pool_group::PoolEvent;
+
+    fn create_test_manager() -> TargetManager {
+        let (events_tx, _) = mpsc::channel(100);
+        let (orch_tx, _) = mpsc::channel(100);
+        let (pool_event_tx, _) = mpsc::channel(100);
+        let pool_registry = Arc::new(PoolGroupRegistry::new(pool_event_tx));
+        TargetManager::new(30, events_tx, orch_tx, pool_registry)
+    }
 
     #[test]
     fn test_target_status_display() {
@@ -860,9 +889,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_and_get() {
-        let (events_tx, _) = mpsc::channel(100);
-        let (orch_tx, _) = mpsc::channel(100);
-        let manager = TargetManager::new(30, events_tx, orch_tx);
+        let manager = create_test_manager();
 
         manager
             .register(TargetConfig {
@@ -879,9 +906,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_reserve_and_release() {
-        let (events_tx, _) = mpsc::channel(100);
-        let (orch_tx, _) = mpsc::channel(100);
-        let manager = TargetManager::new(30, events_tx, orch_tx);
+        let manager = create_test_manager();
 
         manager
             .register(TargetConfig {
