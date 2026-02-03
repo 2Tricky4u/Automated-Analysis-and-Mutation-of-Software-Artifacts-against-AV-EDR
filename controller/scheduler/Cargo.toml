@@ -7,6 +7,7 @@ edition.workspace = true
 edr-config = { path = "../../config" }
 build = { path = "../../build" }
 tokio.workspace = true
+tokio-util = "0.7"
 tokio-stream = "0.1"
 tonic.workspace = true
 prost.workspace = true
