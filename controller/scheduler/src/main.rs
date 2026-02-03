@@ -24,9 +24,9 @@ mod dispatch;
 mod service;
 mod target_manager;
 
-use dispatch::{JobSession, Orchestrator, OrchestratorEvent};
+use dispatch::{JobSession, Orchestrator, OrchestratorEvent, PoolEvent, PoolGroupRegistry};
 use service::SchedulerService;
-use target_manager::{TargetConfig, TargetEvent, TargetManager};
+use target_manager::{TargetEvent, TargetManager};
 
 pub mod automutate {
     pub mod common {
@@ -42,29 +42,6 @@ pub mod automutate {
 
 use crate::automutate::common::worker_message;
 use crate::automutate::controller::controller_server::ControllerServer;
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-fn detect_controller_ip() -> Option<String> {
-    use std::net::IpAddr;
-
-    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("8.8.8.8:80").is_ok() {
-            if let Ok(local_addr) = socket.local_addr() {
-                if let IpAddr::V4(ipv4) = local_addr.ip() {
-                    if !ipv4.is_loopback() {
-                        debug!("Detected controller IP: {}", ipv4);
-                        return Some(ipv4.to_string());
-                    }
-                }
-            }
-        }
-    }
-    warn!("Could not auto-detect controller IP, using localhost");
-    None
-}
 
 // ============================================================================
 // Main
@@ -125,17 +102,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (events_tx, events_rx) = mpsc::channel::<TargetEvent>(1000);
     let (orchestrator_tx, orchestrator_rx) = mpsc::channel::<OrchestratorEvent>(100);
     let (job_tx, job_rx) = mpsc::channel::<JobSession>(100);
+    let (pool_event_tx, pool_event_rx) = mpsc::channel::<PoolEvent>(256);
+
+    // Create shared pool group registry
+    let pool_registry = Arc::new(PoolGroupRegistry::new(pool_event_tx));
 
     // Create TargetManager
     let targets = Arc::new(TargetManager::new(
         config.scheduler.run_timeout_secs,
         events_tx.clone(),
         orchestrator_tx.clone(),
+        Arc::clone(&pool_registry),
     ));
 
-    // Spawn Orchestrator
+    // Spawn Orchestrator (handles pool events internally)
     debug!("Orchestrator starting..");
-    let orchestrator = Orchestrator::new(orchestrator_rx, job_rx);
+    let orchestrator = Orchestrator::new(
+        orchestrator_rx,
+        job_rx,
+        Arc::clone(&pool_registry),
+        pool_event_rx,
+    );
     tokio::spawn(orchestrator.run());
 
 

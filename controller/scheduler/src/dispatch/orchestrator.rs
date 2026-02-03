@@ -1,67 +1,86 @@
-//! Orchestrator - routes jobs to compatible workers.
+//! Orchestrator - manages pool groups and routes jobs.
 //!
 //! Responsibilities:
-//! - Receives job submissions
-//! - Routes jobs to compatible workers (OS + capabilities)
-//! - Holds pending_jobs queue for unassigned jobs
-//! - Listens to worker events
+//! - Create and manage pool groups by capabilities
+//! - Route jobs to compatible pool groups
+//! - Handle worker connect/disconnect
+//! - Forward pool events
 
 use super::channels::{OrchestratorEvent, WorkerCommand, WorkerEvent};
+use super::group_id::GroupId;
+use super::pool_group::{PoolEvent, PoolGroup};
 use super::types::{JobSession, WorkerId, WorkerInfo};
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 // ============================================================================
 // Worker Handle
 // ============================================================================
 
+/// Handle to a connected worker.
 pub struct WorkerHandle {
     pub info: WorkerInfo,
     pub cmd_tx: mpsc::Sender<WorkerCommand>,
     pub event_rx: mpsc::Receiver<WorkerEvent>,
-    pub has_active_job: bool,
-}
-
-impl WorkerHandle {
-    pub fn is_idle(&self) -> bool {
-        !self.has_active_job
-    }
+    pub group_id: GroupId,
 }
 
 // ============================================================================
 // Orchestrator
 // ============================================================================
 
+use super::pool_group::PoolGroupRegistry;
+
 pub struct Orchestrator {
-    pending_jobs: VecDeque<JobSession>,
+    /// Shared pool group registry (same as TargetManager uses)
+    pool_registry: Arc<PoolGroupRegistry>,
+
+    /// Connected workers
     workers: HashMap<WorkerId, WorkerHandle>,
+
+    /// Jobs waiting for a compatible pool group
+    pending_jobs: VecDeque<JobSession>,
+
+    /// Channel for orchestrator events (worker connect/disconnect)
     orchestrator_rx: mpsc::Receiver<OrchestratorEvent>,
+
+    /// Channel for job submissions
     job_submit_rx: mpsc::Receiver<JobSession>,
+
+    /// Channel for pool events
+    pool_event_rx: mpsc::Receiver<PoolEvent>,
 }
 
 impl Orchestrator {
     pub fn new(
         orchestrator_rx: mpsc::Receiver<OrchestratorEvent>,
         job_submit_rx: mpsc::Receiver<JobSession>,
+        pool_registry: Arc<PoolGroupRegistry>,
+        pool_event_rx: mpsc::Receiver<PoolEvent>,
     ) -> Self {
         Self {
-            pending_jobs: VecDeque::new(),
+            pool_registry,
             workers: HashMap::new(),
+            pending_jobs: VecDeque::new(),
             orchestrator_rx,
             job_submit_rx,
+            pool_event_rx,
         }
     }
 
-    /// Main orchestrator loop
+    /// Main orchestrator loop.
     pub async fn run(mut self) {
-        info!("Orchestrator Started");
+        info!("Orchestrator started");
 
         loop {
-            // Build list of worker event receivers for select
+            // Build list of worker IDs for event polling
             let worker_ids: Vec<WorkerId> = self.workers.keys().cloned().collect();
 
             tokio::select! {
+                biased;
+
                 // Job submissions
                 Some(job) = self.job_submit_rx.recv() => {
                     self.on_job_submitted(job).await;
@@ -71,178 +90,217 @@ impl Orchestrator {
                 Some(event) = self.orchestrator_rx.recv() => {
                     match event {
                         OrchestratorEvent::WorkerConnected { worker_id, info, cmd_tx, event_rx } => {
-                            self.register_worker(worker_id, info, cmd_tx, event_rx).await;
+                            self.on_worker_connected(worker_id, info, cmd_tx, event_rx).await;
                         }
                         OrchestratorEvent::WorkerDisconnected { worker_id, reason } => {
-                            self.unregister_worker(&worker_id, &reason).await;
+                            self.on_worker_disconnected(&worker_id, &reason).await;
                         }
                     }
                 }
 
-                // Poll worker events (using a helper)
-                result = poll_worker_events(&mut self.workers, &worker_ids) => {
-                    if let Some((worker_id, event)) = result {
-                        self.on_worker_event(worker_id, event).await;
-                    }
+                // Pool events
+                Some(event) = self.pool_event_rx.recv() => {
+                    self.on_pool_event(event).await;
                 }
+
+                // Worker events (for observability) //TODO if wants log
+               // result = poll_worker_events(&mut self.workers, &worker_ids) => {
+               //     if let Some((worker_id, event)) = result {
+               //         self.on_worker_event(worker_id, event).await;
+               //     }
+               // }
             }
         }
+    }
+
+    // ========================================================================
+    // Pool Group Management
+    // ========================================================================
+
+    /// Find a pool group that can run the given job.
+    async fn find_compatible_pool(&self, job: &JobSession) -> Option<Arc<PoolGroup>> {
+        self.pool_registry
+            .find_compatible(job.target_os.as_deref(), &job.required_capabilities)
+            .await
+    }
+
+    /// Get the pool registry.
+    pub fn pool_registry(&self) -> Arc<PoolGroupRegistry> {
+        Arc::clone(&self.pool_registry)
     }
 
     // ========================================================================
     // Worker Management
     // ========================================================================
 
-    async fn register_worker(
+    async fn on_worker_connected(
         &mut self,
         worker_id: WorkerId,
         info: WorkerInfo,
         cmd_tx: mpsc::Sender<WorkerCommand>,
         event_rx: mpsc::Receiver<WorkerEvent>,
     ) {
-        info!("Worker {} connected (os={}, caps={:?})",
-            worker_id, info.os, info.capabilities);
+        let group_id = GroupId::from_worker_info(&info);
 
+        info!(
+            "Worker {} connected (os={}, caps={:?}, group={})",
+            worker_id, info.os, info.capabilities, group_id
+        );
+
+        // Pool group is already created by TargetManager when Worker was spawned
+        // Just store the worker handle
         let handle = WorkerHandle {
             info,
             cmd_tx,
             event_rx,
-            has_active_job: false,
+            group_id: group_id.clone(),
         };
-
         self.workers.insert(worker_id.clone(), handle);
 
-        // Try to assign pending job
-        self.try_assign_pending(&worker_id).await;
+        // Try to assign pending jobs to this group
+        self.try_assign_pending_jobs(&group_id).await;
     }
 
-    async fn unregister_worker(&mut self, worker_id: &WorkerId, reason: &str) {
+    async fn on_worker_disconnected(&mut self, worker_id: &WorkerId, reason: &str) {
         info!("Worker {} disconnected: {}", worker_id, reason);
 
-        if let Some(handle) = self.workers.remove(worker_id) {
-            if handle.has_active_job {
-                warn!("Worker {} had active job, job lost", worker_id);
-                // Could implement job recovery here
-            }
+        if let Some(_handle) = self.workers.remove(worker_id) {
+            // Worker removed, pool group remains (other workers may still use it)
+            // TODO: Consider cleaning up empty pool groups
         }
     }
 
     // ========================================================================
-    // Job Assignment
+    // Job Management
     // ========================================================================
 
     async fn on_job_submitted(&mut self, job: JobSession) {
-        info!("Job {} submitted (os={:?}, caps={:?})",
-            job.id, job.target_os, job.required_capabilities);
+        info!(
+            "Job {} submitted (os={:?}, caps={:?})",
+            job.id, job.target_os, job.required_capabilities
+        );
 
-        // Find compatible idle worker
-        let compatible = self.find_compatible_worker(&job);
-
-        match compatible {
-            Some(worker_id) => {
-                self.assign_job(&worker_id, job).await;
+        // Find compatible pool group
+        match self.find_compatible_pool(&job).await {
+            Some(pool) => {
+                info!("Assigning job {} to pool {}", job.id, pool.group_id());
+                pool.assign_job(job).await;
             }
             None => {
-                debug!("No compatible worker, queueing job {}", job.id);
+                debug!(
+                    "No compatible pool for job {}, queueing",
+                    job.id
+                );
                 self.pending_jobs.push_back(job);
             }
         }
     }
 
-    fn find_compatible_worker(&self, job: &JobSession) -> Option<WorkerId> {
-        for (id, handle) in &self.workers {
-            if handle.is_idle() && is_compatible(&handle.info, job) {
-                return Some(id.clone());
-            }
-        }
-        None
-    }
-
-    async fn assign_job(&mut self, worker_id: &WorkerId, job: JobSession) {
-        let handle = match self.workers.get_mut(worker_id) {
-            Some(h) => h,
-            None => {
-                warn!("Worker {} not found, requeueing job", worker_id);
-                self.pending_jobs.push_back(job);
-                return;
-            }
+    /// Try to assign pending jobs to a specific pool group.
+    async fn try_assign_pending_jobs(&mut self, group_id: &GroupId) {
+        let pool = match self.pool_registry.get(group_id).await {
+            Some(p) => p,
+            None => return,
         };
 
-        info!("Assigning job {} to worker {}", job.id, worker_id);
-
-        handle.has_active_job = true;
-
-        if let Err(e) = handle.cmd_tx.send(WorkerCommand::AssignJob(job)).await {
-            error!("Failed to send job to worker {}: {}", worker_id, e);
-            handle.has_active_job = false;
+        // Find jobs compatible with this group
+        let mut assigned = Vec::new();
+        for (idx, job) in self.pending_jobs.iter().enumerate() {
+            if group_id.satisfies(job.target_os.as_deref(), &job.required_capabilities) {
+                assigned.push(idx);
+            }
         }
-    }
 
-    async fn try_assign_pending(&mut self, worker_id: &WorkerId) {
-        let handle = match self.workers.get(worker_id) {
-            Some(h) if h.is_idle() => h,
-            _ => return,
-        };
-
-        // Find first compatible pending job
-        let job_idx = self.pending_jobs.iter()
-            .position(|job| is_compatible(&handle.info, job));
-
-        if let Some(idx) = job_idx {
-            let job = self.pending_jobs.remove(idx).unwrap();
-            self.assign_job(worker_id, job).await;
+        // Assign jobs (reverse order to maintain indices)
+        for idx in assigned.into_iter().rev() {
+            if let Some(job) = self.pending_jobs.remove(idx) {
+                info!("Assigning queued job {} to pool {}", job.id, group_id);
+                pool.assign_job(job).await;
+            }
         }
     }
 
     // ========================================================================
-    // Worker Events
+    // Event Handling
     // ========================================================================
 
+    async fn on_pool_event(&mut self, event: PoolEvent) {
+        match event {
+            PoolEvent::RunDispatched { pool_id, run_id, worker_id } => {
+                debug!(
+                    "Run {} dispatched to worker {} (pool={})",
+                    run_id, worker_id, pool_id
+                );
+            }
+            PoolEvent::RunCompleted { pool_id, run_id, outcome } => {
+                debug!(
+                    "Run {} completed: detected={} (pool={})",
+                    run_id, outcome.detected, pool_id
+                );
+            }
+            PoolEvent::RoundCompleted { pool_id, round_id, summary } => {
+                info!(
+                    "Round {} completed: detected={}, evasion={:.2} (pool={})",
+                    round_id, summary.detected, summary.evasion_score, pool_id
+                );
+                // TODO: Index to ES
+            }
+            PoolEvent::JobCompleted { pool_id, job_id, outcome } => {
+                info!(
+                    "Job {} completed: {:?} (pool={})",
+                    job_id, outcome, pool_id
+                );
+                // TODO: Index to ES
+            }
+        }
+    }
+
+    #[warn(dead_code)]
     async fn on_worker_event(&mut self, worker_id: WorkerId, event: WorkerEvent) {
         match event {
             WorkerEvent::Available { worker_id } => {
                 debug!("Worker {} available", worker_id);
-                if let Some(handle) = self.workers.get_mut(&worker_id) {
-                    handle.has_active_job = false;
-                }
-                self.try_assign_pending(&worker_id).await;
+                // Workers now pull from pool, no action needed
             }
-
             WorkerEvent::JobCompleted { worker_id, job_id, outcome } => {
-                info!("Job {} completed on worker {}: {:?}",
-                    job_id, worker_id, outcome);
-
-                if let Some(handle) = self.workers.get_mut(&worker_id) {
-                    handle.has_active_job = false;
-                }
-
-                // TODO: Index to ES
-
-                self.try_assign_pending(&worker_id).await;
+                // This shouldn't happen in new architecture (jobs complete in pool)
+                warn!(
+                    "Received JobCompleted from worker {} (job={}, outcome={:?}) - unexpected",
+                    worker_id, job_id, outcome
+                );
             }
-
             WorkerEvent::RunCompleted { worker_id, run_id, outcome } => {
-                debug!("Run {} completed on worker {}: detected={}",
-                    run_id, worker_id, outcome.detected);
-                // Observability only
+                debug!(
+                    "Run {} completed on worker {}: detected={}",
+                    run_id, worker_id, outcome.detected
+                );
+                // Observability only, aggregation happens in pool
             }
         }
     }
 
     // ========================================================================
-    // Stats
+    // Stats (public API for monitoring/management)
     // ========================================================================
 
+    #[allow(dead_code)]
     pub fn pending_count(&self) -> usize {
         self.pending_jobs.len()
     }
 
+    #[allow(dead_code)]
     pub fn worker_count(&self) -> usize {
         self.workers.len()
     }
 
-    pub fn idle_worker_count(&self) -> usize {
-        self.workers.values().filter(|h| h.is_idle()).count()
+    #[allow(dead_code)]
+    pub async fn pool_count(&self) -> usize {
+        self.pool_registry.count().await
+    }
+
+    #[allow(dead_code)]
+    pub async fn pool_group_ids(&self) -> Vec<GroupId> {
+        self.pool_registry.list_ids().await
     }
 }
 
@@ -250,25 +308,7 @@ impl Orchestrator {
 // Helpers
 // ============================================================================
 
-/// Check if worker is compatible with job requirements
-fn is_compatible(worker: &WorkerInfo, job: &JobSession) -> bool {
-    // OS match (if job specifies target_os)
-    let os_ok = match &job.target_os {
-        None => true,
-        Some(required_os) => worker.os.eq_ignore_ascii_case(required_os),
-    };
-
-    if !os_ok {
-        return false;
-    }
-
-    // Capabilities: worker must have ALL required capabilities
-    job.required_capabilities.iter().all(|req| {
-        worker.capabilities.iter().any(|cap| cap.eq_ignore_ascii_case(req))
-    })
-}
-
-/// Poll events from any worker
+/// Poll events from any worker.
 async fn poll_worker_events(
     workers: &mut HashMap<WorkerId, WorkerHandle>,
     worker_ids: &[WorkerId],
@@ -303,49 +343,19 @@ mod tests {
     }
 
     #[test]
-    fn test_compatibility_any_os() {
-        let worker = WorkerInfo {
-            id: WorkerId("w1".into()),
-            os: "win10".into(),
-            capabilities: vec!["mde".into()],
-        };
+    fn test_group_id_satisfies() {
+        let group = GroupId::new("win10-defender+rededr");
 
-        let job = JobSession::new("j1", 5, test_build_spec());
-        assert!(is_compatible(&worker, &job));
-    }
+        // No requirements
+        assert!(group.satisfies(None, &[]));
 
-    #[test]
-    fn test_compatibility_specific_os() {
-        let worker = WorkerInfo {
-            id: WorkerId("w1".into()),
-            os: "win10".into(),
-            capabilities: vec!["mde".into()],
-        };
+        // OS only
+        assert!(group.satisfies(Some("win10"), &[]));
+        assert!(!group.satisfies(Some("win11"), &[]));
 
-        let mut job = JobSession::new("j1", 5, test_build_spec());
-        job.target_os = Some("win10".into());
-        assert!(is_compatible(&worker, &job));
-
-        job.target_os = Some("win11".into());
-        assert!(!is_compatible(&worker, &job));
-    }
-
-    #[test]
-    fn test_compatibility_capabilities() {
-        let worker = WorkerInfo {
-            id: WorkerId("w1".into()),
-            os: "win10".into(),
-            capabilities: vec!["mde".into(), "rededr".into()],
-        };
-
-        let mut job = JobSession::new("j1", 5, test_build_spec());
-        job.required_capabilities = vec!["mde".into()];
-        assert!(is_compatible(&worker, &job));
-
-        job.required_capabilities = vec!["mde".into(), "rededr".into()];
-        assert!(is_compatible(&worker, &job));
-
-        job.required_capabilities = vec!["cortex".into()];
-        assert!(!is_compatible(&worker, &job));
+        // Capabilities only
+        assert!(group.satisfies(None, &["defender".into()]));
+        assert!(group.satisfies(None, &["defender".into(), "rededr".into()]));
+        assert!(!group.satisfies(None, &["cortex".into()]));
     }
 }

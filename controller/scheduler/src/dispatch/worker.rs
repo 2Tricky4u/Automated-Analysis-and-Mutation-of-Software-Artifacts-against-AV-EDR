@@ -1,105 +1,119 @@
-//! Worker task - owns job execution for a single VM.
+//! Worker - thin dispatcher that owns a VM connection.
 //!
-//! Dual-lane model:
-//! - Producer lane: creates rounds, builds artifacts, submits RunEnvelopes
-//! - Dispatch lane: sends runs to remote VM, receives results
+//! Workers pull runs from their shared PoolGroup and dispatch to their VM.
+//! Multiple workers can share a pool, enabling parallel execution.
+//!
+//! Responsibilities:
+//! - Pull runs from shared pool (signal-driven, efficient)
+//! - Upload artifacts to VM
+//! - Send execution commands to VM
+//! - Report results back to pool
 
 use super::channels::{RemoteRunResult, WorkerCommand, WorkerEvent};
-use super::types::{
-    ArtifactRef, JobOutcome, JobSession, RoundAgg, RoundId, RoundSpec, RunEnvelope, RunId,
-    RunOutcome, RunType, WorkerId, WorkerInfo,
-};
+use super::pool_group::PoolGroup;
+use super::types::{JobId, RunEnvelope, RunId, RunOutcome, WorkerId, WorkerInfo};
 use crate::automutate::common::{controller_message, ControllerMessage, RunSampleCommand, SampleRequest};
-use build::{ArtifactBuilder, BuilderConfig, BuildInput, BuiltArtifact, EncodingType, ModuleSelection};
-use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
 
 // ============================================================================
-// Configuration
+// ArtifactSender Trait
 // ============================================================================
 
-const MAX_POOL_SIZE: usize = 10;
-const MAX_IN_FLIGHT_ROUNDS: usize = 3;
-const DEFAULT_TIMEOUT_SECONDS: u32 = 120;
-
-// ============================================================================
-// Worker
-// ============================================================================
-
-pub struct Worker {
-    // Identity
-    id: WorkerId,
-    info: WorkerInfo,
-
-    // Channels
-    cmd_rx: mpsc::Receiver<WorkerCommand>,
-    event_tx: mpsc::Sender<WorkerEvent>,
-    remote_tx: mpsc::Sender<ControllerMessage>,
-    remote_rx: mpsc::Receiver<RemoteRunResult>,
-
-    // Artifact sender (for uploading before dispatch)
-    artifact_sender: Arc<dyn ArtifactSender + Send + Sync>,
-
-    // Local state (single-writer)
-    active_job: Option<JobSession>,
-    run_pool: VecDeque<RunEnvelope>,
-    round_aggs: HashMap<RoundId, RoundAgg>,
-    pending_runs: HashMap<RunId, RunEnvelope>,
-
-    // Dispatch state
-    max_concurrent: usize,
-    in_flight: usize,
-}
-
-/// Trait for sending artifacts to remote VM
+/// Trait for sending artifacts to remote VM.
+///
+/// Implemented by TargetManager to handle the actual file transfer.
 pub trait ArtifactSender: std::fmt::Debug {
     fn send_artifact(
         &self,
         worker_id: &str,
         artifact_id: &str,
         path: &Path,
-    ) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + '_>>;
+}
+
+// ============================================================================
+// Worker
+// ============================================================================
+
+/// Worker is a thin dispatcher that owns a VM connection.
+///
+/// It pulls runs from the shared PoolGroup and dispatches them to its VM.
+/// The worker does NOT own the run pool or perform artifact building -
+/// that's handled by the PoolGroup.
+pub struct Worker {
+    /// Worker identity
+    id: WorkerId,
+    info: WorkerInfo,
+
+    /// Reference to shared pool group
+    pool: Arc<PoolGroup>,
+
+    /// Commands from orchestrator (shutdown, etc.)
+    cmd_rx: mpsc::Receiver<WorkerCommand>,
+
+    /// Events to orchestrator (for observability)
+    event_tx: mpsc::Sender<WorkerEvent>,
+
+    /// Channel to send commands to remote VM
+    remote_tx: mpsc::Sender<ControllerMessage>,
+
+    /// Channel to receive results from remote VM
+    remote_rx: mpsc::Receiver<RemoteRunResult>,
+
+    /// Artifact sender (for uploading before dispatch)
+    artifact_sender: Arc<dyn ArtifactSender + Send + Sync>,
+
+    /// Currently in-flight run (None = idle, Some = waiting for result)
+    in_flight: Option<InFlightRun>,
+}
+
+/// Tracks a run that has been dispatched and is awaiting result.
+#[derive(Debug)]
+#[allow(dead_code)] // job_id kept for future correlation/logging
+struct InFlightRun {
+    run_id: RunId,
+    job_id: JobId,
 }
 
 impl Worker {
+    /// Create a new worker.
     pub fn new(
         id: WorkerId,
         info: WorkerInfo,
+        pool: Arc<PoolGroup>,
         cmd_rx: mpsc::Receiver<WorkerCommand>,
         event_tx: mpsc::Sender<WorkerEvent>,
         remote_tx: mpsc::Sender<ControllerMessage>,
         remote_rx: mpsc::Receiver<RemoteRunResult>,
         artifact_sender: Arc<dyn ArtifactSender + Send + Sync>,
-        max_concurrent: usize,
     ) -> Self {
         Self {
             id,
             info,
+            pool,
             cmd_rx,
             event_tx,
             remote_tx,
             remote_rx,
             artifact_sender,
-            active_job: None,
-            run_pool: VecDeque::new(),
-            round_aggs: HashMap::new(),
-            pending_runs: HashMap::new(),
-            max_concurrent,
-            in_flight: 0,
+            in_flight: None,
         }
     }
 
-    /// Main worker loop
+    /// Main worker loop.
+    ///
+    /// Signal-driven: waits for pool notification or VM result.
     pub async fn run(mut self) {
-        info!("[Worker:{}] Started (os={}, caps={:?})",
-            self.id, self.info.os, self.info.capabilities);
+        info!(
+            "[Worker:{}] Started (os={}, caps={:?}, pool={})",
+            self.id, self.info.os, self.info.capabilities, self.pool.group_id()
+        );
 
-        let mut production_interval = interval(Duration::from_millis(100));
+        // Signal availability
+        self.emit_available().await;
 
         loop {
             tokio::select! {
@@ -108,8 +122,9 @@ impl Worker {
                 // Priority 1: Commands from orchestrator
                 Some(cmd) = self.cmd_rx.recv() => {
                     match cmd {
-                        WorkerCommand::AssignJob(job) => {
-                            self.start_job(job);
+                        WorkerCommand::AssignJob(_) => {
+                            // Jobs are now assigned to PoolGroup, not Worker
+                            warn!("[Worker:{}] Received AssignJob but jobs go to PoolGroup", self.id);
                         }
                         WorkerCommand::Shutdown => {
                             info!("[Worker:{}] Shutdown requested", self.id);
@@ -118,304 +133,53 @@ impl Worker {
                     }
                 }
 
-                // Priority 2: Results from remote VM
-                Some(result) = self.remote_rx.recv() => {
-                    self.on_run_completed(result).await;
+                // Priority 2: Results from remote VM (when in-flight)
+                Some(result) = self.remote_rx.recv(), if self.in_flight.is_some() => {
+                    self.on_result_received(result).await;
+
+                    // Immediately try to get more work (no wait needed)
+                    if let Some(run) = self.pool.try_take_run().await {
+                        if let Err(e) = self.dispatch_run(run).await {
+                            error!("[Worker:{}] Dispatch failed: {}", self.id, e);
+                        }
+                    }
                 }
 
-                // Priority 3: Production tick
-                _ = production_interval.tick(), if self.can_produce_rounds() => {
-                    self.produce_round().await;
+                // Priority 3: Wait for pool signal when idle
+                _ = self.pool.wait_for_runs(), if self.in_flight.is_none() => {
+                    // Woken by signal - try to grab a run
+                    // Might fail if another worker grabbed it first
+                    if let Some(run) = self.pool.try_take_run().await {
+                        if let Err(e) = self.dispatch_run(run).await {
+                            error!("[Worker:{}] Dispatch failed: {}", self.id, e);
+                        }
+                    }
                 }
             }
-
-            // After any event, attempt dispatch
-            self.try_dispatch().await;
-        }
-
-        // Cleanup
-        if let Some(job) = self.active_job.take() {
-            self.finalize_job(job, JobOutcome::Stopped {
-                reason: "Worker shutdown".to_string(),
-            }).await;
         }
 
         info!("[Worker:{}] Stopped", self.id);
     }
 
     // ========================================================================
-    // Job Management
-    // ========================================================================
-
-    fn start_job(&mut self, mut job: JobSession) {
-        info!("[Worker:{}] Starting job {} (max_rounds={})",
-            self.id, job.id, job.max_rounds);
-
-        job.mark_started();
-        self.active_job = Some(job);
-
-        // Clear any leftover state
-        self.run_pool.clear();
-        self.round_aggs.clear();
-        self.pending_runs.clear();
-    }
-
-    async fn finalize_job(&mut self, job: JobSession, outcome: JobOutcome) {
-        info!("[Worker:{}] Finalizing job {}: {:?}", self.id, job.id, outcome);
-
-        // Emit completion event
-        let _ = self.event_tx.send(WorkerEvent::JobCompleted {
-            worker_id: self.id.clone(),
-            job_id: job.id.clone(),
-            outcome,
-        }).await;
-
-        // Clear state
-        self.run_pool.clear();
-        self.round_aggs.clear();
-        self.pending_runs.clear();
-
-        // Emit available
-        let _ = self.event_tx.send(WorkerEvent::Available {
-            worker_id: self.id.clone(),
-        }).await;
-    }
-
-    // ========================================================================
-    // Round Production
-    // ========================================================================
-
-    fn can_produce_rounds(&self) -> bool {
-        // Must have active job
-        let job = match &self.active_job {
-            Some(j) => j,
-            None => return false,
-        };
-
-        // Job must want more rounds
-        if !job.should_continue() {
-            return false;
-        }
-
-        // Pool not full
-        if self.run_pool.len() >= MAX_POOL_SIZE {
-            return false;
-        }
-
-        // Not too many in-flight rounds
-        if self.round_aggs.len() >= MAX_IN_FLIGHT_ROUNDS {
-            return false;
-        }
-
-        true
-    }
-
-    async fn produce_round(&mut self) {
-        // Extract data from job first (to avoid borrow conflicts)
-        let (round_num, round_id, job_id, build_spec) = {
-            let job = match &mut self.active_job {
-                Some(j) => j,
-                None => return,
-            };
-
-            // Start round
-            let (round_num, round_id) = job.start_round();
-            info!("[Worker:{}][{}] Producing round {}", self.id, job.id, round_num);
-
-            (round_num, round_id, job.id.clone(), job.build_spec.clone())
-        };
-
-        // Create round spec (simplified - no selector for now)
-        let spec = RoundSpec {
-            id: round_id.clone(),
-            job_id: job_id.clone(),
-            round_number: round_num,
-            mutations: vec![], // TODO: integrate with mutation selector
-        };
-
-        // Build baseline artifact (trace_mode = off)
-        let baseline_built = match self.build_artifact(&build_spec, "off", &spec).await {
-            Ok(built) => built,
-            Err(e) => {
-                error!("[Worker:{}] Failed to build baseline artifact: {}", self.id, e);
-                return;
-            }
-        };
-
-        // Build instrumented artifact (trace_mode = lines)
-        let instrumented_built = match self.build_artifact(&build_spec, "lines", &spec).await {
-            Ok(built) => built,
-            Err(e) => {
-                error!("[Worker:{}] Failed to build instrumented artifact: {}", self.id, e);
-                return;
-            }
-        };
-
-        // Create run envelopes with built artifacts
-        let baseline_run = RunEnvelope {
-            run_id: RunId(format!("{}-baseline", round_id.0)),
-            job_id: job_id.clone(),
-            round_id: round_id.clone(),
-            round_number: round_num,
-            run_type: RunType::Baseline,
-            artifact: ArtifactRef {
-                path: baseline_built.output_path,
-                sha256: Some(baseline_built.sha256),
-            },
-            mutations: spec.mutations.iter().map(|m| m.id.clone()).collect(),
-            timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
-        };
-
-        let instrumented_run = RunEnvelope {
-            run_id: RunId(format!("{}-instrumented", round_id.0)),
-            job_id: job_id.clone(),
-            round_id: round_id.clone(),
-            round_number: round_num,
-            run_type: RunType::Instrumented,
-            artifact: ArtifactRef {
-                path: instrumented_built.output_path,
-                sha256: Some(instrumented_built.sha256),
-            },
-            mutations: spec.mutations.iter().map(|m| m.id.clone()).collect(),
-            timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
-        };
-
-        // Create round aggregator
-        let agg = RoundAgg {
-            spec,
-            baseline_run_id: baseline_run.run_id.clone(),
-            instrumented_run_id: instrumented_run.run_id.clone(),
-            baseline: None,
-            instrumented: None,
-        };
-        self.round_aggs.insert(round_id.clone(), agg);
-
-        // Add to pool
-        info!(
-            "[Worker:{}] Built and enqueued runs for round {} (baseline={}, instrumented={})",
-            self.id, round_id, baseline_built.artifact_id, instrumented_built.artifact_id
-        );
-        self.run_pool.push_back(baseline_run);
-        self.run_pool.push_back(instrumented_run);
-    }
-
-    /// Build an artifact using the modular template system
-    async fn build_artifact(
-        &self,
-        build_spec: &super::types::ModularBuildSpec,
-        trace_mode: &str,
-        round_spec: &RoundSpec,
-    ) -> anyhow::Result<BuiltArtifact> {
-        // Create builder with default system paths
-        let builder = ArtifactBuilder::new(BuilderConfig::default())?;
-
-        // Read payload from file
-        let payload = tokio::fs::read(&build_spec.payload_path).await
-            .map_err(|e| anyhow::anyhow!("Failed to read payload {}: {}", build_spec.payload_path.display(), e))?;
-
-        // Convert module selection
-        let modules = ModuleSelection {
-            carrier: build_spec.modules.carrier.clone(),
-            decoder: build_spec.modules.decoder.clone(),
-            antiemulation: build_spec.modules.antiemulation.clone(),
-            guardrail: build_spec.modules.guardrail.clone(),
-            virtualprotect: build_spec.modules.virtualprotect.clone(),
-            decoy: build_spec.modules.decoy.clone(),
-        };
-
-        // Parse encoding type
-        let encoding = EncodingType::from_str(&build_spec.encoding)
-            .unwrap_or(EncodingType::Xor);
-
-        // Convert mutations to builder format
-        let mutations: Vec<build::mutator::MutationSpec> = round_spec.mutations
-            .iter()
-            .map(|m| build::mutator::MutationSpec {
-                id: m.id.clone(),
-                params: m.params.as_ref()
-                    .and_then(|v| v.as_object())
-                    .map(|obj| {
-                        obj.iter()
-                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-            })
-            .collect();
-
-        debug!(
-            "[Worker:{}] Building artifact (carrier={}, decoder={}, encoding={}, trace_mode={})",
-            self.id, modules.carrier, modules.decoder, build_spec.encoding, trace_mode
-        );
-
-        // Build using modular template
-        let built = builder.build(BuildInput::ModularTemplate {
-            modules,
-            payload,
-            encoding,
-            mutations,
-            trace_mode: trace_mode.to_string(),
-        }).await?;
-
-        info!(
-            "[Worker:{}] Build complete: artifact_id={}, size={} bytes",
-            self.id, built.artifact_id, built.size_bytes
-        );
-
-        Ok(built)
-    }
-
-    // ========================================================================
     // Dispatch
     // ========================================================================
 
-    async fn try_dispatch(&mut self) {
-        // Dispatch up to available slots
-        while self.in_flight < self.max_concurrent {
-            match self.run_pool.pop_front() {
-                Some(envelope) => {
-                    if let Err(e) = self.dispatch_run(envelope).await {
-                        error!("[Worker:{}] Dispatch failed: {}", self.id, e);
-                        self.in_flight = self.in_flight.saturating_sub(1);
-                    }
-                }
-                None => break,
-            }
-        }
-
-        // Check if job is complete
-        if let Some(job) = &self.active_job {
-            if !job.should_continue()
-                && self.run_pool.is_empty()
-                && self.round_aggs.is_empty()
-                && self.in_flight == 0
-            {
-                let job = self.active_job.take().unwrap();
-                let rounds_completed = job.current_round;
-                self.finalize_job(job, JobOutcome::Completed { rounds_completed }).await;
-            }
-        }
-
-        // Emit available if idle
-        if self.active_job.is_none()
-            && self.in_flight == 0
-            && self.run_pool.is_empty()
-        {
-            let _ = self.event_tx.try_send(WorkerEvent::Available {
-                worker_id: self.id.clone(),
-            });
-        }
-    }
-
+    /// Dispatch a run to the remote VM.
     async fn dispatch_run(&mut self, envelope: RunEnvelope) -> anyhow::Result<()> {
-        debug!("[Worker:{}] Dispatching run {} ({})",
-            self.id, envelope.run_id, envelope.run_type);
+        debug!(
+            "[Worker:{}] Dispatching run {} (type={}, job={})",
+            self.id, envelope.run_id, envelope.run_type, envelope.job_id
+        );
 
-        // Use the real artifact SHA256 as the artifact_id
-        let artifact_id = envelope.artifact.sha256.clone()
+        // Get artifact ID (SHA256)
+        let artifact_id = envelope
+            .artifact
+            .sha256
+            .clone()
             .ok_or_else(|| anyhow::anyhow!("Artifact missing SHA256"))?;
 
-        // Upload artifact
+        // Upload artifact to VM
         self.artifact_sender
             .send_artifact(&self.id.0, &artifact_id, &envelope.artifact.path)
             .await?;
@@ -434,35 +198,55 @@ impl Worker {
             })),
         };
 
-        // Track pending
-        self.pending_runs.insert(envelope.run_id.clone(), envelope);
-        self.in_flight += 1;
+        // Track in-flight
+        self.in_flight = Some(InFlightRun {
+            run_id: envelope.run_id.clone(),
+            job_id: envelope.job_id.clone(),
+        });
 
-        // Send
-        self.remote_tx.send(command).await
+        // Send to VM
+        self.remote_tx
+            .send(command)
+            .await
             .map_err(|_| anyhow::anyhow!("Remote channel closed"))?;
+
+        debug!(
+            "[Worker:{}] Run {} dispatched to VM",
+            self.id, envelope.run_id
+        );
 
         Ok(())
     }
 
     // ========================================================================
-    // Run Completion
+    // Result Handling
     // ========================================================================
 
-    async fn on_run_completed(&mut self, result: RemoteRunResult) {
-        debug!("[Worker:{}] Run completed: {} (detected={}, exit={})",
-            self.id, result.run_id, result.detected, result.exit_code);
-
-        self.in_flight = self.in_flight.saturating_sub(1);
-
-        // Get envelope
-        let envelope = match self.pending_runs.remove(&result.run_id) {
-            Some(e) => e,
+    /// Handle result received from VM.
+    async fn on_result_received(&mut self, result: RemoteRunResult) {
+        let in_flight = match self.in_flight.take() {
+            Some(f) => f,
             None => {
-                warn!("[Worker:{}] Unknown run_id: {}", self.id, result.run_id);
+                warn!(
+                    "[Worker:{}] Received result but no run in-flight: {}",
+                    self.id, result.run_id
+                );
                 return;
             }
         };
+
+        // Verify run_id matches
+        if in_flight.run_id != result.run_id {
+            warn!(
+                "[Worker:{}] Run ID mismatch: expected {}, got {}",
+                self.id, in_flight.run_id, result.run_id
+            );
+        }
+
+        debug!(
+            "[Worker:{}] Run {} completed: detected={}, exit={}",
+            self.id, result.run_id, result.detected, result.exit_code
+        );
 
         // Build outcome
         let outcome = RunOutcome {
@@ -471,44 +255,109 @@ impl Worker {
             error: result.error.clone(),
         };
 
-        // Emit run completed event
-        let _ = self.event_tx.send(WorkerEvent::RunCompleted {
-            worker_id: self.id.clone(),
-            run_id: result.run_id.clone(),
-            outcome: outcome.clone(),
-        }).await;
+        // Report to pool for aggregation
+        self.pool
+            .report_result(result.run_id.clone(), outcome.clone())
+            .await;
 
-        // Update round aggregator
-        if let Some(agg) = self.round_aggs.get_mut(&envelope.round_id) {
-            match envelope.run_type {
-                RunType::Baseline => agg.baseline = Some(outcome),
-                RunType::Instrumented => agg.instrumented = Some(outcome),
-            }
+        // Emit event for observability
+        let _ = self
+            .event_tx
+            .send(WorkerEvent::RunCompleted {
+                worker_id: self.id.clone(),
+                run_id: result.run_id,
+                outcome,
+            })
+            .await;
+    }
 
-            // Check if round complete
-            if agg.is_complete() {
-                self.finalize_round(&envelope.round_id).await;
-            }
+    // ========================================================================
+    // Events
+    // ========================================================================
+
+    /// Emit available event.
+    async fn emit_available(&self) {
+        let _ = self
+            .event_tx
+            .send(WorkerEvent::Available {
+                worker_id: self.id.clone(),
+            })
+            .await;
+    }
+
+    // ========================================================================
+    // Accessors (public API for introspection)
+    // ========================================================================
+
+    /// Get worker ID.
+    #[allow(dead_code)]
+    pub fn id(&self) -> &WorkerId {
+        &self.id
+    }
+
+    /// Get worker info.
+    #[allow(dead_code)]
+    pub fn info(&self) -> &WorkerInfo {
+        &self.info
+    }
+
+    /// Check if worker is idle (no in-flight run).
+    #[allow(dead_code)]
+    pub fn is_idle(&self) -> bool {
+        self.in_flight.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dispatch::group_id::GroupId;
+    use crate::dispatch::pool_group::PoolEvent;
+
+    #[derive(Debug)]
+    struct MockArtifactSender;
+
+    impl ArtifactSender for MockArtifactSender {
+        fn send_artifact(
+            &self,
+            _worker_id: &str,
+            _artifact_id: &str,
+            _path: &Path,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + '_>>
+        {
+            Box::pin(async { Ok(()) })
         }
     }
 
-    async fn finalize_round(&mut self, round_id: &RoundId) {
-        let agg = match self.round_aggs.remove(round_id) {
-            Some(a) => a,
-            None => return,
-        };
+    #[tokio::test]
+    async fn test_worker_creation() {
+        let (pool_event_tx, _) = mpsc::channel(100);
+        let pool = Arc::new(PoolGroup::new(
+            GroupId::new("windows-defender"),
+            pool_event_tx,
+        ));
 
-        let summary = match agg.to_summary() {
-            Some(s) => s,
-            None => return,
-        };
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let (worker_event_tx, _) = mpsc::channel(64);
+        let (remote_tx, _) = mpsc::channel(100);
+        let (_, remote_rx) = mpsc::channel(100);
 
-        info!("[Worker:{}] Round {} complete: detected={}, evasion={:.2}",
-            self.id, round_id, summary.detected, summary.evasion_score);
+        let worker = Worker::new(
+            WorkerId("test-worker".into()),
+            WorkerInfo {
+                id: WorkerId("test-worker".into()),
+                os: "windows".into(),
+                capabilities: vec!["defender".into()],
+            },
+            pool,
+            cmd_rx,
+            worker_event_tx,
+            remote_tx,
+            remote_rx,
+            Arc::new(MockArtifactSender),
+        );
 
-        // Record in job session
-        if let Some(job) = &mut self.active_job {
-            job.record_round_summary(summary);
-        }
+        assert_eq!(worker.id().0, "test-worker");
+        assert!(worker.is_idle());
     }
 }

@@ -86,6 +86,9 @@ message JobRequest {
   // NEW: Iterative mutation parameters
   uint32 max_rounds = 6;              // Maximum rounds (default: 10)
   bool stop_on_evasion = 7;           // Stop when not_detected (default: false)
+  // Target OS version (e.g., "win10", "win11")
+  // If empty, job can run on any available worker
+  string target_os = 8;
   // NEW: Required capabilities for worker selection
   // Workers must have ALL listed capabilities (e.g., ["mde"] or ["cortex"])
   // If empty, no capability filtering is applied

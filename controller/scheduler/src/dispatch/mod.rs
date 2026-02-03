@@ -1,21 +1,28 @@
-//! Dispatch module - Worker-VM-bound dispatch and orchestration.
+//! Dispatch module - shared pool dispatch and orchestration.
 //!
 //! Architecture:
-//! - Worker: One task per VM, owns job execution
-//! - Orchestrator: Routes jobs to compatible workers
-//! - Types: JobSession, RoundSpec, RunEnvelope, etc.
+//! - PoolGroup: Shared run pool for workers with matching capabilities
+//! - Worker: Thin dispatcher that owns a VM connection
+//! - Orchestrator: Routes jobs to compatible pool groups
+//!
+//! Key Features:
+//! - Signal-driven dispatch (efficient, no polling for run pool)
+//! - Multiple VMs can share a pool for parallel execution
+//! - Each VM runs only one execution at a time
 
 pub mod channels;
+pub mod group_id;
 pub mod orchestrator;
+pub mod pool_group;
 pub mod types;
 pub mod worker;
 
-// Re-exports
+// Re-exports for public API
 pub use channels::{OrchestratorEvent, RemoteRunResult, WorkerCommand, WorkerEvent};
-pub use orchestrator::{Orchestrator, WorkerHandle};
+pub use orchestrator::Orchestrator;
+pub use pool_group::{PoolEvent, PoolGroupRegistry};
 pub use types::{
-    ArtifactRef, JobId, JobOutcome, JobSession, ModularBuildSpec, ModuleSelectionSpec,
-    MutationSpec, RoundAgg, RoundId, RoundSpec, RoundSummary, RunEnvelope, RunId, RunOutcome,
-    RunType, WorkerId, WorkerInfo,
+    JobId, JobOutcome, JobSession, ModularBuildSpec, ModuleSelectionSpec, RoundSpec, RunEnvelope,
+    RunId, RunOutcome, RunType, WorkerId, WorkerInfo,
 };
 pub use worker::{ArtifactSender, Worker};
