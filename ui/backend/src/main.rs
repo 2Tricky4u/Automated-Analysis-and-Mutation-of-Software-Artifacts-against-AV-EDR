@@ -43,6 +43,7 @@ use axum::{
 use grpc_client::{ControllerConfig, ControllerGrpcClient};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::{info, Level};
 use websocket::TelemetryBroadcaster;
@@ -78,12 +79,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Configuration from environment
     let controller_addr =
-        std::env::var("CONTROLLER_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
+        std::env::var("CONTROLLER_ADDR").unwrap_or_else(|_| "http://10.200.200.1:50051".to_string());
     let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
+    let frontend_dir =
+        std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "../frontend".to_string());
 
     info!("UI Backend starting...");
     info!("  Controller: {}", controller_addr);
     info!("  Listen: {}", listen_addr);
+    info!("  Frontend: {}", frontend_dir);
 
     // Create gRPC client
     let grpc_client = Arc::new(ControllerGrpcClient::new(ControllerConfig {
@@ -133,7 +137,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         // State
-        .with_state(app_state);
+        .with_state(app_state)
+        // Serve static frontend files (fallback for non-API routes)
+        .fallback_service(ServeDir::new(&frontend_dir));
 
     info!("UI Backend API ready on {}", listen_addr);
 

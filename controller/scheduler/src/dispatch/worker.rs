@@ -104,7 +104,6 @@ impl Worker {
     }
 
     /// Main worker loop.
-    ///
     /// Signal-driven: waits for pool notification or VM result.
     pub async fn run(mut self) {
         info!(
