@@ -453,11 +453,20 @@ impl TargetManager {
         // Spawn stream handler
         let id_clone = id.to_string();
         let events_tx = self.events_tx.clone();
+        let orchestrator_tx = self.orchestrator_tx.clone();
         let targets = self.targets.clone();
         let result_tx_clone = result_tx.clone();
 
         tokio::spawn(async move {
-            Self::stream_handler(id_clone, incoming, events_tx, targets, result_tx_clone).await;
+            Self::stream_handler(
+                id_clone,
+                incoming,
+                events_tx,
+                orchestrator_tx,
+                targets,
+                result_tx_clone,
+            )
+            .await;
         });
 
         // Create artifact sender
@@ -505,6 +514,7 @@ impl TargetManager {
         id: String,
         mut incoming: tonic::Streaming<WorkerMessage>,
         events_tx: mpsc::Sender<TargetEvent>,
+        orchestrator_tx: mpsc::Sender<OrchestratorEvent>,
         targets: DashMap<String, Target>,
         result_tx: mpsc::Sender<RemoteRunResult>,
     ) {
@@ -583,9 +593,13 @@ impl TargetManager {
             })
             .await;
 
-        // TODO: Send OrchestratorEvent::WorkerDisconnected to orchestrator_tx
-        // Currently Orchestrator has on_worker_disconnected() but it's never called
-        
+        // Notify Orchestrator so it can clean up worker state
+        let _ = orchestrator_tx
+            .send(OrchestratorEvent::WorkerDisconnected {
+                worker_id: WorkerId(id.clone()),
+                reason: "Stream closed".to_string(),
+            })
+            .await;
 
         warn!("Target {} disconnected", id);
     }
