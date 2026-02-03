@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoMutate++ Controller</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            background: #16213e;
+            padding: 15px 20px;
+            border-bottom: 2px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        header h1 {
+            color: #e94560;
+            font-size: 1.5rem;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #666;
+        }
+
+        .status-dot.healthy { background: #4ade80; }
+        .status-dot.degraded { background: #fbbf24; }
+        .status-dot.offline { background: #ef4444; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .card {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid #0f3460;
+        }
+
+        .card h2 {
+            color: #e94560;
+            font-size: 1.1rem;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #aaa;
+            font-size: 0.85rem;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            background: #1a1a2e;
+            color: #eee;
+            font-size: 0.9rem;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #e94560;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #d63d56;
+        }
+
+        .btn-secondary {
+            background: #0f3460;
+            color: #eee;
+        }
+
+        .btn-secondary:hover {
+            background: #1a4a7a;
+        }
+
+        .btn-danger {
+            background: #dc2626;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #b91c1c;
+        }
+
+        .btn-sm {
+            padding: 5px 10px;
+            font-size: 0.8rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        th {
+            color: #aaa;
+            font-weight: 500;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .badge-available { background: #166534; color: #4ade80; }
+        .badge-busy { background: #854d0e; color: #fbbf24; }
+        .badge-offline { background: #7f1d1d; color: #fca5a5; }
+        .badge-running { background: #1e40af; color: #93c5fd; }
+        .badge-completed { background: #166534; color: #4ade80; }
+        .badge-failed { background: #7f1d1d; color: #fca5a5; }
+
+        .telemetry-log {
+            background: #0d1117;
+            border-radius: 4px;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: 'Consolas', monospace;
+            font-size: 0.8rem;
+        }
+
+        .telemetry-entry {
+            padding: 3px 0;
+            border-bottom: 1px solid #21262d;
+        }
+
+        .telemetry-entry .time {
+            color: #8b949e;
+        }
+
+        .telemetry-entry .type {
+            color: #58a6ff;
+        }
+
+        .telemetry-entry .job {
+            color: #f0883e;
+        }
+
+        .response-box {
+            background: #0d1117;
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 10px;
+            font-family: 'Consolas', monospace;
+            font-size: 0.8rem;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        .flex-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .flex-grow {
+            flex-grow: 1;
+        }
+
+        .mt-10 { margin-top: 10px; }
+        .mb-10 { margin-bottom: 10px; }
+
+        .hidden { display: none; }
+
+        .tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 15px;
+        }
+
+        .tab {
+            padding: 8px 16px;
+            background: #0f3460;
+            border: none;
+            color: #aaa;
+            cursor: pointer;
+            border-radius: 4px 4px 0 0;
+        }
+
+        .tab.active {
+            background: #1a1a2e;
+            color: #e94560;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #0f3460;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: #e94560;
+            transition: width 0.3s;
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .stat-box {
+            background: #1a1a2e;
+            padding: 15px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #e94560;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>AutoMutate++ Controller</h1>
+        <div class="status-indicator">
+            <span class="status-dot" id="healthDot"></span>
+            <span id="healthStatus">Checking...</span>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Stats Overview -->
+        <div class="stat-grid" id="statsGrid">
+            <div class="stat-box">
+                <div class="stat-value" id="statWorkers">-</div>
+                <div class="stat-label">Workers</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="statAvailable">-</div>
+                <div class="stat-label">Available</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="statBusy">-</div>
+                <div class="stat-label">Busy</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="statOffline">-</div>
+                <div class="stat-label">Offline</div>
+            </div>
+        </div>
+
+        <div class="grid">
+            <!-- Submit Job Card -->
+            <div class="card">
+                <h2>Submit Job</h2>
+                <form id="submitJobForm">
+                    <div class="form-group">
+                        <label>Payload Source (path to .bin)</label>
+                        <input type="text" id="jobSource" placeholder="/path/to/payload.bin" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Max Rounds</label>
+                        <input type="number" id="jobMaxRounds" value="10" min="1" max="100">
+                    </div>
+                    <div class="form-group">
+                        <label>Target OS (optional)</label>
+                        <select id="jobTargetOs">
+                            <option value="">Any</option>
+                            <option value="win10">Windows 10</option>
+                            <option value="win11">Windows 11</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Required Capabilities (comma-separated)</label>
+                        <input type="text" id="jobCapabilities" placeholder="defender, rededr">
+                    </div>
+                    <div class="flex-row">
+                        <div class="form-group flex-grow">
+                            <label>Carrier</label>
+                            <select id="moduleCarrier">
+                                <option value="alloc_rw_rx">alloc_rw_rx</option>
+                                <option value="change_rw_rx">change_rw_rx</option>
+                                <option value="peb_walk">peb_walk</option>
+                            </select>
+                        </div>
+                        <div class="form-group flex-grow">
+                            <label>Decoder</label>
+                            <select id="moduleDecoder">
+                                <option value="xor">xor</option>
+                                <option value="english">english</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="jobStopOnEvasion"> Stop on first evasion
+                        </label>
+                    </div>
+                    <button type="submit" class="btn-primary">Submit Job</button>
+                </form>
+                <div class="response-box hidden" id="submitJobResponse"></div>
+            </div>
+
+            <!-- Workers Card -->
+            <div class="card">
+                <h2>Workers</h2>
+                <button class="btn-secondary btn-sm mb-10" onclick="refreshWorkers()">Refresh</button>
+                <table id="workersTable">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>OS</th>
+                            <th>Capabilities</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="workersBody">
+                        <tr><td colspan="4">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Job Status Card -->
+            <div class="card">
+                <h2>Job Status</h2>
+                <div class="flex-row mb-10">
+                    <input type="text" id="jobIdInput" placeholder="Job ID" class="flex-grow">
+                    <button class="btn-secondary" onclick="getJobStatus()">Get Status</button>
+                    <button class="btn-secondary" onclick="getJobProgress()">Progress</button>
+                    <button class="btn-danger btn-sm" onclick="stopJob()">Stop</button>
+                </div>
+                <div class="response-box" id="jobStatusResponse">Enter a Job ID and click Get Status</div>
+            </div>
+
+            <!-- Round Details Card -->
+            <div class="card">
+                <h2>Round Details</h2>
+                <div class="flex-row mb-10">
+                    <input type="text" id="roundJobId" placeholder="Job ID" class="flex-grow">
+                    <input type="text" id="roundId" placeholder="Round ID" class="flex-grow">
+                    <button class="btn-secondary" onclick="getRound()">Get Round</button>
+                </div>
+                <div class="response-box" id="roundResponse">Enter Job ID and Round ID</div>
+            </div>
+
+            <!-- Compare Runs Card -->
+            <div class="card">
+                <h2>Compare Runs</h2>
+                <div class="flex-row mb-10">
+                    <input type="text" id="baselineRunId" placeholder="Baseline Run ID" class="flex-grow">
+                    <input type="text" id="instrumentedRunId" placeholder="Instrumented Run ID" class="flex-grow">
+                    <button class="btn-secondary" onclick="compareRuns()">Compare</button>
+                </div>
+                <div class="response-box" id="compareResponse">Enter Run IDs to compare</div>
+            </div>
+
+            <!-- Query Results Card -->
+            <div class="card">
+                <h2>Query Results</h2>
+                <div class="form-group">
+                    <label>Job IDs (comma-separated)</label>
+                    <input type="text" id="queryJobIds" placeholder="job-1, job-2">
+                </div>
+                <div class="flex-row mb-10">
+                    <div class="form-group flex-grow">
+                        <label>Date From</label>
+                        <input type="date" id="queryDateFrom">
+                    </div>
+                    <div class="form-group flex-grow">
+                        <label>Date To</label>
+                        <input type="date" id="queryDateTo">
+                    </div>
+                </div>
+                <button class="btn-secondary" onclick="queryResults()">Query</button>
+                <div class="response-box mt-10" id="queryResponse">Enter filters and click Query</div>
+            </div>
+
+            <!-- Triage Card -->
+            <div class="card">
+                <h2>Submit Triage</h2>
+                <div class="form-group">
+                    <label>Job ID</label>
+                    <input type="text" id="triageJobId" placeholder="job-123">
+                </div>
+                <div class="form-group">
+                    <label>AV Product</label>
+                    <input type="text" id="triageAvProduct" placeholder="Windows Defender">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="triageDetected"> Detected
+                    </label>
+                </div>
+                <button class="btn-secondary" onclick="submitTriage()">Submit Triage</button>
+                <div class="response-box mt-10 hidden" id="triageResponse"></div>
+            </div>
+
+            <!-- Telemetry Card (Full Width) -->
+            <div class="card" style="grid-column: 1 / -1;">
+                <h2>Real-time Telemetry</h2>
+                <div class="flex-row mb-10">
+                    <input type="text" id="telemetryJobFilter" placeholder="Filter by Job ID (optional)" class="flex-grow">
+                    <button class="btn-primary" id="wsConnectBtn" onclick="toggleWebSocket()">Connect</button>
+                    <button class="btn-secondary" onclick="clearTelemetry()">Clear</button>
+                </div>
+                <div class="telemetry-log" id="telemetryLog">
+                    <div class="telemetry-entry">WebSocket disconnected. Click Connect to start.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';  // Same origin
+        let ws = null;
+
+        // Health check
+        async function checkHealth() {
+            try {
+                const resp = await fetch(`${API_BASE}/api/health`);
+                const data = await resp.json();
+                const dot = document.getElementById('healthDot');
+                const status = document.getElementById('healthStatus');
+
+                if (data.data.controller_connected) {
+                    dot.className = 'status-dot healthy';
+                    status.textContent = 'Connected';
+                } else {
+                    dot.className = 'status-dot degraded';
+                    status.textContent = 'Controller Disconnected';
+                }
+            } catch (e) {
+                document.getElementById('healthDot').className = 'status-dot offline';
+                document.getElementById('healthStatus').textContent = 'Backend Offline';
+            }
+        }
+
+        // Workers
+        async function refreshWorkers() {
+            try {
+                const resp = await fetch(`${API_BASE}/api/workers`);
+                const data = await resp.json();
+                const workers = data.data.workers || [];
+
+                // Update stats
+                document.getElementById('statWorkers').textContent = data.data.total || 0;
+                document.getElementById('statAvailable').textContent = data.data.available || 0;
+                document.getElementById('statBusy').textContent = data.data.busy || 0;
+                document.getElementById('statOffline').textContent = data.data.offline || 0;
+
+                // Update table
+                const tbody = document.getElementById('workersBody');
+                if (workers.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4">No workers connected</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = workers.map(w => `
+                    <tr>
+                        <td>${w.id}</td>
+                        <td>${w.os_version}</td>
+                        <td>${w.capabilities.join(', ') || '-'}</td>
+                        <td><span class="badge badge-${w.status}">${w.status}</span></td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                document.getElementById('workersBody').innerHTML =
+                    `<tr><td colspan="4">Error: ${e.message}</td></tr>`;
+            }
+        }
+
+        // Submit Job
+        document.getElementById('submitJobForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const responseBox = document.getElementById('submitJobResponse');
+            responseBox.classList.remove('hidden');
+            responseBox.textContent = 'Submitting...';
+
+            const caps = document.getElementById('jobCapabilities').value;
+            const payload = {
+                source: document.getElementById('jobSource').value,
+                max_rounds: parseInt(document.getElementById('jobMaxRounds').value),
+                target_os: document.getElementById('jobTargetOs').value || null,
+                required_capabilities: caps ? caps.split(',').map(c => c.trim()) : [],
+                modules: {
+                    carrier: document.getElementById('moduleCarrier').value,
+                    decoder: document.getElementById('moduleDecoder').value
+                },
+                stop_on_evasion: document.getElementById('jobStopOnEvasion').checked
+            };
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/jobs`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                responseBox.textContent = JSON.stringify(data, null, 2);
+
+                if (data.data?.job_id) {
+                    document.getElementById('jobIdInput').value = data.data.job_id;
+                }
+            } catch (e) {
+                responseBox.textContent = `Error: ${e.message}`;
+            }
+        });
+
+        // Job Status
+        async function getJobStatus() {
+            const jobId = document.getElementById('jobIdInput').value;
+            if (!jobId) return alert('Enter a Job ID');
+
+            const responseBox = document.getElementById('jobStatusResponse');
+            responseBox.textContent = 'Loading...';
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/jobs/${jobId}`);
+                const data = await resp.json();
+                responseBox.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                responseBox.textContent = `Error: ${e.message}`;
+            }
+        }
+
+        // Job Progress
+        async function getJobProgress() {
+            const jobId = document.getElementById('jobIdInput').value;
+            if (!jobId) return alert('Enter a Job ID');
+
+            const responseBox = document.getElementById('jobStatusResponse');
+            responseBox.textContent = 'Loading...';
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/jobs/${jobId}/progress`);
+                const data = await resp.json();
+                responseBox.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                responseBox.textContent = `Error: ${e.message}`;
+            }
+        }
+
+        // Stop Job
+        async function stopJob() {
+            const jobId = document.getElementById('jobIdInput').value;
+            if (!jobId) return alert('Enter a Job ID');
+            if (!confirm(`Stop job ${jobId}?`)) return;
+
+            const responseBox = document.getElementById('jobStatusResponse');
+            responseBox.textContent = 'Stopping...';
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/jobs/${jobId}/stop`, { method: 'POST' });
+                const data = await resp.json();
+                responseBox.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                responseBox.textContent = `Error: ${e.message}`;
+            }
+        }
+
+        // Get Round
+        async function getRound() {
+            const jobId = document.getElementById('roundJobId').value;
+            const roundId = document.getElementById('roundId').value;
+            if (!jobId || !roundId) return alert('Enter both Job ID and Round ID');
+
+            const responseBox = document.getElementById('roundResponse');
+            responseBox.textContent = 'Loading...';
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/jobs/${jobId}/rounds/${roundId}`);
+                const data = await resp.json();
+                responseBox.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                responseBox.textContent = `Error: ${e.message}`;
+            }
+        }
+
+        // Compare Runs
+        async function compareRuns() {
+            const baseline = document.getElementById('baselineRunId').value;
+            const instrumented = document.getElementById('instrumentedRunId').value;
+            if (!baseline || !instrumented) return alert('Enter both Run IDs');
+
+            const responseBox = document.getElementById('compareResponse');
+            responseBox.textContent = 'Loading...';
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/runs/compare?baseline=${baseline}&instrumented=${instrumented}`);
+                const data = await resp.json();
+                responseBox.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                responseBox.textContent = `Error: ${e.message}`;
+            }
+        }
+
+        // Query Results
+        async function queryResults() {
+            const jobIds = document.getElementById('queryJobIds').value;
+            const dateFrom = document.getElementById('queryDateFrom').value;
+            const dateTo = document.getElementById('queryDateTo').value;
+
+            const payload = {
+                job_ids: jobIds ? jobIds.split(',').map(j => j.trim()) : [],
+                date_from: dateFrom || null,
+                date_to: dateTo || null
+            };
+
+            const responseBox = document.getElementById('queryResponse');
+            responseBox.textContent = 'Loading...';
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                responseBox.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                responseBox.textContent = `Error: ${e.message}`;
+            }
+        }
+
+        // Submit Triage
+        async function submitTriage() {
+            const jobId = document.getElementById('triageJobId').value;
+            if (!jobId) return alert('Enter a Job ID');
+
+            const payload = {
+                job_id: jobId,
+                detected: document.getElementById('triageDetected').checked,
+                av_product: document.getElementById('triageAvProduct').value
+            };
+
+            const responseBox = document.getElementById('triageResponse');
+            responseBox.classList.remove('hidden');
+            responseBox.textContent = 'Submitting...';
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/triage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                responseBox.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                responseBox.textContent = `Error: ${e.message}`;
+            }
+        }
+
+        // WebSocket Telemetry
+        function toggleWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                return;
+            }
+
+            const filter = document.getElementById('telemetryJobFilter').value;
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = filter
+                ? `${protocol}//${window.location.host}/ws/telemetry/filtered?job_id=${filter}`
+                : `${protocol}//${window.location.host}/ws/telemetry`;
+
+            ws = new WebSocket(wsUrl);
+            const log = document.getElementById('telemetryLog');
+            const btn = document.getElementById('wsConnectBtn');
+
+            ws.onopen = () => {
+                btn.textContent = 'Disconnect';
+                btn.className = 'btn-danger';
+                log.innerHTML = '<div class="telemetry-entry">Connected to telemetry stream...</div>';
+            };
+
+            ws.onclose = () => {
+                btn.textContent = 'Connect';
+                btn.className = 'btn-primary';
+                addTelemetryEntry('Disconnected');
+            };
+
+            ws.onerror = (e) => {
+                addTelemetryEntry(`Error: Connection failed`);
+            };
+
+            ws.onmessage = (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    const time = new Date().toLocaleTimeString();
+                    const entry = `<span class="time">[${time}]</span> <span class="type">${data.event_type}</span> <span class="job">${data.job_id}</span>`;
+                    addTelemetryEntry(entry);
+                } catch {
+                    addTelemetryEntry(e.data);
+                }
+            };
+        }
+
+        function addTelemetryEntry(html) {
+            const log = document.getElementById('telemetryLog');
+            const div = document.createElement('div');
+            div.className = 'telemetry-entry';
+            div.innerHTML = html;
+            log.appendChild(div);
+            log.scrollTop = log.scrollHeight;
+
+            // Keep only last 500 entries
+            while (log.children.length > 500) {
+                log.removeChild(log.firstChild);
+            }
+        }
+
+        function clearTelemetry() {
+            document.getElementById('telemetryLog').innerHTML = '';
+        }
+
+        // Init
+        checkHealth();
+        refreshWorkers();
+        setInterval(checkHealth, 10000);
+        setInterval(refreshWorkers, 30000);
+    </script>
+</body>
+</html>
