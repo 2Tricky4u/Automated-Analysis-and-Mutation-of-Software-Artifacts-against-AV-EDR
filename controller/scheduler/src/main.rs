@@ -98,13 +98,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let es_client = Elasticsearch::new(es_transport);
     info!("Elasticsearch: {}", config.elasticsearch.url);
 
-    // Create channels
-    let (events_tx, events_rx) = mpsc::channel::<TargetEvent>(1000);
-    let (orchestrator_tx, orchestrator_rx) = mpsc::channel::<OrchestratorEvent>(100);
-    let (job_tx, job_rx) = mpsc::channel::<JobSession>(100);
-    let (pool_event_tx, pool_event_rx) = mpsc::channel::<PoolEvent>(256);
-    // Aggregated worker event bus - all workers send to this single channel
-    let (worker_event_tx, worker_event_rx) = mpsc::channel::<WorkerEvent>(256);
+    // Create channels - sized for powerful controller with many workers
+    // events: high-volume telemetry from all workers, allow large bursts
+    let (events_tx, events_rx) = mpsc::channel::<TargetEvent>(4096);
+    // orchestrator: rare connect/disconnect events only
+    let (orchestrator_tx, orchestrator_rx) = mpsc::channel::<OrchestratorEvent>(64);
+    // job: heavyweight operations, moderate queue depth
+    let (job_tx, job_rx) = mpsc::channel::<JobSession>(128);
+    // pool_event: all run/round completions funnel here, needs headroom
+    let (pool_event_tx, pool_event_rx) = mpsc::channel::<PoolEvent>(1024);
+    // worker_event: aggregated bus from all workers, O(workers) per burst
+    let (worker_event_tx, worker_event_rx) = mpsc::channel::<WorkerEvent>(1024);
 
     // Create shared pool group registry
     let pool_registry = Arc::new(PoolGroupRegistry::new(pool_event_tx));
