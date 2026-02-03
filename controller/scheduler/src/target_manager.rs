@@ -416,8 +416,8 @@ impl TargetManager {
         let channel = self.get_channel(id).await?;
         let mut client = WorkerAgentClient::new(channel);
 
-        // Create channel for outgoing messages to remote VM
-        let (stream_tx, stream_rx) = mpsc::channel::<ControllerMessage>(100);
+        // Create channel for outgoing messages to remote VM (commands, heartbeats)
+        let (stream_tx, stream_rx) = mpsc::channel::<ControllerMessage>(128);
         let outgoing = tokio_stream::wrappers::ReceiverStream::new(stream_rx);
 
         // Establish stream
@@ -434,8 +434,8 @@ impl TargetManager {
             }
         }
 
-        // Create channels for Worker
-        let (result_tx, result_rx) = mpsc::channel::<RemoteRunResult>(64);
+        // Create channel for results from VM (run completions)
+        let (result_tx, result_rx) = mpsc::channel::<RemoteRunResult>(128);
 
         // Clone the shared worker event channel (all workers send to same bus)
         let worker_event_tx = self.worker_event_tx.clone();
