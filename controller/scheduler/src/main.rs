@@ -24,7 +24,7 @@ mod dispatch;
 mod service;
 mod target_manager;
 
-use dispatch::{JobSession, Orchestrator, OrchestratorEvent, PoolEvent, PoolGroupRegistry};
+use dispatch::{JobSession, Orchestrator, OrchestratorEvent, PoolEvent, PoolGroupRegistry, WorkerEvent};
 use service::SchedulerService;
 use target_manager::{TargetEvent, TargetManager};
 
@@ -103,6 +103,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (orchestrator_tx, orchestrator_rx) = mpsc::channel::<OrchestratorEvent>(100);
     let (job_tx, job_rx) = mpsc::channel::<JobSession>(100);
     let (pool_event_tx, pool_event_rx) = mpsc::channel::<PoolEvent>(256);
+    // Aggregated worker event bus - all workers send to this single channel
+    let (worker_event_tx, worker_event_rx) = mpsc::channel::<WorkerEvent>(256);
 
     // Create shared pool group registry
     let pool_registry = Arc::new(PoolGroupRegistry::new(pool_event_tx));
@@ -112,6 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.scheduler.run_timeout_secs,
         events_tx.clone(),
         orchestrator_tx.clone(),
+        worker_event_tx,
         Arc::clone(&pool_registry),
     ));
 
@@ -122,6 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         job_rx,
         Arc::clone(&pool_registry),
         pool_event_rx,
+        worker_event_rx,
     );
     tokio::spawn(orchestrator.run());
 

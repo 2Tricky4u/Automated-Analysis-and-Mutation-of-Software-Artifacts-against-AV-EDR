@@ -162,6 +162,8 @@ pub struct TargetManager {
     targets: DashMap<String, Target>,
     events_tx: mpsc::Sender<TargetEvent>,
     orchestrator_tx: mpsc::Sender<OrchestratorEvent>,
+    /// Shared channel for worker events (all workers send to this)
+    worker_event_tx: mpsc::Sender<WorkerEvent>,
     rpc_timeout: Duration,
     /// Shared pool group registry (workers with same capabilities share a pool)
     pool_registry: Arc<PoolGroupRegistry>,
@@ -172,12 +174,14 @@ impl TargetManager {
         rpc_timeout_secs: u64,
         events_tx: mpsc::Sender<TargetEvent>,
         orchestrator_tx: mpsc::Sender<OrchestratorEvent>,
+        worker_event_tx: mpsc::Sender<WorkerEvent>,
         pool_registry: Arc<PoolGroupRegistry>,
     ) -> Self {
         Self {
             targets: DashMap::new(),
             events_tx,
             orchestrator_tx,
+            worker_event_tx,
             rpc_timeout: Duration::from_secs(rpc_timeout_secs),
             pool_registry,
         }
@@ -432,8 +436,10 @@ impl TargetManager {
 
         // Create channels for Worker
         let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCommand>(16);
-        let (event_tx, event_rx) = mpsc::channel::<WorkerEvent>(64);
         let (result_tx, result_rx) = mpsc::channel::<RemoteRunResult>(64);
+
+        // Clone the shared worker event channel (all workers send to same bus)
+        let worker_event_tx = self.worker_event_tx.clone();
 
         // Get worker info
         let worker_info = {
@@ -475,7 +481,7 @@ impl TargetManager {
             worker_info.clone(),
             pool,
             cmd_rx,
-            event_tx,
+            worker_event_tx,
             stream_tx.clone(),
             result_rx,
             artifact_sender,
@@ -489,7 +495,6 @@ impl TargetManager {
                 worker_id: WorkerId(id.to_string()),
                 info: worker_info,
                 cmd_tx,
-                event_rx,
             })
             .await;
 
@@ -879,9 +884,10 @@ mod tests {
     fn create_test_manager() -> TargetManager {
         let (events_tx, _) = mpsc::channel(100);
         let (orch_tx, _) = mpsc::channel(100);
+        let (worker_event_tx, _) = mpsc::channel(100);
         let (pool_event_tx, _) = mpsc::channel(100);
         let pool_registry = Arc::new(PoolGroupRegistry::new(pool_event_tx));
-        TargetManager::new(30, events_tx, orch_tx, pool_registry)
+        TargetManager::new(30, events_tx, orch_tx, worker_event_tx, pool_registry)
     }
 
     #[test]
