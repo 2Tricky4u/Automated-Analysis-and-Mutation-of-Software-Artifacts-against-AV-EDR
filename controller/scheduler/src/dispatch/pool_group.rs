@@ -57,6 +57,7 @@ pub struct PoolMetrics {
 #[derive(Debug, Clone)]
 pub enum PoolEvent {
     /// Run was dispatched to a worker
+    /// TODO: Never sent - Worker.dispatch_run() should emit this
     RunDispatched {
         pool_id: GroupId,
         run_id: RunId,

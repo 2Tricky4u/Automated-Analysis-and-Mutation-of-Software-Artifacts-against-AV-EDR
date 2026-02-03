@@ -581,6 +581,9 @@ impl TargetManager {
             })
             .await;
 
+        // TODO: Send OrchestratorEvent::WorkerDisconnected to orchestrator_tx
+        // Currently Orchestrator has on_worker_disconnected() but it's never called
+
         warn!("Target {} disconnected", id);
     }
 

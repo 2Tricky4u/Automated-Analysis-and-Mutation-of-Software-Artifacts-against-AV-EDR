@@ -20,6 +20,8 @@ use tracing::{debug, info, warn};
 // ============================================================================
 
 /// Handle to a connected worker.
+/// TODO: cmd_tx is stored but never used (Shutdown command not sent)
+/// TODO: event_rx receives events but poll_worker_events() is disabled
 pub struct WorkerHandle {
     pub info: WorkerInfo,
     pub cmd_tx: mpsc::Sender<WorkerCommand>,
@@ -281,6 +283,7 @@ impl Orchestrator {
 
     // ========================================================================
     // Stats (public API for monitoring/management)
+    // TODO: Expose these via gRPC service (ListWorkers, GetStats endpoints)
     // ========================================================================
 
     #[allow(dead_code)]
