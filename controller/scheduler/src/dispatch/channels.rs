@@ -23,11 +23,9 @@ pub enum WorkerCommand {
     Shutdown,
 }
 
-/// Events sent from Worker to Orchestrator
-/// TODO: Worker sends these events but Orchestrator poll_worker_events() is disabled
-/// TODO: Enable polling in Orchestrator.run() or remove this channel
+/// Events sent from Worker to Orchestrator via shared event bus.
+/// All workers send to a single aggregated channel for O(1) receive.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum WorkerEvent {
     /// Worker is idle and can accept a job
     Available { worker_id: WorkerId },
@@ -51,18 +49,14 @@ pub enum WorkerEvent {
 
 /// Events sent from TargetManager to Orchestrator
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum OrchestratorEvent {
     /// New worker connected
-    /// TODO: cmd_tx and event_rx are passed but never used by Orchestrator
     WorkerConnected {
         worker_id: WorkerId,
         info: WorkerInfo,
         cmd_tx: mpsc::Sender<WorkerCommand>,
-        event_rx: mpsc::Receiver<WorkerEvent>,
     },
     /// Worker disconnected
-    /// TODO: TargetManager never sends this - add to stream_handler on disconnect
     WorkerDisconnected {
         worker_id: WorkerId,
         reason: String,

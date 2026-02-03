@@ -20,12 +20,9 @@ use tracing::{debug, info, warn};
 // ============================================================================
 
 /// Handle to a connected worker.
-/// TODO: cmd_tx is stored but never used (Shutdown command not sent)
-/// TODO: event_rx receives events but poll_worker_events() is disabled
 pub struct WorkerHandle {
     pub info: WorkerInfo,
     pub cmd_tx: mpsc::Sender<WorkerCommand>,
-    pub event_rx: mpsc::Receiver<WorkerEvent>,
     pub group_id: GroupId,
 }
 
@@ -53,6 +50,9 @@ pub struct Orchestrator {
 
     /// Channel for pool events
     pool_event_rx: mpsc::Receiver<PoolEvent>,
+
+    /// Aggregated channel for worker events (all workers send to this)
+    worker_event_rx: mpsc::Receiver<WorkerEvent>,
 }
 
 impl Orchestrator {
@@ -61,6 +61,7 @@ impl Orchestrator {
         job_submit_rx: mpsc::Receiver<JobSession>,
         pool_registry: Arc<PoolGroupRegistry>,
         pool_event_rx: mpsc::Receiver<PoolEvent>,
+        worker_event_rx: mpsc::Receiver<WorkerEvent>,
     ) -> Self {
         Self {
             pool_registry,
@@ -69,17 +70,16 @@ impl Orchestrator {
             orchestrator_rx,
             job_submit_rx,
             pool_event_rx,
+            worker_event_rx,
         }
     }
 
     /// Main orchestrator loop.
+    /// Event-driven: wakes only when there's actual work to do.
     pub async fn run(mut self) {
         info!("Orchestrator started");
 
         loop {
-            // Build list of worker IDs for event polling
-            let worker_ids: Vec<WorkerId> = self.workers.keys().cloned().collect();
-
             tokio::select! {
                 biased;
 
@@ -91,8 +91,8 @@ impl Orchestrator {
                 // Orchestrator events (worker connect/disconnect)
                 Some(event) = self.orchestrator_rx.recv() => {
                     match event {
-                        OrchestratorEvent::WorkerConnected { worker_id, info, cmd_tx, event_rx } => {
-                            self.on_worker_connected(worker_id, info, cmd_tx, event_rx).await;
+                        OrchestratorEvent::WorkerConnected { worker_id, info, cmd_tx } => {
+                            self.on_worker_connected(worker_id, info, cmd_tx).await;
                         }
                         OrchestratorEvent::WorkerDisconnected { worker_id, reason } => {
                             self.on_worker_disconnected(&worker_id, &reason).await;
@@ -105,12 +105,10 @@ impl Orchestrator {
                     self.on_pool_event(event).await;
                 }
 
-                // Worker events (for observability) //TODO if wants log
-               // result = poll_worker_events(&mut self.workers, &worker_ids) => {
-               //     if let Some((worker_id, event)) = result {
-               //         self.on_worker_event(worker_id, event).await;
-               //     }
-               // }
+                // Worker events (aggregated bus - O(1) receive per event)
+                Some(event) = self.worker_event_rx.recv() => {
+                    self.on_worker_event(event).await;
+                }
             }
         }
     }
@@ -140,7 +138,6 @@ impl Orchestrator {
         worker_id: WorkerId,
         info: WorkerInfo,
         cmd_tx: mpsc::Sender<WorkerCommand>,
-        event_rx: mpsc::Receiver<WorkerEvent>,
     ) {
         let group_id = GroupId::from_worker_info(&info);
 
@@ -154,7 +151,6 @@ impl Orchestrator {
         let handle = WorkerHandle {
             info,
             cmd_tx,
-            event_rx,
             group_id: group_id.clone(),
         };
         self.workers.insert(worker_id.clone(), handle);
@@ -257,8 +253,8 @@ impl Orchestrator {
         }
     }
 
-    #[warn(dead_code)]
-    async fn on_worker_event(&mut self, worker_id: WorkerId, event: WorkerEvent) {
+    /// Handle worker event from aggregated bus.
+    async fn on_worker_event(&mut self, event: WorkerEvent) {
         match event {
             WorkerEvent::Available { worker_id } => {
                 debug!("Worker {} available", worker_id);
@@ -305,30 +301,6 @@ impl Orchestrator {
     pub async fn pool_group_ids(&self) -> Vec<GroupId> {
         self.pool_registry.list_ids().await
     }
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/// Poll events from any worker.
-async fn poll_worker_events(
-    workers: &mut HashMap<WorkerId, WorkerHandle>,
-    worker_ids: &[WorkerId],
-) -> Option<(WorkerId, WorkerEvent)> {
-    // Simple round-robin poll
-    for id in worker_ids {
-        if let Some(handle) = workers.get_mut(id) {
-            match handle.event_rx.try_recv() {
-                Ok(event) => return Some((id.clone(), event)),
-                Err(_) => continue,
-            }
-        }
-    }
-
-    // No events ready, yield briefly
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-    None
 }
 
 #[cfg(test)]
