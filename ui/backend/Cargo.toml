@@ -4,11 +4,36 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-axum = "0.7"
+# Web framework
+axum = { version = "0.7", features = ["ws"] }
 tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "fs"] }
-tokio.workspace = true
-serde.workspace = true
+tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+
+# gRPC client
+tonic.workspace = true
+prost.workspace = true
+tonic-prost = "0.14.2"
+
+# Logging
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+# Utils
+uuid = { version = "1.11", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow.workspace = true
+
+# Elasticsearch client (for direct queries)
+elasticsearch = "8.5.0-alpha.1"
+
+[build-dependencies]
+tonic-prost-build = "0.14.2"
