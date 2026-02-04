@@ -194,14 +194,22 @@ async fn get_rededr_version() -> Option<String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()
-        .unwrap();
+        .ok()?;
 
-    if let Ok(response) = client.get("http://localhost:8081/api/version").send().await
-        && let Ok(text) = response.text().await
-    {
-        return Some(text.trim().to_string());
-    }
-    None
+    let resp = client
+        .get("http://localhost:8081/api/logs/agent")
+        .send()
+        .await
+        .ok()?;
+
+    let logs: Vec<String> = resp.json().await.ok()?;
+
+    // Expected format: "RedEdr 0.4"
+    logs.iter()
+        .find_map(|line| {
+            line.strip_prefix("RedEdr ")
+                .map(|v| v.trim().to_string())
+        })
 }
 
 fn check_defender_available() -> bool {
