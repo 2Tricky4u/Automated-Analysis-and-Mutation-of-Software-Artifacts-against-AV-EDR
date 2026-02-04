@@ -98,6 +98,7 @@ pub struct Target {
     pub registration_type: RegistrationType,
     pub current_job: Option<String>,
     pub last_seen: SystemTime,
+    pub connected_at: Option<SystemTime>,
     channel: Option<Channel>,
     stream_tx: Option<mpsc::Sender<ControllerMessage>>,
 }
@@ -143,6 +144,7 @@ impl Target {
             registration_type: RegistrationType::Static,
             current_job: None,
             last_seen: SystemTime::now(),
+            connected_at: None,
             channel: None,
             stream_tx: None,
         }
@@ -337,6 +339,7 @@ impl TargetManager {
             .ok_or_else(|| anyhow!("Target not found: {}", id))?;
         if target.status == TargetStatus::Offline {
             target.status = TargetStatus::Available;
+            target.connected_at = Some(SystemTime::now());
         }
         target.touch();
         debug!("Target {} connected", id);

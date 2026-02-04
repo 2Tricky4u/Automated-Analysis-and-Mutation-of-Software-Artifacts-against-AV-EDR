@@ -3,7 +3,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use sysinfo::CpuRefreshKind;
 use tracing::debug;
-
+use regex::Regex;
 // Import protobuf types
 use crate::automutate::common::ToolVersions;
 
@@ -191,6 +191,8 @@ async fn check_rededr_available() -> bool {
 }
 
 async fn get_rededr_version() -> Option<String> {
+    let re = Regex::new(r"RedEdr\s+([0-9]+(?:\.[0-9]+)*)").ok()?;
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()
@@ -204,12 +206,9 @@ async fn get_rededr_version() -> Option<String> {
 
     let logs: Vec<String> = resp.json().await.ok()?;
 
-    // Expected format: "RedEdr 0.4"
     logs.iter()
-        .find_map(|line| {
-            line.strip_prefix("RedEdr ")
-                .map(|v| v.trim().to_string())
-        })
+        .find_map(|l| re.captures(l).and_then(|c| c.get(1)))
+        .map(|m| m.as_str().to_string())
 }
 
 fn check_defender_available() -> bool {

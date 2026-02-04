@@ -4,12 +4,15 @@
 
 use crate::automutate::common::JobId;
 use crate::automutate::controller::{
-    CompareRunsRequest, CompareRunsResponse, GetRoundRequest, GetRoundResponse,
-    JobProgressRequest, JobProgressResponse, JobRequest, JobResponse, JobStatusRequest,
-    JobStatusResponse, StatusAck, StatusReport, StopJobRequest, StopJobResponse,
+    BehaviorComparisonProto, CompareRunsRequest, CompareRunsResponse, GetRoundRequest,
+    GetRoundResponse, JobProgressRequest, JobProgressResponse, JobRequest, JobResponse,
+    JobStatusRequest, JobStatusResponse, RoundSummaryProto, StatusAck, StatusReport,
+    StopJobRequest, StopJobResponse,
 };
 use crate::dispatch::{JobSession, ModularBuildSpec, ModuleSelectionSpec};
 use crate::service::SchedulerService;
+use elasticsearch::SearchParts;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -116,24 +119,72 @@ pub async fn schedule_job(
 
 /// Get job status
 /// Note: With dispatch architecture, job state is tracked by Worker/Orchestrator.
-/// For now, query ES for stored job state.
+/// Query ES for stored job state.
 pub async fn get_job_status(
     service: &SchedulerService,
     request: Request<JobStatusRequest>,
 ) -> Result<Response<JobStatusResponse>, Status> {
     let req = request.into_inner();
-
     debug!("[RPC] GetJobStatus: job_id={}", req.job_id);
 
-    // Query ES for job status
-    // TODO: Implement ES query for job status
-    Ok(Response::new(JobStatusResponse {
-        job_id: req.job_id,
-        status: "unknown".to_string(),
-        progress_percent: 0,
-        current_phase: "Status tracking via ES pending".to_string(),
-        logs: vec![],
-    }))
+    // Query ES for job document across all jobs-* indices
+    let search_result = service
+        .es_client
+        .search(SearchParts::Index(&["jobs-*"]))
+        .body(json!({
+            "query": {
+                "term": { "job_id": req.job_id }
+            },
+            "size": 1
+        }))
+        .send()
+        .await;
+
+    match search_result {
+        Ok(response) => {
+            if let Ok(body) = response.json::<Value>().await {
+                if let Some(hits) = body["hits"]["hits"].as_array() {
+                    if let Some(hit) = hits.first() {
+                        let source = &hit["_source"];
+                        let status = source["status"].as_str().unwrap_or("unknown").to_string();
+                        let current_round = source["current_round"].as_u64().unwrap_or(0) as u32;
+                        let max_rounds = source["max_rounds"].as_u64().unwrap_or(0) as u32;
+                        let progress = if max_rounds > 0 {
+                            ((current_round as f64 / max_rounds as f64) * 100.0) as i32
+                        } else {
+                            0
+                        };
+
+                        return Ok(Response::new(JobStatusResponse {
+                            job_id: req.job_id,
+                            status,
+                            progress_percent: progress,
+                            current_phase: format!("Round {}/{}", current_round, max_rounds),
+                            logs: vec![],
+                        }));
+                    }
+                }
+            }
+            // Job not found in ES
+            Ok(Response::new(JobStatusResponse {
+                job_id: req.job_id,
+                status: "not_found".to_string(),
+                progress_percent: 0,
+                current_phase: "Job not found in Elasticsearch".to_string(),
+                logs: vec![],
+            }))
+        }
+        Err(e) => {
+            error!("ES query failed: {}", e);
+            Ok(Response::new(JobStatusResponse {
+                job_id: req.job_id,
+                status: "error".to_string(),
+                progress_percent: 0,
+                current_phase: format!("ES query failed: {}", e),
+                logs: vec![],
+            }))
+        }
+    }
 }
 
 /// Get detailed job progress
@@ -142,18 +193,88 @@ pub async fn get_job_progress(
     request: Request<JobProgressRequest>,
 ) -> Result<Response<JobProgressResponse>, Status> {
     let job_id = &request.get_ref().job_id;
-
     debug!("[RPC] GetJobProgress: job_id={}", job_id);
 
-    // Query ES for job progress
-    // TODO: Implement ES query for rounds
+    // Query ES for job document
+    let job_result = service
+        .es_client
+        .search(SearchParts::Index(&["jobs-*"]))
+        .body(json!({
+            "query": { "term": { "job_id": job_id } },
+            "size": 1
+        }))
+        .send()
+        .await;
+
+    let (status, current_round, max_rounds) = match job_result {
+        Ok(response) => {
+            if let Ok(body) = response.json::<Value>().await {
+                if let Some(hit) = body["hits"]["hits"].as_array().and_then(|h| h.first()) {
+                    let source = &hit["_source"];
+                    (
+                        source["status"].as_str().unwrap_or("unknown").to_string(),
+                        source["current_round"].as_u64().unwrap_or(0) as u32,
+                        source["max_rounds"].as_u64().unwrap_or(0) as u32,
+                    )
+                } else {
+                    ("not_found".to_string(), 0, 0)
+                }
+            } else {
+                ("error".to_string(), 0, 0)
+            }
+        }
+        Err(_) => ("error".to_string(), 0, 0),
+    };
+
+    // Query ES for rounds associated with this job
+    let rounds_result = service
+        .es_client
+        .search(SearchParts::Index(&["rounds-*"]))
+        .body(json!({
+            "query": { "term": { "job_id": job_id } },
+            "sort": [{ "round_number": "asc" }],
+            "size": 100
+        }))
+        .send()
+        .await;
+
+    let mut rounds = Vec::new();
+    if let Ok(response) = rounds_result {
+        if let Ok(body) = response.json::<Value>().await {
+            if let Some(hits) = body["hits"]["hits"].as_array() {
+                for hit in hits {
+                    let source = &hit["_source"];
+                    rounds.push(RoundSummaryProto {
+                        round_id: source["round_id"].as_str().unwrap_or("").to_string(),
+                        round_number: source["round_number"].as_u64().unwrap_or(0) as u32,
+                        mutations: source["mutations"]
+                            .as_array()
+                            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default(),
+                        detected: source["detected"].as_bool().unwrap_or(false),
+                        behavior_match: source["behavior_match"].as_bool().unwrap_or(false),
+                        evasion_score: source["evasion_score"].as_f64().unwrap_or(0.0),
+                        status: source["status"].as_str().unwrap_or("unknown").to_string(),
+                        completed_at: source["completed_at"].as_i64().unwrap_or(0),
+                    });
+                }
+            }
+        }
+    }
+
+    let progress = if max_rounds > 0 {
+        ((current_round as f64 / max_rounds as f64) * 100.0) as u32
+    } else {
+        0
+    };
+
     Ok(Response::new(JobProgressResponse {
         job_id: job_id.clone(),
-        status: "unknown".to_string(),
-        current_round: 0,
-        max_rounds: 0,
-        progress_percent: 0,
-        rounds: vec![],
+        status,
+        current_round,
+        max_rounds,
+        progress_percent: progress,
+        rounds,
     }))
 }
 
@@ -163,16 +284,43 @@ pub async fn stop_job(
     request: Request<StopJobRequest>,
 ) -> Result<Response<StopJobResponse>, Status> {
     let job_id = &request.get_ref().job_id;
-
     debug!("[RPC] StopJob: job_id={}", job_id);
 
-    // TODO: Send stop signal to Orchestrator
-    // For now, just acknowledge
-    warn!("StopJob not fully implemented in dispatch architecture");
+    // Find the pool that has this job and signal shutdown
+    let registry = service.targets.pool_registry();
+    let pool_ids = registry.list_ids().await;
 
+    for group_id in pool_ids {
+        if let Some(pool) = registry.get(&group_id).await {
+            if let Some(current_job_id) = pool.current_job_id().await {
+                if current_job_id.0 == *job_id {
+                    // Found the pool running this job - signal shutdown
+                    pool.shutdown();
+                    info!("Stopped job {} in pool {}", job_id, group_id.as_str());
+
+                    // Update job status in ES
+                    let _ = service
+                        .es_client
+                        .update(elasticsearch::UpdateParts::IndexId("jobs-*", job_id))
+                        .body(json!({
+                            "doc": { "status": "stopped" }
+                        }))
+                        .send()
+                        .await;
+
+                    return Ok(Response::new(StopJobResponse {
+                        stopped: true,
+                        message: format!("Job {} stopped in pool {}", job_id, group_id.as_str()),
+                    }));
+                }
+            }
+        }
+    }
+
+    // Job not found running
     Ok(Response::new(StopJobResponse {
         stopped: false,
-        message: "Job stop signaling pending implementation".to_string(),
+        message: format!("Job {} not found running in any pool", job_id),
     }))
 }
 
@@ -181,16 +329,56 @@ pub async fn get_round(
     service: &SchedulerService,
     request: Request<GetRoundRequest>,
 ) -> Result<Response<GetRoundResponse>, Status> {
+    use crate::automutate::controller::RoundProto;
+
     let req = request.get_ref();
+    debug!("[RPC] GetRound: job_id={}, round_id={}", req.job_id, req.round_id);
 
-    debug!(
-        "[RPC] GetRound: job_id={}, round_id={}",
-        req.job_id, req.round_id
-    );
+    // Query ES for round document
+    let round_result = service
+        .es_client
+        .search(SearchParts::Index(&["rounds-*"]))
+        .body(json!({
+            "query": {
+                "bool": {
+                    "must": [
+                        { "term": { "job_id": req.job_id } },
+                        { "term": { "round_id": req.round_id } }
+                    ]
+                }
+            },
+            "size": 1
+        }))
+        .send()
+        .await;
 
-    // Query ES for round data
-    // TODO: Implement ES query
-    Ok(Response::new(GetRoundResponse { round: None }))
+    match round_result {
+        Ok(response) => {
+            if let Ok(body) = response.json::<Value>().await {
+                if let Some(hit) = body["hits"]["hits"].as_array().and_then(|h| h.first()) {
+                    let source = &hit["_source"];
+
+                    let round = RoundProto {
+                        round_id: source["round_id"].as_str().unwrap_or("").to_string(),
+                        job_id: source["job_id"].as_str().unwrap_or("").to_string(),
+                        round_number: source["round_number"].as_u64().unwrap_or(0) as u32,
+                        mutations: vec![], // TODO: Parse mutations from ES
+                        baseline_run: None,     // TODO: Query run details
+                        instrumented_run: None, // TODO: Query run details
+                        status: source["status"].as_str().unwrap_or("unknown").to_string(),
+                        behavior_match: None,   // TODO: Parse comparison
+                    };
+
+                    return Ok(Response::new(GetRoundResponse { round: Some(round) }));
+                }
+            }
+            Ok(Response::new(GetRoundResponse { round: None }))
+        }
+        Err(e) => {
+            error!("ES query failed for round: {}", e);
+            Ok(Response::new(GetRoundResponse { round: None }))
+        }
+    }
 }
 
 /// Compare baseline vs instrumented runs
@@ -199,15 +387,90 @@ pub async fn compare_runs(
     request: Request<CompareRunsRequest>,
 ) -> Result<Response<CompareRunsResponse>, Status> {
     let req = request.get_ref();
-
     debug!(
         "[RPC] CompareRuns: baseline={}, instrumented={}",
         req.baseline_run_id, req.instrumented_run_id
     );
 
-    // Query ES for run comparison
-    // TODO: Implement ES query
-    Ok(Response::new(CompareRunsResponse { comparison: None }))
+    // Query ES for both runs
+    let runs_result = service
+        .es_client
+        .search(SearchParts::Index(&["runs-*"]))
+        .body(json!({
+            "query": {
+                "terms": {
+                    "run_id": [req.baseline_run_id, req.instrumented_run_id]
+                }
+            },
+            "size": 2
+        }))
+        .send()
+        .await;
+
+    match runs_result {
+        Ok(response) => {
+            if let Ok(body) = response.json::<Value>().await {
+                if let Some(hits) = body["hits"]["hits"].as_array() {
+                    let mut baseline_detected = false;
+                    let mut baseline_exit_code = 0i32;
+                    let mut instrumented_detected = false;
+                    let mut instrumented_exit_code = 0i32;
+                    let mut differences = Vec::new();
+
+                    for hit in hits {
+                        let source = &hit["_source"];
+                        let run_id = source["run_id"].as_str().unwrap_or("");
+                        let detected = source["detected"].as_bool().unwrap_or(false);
+                        let exit_code = source["exit_code"].as_i64().unwrap_or(0) as i32;
+
+                        if run_id == req.baseline_run_id {
+                            baseline_detected = detected;
+                            baseline_exit_code = exit_code;
+                        } else if run_id == req.instrumented_run_id {
+                            instrumented_detected = detected;
+                            instrumented_exit_code = exit_code;
+                        }
+                    }
+
+                    // Calculate differences
+                    if baseline_detected != instrumented_detected {
+                        differences.push(format!(
+                            "Detection mismatch: baseline={}, instrumented={}",
+                            baseline_detected, instrumented_detected
+                        ));
+                    }
+                    if baseline_exit_code != instrumented_exit_code {
+                        differences.push(format!(
+                            "Exit code mismatch: baseline={}, instrumented={}",
+                            baseline_exit_code, instrumented_exit_code
+                        ));
+                    }
+
+                    let outcome_match = baseline_detected == instrumented_detected
+                        && baseline_exit_code == instrumented_exit_code;
+
+                    let confidence = if outcome_match { 1.0 } else { 0.5 };
+
+                    return Ok(Response::new(CompareRunsResponse {
+                        comparison: Some(BehaviorComparisonProto {
+                            outcome_match,
+                            baseline_detected,
+                            baseline_exit_code,
+                            instrumented_detected,
+                            instrumented_exit_code,
+                            differences,
+                            confidence,
+                        }),
+                    }));
+                }
+            }
+            Ok(Response::new(CompareRunsResponse { comparison: None }))
+        }
+        Err(e) => {
+            error!("ES query failed for run comparison: {}", e);
+            Ok(Response::new(CompareRunsResponse { comparison: None }))
+        }
+    }
 }
 
 /// Handle status reports from workers
