@@ -1,6 +1,7 @@
 /// Capability detection for worker self-registration
 use anyhow::Result;
 use std::collections::HashMap;
+use sysinfo::CpuRefreshKind;
 use tracing::debug;
 
 // Import protobuf types
@@ -96,6 +97,7 @@ impl WorkerState {
         use sysinfo::System;
         let mut sys = System::new_all();
         sys.refresh_all();
+        sys.refresh_cpu_specifics(CpuRefreshKind::everything());
 
         // Calculate average CPU usage across all cores
         let cpu_percent = if !sys.cpus().is_empty() {
@@ -129,7 +131,7 @@ pub async fn detect_capabilities() -> Result<WorkerCapabilities> {
 
     // Check for Windows Defender
     if check_defender_available() {
-        capabilities.push("defender".to_string());
+        //capabilities.push("defender".to_string());
         if let Some(version) = get_defender_version() {
             tools.insert("defender_version".to_string(), version);
         }
@@ -137,7 +139,8 @@ pub async fn detect_capabilities() -> Result<WorkerCapabilities> {
     // Check for MDE 
     if is_mde_onboarded() {
         capabilities.push("mde".to_string());
-    }else {
+    }
+    if is_cortex_xdr_present(){
         capabilities.push("cortex".to_string());
     }
     // System metadata
@@ -247,6 +250,47 @@ fn is_mde_onboarded() -> bool {
 fn is_mde_onboarded() -> bool {
     false
 }
+
+#[cfg(windows)]
+fn is_cortex_xdr_installed() -> bool {
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+
+    // Service registration is a strong indicator of installation.
+    hklm.open_subkey_with_flags(
+        r"SYSTEM\CurrentControlSet\Services\CyveraService",
+        KEY_READ,
+    ).is_ok()
+}
+
+#[cfg(not(windows))]
+fn is_cortex_xdr_installed() -> bool { false }
+
+#[cfg(windows)]
+fn is_cortex_xdr_footprint_present() -> bool {
+    use std::path::Path;
+
+    // High-signal data directory used by the agent
+    let cyvera_data = Path::new(r"C:\ProgramData\Cyvera");
+
+    // Legacy install location often seen in the field (Traps/Cortex lineage)
+    let traps_install = Path::new(r"C:\Program Files\Palo Alto Networks\Traps");
+
+    cyvera_data.exists() || traps_install.exists()
+}
+
+#[cfg(not(windows))]
+fn is_cortex_xdr_footprint_present() -> bool { false }
+
+#[cfg(windows)]
+fn is_cortex_xdr_present() -> bool {
+    is_cortex_xdr_installed() || is_cortex_xdr_footprint_present()
+}
+
+#[cfg(not(windows))]
+fn is_cortex_xdr_present() -> bool { false }
 
 #[cfg(windows)]
 pub fn get_windows_version_info() -> WindowsVersionInfo {
