@@ -11,7 +11,10 @@ pub mod worker_handlers;
 use crate::automutate::common::TelemetryData;
 use crate::automutate::controller::{
     controller_server::Controller, BuildRequest, BuildResponse, CompareRunsRequest,
-    CompareRunsResponse, DeployRequest, DeployResponse, GetRoundRequest, GetRoundResponse,
+    CompareRunsResponse, DeployRequest, DeployResponse, GetAvailableWorkersRequest,
+    GetAvailableWorkersResponse, GetOrchestratorStatusRequest, GetOrchestratorStatusResponse,
+    GetPoolMetricsRequest, GetPoolMetricsResponse, GetRoundRequest, GetRoundResponse,
+    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkerRequest, GetWorkerResponse,
     JobProgressRequest, JobProgressResponse, JobRequest, JobResponse, JobStatusRequest,
     JobStatusResponse, ListWorkersRequest, ListWorkersResponse, PingRequest, PingResponse,
     QueryRequest, QueryResponse, StatusAck, StatusReport, StopJobRequest, StopJobResponse,
@@ -271,5 +274,41 @@ impl Controller for SchedulerService {
         request: Request<CompareRunsRequest>,
     ) -> Result<Response<CompareRunsResponse>, Status> {
         job_handlers::compare_runs(self, request).await
+    }
+
+    // Monitoring handlers
+    async fn get_worker(
+        &self,
+        request: Request<GetWorkerRequest>,
+    ) -> Result<Response<GetWorkerResponse>, Status> {
+        worker_handlers::get_worker(self, request).await
+    }
+
+    async fn get_available_workers(
+        &self,
+        request: Request<GetAvailableWorkersRequest>,
+    ) -> Result<Response<GetAvailableWorkersResponse>, Status> {
+        worker_handlers::get_available_workers(self, request).await
+    }
+
+    async fn get_worker_metadata(
+        &self,
+        request: Request<GetWorkerMetadataRequest>,
+    ) -> Result<Response<GetWorkerMetadataResponse>, Status> {
+        worker_handlers::get_worker_metadata(self, request).await
+    }
+
+    async fn get_pool_metrics(
+        &self,
+        request: Request<GetPoolMetricsRequest>,
+    ) -> Result<Response<GetPoolMetricsResponse>, Status> {
+        worker_handlers::get_pool_metrics(self, request).await
+    }
+
+    async fn get_orchestrator_status(
+        &self,
+        request: Request<GetOrchestratorStatusRequest>,
+    ) -> Result<Response<GetOrchestratorStatusResponse>, Status> {
+        worker_handlers::get_orchestrator_status(self, request).await
     }
 }

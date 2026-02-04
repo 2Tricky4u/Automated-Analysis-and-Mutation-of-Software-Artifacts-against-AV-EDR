@@ -47,6 +47,23 @@ service Controller {
 
   // NEW: Compare two runs (differential analysis)
   rpc CompareRuns(CompareRunsRequest) returns (CompareRunsResponse);
+
+  // === MONITORING & ADMIN ENDPOINTS ===
+
+  // Get a specific worker by ID
+  rpc GetWorker(GetWorkerRequest) returns (GetWorkerResponse);
+
+  // Get available workers (not busy)
+  rpc GetAvailableWorkers(GetAvailableWorkersRequest) returns (GetAvailableWorkersResponse);
+
+  // Get enhanced worker metadata (health, tools, detailed info)
+  rpc GetWorkerMetadata(GetWorkerMetadataRequest) returns (GetWorkerMetadataResponse);
+
+  // Get pool group metrics
+  rpc GetPoolMetrics(GetPoolMetricsRequest) returns (GetPoolMetricsResponse);
+
+  // Get orchestrator status (queue depth, pool count, etc.)
+  rpc GetOrchestratorStatus(GetOrchestratorStatusRequest) returns (GetOrchestratorStatusResponse);
 }
 
 // Selector Service - mutation selection with feedback
@@ -469,4 +486,91 @@ message WorkerMetadataUpdate {
 // Metadata update acknowledgment
 message MetadataAck {
   bool success = 1;
+}
+
+// ===== MONITORING & ADMIN MESSAGES =====
+
+// Get worker by ID
+message GetWorkerRequest {
+  string worker_id = 1;
+}
+
+message GetWorkerResponse {
+  WorkerInfo worker = 1;
+  bool found = 2;
+}
+
+// Get available workers
+message GetAvailableWorkersRequest {
+  string target_os = 1;  // Optional: filter by OS
+  repeated string required_capabilities = 2;  // Optional: filter by capabilities
+}
+
+message GetAvailableWorkersResponse {
+  repeated WorkerInfo workers = 1;
+  int32 total_available = 2;
+}
+
+// Get enhanced worker metadata
+message GetWorkerMetadataRequest {
+  string worker_id = 1;  // If empty, returns all workers
+}
+
+message GetWorkerMetadataResponse {
+  repeated WorkerMetadataEntry workers = 1;
+}
+
+message WorkerMetadataEntry {
+  string worker_id = 1;
+  string address = 2;
+  string status = 3;
+  string os_version = 4;
+  repeated string capabilities = 5;
+  map<string, string> metadata = 6;
+  automutate.common.ToolVersions tools = 7;
+  int64 last_seen_seconds_ago = 8;
+  bool healthy = 9;  // Based on last_seen threshold
+  string current_job_id = 10;
+  int64 connected_at = 11;  // Unix timestamp when connected
+}
+
+// Pool metrics
+message GetPoolMetricsRequest {
+  string pool_id = 1;  // If empty, returns all pools
+}
+
+message GetPoolMetricsResponse {
+  repeated PoolMetricsEntry pools = 1;
+}
+
+message PoolMetricsEntry {
+  string pool_id = 1;
+  uint64 total_runs_dispatched = 2;
+  uint64 total_runs_completed = 3;
+  uint64 total_rounds_completed = 4;
+  uint64 total_jobs_completed = 5;
+  uint32 current_queue_size = 6;
+  uint32 worker_count = 7;
+  string current_job_id = 8;
+}
+
+// Orchestrator status
+message GetOrchestratorStatusRequest {}
+
+message GetOrchestratorStatusResponse {
+  uint32 pending_jobs = 1;
+  uint32 active_pools = 2;
+  uint32 total_workers = 3;
+  uint32 available_workers = 4;
+  uint32 busy_workers = 5;
+  repeated string pool_ids = 6;
+  repeated ActiveJobEntry active_jobs = 7;
+}
+
+message ActiveJobEntry {
+  string job_id = 1;
+  string pool_id = 2;
+  uint32 current_round = 3;
+  uint32 max_rounds = 4;
+  string status = 5;
 }
