@@ -618,9 +618,17 @@ Write-Success "Enabled Advanced Audit Policy mode (disabled legacy audit policy)
 
 # Enable ALL audit categories for maximum telemetry using auditpol
 $cats = @(
-    "Logon","Policy Change","Account Logon","Account Management","Privilege Use",
-    "System","DS Access","Object Access","Detailed Tracking"
+    "Account Logon",
+    "Account Management",
+    "Detailed Tracking",
+    "DS Access",
+    "Logon/Logoff",
+    "Object Access",
+    "Policy Change",
+    "Privilege Use",
+    "System"
 )
+
 foreach($c in $cats){
     try { & auditpol /set /category:$c /success:enable /failure:enable | Out-Null } catch {}
 }
