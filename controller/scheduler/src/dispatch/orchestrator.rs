@@ -325,5 +325,8 @@ mod tests {
         assert!(group.satisfies(None, &["defender".into()]));
         assert!(group.satisfies(None, &["defender".into(), "rededr".into()]));
         assert!(!group.satisfies(None, &["cortex".into()]));
+
+        assert!(group.satisfies(Some("win10"), &["defender".into()]));
+        assert!(!group.satisfies(Some("win11"), &["defender".into()]));
     }
 }
