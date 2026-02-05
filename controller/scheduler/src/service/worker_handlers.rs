@@ -351,6 +351,8 @@ pub async fn get_pool_metrics(
                 let queue_size = pool.pool_size().await;
                 let current_job = pool.current_job_id().await;
 
+                // TODO: Track worker count per pool - requires PoolGroup to maintain worker list
+                // or Orchestrator to expose worker-to-pool mapping
                 entries.push(PoolMetricsEntry {
                     pool_id: group_id.as_str().to_string(),
                     total_runs_dispatched: metrics.total_runs_dispatched,
@@ -358,7 +360,7 @@ pub async fn get_pool_metrics(
                     total_rounds_completed: metrics.total_rounds_completed,
                     total_jobs_completed: metrics.total_jobs_completed,
                     current_queue_size: queue_size as u32,
-                    worker_count: 0, // TODO: Track worker count per pool
+                    worker_count: 0,
                     current_job_id: current_job.map(|j| j.0).unwrap_or_default(),
                 });
             }
@@ -418,19 +420,23 @@ pub async fn get_orchestrator_status(
     for group_id in pool_id_list {
         if let Some(pool) = registry.get(&group_id).await {
             if let Some(job_id) = pool.current_job_id().await {
+                // TODO: ActiveJobEntry needs current_round and max_rounds from JobSession
+                // Requires exposing job details from PoolGroup (currently only job_id is exposed)
                 active_jobs.push(ActiveJobEntry {
                     job_id: job_id.0,
                     pool_id: group_id.as_str().to_string(),
-                    current_round: 0, // TODO: Track current round
-                    max_rounds: 0,    // TODO: Track max rounds
+                    current_round: 0,
+                    max_rounds: 0,
                     status: "running".to_string(),
                 });
             }
         }
     }
 
+    // TODO: pending_jobs requires exposing Orchestrator.pending_count() via shared state
+    // Currently Orchestrator owns the pending_jobs queue without public accessor from SchedulerService
     Ok(Response::new(GetOrchestratorStatusResponse {
-        pending_jobs: 0, // TODO: Get from orchestrator
+        pending_jobs: 0,
         active_pools,
         total_workers,
         available_workers,

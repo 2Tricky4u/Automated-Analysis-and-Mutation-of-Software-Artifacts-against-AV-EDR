@@ -358,15 +358,16 @@ pub async fn get_round(
                 if let Some(hit) = body["hits"]["hits"].as_array().and_then(|h| h.first()) {
                     let source = &hit["_source"];
 
+                    // TODO: GetRound implementation is incomplete - needs additional ES queries
                     let round = RoundProto {
                         round_id: source["round_id"].as_str().unwrap_or("").to_string(),
                         job_id: source["job_id"].as_str().unwrap_or("").to_string(),
                         round_number: source["round_number"].as_u64().unwrap_or(0) as u32,
                         mutations: vec![], // TODO: Parse mutations from ES
-                        baseline_run: None,     // TODO: Query run details
-                        instrumented_run: None, // TODO: Query run details
+                        baseline_run: None,     // TODO: Query run details from runs-* index
+                        instrumented_run: None, // TODO: Query run details from runs-* index
                         status: source["status"].as_str().unwrap_or("unknown").to_string(),
-                        behavior_match: None,   // TODO: Parse comparison
+                        behavior_match: None,   // TODO: Parse comparison from round document
                     };
 
                     return Ok(Response::new(GetRoundResponse { round: Some(round) }));

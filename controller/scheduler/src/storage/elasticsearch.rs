@@ -4,7 +4,7 @@ use crate::job;
 use crate::round;
 use elasticsearch::{Elasticsearch, IndexParts, http::transport::Transport};
 use tracing::{info, warn};
-
+//TODO old ES, maybe should use it
 /// Elasticsearch storage helpers for SchedulerService
 impl crate::SchedulerService {
     /// Index telemetry batch to Elasticsearch
