@@ -120,7 +120,7 @@ struct TargetInfo {
 }
 
 /// Load target configuration from individual worker TOML file
-fn load_target_config(path: &std::path::Path) -> anyhow::Result<(String, String)> {
+fn load_target_config(path: &Path) -> Result<(String, String)> {
     let content = std::fs::read_to_string(path)?;
     let config: TargetTomlConfig = toml::from_str(&content)?;
 
@@ -301,7 +301,7 @@ impl TargetManager {
     // State Management
     // ========================================================================
 
-    pub fn reserve(&self, id: &str) -> Result<()> {
+    pub fn reserve(&self, id: &str) -> Result<()> { //TODO need to reserve worker when choosed for a job
         let mut target = self
             .targets
             .get_mut(id)
@@ -318,7 +318,7 @@ impl TargetManager {
         Ok(())
     }
 
-    pub fn release(&self, id: &str) -> Result<()> {
+    pub fn release(&self, id: &str) -> Result<()> { //TODO need to release when run end
         let mut target = self
             .targets
             .get_mut(id)
@@ -332,7 +332,7 @@ impl TargetManager {
         Ok(())
     }
 
-    pub fn mark_connected(&self, id: &str) -> Result<()> {
+    pub fn mark_connected(&self, id: &str) -> Result<()> { //TODO need to connect when connected
         let mut target = self
             .targets
             .get_mut(id)
@@ -346,7 +346,7 @@ impl TargetManager {
         Ok(())
     }
 
-    pub fn mark_offline(&self, id: &str) -> Result<()> {
+    pub fn mark_offline(&self, id: &str) -> Result<()> { //TODO need to offline when disconnect
         let mut target = self
             .targets
             .get_mut(id)
@@ -362,10 +362,6 @@ impl TargetManager {
         target.stream_tx = None;
         debug!("Target {} offline", id);
         Ok(())
-    }
-
-    pub fn mark_disconnected(&self, id: &str) -> Result<()> {
-        self.mark_offline(id)
     }
 
     pub fn update_health(&self, id: &str) -> Result<()> {
@@ -435,6 +431,7 @@ impl TargetManager {
             if target.status == TargetStatus::Offline {
                 target.status = TargetStatus::Available;
             }
+            target.touch();
         }
 
         // Create channel for results from VM (run completions)
@@ -693,7 +690,7 @@ impl TargetManager {
         success
     }
 
-    pub async fn disconnect_all(&self, reason: &str, reconnect_allowed: bool) {
+    pub async fn disconnect_all(&self, reason: &str, reconnect_allowed: bool) { // TODO use it
         info!("Disconnecting all targets: {}", reason);
 
         // First, signal graceful shutdown to all workers via pool cancellation tokens
