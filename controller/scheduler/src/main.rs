@@ -23,7 +23,7 @@ mod dispatch;
 mod service;
 mod target_manager;
 
-use dispatch::{JobSession, Orchestrator, RunPool};
+use dispatch::{JobControlCommand, JobSession, Orchestrator, RunPool};
 use service::SchedulerService;
 use target_manager::{TargetEvent, TargetManager};
 
@@ -95,6 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create channels
     let (events_tx, events_rx) = mpsc::channel::<TargetEvent>(4096);
     let (job_tx, job_rx) = mpsc::channel::<JobSession>(128);
+    let (job_control_tx, job_control_rx) = mpsc::channel::<JobControlCommand>(64);
 
     // Create shared run pool
     let run_pool = Arc::new(RunPool::new());
@@ -111,6 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let orchestrator = Orchestrator::new(
         events_rx,
         job_rx,
+        job_control_rx,
         Arc::clone(&run_pool),
         Arc::clone(&targets),
         es_client.clone(),
@@ -155,6 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let service = SchedulerService::new(
         es_client,
         job_tx,
+        job_control_tx,
         Arc::clone(&targets),
         Arc::clone(&run_pool),
     );

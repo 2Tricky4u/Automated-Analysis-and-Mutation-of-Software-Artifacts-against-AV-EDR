@@ -86,12 +86,49 @@ impl RunPool {
         debug!("[RunPool] Job {} registered", job_id);
     }
 
-    /// Unregister a job.
+    /// Unregister a job and remove all its pending runs.
     pub async fn unregister_job(&self, job_id: &JobId) {
+        // Remove from result routers
         let mut routers = self.result_routers.write().await;
         routers.remove(job_id);
         self.metrics.lock().await.active_jobs = routers.len();
-        debug!("[RunPool] Job {} unregistered", job_id);
+
+        // Remove all pending runs for this job
+        let removed = self.remove_runs_for_job(job_id).await;
+        if removed > 0 {
+            debug!(
+                "[RunPool] Job {} unregistered, removed {} pending runs",
+                job_id, removed
+            );
+        } else {
+            debug!("[RunPool] Job {} unregistered", job_id);
+        }
+    }
+
+    /// Remove all pending runs for a specific job.
+    /// Returns the number of runs removed.
+    pub async fn remove_runs_for_job(&self, job_id: &JobId) -> usize {
+        let mut removed_count = 0;
+
+        // Find all run_ids belonging to this job
+        let run_ids_to_remove: Vec<RunId> = self
+            .pending
+            .iter()
+            .filter(|entry| &entry.value().job_id == job_id)
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        // Remove from pending map
+        for run_id in &run_ids_to_remove {
+            if self.pending.remove(run_id).is_some() {
+                removed_count += 1;
+            }
+        }
+
+        // Note: We don't need to remove from by_os queues because take_run()
+        // already handles missing entries gracefully (continues to next)
+
+        removed_count
     }
 
     // ========================================================================

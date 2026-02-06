@@ -9,7 +9,7 @@ use crate::automutate::controller::{
     JobStatusRequest, JobStatusResponse, RoundSummaryProto, StatusAck, StatusReport,
     StopJobRequest, StopJobResponse,
 };
-use crate::dispatch::{JobSession, ModularBuildSpec, ModuleSelectionSpec};
+use crate::dispatch::{JobControlCommand, JobSession, ModularBuildSpec, ModuleSelectionSpec, JobId as DispatchJobId};
 use crate::service::SchedulerService;
 use elasticsearch::SearchParts;
 use serde_json::{json, Value};
@@ -279,40 +279,45 @@ pub async fn get_job_progress(
 }
 
 /// Stop a running job
-///
-/// TODO: In the new JobWorker architecture, we need access to Orchestrator
-/// to stop specific jobs. For now, we can only update ES status.
 pub async fn stop_job(
     service: &SchedulerService,
     request: Request<StopJobRequest>,
 ) -> Result<Response<StopJobResponse>, Status> {
     let job_id = &request.get_ref().job_id;
-    debug!("[RPC] StopJob: job_id={}", job_id);
+    info!("[RPC] StopJob: job_id={}", job_id);
 
-    // TODO: Need to expose job shutdown via Orchestrator
-    // In the new architecture, jobs are managed by JobWorkers which have shutdown tokens
-    // tracked in Orchestrator.job_workers HashMap.
-    // For now, we just update the ES status.
+    // Send stop command to Orchestrator
+    let cmd = JobControlCommand::Stop {
+        job_id: DispatchJobId(job_id.clone()),
+    };
 
-    // Update job status in ES
-    let _ = service
-        .es_client
-        .update(elasticsearch::UpdateParts::IndexId("jobs-*", job_id))
-        .body(json!({
-            "doc": { "status": "stop_requested" }
-        }))
-        .send()
-        .await;
+    match service.job_control_tx.send(cmd).await {
+        Ok(_) => {
+            info!("[RPC] StopJob: Stop command sent for job {}", job_id);
 
-    warn!("StopJob: Job stop not fully implemented in new architecture");
+            // Update job status in ES
+            let _ = service
+                .es_client
+                .update(elasticsearch::UpdateParts::IndexId("jobs-*", job_id))
+                .body(json!({
+                    "doc": { "status": "stopping" }
+                }))
+                .send()
+                .await;
 
-    Ok(Response::new(StopJobResponse {
-        stopped: false,
-        message: format!(
-            "Job {} stop requested (full implementation pending - jobs managed by JobWorkers)",
-            job_id
-        ),
-    }))
+            Ok(Response::new(StopJobResponse {
+                stopped: true,
+                message: format!("Job {} stop command sent", job_id),
+            }))
+        }
+        Err(e) => {
+            error!("[RPC] StopJob: Failed to send stop command for job {}: {}", job_id, e);
+            Ok(Response::new(StopJobResponse {
+                stopped: false,
+                message: format!("Failed to stop job {}: channel closed", job_id),
+            }))
+        }
+    }
 }
 
 /// Get detailed round information
