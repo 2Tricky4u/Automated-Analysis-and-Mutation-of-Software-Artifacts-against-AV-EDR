@@ -3,6 +3,7 @@
 //! Defines the messages that flow between:
 //! - VMExecutor -> RunPool -> JobWorker (run results)
 //! - JobWorker -> Orchestrator (job lifecycle events)
+//! - Service -> Orchestrator (job control commands)
 //!
 //! Architecture:
 //! - JobWorker: Spawned per job, owns job lifecycle, builds artifacts, aggregates results
@@ -10,6 +11,17 @@
 //! - VMExecutor: Thin dispatcher per VM, takes runs, routes results back
 
 use super::types::{JobId, JobOutcome, RoundId, RoundSummary, RunId, RunOutcome};
+
+// ============================================================================
+// Service -> Orchestrator (Job Control Commands)
+// ============================================================================
+
+/// Commands sent from Service to Orchestrator for job control.
+#[derive(Debug, Clone)]
+pub enum JobControlCommand {
+    /// Stop a running job
+    Stop { job_id: JobId },
+}
 
 // ============================================================================
 // Remote execution results (stream -> VMExecutor)

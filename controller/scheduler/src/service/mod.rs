@@ -20,7 +20,7 @@ use crate::automutate::controller::{
     QueryRequest, QueryResponse, StatusAck, StatusReport, StopJobRequest, StopJobResponse,
     TriageRequest, TriageResponse,
 };
-use crate::dispatch::{JobSession, RunPool};
+use crate::dispatch::{JobControlCommand, JobSession, RunPool};
 use crate::target_manager::TargetManager;
 use elasticsearch::Elasticsearch;
 use std::sync::Arc;
@@ -36,6 +36,7 @@ use tonic::{Request, Response, Status};
 pub struct SchedulerService {
     pub es_client: Elasticsearch,
     pub job_tx: mpsc::Sender<JobSession>,
+    pub job_control_tx: mpsc::Sender<JobControlCommand>,
     pub targets: Arc<TargetManager>,
     pub run_pool: Arc<RunPool>,
 }
@@ -44,12 +45,14 @@ impl SchedulerService {
     pub fn new(
         es_client: Elasticsearch,
         job_tx: mpsc::Sender<JobSession>,
+        job_control_tx: mpsc::Sender<JobControlCommand>,
         targets: Arc<TargetManager>,
         run_pool: Arc<RunPool>,
     ) -> Self {
         Self {
             es_client,
             job_tx,
+            job_control_tx,
             targets,
             run_pool,
         }

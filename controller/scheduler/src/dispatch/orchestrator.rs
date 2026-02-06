@@ -6,10 +6,10 @@
 //! - Routes telemetry to ES indexing
 //! - Manages shared RunPool
 
-use super::channels::JobWorkerEvent;
+use super::channels::{JobControlCommand, JobWorkerEvent};
 use super::job_worker::JobWorker;
 use super::run_pool::RunPool;
-use super::types::{JobId, JobSession, WorkerId, WorkerInfo};
+use super::types::{JobId, JobOutcome, JobSession, WorkerId, WorkerInfo};
 use crate::target_manager::{TargetEvent, TargetManager};
 use elasticsearch::Elasticsearch;
 use std::collections::HashMap;
@@ -45,12 +45,16 @@ pub struct Orchestrator {
 
     /// Channel for job submissions
     job_submit_rx: mpsc::Receiver<JobSession>,
+
+    /// Channel for job control commands (stop, etc.)
+    job_control_rx: mpsc::Receiver<JobControlCommand>,
 }
 
 impl Orchestrator {
     pub fn new(
         events_rx: mpsc::Receiver<TargetEvent>,
         job_submit_rx: mpsc::Receiver<JobSession>,
+        job_control_rx: mpsc::Receiver<JobControlCommand>,
         run_pool: Arc<RunPool>,
         targets: Arc<TargetManager>,
         es_client: Elasticsearch,
@@ -66,6 +70,7 @@ impl Orchestrator {
             vms: HashMap::new(),
             events_rx,
             job_submit_rx,
+            job_control_rx,
         }
     }
 
@@ -76,6 +81,11 @@ impl Orchestrator {
         loop {
             tokio::select! {
                 biased;
+
+                // Job control commands (stop, etc.) - highest priority
+                Some(cmd) = self.job_control_rx.recv() => {
+                    self.on_job_control(cmd);
+                }
 
                 // Job submissions -> spawn JobWorker
                 Some(job) = self.job_submit_rx.recv() => {
@@ -91,6 +101,18 @@ impl Orchestrator {
                 Some(event) = self.events_rx.recv() => {
                     self.on_target_event(event).await;
                 }
+            }
+        }
+    }
+
+    // ========================================================================
+    // Job Control
+    // ========================================================================
+
+    fn on_job_control(&self, cmd: JobControlCommand) {
+        match cmd {
+            JobControlCommand::Stop { job_id } => {
+                self.shutdown_job(&job_id);
             }
         }
     }
@@ -246,7 +268,26 @@ impl Orchestrator {
                 // TODO: Index round to ES
             }
             JobWorkerEvent::JobCompleted { job_id, outcome } => {
-                info!("[Orchestrator] Job {} completed: {:?}", job_id, outcome);
+                match &outcome {
+                    JobOutcome::Completed { rounds_completed } => {
+                        info!(
+                            "[Orchestrator] Job {} completed: {} rounds finished",
+                            job_id, rounds_completed
+                        );
+                    }
+                    JobOutcome::Stopped { reason } => {
+                        warn!(
+                            "[Orchestrator] Job {} stopped: {}",
+                            job_id, reason
+                        );
+                    }
+                    JobOutcome::Failed { error } => {
+                        error!(
+                            "[Orchestrator] Job {} failed: {}",
+                            job_id, error
+                        );
+                    }
+                }
                 self.job_workers.remove(&job_id);
                 // TODO: Update job status in ES
             }
@@ -459,6 +500,7 @@ mod tests {
     async fn test_orchestrator_creation() {
         let (_events_tx, events_rx) = mpsc::channel(10);
         let (_job_tx, job_rx) = mpsc::channel(10);
+        let (_job_control_tx, job_control_rx) = mpsc::channel(10);
         let run_pool = Arc::new(RunPool::new());
 
         // Create minimal TargetManager for test
@@ -469,7 +511,7 @@ mod tests {
         let transport = Transport::single_node("http://localhost:9200").unwrap();
         let es_client = Elasticsearch::new(transport);
 
-        let orchestrator = Orchestrator::new(events_rx, job_rx, run_pool, targets, es_client);
+        let orchestrator = Orchestrator::new(events_rx, job_rx, job_control_rx, run_pool, targets, es_client);
 
         assert_eq!(orchestrator.active_job_count(), 0);
         assert_eq!(orchestrator.vm_count(), 0);

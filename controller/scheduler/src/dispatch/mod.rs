@@ -20,12 +20,12 @@ pub mod types;
 pub mod vm_executor;
 
 // Re-exports for public API
-pub use channels::RemoteRunResult;
+pub use channels::{JobControlCommand, RemoteRunResult};
 pub use orchestrator::Orchestrator;
 pub use run_pool::RunPool;
 pub use vm_executor::{ArtifactSender, VMExecutor};
 
 // Types
 pub use types::{
-    JobSession, ModularBuildSpec, ModuleSelectionSpec, RunId, VMInfo, WorkerId, WorkerInfo,
+    JobId, JobSession, ModularBuildSpec, ModuleSelectionSpec, RunId, VMInfo, WorkerId, WorkerInfo,
 };
