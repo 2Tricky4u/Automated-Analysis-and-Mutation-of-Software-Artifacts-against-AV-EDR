@@ -314,6 +314,14 @@ impl RunPool {
     pub async fn job_count(&self) -> usize {
         self.result_routers.read().await.len()
     }
+
+    /// Get count of pending runs for a specific job.
+    pub fn pending_runs_for_job(&self, job_id: &JobId) -> usize {
+        self.pending
+            .iter()
+            .filter(|entry| &entry.value().job_id == job_id)
+            .count()
+    }
 }
 
 impl Default for RunPool {
