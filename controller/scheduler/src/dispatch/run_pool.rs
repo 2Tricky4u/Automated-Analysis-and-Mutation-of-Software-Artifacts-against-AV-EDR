@@ -1,45 +1,48 @@
-//! RunPool - shared run queue for all jobs.
+//! RunPool - sharded run queue for all jobs.
 //!
 //! Architecture:
+//! - Sharded by OS: each OS has its own queue (reduces contention)
+//! - DashMap for lock-free run storage
+//! - Per-OS Mutex for queue ordering
 //! - JobWorkers put runs into the pool via add_runs()
-//! - VMExecutors take runs via take_run() (capability-filtered)
+//! - VMExecutors take runs via take_run(os, caps) - locks only their OS queue
 //! - Results are routed back to originating JobWorker via route_result()
-//!
-//! This is the central coordination point between jobs and VMs.
-//! Multiple jobs can run in parallel, all sharing the same pool of VMs.
 
+use dashmap::DashMap;
 use std::collections::{HashMap, VecDeque};
 use tokio::sync::{mpsc, Mutex, Notify, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::channels::JobRunResult;
-use super::types::{JobId, RunEnvelope};
+use super::types::{JobId, RunEnvelope, RunId};
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
-/// Maximum runs to buffer in pool before backpressure
-const MAX_POOL_SIZE: usize = 100;
+/// Maximum runs to buffer per OS queue before warning
+const MAX_QUEUE_SIZE: usize = 50;
 
 // ============================================================================
 // RunPool
 // ============================================================================
 
-/// Shared run pool for all jobs.
+/// Sharded run pool for all jobs.
 ///
-/// JobWorkers produce runs into this pool, VMExecutors consume them.
-/// Results are routed back to the originating JobWorker.
+/// Internally sharded by OS to reduce lock contention.
+/// VMExecutors only lock their own OS queue when taking runs.
 pub struct RunPool {
-    /// All pending runs (from all jobs)
-    runs: Mutex<VecDeque<RunEnvelope>>,
+    /// Run storage (lock-free access)
+    pending: DashMap<RunId, RunEnvelope>,
+
+    /// Per-OS run queues (only the relevant OS queue is locked)
+    by_os: DashMap<String, Mutex<VecDeque<RunId>>>,
 
     /// Signal when runs are available
     runs_available: Notify,
 
     /// Route results back to JobWorkers
-    /// JobId -> Sender for that job's results
     result_routers: RwLock<HashMap<JobId, mpsc::Sender<JobRunResult>>>,
 
     /// Global shutdown token
@@ -62,7 +65,8 @@ impl RunPool {
     /// Create a new run pool.
     pub fn new() -> Self {
         Self {
-            runs: Mutex::new(VecDeque::new()),
+            pending: DashMap::new(),
+            by_os: DashMap::new(),
             runs_available: Notify::new(),
             result_routers: RwLock::new(HashMap::new()),
             shutdown_token: CancellationToken::new(),
@@ -75,7 +79,6 @@ impl RunPool {
     // ========================================================================
 
     /// Register a job's result channel.
-    /// Called by JobWorker on start to receive results for its runs.
     pub async fn register_job(&self, job_id: JobId, result_tx: mpsc::Sender<JobRunResult>) {
         let mut routers = self.result_routers.write().await;
         routers.insert(job_id.clone(), result_tx);
@@ -84,7 +87,6 @@ impl RunPool {
     }
 
     /// Unregister a job.
-    /// Called by JobWorker on completion.
     pub async fn unregister_job(&self, job_id: &JobId) {
         let mut routers = self.result_routers.write().await;
         routers.remove(job_id);
@@ -97,30 +99,41 @@ impl RunPool {
     // ========================================================================
 
     /// Add runs to the pool.
-    /// Called by JobWorker when producing a round.
+    /// Runs are sharded into per-OS queues.
     pub async fn add_runs(&self, runs: Vec<RunEnvelope>) {
         if runs.is_empty() {
             return;
         }
 
         let count = runs.len();
-        {
-            let mut pool = self.runs.lock().await;
 
-            // Backpressure: don't exceed max pool size
-            if pool.len() + count > MAX_POOL_SIZE {
+        for run in runs {
+            let os = run.required_os.clone();
+            let run_id = run.run_id.clone();
+
+            // Store run in pending map (lock-free)
+            self.pending.insert(run_id.clone(), run);
+
+            // Add run_id to the OS queue (short lock)
+            let queue = self
+                .by_os
+                .entry(os.clone())
+                .or_insert_with(|| Mutex::new(VecDeque::new()));
+            let mut q = queue.lock().await;
+
+            if q.len() >= MAX_QUEUE_SIZE {
                 warn!(
-                    "[RunPool] Pool near capacity ({}/{}), adding {} runs anyway",
-                    pool.len(),
-                    MAX_POOL_SIZE,
-                    count
+                    "[RunPool] OS queue '{}' near capacity ({}/{})",
+                    os,
+                    q.len(),
+                    MAX_QUEUE_SIZE
                 );
             }
 
-            pool.extend(runs);
-            self.metrics.lock().await.total_runs_added += count as u64;
+            q.push_back(run_id);
         }
 
+        self.metrics.lock().await.total_runs_added += count as u64;
         debug!("[RunPool] Added {} runs to pool", count);
 
         // Wake ALL waiting VMExecutors - they compete for runs
@@ -131,50 +144,55 @@ impl RunPool {
     // Run Consumption (VMExecutor calls these)
     // ========================================================================
 
-    /// Try to take a run from the pool (non-blocking).
-    /// Returns None if pool is empty or no compatible run found.
+    /// Take a run from the pool that matches VM's OS and capabilities.
     ///
-    /// VMExecutors call this after being signaled or after completing a run.
-    pub async fn take_run(&self, capabilities: &[String]) -> Option<RunEnvelope> {
-        let mut pool = self.runs.lock().await;
+    /// Only locks the queue for the given OS, not the entire pool.
+    /// Returns None if no compatible run found.
+    pub async fn take_run(&self, vm_os: &str, vm_capabilities: &[String]) -> Option<RunEnvelope> {
+        // Get the queue for this OS
+        let queue = self.by_os.get(vm_os)?;
+        let mut q = queue.lock().await;
 
-        // For now, take any run (capability filtering can be added later)
-        // In future: find first run where run.required_caps is subset of capabilities
-        let run = pool.pop_front();
+        // Bounded scan to avoid infinite rotation
+        let n = q.len();
+        for _ in 0..n {
+            let run_id = match q.pop_front() {
+                Some(id) => id,
+                None => return None,
+            };
 
-        if let Some(ref r) = run {
-            debug!("[RunPool] Run {} taken (job={})", r.run_id, r.job_id);
-            drop(pool); // Release lock before async metrics update
-            self.metrics.lock().await.total_runs_taken += 1;
+            // Check if run exists and matches capabilities
+            if let Some(run_ref) = self.pending.get(&run_id) {
+                let caps_match = run_ref.required_capabilities.iter().all(|required| {
+                    vm_capabilities
+                        .iter()
+                        .any(|cap| cap.eq_ignore_ascii_case(required))
+                });
+
+                if caps_match {
+                    // Remove from pending and return
+                    drop(run_ref); // Release read lock before remove
+                    if let Some((_, run)) = self.pending.remove(&run_id) {
+                        debug!(
+                            "[RunPool] Run {} taken (job={}, os={}, caps={:?})",
+                            run.run_id, run.job_id, vm_os, run.required_capabilities
+                        );
+                        drop(q); // Release queue lock before metrics update
+                        self.metrics.lock().await.total_runs_taken += 1;
+                        return Some(run);
+                    }
+                } else {
+                    // Capabilities don't match - push back to queue
+                    q.push_back(run_id);
+                }
+            }
+            // Run not in pending (already taken or removed) - continue to next
         }
 
-        run
-    }
-
-    /// Take a run with capability filtering.
-    /// Returns the first run that matches the given capabilities.
-    #[allow(dead_code)]
-    pub async fn take_run_filtered(&self, capabilities: &[String]) -> Option<RunEnvelope> {
-        let mut pool = self.runs.lock().await;
-
-        // Find first compatible run
-        // For now, all runs are compatible (capability filtering on job submission)
-        // In future: check run.required_capabilities against VM capabilities
-        let _ = capabilities; // Suppress warning for now
-
-        let run = pool.pop_front();
-
-        if let Some(ref r) = run {
-            debug!("[RunPool] Run {} taken (job={}, filtered)", r.run_id, r.job_id);
-            drop(pool);
-            self.metrics.lock().await.total_runs_taken += 1;
-        }
-
-        run
+        None
     }
 
     /// Wait for runs to become available.
-    /// Use in tokio::select! to efficiently wait for work.
     pub async fn wait_for_runs(&self) {
         self.runs_available.notified().await
     }
@@ -184,7 +202,6 @@ impl RunPool {
     // ========================================================================
 
     /// Route a result back to the originating JobWorker.
-    /// Called by VMExecutor when a run completes.
     pub async fn route_result(&self, result: JobRunResult) {
         let routers = self.result_routers.read().await;
 
@@ -228,7 +245,6 @@ impl RunPool {
     pub fn shutdown(&self) {
         warn!("[RunPool] Shutdown requested");
         self.shutdown_token.cancel();
-        // Wake any waiting VMExecutors so they can check cancellation
         self.runs_available.notify_waiters();
     }
 
@@ -236,9 +252,20 @@ impl RunPool {
     // Monitoring
     // ========================================================================
 
-    /// Get current pool size.
+    /// Get total pending runs across all OS queues.
     pub async fn pool_size(&self) -> usize {
-        self.runs.lock().await.len()
+        self.pending.len()
+    }
+
+    /// Get pending runs per OS.
+    pub async fn pool_size_by_os(&self) -> HashMap<String, usize> {
+        let mut sizes = HashMap::new();
+        for entry in self.by_os.iter() {
+            let os = entry.key().clone();
+            let q = entry.value().lock().await;
+            sizes.insert(os, q.len());
+        }
+        sizes
     }
 
     /// Get current metrics.
@@ -261,6 +288,8 @@ impl Default for RunPool {
 impl std::fmt::Debug for RunPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunPool")
+            .field("pending_count", &self.pending.len())
+            .field("os_queues", &self.by_os.len())
             .field("shutdown", &self.shutdown_token.is_cancelled())
             .finish_non_exhaustive()
     }
@@ -269,11 +298,11 @@ impl std::fmt::Debug for RunPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::types::{ArtifactRef, RoundId, RunId, RunType};
+    use crate::dispatch::types::{ArtifactRef, RoundId, RunType};
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    fn test_run(job_id: &str, run_id: &str) -> RunEnvelope {
+    fn test_run(job_id: &str, run_id: &str, os: &str, caps: Vec<String>) -> RunEnvelope {
         RunEnvelope {
             run_id: RunId(run_id.to_string()),
             job_id: JobId(job_id.to_string()),
@@ -286,6 +315,8 @@ mod tests {
             },
             mutations: vec![],
             timeout_seconds: 120,
+            required_os: os.to_string(),
+            required_capabilities: caps,
         }
     }
 
@@ -293,24 +324,68 @@ mod tests {
     async fn test_add_and_take_runs() {
         let pool = RunPool::new();
 
-        // Add runs
-        pool.add_runs(vec![test_run("job-1", "run-1"), test_run("job-1", "run-2")])
-            .await;
+        // Add runs for different OS
+        pool.add_runs(vec![
+            test_run("job-1", "run-1", "windows", vec![]),
+            test_run("job-1", "run-2", "windows", vec![]),
+            test_run("job-1", "run-3", "linux", vec![]),
+        ])
+        .await;
 
-        assert_eq!(pool.pool_size().await, 2);
+        assert_eq!(pool.pool_size().await, 3);
 
-        // Take runs
-        let run1 = pool.take_run(&[]).await;
+        // Take Windows runs
+        let run1 = pool.take_run("windows", &[]).await;
         assert!(run1.is_some());
         assert_eq!(run1.unwrap().run_id.0, "run-1");
 
-        let run2 = pool.take_run(&[]).await;
+        let run2 = pool.take_run("windows", &[]).await;
         assert!(run2.is_some());
         assert_eq!(run2.unwrap().run_id.0, "run-2");
 
-        // Pool empty
-        assert!(pool.take_run(&[]).await.is_none());
+        // No more Windows runs
+        assert!(pool.take_run("windows", &[]).await.is_none());
+
+        // Linux run still there
+        let run3 = pool.take_run("linux", &[]).await;
+        assert!(run3.is_some());
+        assert_eq!(run3.unwrap().run_id.0, "run-3");
+
         assert_eq!(pool.pool_size().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_capability_filtering() {
+        let pool = RunPool::new();
+
+        pool.add_runs(vec![
+            test_run("job-1", "run-1", "windows", vec!["defender".to_string()]),
+            test_run("job-1", "run-2", "windows", vec!["rededr".to_string()]),
+            test_run(
+                "job-1",
+                "run-3",
+                "windows",
+                vec!["defender".to_string(), "rededr".to_string()],
+            ),
+        ])
+        .await;
+
+        // VM with only defender can take run-1
+        let run = pool.take_run("windows", &["defender".to_string()]).await;
+        assert!(run.is_some());
+        assert_eq!(run.unwrap().run_id.0, "run-1");
+
+        // VM with only rededr can take run-2
+        let run = pool.take_run("windows", &["rededr".to_string()]).await;
+        assert!(run.is_some());
+        assert_eq!(run.unwrap().run_id.0, "run-2");
+
+        // VM with both can take run-3
+        let run = pool
+            .take_run("windows", &["defender".to_string(), "rededr".to_string()])
+            .await;
+        assert!(run.is_some());
+        assert_eq!(run.unwrap().run_id.0, "run-3");
     }
 
     #[tokio::test]
@@ -318,10 +393,8 @@ mod tests {
         let pool = Arc::new(RunPool::new());
         let (tx, mut rx) = mpsc::channel(10);
 
-        // Register job
         pool.register_job(JobId("job-1".to_string()), tx).await;
 
-        // Route result
         let result = JobRunResult {
             run_id: RunId("run-1".to_string()),
             job_id: JobId("job-1".to_string()),
@@ -335,7 +408,6 @@ mod tests {
         };
         pool.route_result(result).await;
 
-        // Should receive result
         let received = rx.recv().await;
         assert!(received.is_some());
         assert_eq!(received.unwrap().run_id.0, "run-1");

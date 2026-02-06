@@ -329,7 +329,7 @@ pub struct ArtifactRef {
     pub sha256: Option<String>,
 }
 
-/// RunEnvelope: what we keep in the per-worker pool
+/// RunEnvelope: what we keep in the run pool
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunEnvelope {
     pub run_id: RunId,
@@ -340,6 +340,8 @@ pub struct RunEnvelope {
     pub artifact: ArtifactRef,
     pub mutations: Vec<String>,
     pub timeout_seconds: u32,
+    pub required_os: String,
+    pub required_capabilities: Vec<String>,
 }
 
 // ============================================================================

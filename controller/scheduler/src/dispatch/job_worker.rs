@@ -248,6 +248,14 @@ impl JobWorker {
                 e
             })?;
 
+        // Determine target OS and capabilities from job constraints
+        let target_os = self
+            .job
+            .target_os
+            .clone()
+            .unwrap_or_else(|| "windows".to_string());
+        let required_caps = self.job.required_capabilities.clone();
+
         // Create run envelopes
         let baseline_run = RunEnvelope {
             run_id: RunId(format!("{}-baseline", round_id.0)),
@@ -261,6 +269,8 @@ impl JobWorker {
             },
             mutations: spec.mutations.iter().map(|m| m.id.clone()).collect(),
             timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
+            required_os: target_os.clone(),
+            required_capabilities: required_caps.clone(),
         };
 
         let instrumented_run = RunEnvelope {
@@ -275,6 +285,8 @@ impl JobWorker {
             },
             mutations: spec.mutations.iter().map(|m| m.id.clone()).collect(),
             timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
+            required_os: target_os,
+            required_capabilities: required_caps,
         };
 
         // Create round aggregator
