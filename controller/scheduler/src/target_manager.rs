@@ -291,7 +291,7 @@ impl TargetManager {
     // State Management
     // ========================================================================
 
-    pub fn reserve(&self, id: &str) -> Result<()> { //TODO need to reserve worker when reserved for a run
+    pub fn reserve(&self, id: &str) -> Result<()> {
         let mut target = self
             .targets
             .get_mut(id)
@@ -308,7 +308,7 @@ impl TargetManager {
         Ok(())
     }
 
-    pub fn release(&self, id: &str) -> Result<()> { //TODO need to release when run end
+    pub fn release(&self, id: &str) -> Result<()> {
         let mut target = self
             .targets
             .get_mut(id)
@@ -322,7 +322,7 @@ impl TargetManager {
         Ok(())
     }
 
-    pub fn mark_connected(&self, id: &str) -> Result<()> { //TODO need to connect when connected
+    pub fn mark_connected(&self, id: &str) -> Result<()> {
         let mut target = self
             .targets
             .get_mut(id)
@@ -336,7 +336,7 @@ impl TargetManager {
         Ok(())
     }
 
-    pub fn mark_offline(&self, id: &str) -> Result<()> { //TODO need to offline when disconnect
+    pub fn mark_offline(&self, id: &str) -> Result<()> {
         let mut target = self
             .targets
             .get_mut(id)

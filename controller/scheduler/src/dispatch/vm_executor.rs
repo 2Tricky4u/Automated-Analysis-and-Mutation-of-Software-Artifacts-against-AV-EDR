@@ -136,7 +136,7 @@ impl VMExecutor {
                     }
 
                     // Immediately try to get more work
-                    if let Some(run) = self.run_pool.take_run(&self.info.capabilities).await {
+                    if let Some(run) = self.run_pool.take_run(&self.info.os, &self.info.capabilities).await {
                         self.dispatch(run).await;
                     }
                 }
@@ -149,7 +149,7 @@ impl VMExecutor {
                     }
 
                     // Woken by signal - try to grab a run
-                    if let Some(run) = self.run_pool.take_run(&self.info.capabilities).await {
+                    if let Some(run) = self.run_pool.take_run(&self.info.os, &self.info.capabilities).await {
                         self.dispatch(run).await;
                     }
                 }
