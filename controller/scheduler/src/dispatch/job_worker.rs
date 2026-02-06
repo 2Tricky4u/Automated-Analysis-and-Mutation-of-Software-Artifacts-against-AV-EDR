@@ -123,19 +123,29 @@ impl JobWorker {
         // Get pool cancellation token (needs to be bound to a variable for the select!)
         let pool_shutdown = self.run_pool.cancellation_token();
 
+        // Track exit reason
+        enum ExitReason {
+            Completed,
+            Cancelled,
+            PoolShutdown,
+        }
+        let mut exit_reason = ExitReason::Completed;
+
         loop {
             tokio::select! {
                 biased;
 
-                // Shutdown signal
+                // Shutdown signal (job cancelled)
                 _ = self.shutdown_token.cancelled() => {
                     info!("[JobWorker:{}] Shutdown requested", self.job.id);
+                    exit_reason = ExitReason::Cancelled;
                     break;
                 }
 
                 // Global pool shutdown
                 _ = pool_shutdown.cancelled() => {
                     info!("[JobWorker:{}] Pool shutdown, stopping", self.job.id);
+                    exit_reason = ExitReason::PoolShutdown;
                     break;
                 }
 
@@ -156,6 +166,7 @@ impl JobWorker {
                     // Check if job is done
                     if self.is_job_complete() {
                         info!("[JobWorker:{}] Job complete", self.job.id);
+                        exit_reason = ExitReason::Completed;
                         break;
                     }
                 }
@@ -165,22 +176,47 @@ impl JobWorker {
         // Cleanup
         self.run_pool.unregister_job(&self.job.id).await;
 
-        // Emit completion event
-        let outcome = JobOutcome::Completed {
-            rounds_completed: self.job.current_round,
+        // Emit appropriate outcome based on exit reason
+        let outcome = match exit_reason {
+            ExitReason::Completed => JobOutcome::Completed {
+                rounds_completed: self.job.current_round,
+            },
+            ExitReason::Cancelled => JobOutcome::Stopped {
+                reason: "Job cancelled".to_string(),
+            },
+            ExitReason::PoolShutdown => JobOutcome::Stopped {
+                reason: "Scheduler shutdown".to_string(),
+            },
         };
+
         let _ = self
             .event_tx
             .send(JobWorkerEvent::JobCompleted {
                 job_id: self.job.id.clone(),
-                outcome,
+                outcome: outcome.clone(),
             })
             .await;
 
-        info!(
-            "[JobWorker:{}] Completed ({} rounds)",
-            self.job.id, self.job.current_round
-        );
+        match exit_reason {
+            ExitReason::Completed => {
+                info!(
+                    "[JobWorker:{}] Completed ({} rounds)",
+                    self.job.id, self.job.current_round
+                );
+            }
+            ExitReason::Cancelled => {
+                warn!(
+                    "[JobWorker:{}] Stopped (cancelled after {} rounds)",
+                    self.job.id, self.job.current_round
+                );
+            }
+            ExitReason::PoolShutdown => {
+                warn!(
+                    "[JobWorker:{}] Stopped (pool shutdown after {} rounds)",
+                    self.job.id, self.job.current_round
+                );
+            }
+        }
     }
 
     // ========================================================================
@@ -403,6 +439,8 @@ impl JobWorker {
             self.job.id, result.run_id, result.outcome.detected, result.outcome.exit_code
         );
 
+        //TODO should use result.round_id?
+        
         // Find which round this belongs to and update
         let mut round_to_finalize = None;
 

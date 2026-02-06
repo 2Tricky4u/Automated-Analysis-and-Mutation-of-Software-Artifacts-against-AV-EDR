@@ -123,6 +123,7 @@ impl VMExecutor {
                 // Priority 1: Graceful shutdown
                 _ = shutdown_token.cancelled() => {
                     info!("[VM:{}] Shutdown requested", self.id);
+                    //TODO clean vm about this job
                     break;
                 }
 
@@ -245,6 +246,7 @@ impl VMExecutor {
                 return;
             }
         };
+        // TODO use result.success (evaded?)
 
         let envelope = in_flight.envelope;
 
