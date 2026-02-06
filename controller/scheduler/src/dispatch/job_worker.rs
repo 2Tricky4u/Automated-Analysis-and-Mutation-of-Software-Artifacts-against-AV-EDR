@@ -36,6 +36,10 @@ use super::types::{
 /// Maximum rounds being processed simultaneously
 const MAX_IN_FLIGHT_ROUNDS: usize = 5;
 
+/// Maximum pending runs in pool for this job (backpressure)
+/// Each round = 2 runs (baseline + instrumented), so 10 = 5 rounds worth
+const MAX_PENDING_RUNS: usize = 10;
+
 /// Default timeout for run execution
 const DEFAULT_TIMEOUT_SECONDS: u32 = 120;
 
@@ -230,8 +234,14 @@ impl JobWorker {
             return false;
         }
 
-        // Not too many in-flight rounds
+        // Not too many in-flight rounds (being aggregated)
         if self.round_aggs.len() >= MAX_IN_FLIGHT_ROUNDS {
+            return false;
+        }
+
+        // Backpressure: don't overload the run pool
+        let pending = self.run_pool.pending_runs_for_job(&self.job.id);
+        if pending >= MAX_PENDING_RUNS {
             return false;
         }
 
