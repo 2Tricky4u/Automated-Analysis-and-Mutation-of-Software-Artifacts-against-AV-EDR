@@ -471,11 +471,7 @@ pub async fn report_status(
     request: Request<StatusReport>,
 ) -> Result<Response<StatusAck>, Status> {
     use tokio::time::Duration;
-
-    let remote_addr = request
-        .remote_addr()
-        .map(|a| a.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+    
     let report = request.into_inner();
 
     // Log status

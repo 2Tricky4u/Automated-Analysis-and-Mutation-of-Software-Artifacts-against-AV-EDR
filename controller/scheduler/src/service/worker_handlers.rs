@@ -399,7 +399,6 @@ pub async fn get_orchestrator_status(
 
     // Get active job count from RunPool
     let active_job_count = service.run_pool.job_count().await;
-    let pool_metrics = service.run_pool.get_metrics().await;
 
     // Create active job entries (we only know count, not details)
     // TODO: Expose job details from Orchestrator
