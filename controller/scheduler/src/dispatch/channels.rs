@@ -1,64 +1,22 @@
 //! Channel types and events for dispatch system.
 //!
 //! Defines the messages that flow between:
-//! - Worker -> Orchestrator (events via aggregated bus)
-//! - TargetManager -> Orchestrator (worker lifecycle)
+//! - VMExecutor -> RunPool -> JobWorker (run results)
+//! - JobWorker -> Orchestrator (job lifecycle events)
 //!
-//! Graceful shutdown is handled via CancellationToken in PoolGroup,
-//! not per-worker command channels.
+//! Architecture:
+//! - JobWorker: Spawned per job, owns job lifecycle, builds artifacts, aggregates results
+//! - RunPool: Shared queue where all jobs put runs, VMExecutors take from it
+//! - VMExecutor: Thin dispatcher per VM, takes runs, routes results back
 
-use super::types::{JobId, JobOutcome, RunId, RunOutcome, WorkerId, WorkerInfo};
-
-// ============================================================================
-// Worker -> Orchestrator (Aggregated Event Bus)
-// ============================================================================
-
-/// Events sent from Worker to Orchestrator via shared event bus.
-/// All workers send to a single aggregated channel for O(1) receive.
-#[derive(Debug, Clone)]
-pub enum WorkerEvent {
-    /// Worker is idle and can accept a job
-    Available { worker_id: WorkerId },
-    /// Job completed (success or failure) - unused in pool architecture
-    JobCompleted {
-        worker_id: WorkerId,
-        job_id: JobId,
-        outcome: JobOutcome,
-    },
-    /// Individual run completed (for observability)
-    RunCompleted {
-        worker_id: WorkerId,
-        run_id: RunId,
-        outcome: RunOutcome,
-    },
-}
+use super::types::{JobId, JobOutcome, RoundId, RoundSummary, RunId, RunOutcome};
 
 // ============================================================================
-// TargetManager -> Orchestrator
-// ============================================================================
-
-/// Events sent from TargetManager to Orchestrator
-#[derive(Debug)]
-pub enum OrchestratorEvent {
-    /// New worker connected
-    WorkerConnected {
-        worker_id: WorkerId,
-        info: WorkerInfo,
-    },
-    /// Worker disconnected
-    WorkerDisconnected {
-        worker_id: WorkerId,
-        reason: String,
-    },
-}
-
-// ============================================================================
-// Remote execution results (stream -> Worker)
+// Remote execution results (stream -> VMExecutor)
 // ============================================================================
 
 /// Result from remote VM execution
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // success field kept for protocol compatibility
 pub struct RemoteRunResult {
     pub run_id: RunId,
     pub detected: bool,
@@ -75,4 +33,39 @@ impl From<RemoteRunResult> for RunOutcome {
             error: r.error,
         }
     }
+}
+
+// ============================================================================
+// JobWorker -> Orchestrator (Job Lifecycle Events)
+// ============================================================================
+
+/// Events emitted by JobWorker to Orchestrator for tracking and ES indexing.
+#[derive(Debug, Clone)]
+pub enum JobWorkerEvent {
+    /// A round completed (both baseline and instrumented runs done)
+    RoundCompleted {
+        job_id: JobId,
+        round_id: RoundId,
+        summary: RoundSummary,
+    },
+    /// Job completed (all rounds done or stopped early)
+    JobCompleted {
+        job_id: JobId,
+        outcome: JobOutcome,
+    },
+}
+
+// ============================================================================
+// VMExecutor -> RunPool -> JobWorker (Run Results)
+// ============================================================================
+
+/// Result routed from VMExecutor back to JobWorker via RunPool.
+/// Contains all info needed to correlate result with originating job/round.
+#[derive(Debug, Clone)]
+pub struct JobRunResult {
+    pub run_id: RunId,
+    pub job_id: JobId,
+    pub round_id: RoundId,
+    pub outcome: RunOutcome,
+    pub vm_id: String,
 }

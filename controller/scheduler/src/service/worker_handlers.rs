@@ -8,7 +8,6 @@ use crate::automutate::controller::{
     GetWorkerResponse, ListWorkersRequest, ListWorkersResponse, PoolMetricsEntry, WorkerInfo,
     WorkerMetadataEntry,
 };
-use crate::dispatch::group_id::GroupId;
 use crate::service::SchedulerService;
 use crate::target_manager::{RegistrationType, TargetStatus};
 use tonic::{Request, Response, Status};
@@ -333,6 +332,9 @@ pub async fn get_worker_metadata(
 }
 
 /// Get pool metrics
+///
+/// In the new architecture, there's a single shared RunPool.
+/// Jobs are tracked via Orchestrator, not per-pool.
 pub async fn get_pool_metrics(
     service: &SchedulerService,
     request: Request<GetPoolMetricsRequest>,
@@ -340,66 +342,47 @@ pub async fn get_pool_metrics(
     let req = request.get_ref();
     debug!("[RPC] GetPoolMetrics: pool_id={}", req.pool_id);
 
-    let registry = service.targets.pool_registry();
-    let mut entries = Vec::new();
+    // In new architecture, there's a single shared RunPool
+    let metrics = service.run_pool.get_metrics().await;
+    let queue_size = service.run_pool.pool_size().await;
+    let job_count = service.run_pool.job_count().await;
 
-    if req.pool_id.is_empty() {
-        // Return all pools
-        for group_id in registry.list_ids().await {
-            if let Some(pool) = registry.get(&group_id).await {
-                let metrics = pool.get_metrics().await;
-                let queue_size = pool.pool_size().await;
-                let current_job = pool.current_job_id().await;
+    // Get VM count from targets
+    let all_workers = service.targets.list_all();
+    let vm_count = all_workers
+        .iter()
+        .filter(|w| w.status == TargetStatus::Available || w.status == TargetStatus::Busy)
+        .count();
 
-                // TODO: Track worker count per pool - requires PoolGroup to maintain worker list
-                // or Orchestrator to expose worker-to-pool mapping
-                entries.push(PoolMetricsEntry {
-                    pool_id: group_id.as_str().to_string(),
-                    total_runs_dispatched: metrics.total_runs_dispatched,
-                    total_runs_completed: metrics.total_runs_completed,
-                    total_rounds_completed: metrics.total_rounds_completed,
-                    total_jobs_completed: metrics.total_jobs_completed,
-                    current_queue_size: queue_size as u32,
-                    worker_count: 0,
-                    current_job_id: current_job.map(|j| j.0).unwrap_or_default(),
-                });
-            }
-        }
-    } else {
-        // Return specific pool
-        let group_id = GroupId::new(&req.pool_id);
-        if let Some(pool) = registry.get(&group_id).await {
-            let metrics = pool.get_metrics().await;
-            let queue_size = pool.pool_size().await;
-            let current_job = pool.current_job_id().await;
+    let entry = PoolMetricsEntry {
+        pool_id: "shared-run-pool".to_string(),
+        total_runs_dispatched: metrics.total_runs_added,  // Renamed in new architecture
+        total_runs_completed: metrics.total_runs_taken,
+        total_rounds_completed: 0,  // TODO: Track in RunPool or Orchestrator
+        total_jobs_completed: 0,    // TODO: Track in Orchestrator
+        current_queue_size: queue_size as u32,
+        worker_count: vm_count as u32,
+        current_job_id: format!("{} active jobs", job_count),
+    };
 
-            entries.push(PoolMetricsEntry {
-                pool_id: req.pool_id.clone(),
-                total_runs_dispatched: metrics.total_runs_dispatched,
-                total_runs_completed: metrics.total_runs_completed,
-                total_rounds_completed: metrics.total_rounds_completed,
-                total_jobs_completed: metrics.total_jobs_completed,
-                current_queue_size: queue_size as u32,
-                worker_count: 0,
-                current_job_id: current_job.map(|j| j.0).unwrap_or_default(),
-            });
-        }
-    }
-
-    Ok(Response::new(GetPoolMetricsResponse { pools: entries }))
+    Ok(Response::new(GetPoolMetricsResponse { pools: vec![entry] }))
 }
 
 /// Get orchestrator status
+///
+/// In the new architecture:
+/// - There's a single shared RunPool (not per-capability pools)
+/// - Jobs are tracked via Orchestrator's job_workers HashMap
+/// - VMs are tracked via TargetManager
 pub async fn get_orchestrator_status(
     service: &SchedulerService,
     _request: Request<GetOrchestratorStatusRequest>,
 ) -> Result<Response<GetOrchestratorStatusResponse>, Status> {
     debug!("[RPC] GetOrchestratorStatus");
 
-    let registry = service.targets.pool_registry();
     let all_workers = service.targets.list_all();
 
-    // Count worker states
+    // Count VM states
     let total_workers = all_workers.len() as u32;
     let available_workers = all_workers
         .iter()
@@ -410,33 +393,28 @@ pub async fn get_orchestrator_status(
         .filter(|w| w.status == TargetStatus::Busy)
         .count() as u32;
 
-    // Get pool info
-    let pool_id_list = registry.list_ids().await;
-    let pool_ids: Vec<String> = pool_id_list.iter().map(|g| g.as_str().to_string()).collect();
-    let active_pools = pool_ids.len() as u32;
+    // In new architecture, there's a single shared pool
+    let pool_ids = vec!["shared-run-pool".to_string()];
+    let active_pools = 1;
 
-    // Get active jobs from pools
-    let mut active_jobs = Vec::new();
-    for group_id in pool_id_list {
-        if let Some(pool) = registry.get(&group_id).await {
-            if let Some(job_id) = pool.current_job_id().await {
-                // TODO: ActiveJobEntry needs current_round and max_rounds from JobSession
-                // Requires exposing job details from PoolGroup (currently only job_id is exposed)
-                active_jobs.push(ActiveJobEntry {
-                    job_id: job_id.0,
-                    pool_id: group_id.as_str().to_string(),
-                    current_round: 0,
-                    max_rounds: 0,
-                    status: "running".to_string(),
-                });
-            }
-        }
-    }
+    // Get active job count from RunPool
+    let active_job_count = service.run_pool.job_count().await;
+    let pool_metrics = service.run_pool.get_metrics().await;
 
-    // TODO: pending_jobs requires exposing Orchestrator.pending_count() via shared state
-    // Currently Orchestrator owns the pending_jobs queue without public accessor from SchedulerService
+    // Create active job entries (we only know count, not details)
+    // TODO: Expose job details from Orchestrator
+    let active_jobs: Vec<ActiveJobEntry> = (0..active_job_count)
+        .map(|i| ActiveJobEntry {
+            job_id: format!("job-{}", i),  // Placeholder
+            pool_id: "shared-run-pool".to_string(),
+            current_round: 0,
+            max_rounds: 0,
+            status: "running".to_string(),
+        })
+        .collect();
+
     Ok(Response::new(GetOrchestratorStatusResponse {
-        pending_jobs: 0,
+        pending_jobs: service.run_pool.pool_size().await as u32,  // Pending runs in pool
         active_pools,
         total_workers,
         available_workers,

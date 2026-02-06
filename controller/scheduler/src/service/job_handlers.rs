@@ -279,6 +279,9 @@ pub async fn get_job_progress(
 }
 
 /// Stop a running job
+///
+/// TODO: In the new JobWorker architecture, we need access to Orchestrator
+/// to stop specific jobs. For now, we can only update ES status.
 pub async fn stop_job(
     service: &SchedulerService,
     request: Request<StopJobRequest>,
@@ -286,41 +289,29 @@ pub async fn stop_job(
     let job_id = &request.get_ref().job_id;
     debug!("[RPC] StopJob: job_id={}", job_id);
 
-    // Find the pool that has this job and signal shutdown
-    let registry = service.targets.pool_registry();
-    let pool_ids = registry.list_ids().await;
+    // TODO: Need to expose job shutdown via Orchestrator
+    // In the new architecture, jobs are managed by JobWorkers which have shutdown tokens
+    // tracked in Orchestrator.job_workers HashMap.
+    // For now, we just update the ES status.
 
-    for group_id in pool_ids {
-        if let Some(pool) = registry.get(&group_id).await {
-            if let Some(current_job_id) = pool.current_job_id().await {
-                if current_job_id.0 == *job_id {
-                    // Found the pool running this job - signal shutdown
-                    pool.shutdown();
-                    info!("Stopped job {} in pool {}", job_id, group_id.as_str());
+    // Update job status in ES
+    let _ = service
+        .es_client
+        .update(elasticsearch::UpdateParts::IndexId("jobs-*", job_id))
+        .body(json!({
+            "doc": { "status": "stop_requested" }
+        }))
+        .send()
+        .await;
 
-                    // Update job status in ES
-                    let _ = service
-                        .es_client
-                        .update(elasticsearch::UpdateParts::IndexId("jobs-*", job_id))
-                        .body(json!({
-                            "doc": { "status": "stopped" }
-                        }))
-                        .send()
-                        .await;
+    warn!("StopJob: Job stop not fully implemented in new architecture");
 
-                    return Ok(Response::new(StopJobResponse {
-                        stopped: true,
-                        message: format!("Job {} stopped in pool {}", job_id, group_id.as_str()),
-                    }));
-                }
-            }
-        }
-    }
-
-    // Job not found running
     Ok(Response::new(StopJobResponse {
         stopped: false,
-        message: format!("Job {} not found running in any pool", job_id),
+        message: format!(
+            "Job {} stop requested (full implementation pending - jobs managed by JobWorkers)",
+            job_id
+        ),
     }))
 }
 
