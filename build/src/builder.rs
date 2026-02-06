@@ -81,7 +81,7 @@ fn get_template_libs(template_name: &str) -> &'static [&'static str] {
         "network_beacon" => &["ws2_32"],
         "eicar_test" => &["advapi32"], // GetUserNameA requires advapi32.lib
         _ => {
-            warn!("Unknown template '{}', using no extra libs", template_name);
+            debug!("Unknown template '{}', using no extra libs", template_name);
             &[]
         }
     }

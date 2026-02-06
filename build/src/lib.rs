@@ -51,12 +51,6 @@ pub mod mutator;
 pub mod builder;
 pub mod compiler;
 
-// Keep old module names for backward compatibility during transition
-pub mod ast_line_tracer;
-pub mod ast_mutator;
-pub mod instrumenter;
-pub mod ir_mutator;
-
 // ============================================================================
 // Re-exports from submodules
 // ============================================================================
@@ -256,7 +250,7 @@ impl LowLevelBuilder {
 
         let source_code = tokio::fs::read_to_string(source).await?;
         let processed_code = if needs_line_tracing {
-            let mutator = crate::ast_mutator::AstMutator::new();
+            let mutator = AstMutator::new();
             mutator.inject_line_tracing(&source_code)?
         } else {
             source_code
@@ -314,7 +308,7 @@ impl LowLevelBuilder {
         match self.config.trace_mode {
             TraceMode::Off => { tokio::fs::copy(ir, output).await?; }
             _ => {
-                let mut instrumenter = crate::instrumenter::Instrumenter::new();
+                let mut instrumenter = Instrumenter::new();
                 instrumenter.instrument(ir, self.config.trace_mode, output).await?;
             }
         }
