@@ -99,11 +99,47 @@ impl Orchestrator {
     // Job Management
     // ========================================================================
 
-    async fn spawn_job_worker(&mut self, job: JobSession) {
+    async fn spawn_job_worker(&mut self, mut job: JobSession) {
         let job_id = job.id.clone();
+
+        // Resolve missing constraints from available targets
+        let needs_os = job.target_os.is_none();
+        let needs_caps = job.required_capabilities.is_empty();
+
+        if needs_os || needs_caps {
+            if let Some((resolved_os, resolved_caps)) = self.resolve_job_constraints(
+                job.target_os.as_deref(),
+                &job.required_capabilities,
+            ) {
+                if needs_os {
+                    debug!(
+                        "[Orchestrator] Job {} auto-assigned OS: {}",
+                        job_id, resolved_os
+                    );
+                    job.target_os = Some(resolved_os);
+                }
+                if needs_caps {
+                    debug!(
+                        "[Orchestrator] Job {} auto-assigned capabilities: {:?}",
+                        job_id, resolved_caps
+                    );
+                    job.required_capabilities = resolved_caps;
+                }
+            } else {
+                warn!(
+                    "[Orchestrator] Job {} has no matching targets, using defaults",
+                    job_id
+                );
+                if needs_os {
+                    job.target_os = Some("win10".to_string());
+                    job.required_capabilities = vec!["rededr".to_string(),"mde".to_string()];
+                }
+            }
+        }
+
         info!(
-            "[Orchestrator] Spawning JobWorker for job {} (max_rounds={})",
-            job_id, job.max_rounds
+            "[Orchestrator] Spawning JobWorker for job {} (max_rounds={}, os={:?}, caps={:?})",
+            job_id, job.max_rounds, job.target_os, job.required_capabilities
         );
 
         let worker = JobWorker::new(
@@ -115,6 +151,85 @@ impl Orchestrator {
         let shutdown_token = worker.cancellation_token();
         tokio::spawn(worker.run());
         self.job_workers.insert(job_id, shutdown_token);
+    }
+
+    // ========================================================================
+    // Constraint Resolution
+    // ========================================================================
+
+    /// Resolve missing job constraints from available targets.
+    ///
+    /// Given optional OS and capabilities constraints, finds a suitable target
+    /// and returns (os, capabilities) to fill in any missing fields.
+    ///
+    /// Priority:
+    /// 1. Available (not busy) targets matching any provided constraints
+    /// 2. Any existing (possibly busy) target matching constraints
+    /// 3. None if no targets exist
+    fn resolve_job_constraints(
+        &self,
+        requested_os: Option<&str>,
+        requested_caps: &[String],
+    ) -> Option<(String, Vec<String>)> {
+        use crate::target_manager::TargetStatus;
+
+        let all_targets = self.targets.list_all();
+
+        // Collect candidates: (os, capabilities, is_available)
+        let mut candidates: Vec<(String, Vec<String>, bool)> = Vec::new();
+
+        for t in &all_targets {
+            if !t.enabled {
+                continue;
+            }
+
+            // Check OS match if requested
+            if let Some(os) = requested_os {
+                if !t.os_version.eq_ignore_ascii_case(os) {
+                    continue;
+                }
+            }
+
+            // Check capabilities match if requested
+            if !requested_caps.is_empty() {
+                let has_all = requested_caps
+                    .iter()
+                    .all(|req| t.capabilities.iter().any(|cap| cap.eq_ignore_ascii_case(req)));
+                if !has_all {
+                    continue;
+                }
+            }
+
+            let is_available = t.status == TargetStatus::Available;
+            candidates.push((t.os_version.clone(), t.capabilities.clone(), is_available));
+        }
+
+        if candidates.is_empty() {
+            // No matching targets - try any enabled target as fallback
+            for t in &all_targets {
+                if t.enabled {
+                    let is_available = t.status == TargetStatus::Available;
+                    candidates.push((t.os_version.clone(), t.capabilities.clone(), is_available));
+                }
+            }
+        }
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // Sort: available targets first, then by OS for determinism
+        candidates.sort_by(|a, b| {
+            match (a.2, b.2) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.0.cmp(&b.0),
+            }
+        });
+
+        // Pick the best candidate
+        let best = &candidates[0];
+        Some((best.0.clone(), best.1.clone()))
     }
 
     async fn on_job_worker_event(&mut self, event: JobWorkerEvent) {
