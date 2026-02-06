@@ -81,8 +81,25 @@ pub struct RoundId(pub String);
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RunId(pub String);
 
+/// WorkerId - ephemeral session identity (new ID per connection)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WorkerId(pub String);
+
+/// TargetId - stable machine identity (persists across reconnects)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TargetId(pub String);
+
+impl TargetId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
+impl std::fmt::Display for TargetId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 impl std::fmt::Display for JobId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -335,6 +352,29 @@ pub struct WorkerInfo {
     pub id: WorkerId,
     pub os: String,
     pub capabilities: Vec<String>,
+}
+
+// ============================================================================
+// VM Info (for VMExecutor)
+// ============================================================================
+
+/// Information about a connected VM for VMExecutor.
+/// Simplified version of WorkerInfo focused on execution capabilities.
+#[derive(Debug, Clone)]
+pub struct VMInfo {
+    pub id: String,
+    pub os: String,
+    pub capabilities: Vec<String>,
+}
+
+impl From<&WorkerInfo> for VMInfo {
+    fn from(info: &WorkerInfo) -> Self {
+        Self {
+            id: info.id.0.clone(),
+            os: info.os.clone(),
+            capabilities: info.capabilities.clone(),
+        }
+    }
 }
 
 // ============================================================================

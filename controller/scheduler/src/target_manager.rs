@@ -28,10 +28,8 @@ use crate::automutate::worker::{
     worker_agent_client::WorkerAgentClient, WorkerInfoRequest, WorkerInfoResponse,
 };
 use crate::dispatch::{
-    ArtifactSender, OrchestratorEvent, RemoteRunResult, RunId, Worker, WorkerEvent,
-    WorkerId, WorkerInfo,
+    ArtifactSender, RemoteRunResult, RunId, RunPool, VMExecutor, VMInfo, WorkerId, WorkerInfo,
 };
-use crate::dispatch::pool_group::PoolGroupRegistry;
 
 // ============================================================================
 // Types
@@ -163,36 +161,28 @@ impl Target {
 pub struct TargetManager {
     targets: DashMap<String, Target>,
     events_tx: mpsc::Sender<TargetEvent>,
-    orchestrator_tx: mpsc::Sender<OrchestratorEvent>,
-    /// Shared channel for worker events (all workers send to this)
-    worker_event_tx: mpsc::Sender<WorkerEvent>,
     rpc_timeout: Duration,
-    /// Shared pool group registry (workers with same capabilities share a pool)
-    pool_registry: Arc<PoolGroupRegistry>,
+    run_pool: Arc<RunPool>,
 }
 
 impl TargetManager {
     pub fn new(
         rpc_timeout_secs: u64,
         events_tx: mpsc::Sender<TargetEvent>,
-        orchestrator_tx: mpsc::Sender<OrchestratorEvent>,
-        worker_event_tx: mpsc::Sender<WorkerEvent>,
-        pool_registry: Arc<PoolGroupRegistry>,
+        run_pool: Arc<RunPool>,
     ) -> Self {
         Self {
             targets: DashMap::new(),
             events_tx,
-            orchestrator_tx,
-            worker_event_tx,
             rpc_timeout: Duration::from_secs(rpc_timeout_secs),
-            pool_registry,
+            run_pool,
         }
     }
 
-    /// Get the pool registry (for Orchestrator to use).
+    /// Get the run pool.
     #[allow(dead_code)]
-    pub fn pool_registry(&self) -> Arc<PoolGroupRegistry> {
-        Arc::clone(&self.pool_registry)
+    pub fn run_pool(&self) -> Arc<RunPool> {
+        Arc::clone(&self.run_pool)
     }
 
     // ========================================================================
@@ -301,7 +291,7 @@ impl TargetManager {
     // State Management
     // ========================================================================
 
-    pub fn reserve(&self, id: &str) -> Result<()> { //TODO need to reserve worker when choosed for a job
+    pub fn reserve(&self, id: &str) -> Result<()> { //TODO need to reserve worker when reserved for a run
         let mut target = self
             .targets
             .get_mut(id)
@@ -425,22 +415,12 @@ impl TargetManager {
 
         debug!("Stream established with target {}", id);
 
-        // Store stream sender
-        if let Some(mut target) = self.targets.get_mut(id) {
-            target.stream_tx = Some(stream_tx.clone());
-            if target.status == TargetStatus::Offline {
-                target.status = TargetStatus::Available;
-            }
-            target.touch();
-        }
+        self.mark_connected(id)?;
 
         // Create channel for results from VM (run completions)
         let (result_tx, result_rx) = mpsc::channel::<RemoteRunResult>(128);
 
-        // Clone the shared worker event channel (all workers send to same bus)
-        let worker_event_tx = self.worker_event_tx.clone();
-
-        // Get worker info
+        // Get worker/VM info
         let worker_info = {
             let target = self.targets.get(id).ok_or_else(|| anyhow!("Target not found"))?;
             WorkerInfo {
@@ -450,23 +430,16 @@ impl TargetManager {
             }
         };
 
+        let vm_info = VMInfo::from(&worker_info);
+
         // Spawn stream handler
         let id_clone = id.to_string();
         let events_tx = self.events_tx.clone();
-        let orchestrator_tx = self.orchestrator_tx.clone();
         let targets = self.targets.clone();
         let result_tx_clone = result_tx.clone();
 
         tokio::spawn(async move {
-            Self::stream_handler(
-                id_clone,
-                incoming,
-                events_tx,
-                orchestrator_tx,
-                targets,
-                result_tx_clone,
-            )
-            .await;
+            Self::stream_handler(id_clone, incoming, events_tx, targets, result_tx_clone).await;
         });
 
         // Create artifact sender
@@ -475,34 +448,22 @@ impl TargetManager {
                 manager: Arc::clone(self),
             });
 
-        // Get or create pool group for this worker
-        let pool = self.pool_registry.get_or_create(&worker_info).await;
+        // Spawn VMExecutor task (uses shared run pool)
         debug!(
-            "Worker {} assigned to pool group {}",
-            id,
-            pool.group_id()
+            "VM {} starting executor (os={}, caps={:?})",
+            id, vm_info.os, vm_info.capabilities
         );
 
-        // Spawn Worker task (gets cancellation token from pool automatically)
-        let worker = Worker::new(
-            WorkerId(id.to_string()),
-            worker_info.clone(),
-            pool,
-            worker_event_tx,
+        let executor = VMExecutor::new(
+            id.to_string(),
+            vm_info,
+            Arc::clone(self),
+            Arc::clone(&self.run_pool),
             stream_tx.clone(),
             result_rx,
             artifact_sender,
         );
-        tokio::spawn(worker.run());
-
-        // Notify Orchestrator
-        let _ = self
-            .orchestrator_tx
-            .send(OrchestratorEvent::WorkerConnected {
-                worker_id: WorkerId(id.to_string()),
-                info: worker_info,
-            })
-            .await;
+        tokio::spawn(executor.run());
 
         // Spawn heartbeat
         self.spawn_heartbeat(id, stream_tx);
@@ -514,7 +475,6 @@ impl TargetManager {
         id: String,
         mut incoming: tonic::Streaming<WorkerMessage>,
         events_tx: mpsc::Sender<TargetEvent>,
-        orchestrator_tx: mpsc::Sender<OrchestratorEvent>,
         targets: DashMap<String, Target>,
         result_tx: mpsc::Sender<RemoteRunResult>,
     ) {
@@ -528,7 +488,7 @@ impl TargetManager {
                     if let Some(mut t) = targets.get_mut(&id) {
                         t.touch();
 
-                        // Handle registration message
+                        // Handle registration message -> send Connected event
                         if !registration_received {
                             if let Some(worker_message::Payload::Registration(ref reg)) = msg.payload
                             {
@@ -547,7 +507,7 @@ impl TargetManager {
                         }
                     }
 
-                    // Handle SampleResponse -> forward to Worker
+                    // Handle SampleResponse -> forward to VMExecutor
                     if let Some(worker_message::Payload::SampleResponse(ref response)) = msg.payload
                     {
                         let result = RemoteRunResult {
@@ -564,7 +524,7 @@ impl TargetManager {
                         let _ = result_tx.send(result).await;
                     }
 
-                    // Forward to event bus
+                    // Forward to Orchestrator (for telemetry/ES indexing)
                     let _ = events_tx
                         .send(TargetEvent::Message {
                             target_id: id.clone(),
@@ -586,17 +546,10 @@ impl TargetManager {
             target.status = TargetStatus::Offline;
         }
 
+        // Send Disconnected event to Orchestrator
         let _ = events_tx
             .send(TargetEvent::Disconnected {
                 target_id: id.clone(),
-                reason: "Stream closed".to_string(),
-            })
-            .await;
-
-        // Notify Orchestrator so it can clean up worker state
-        let _ = orchestrator_tx
-            .send(OrchestratorEvent::WorkerDisconnected {
-                worker_id: WorkerId(id.clone()),
                 reason: "Stream closed".to_string(),
             })
             .await;
@@ -693,10 +646,10 @@ impl TargetManager {
     pub async fn disconnect_all(&self, reason: &str, reconnect_allowed: bool) { // TODO use it
         info!("Disconnecting all targets: {}", reason);
 
-        // First, signal graceful shutdown to all workers via pool cancellation tokens
-        self.pool_registry.shutdown_all().await;
+        // Signal graceful shutdown to all VMExecutors via run pool
+        self.run_pool.shutdown();
 
-        // Give workers a moment to finish current runs
+        // Give executors a moment to finish current runs
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Send disconnect notice to VMs
@@ -900,15 +853,11 @@ impl ArtifactSender for TargetArtifactSender {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::pool_group::PoolEvent;
 
     fn create_test_manager() -> TargetManager {
         let (events_tx, _) = mpsc::channel(100);
-        let (orch_tx, _) = mpsc::channel(100);
-        let (worker_event_tx, _) = mpsc::channel(100);
-        let (pool_event_tx, _) = mpsc::channel(100);
-        let pool_registry = Arc::new(PoolGroupRegistry::new(pool_event_tx));
-        TargetManager::new(30, events_tx, orch_tx, worker_event_tx, pool_registry)
+        let run_pool = Arc::new(RunPool::new());
+        TargetManager::new(30, events_tx, run_pool)
     }
 
     #[test]

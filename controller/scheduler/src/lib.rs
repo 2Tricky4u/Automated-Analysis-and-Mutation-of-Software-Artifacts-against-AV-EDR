@@ -1,8 +1,8 @@
-// Scheduler library - Dispatch-based architecture
+// Scheduler library - JobWorker architecture
 //
 // Core modules:
-// - dispatch: Worker-VM-bound job execution (Worker, Orchestrator, JobSession)
-// - target_manager: Connection management and Worker spawning
+// - dispatch: JobWorker-based job execution (JobWorker, RunPool, VMExecutor, Orchestrator)
+// - target_manager: Connection management and VMExecutor spawning
 // - service: gRPC handler implementations
 
 pub mod dispatch;
@@ -24,8 +24,7 @@ pub mod automutate {
 
 // Re-exports
 pub use dispatch::{
-    JobId, JobOutcome, JobSession, Orchestrator, OrchestratorEvent, RoundSpec, RunEnvelope,
-    RunId, RunOutcome, RunType, Worker, WorkerEvent, WorkerId, WorkerInfo,
+    JobSession, Orchestrator, RunPool, VMExecutor, VMInfo, WorkerId, WorkerInfo,
 };
 pub use service::SchedulerService;
 pub use target_manager::{Target, TargetConfig, TargetEvent, TargetManager, TargetStatus};

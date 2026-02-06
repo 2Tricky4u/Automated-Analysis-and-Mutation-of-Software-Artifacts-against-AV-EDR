@@ -1,30 +1,29 @@
-//! Scheduler main - Dispatch-based architecture
+//! Scheduler main - JobWorker architecture
 //!
 //! Flow:
 //! 1. Load config, init logging, create ES client
 //! 2. Create TargetManager + Orchestrator
-//! 3. Establish streams with targets (spawns Workers)
+//! 3. Establish streams with targets (spawns VMExecutors)
 //! 4. gRPC server accepts job submissions -> Orchestrator
-//! 5. Orchestrator routes jobs to compatible Workers
+//! 5. Orchestrator spawns JobWorkers and handles all events
 
 use edr_config::ControllerConfig;
 use elasticsearch::http::transport::Transport;
 use elasticsearch::Elasticsearch;
-use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tonic::transport::Server;
-use std::fs::OpenOptions;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing::{debug, info, warn};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::Layer;
-use tracing::{debug, error, info, warn};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod dispatch;
 mod service;
 mod target_manager;
 
-use dispatch::{JobSession, Orchestrator, OrchestratorEvent, PoolEvent, PoolGroupRegistry, WorkerEvent};
+use dispatch::{JobSession, Orchestrator, RunPool};
 use service::SchedulerService;
 use target_manager::{TargetEvent, TargetManager};
 
@@ -40,12 +39,7 @@ pub mod automutate {
     }
 }
 
-use crate::automutate::common::worker_message;
 use crate::automutate::controller::controller_server::ControllerServer;
-
-// ============================================================================
-// Main
-// ============================================================================
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -90,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(file_layer)
         .init();
 
-    info!("Scheduler starting (dispatch architecture)");
+    info!("Scheduler starting");
     info!("Config: {}", ControllerConfig::find_config_path());
 
     // Create Elasticsearch client
@@ -98,43 +92,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let es_client = Elasticsearch::new(es_transport);
     info!("Elasticsearch: {}", config.elasticsearch.url);
 
-    // Create channels - sized for powerful controller with many workers
-    // events: high-volume telemetry from all workers, allow large bursts
+    // Create channels
     let (events_tx, events_rx) = mpsc::channel::<TargetEvent>(4096);
-    // orchestrator: rare connect/disconnect events only
-    let (orchestrator_tx, orchestrator_rx) = mpsc::channel::<OrchestratorEvent>(64);
-    // job: heavyweight operations, moderate queue depth
     let (job_tx, job_rx) = mpsc::channel::<JobSession>(128);
-    // pool_event: all run/round completions funnel here, needs headroom
-    let (pool_event_tx, pool_event_rx) = mpsc::channel::<PoolEvent>(1024);
-    // worker_event: aggregated bus from all workers, O(workers) per burst
-    let (worker_event_tx, worker_event_rx) = mpsc::channel::<WorkerEvent>(1024);
 
-    // Create shared pool group registry
-    let pool_registry = Arc::new(PoolGroupRegistry::new(pool_event_tx));
+    // Create shared run pool
+    let run_pool = Arc::new(RunPool::new());
 
     // Create TargetManager
     let targets = Arc::new(TargetManager::new(
         config.scheduler.run_timeout_secs,
-        events_tx.clone(),
-        orchestrator_tx.clone(),
-        worker_event_tx,
-        Arc::clone(&pool_registry),
+        events_tx,
+        Arc::clone(&run_pool),
     ));
 
-    // Spawn Orchestrator (handles pool events internally)
-    debug!("Orchestrator starting..");
+    // Spawn Orchestrator (handles jobs, VM lifecycle, and telemetry)
+    debug!("Orchestrator starting...");
     let orchestrator = Orchestrator::new(
-        orchestrator_rx,
+        events_rx,
         job_rx,
-        Arc::clone(&pool_registry),
-        pool_event_rx,
-        worker_event_rx,
+        Arc::clone(&run_pool),
+        Arc::clone(&targets),
+        es_client.clone(),
     );
     tokio::spawn(orchestrator.run());
 
-
-    // Discover and register targets from automation/generated/*.toml
+    // Discover and register targets
     targets.discover_and_register_targets().await;
     info!("Registered {} targets", targets.count());
 
@@ -148,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Establish streams (spawns Workers and notifies Orchestrator)
+    // Establish streams (spawns VMExecutors)
     info!("Establishing streams with targets...");
     let stream_results = targets.establish_all_streams().await;
 
@@ -168,19 +151,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     info!("Streams: {} ok, {} failed", ok_count, fail_count);
 
-    // Clone for event loop
-    let targets_for_events = Arc::clone(&targets);
-    let es_client_for_events = es_client.clone();
-
-    // Spawn event handler loop
-    tokio::spawn(async move {
-        debug!("Event handler started");
-        handle_target_events(events_rx, targets_for_events, es_client_for_events).await;
-        warn!("Event handler stopped");
-    });
-
     // Create gRPC service
-    let service = SchedulerService::new(es_client, job_tx, Arc::clone(&targets));
+    let service = SchedulerService::new(
+        es_client,
+        job_tx,
+        Arc::clone(&targets),
+        Arc::clone(&run_pool),
+    );
 
     // gRPC reflection
     let reflection = tonic_reflection::server::Builder::configure()
@@ -198,167 +175,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_service(reflection)
         .serve(addr)
         .await?;
-
-    Ok(())
-}
-
-// ============================================================================
-// Event Handler
-// ============================================================================
-
-async fn handle_target_events(
-    mut events_rx: mpsc::Receiver<TargetEvent>,
-    targets: Arc<TargetManager>,
-    es_client: Elasticsearch,
-) {
-    while let Some(event) = events_rx.recv().await {
-        match event {
-            TargetEvent::Connected {
-                target_id,
-                os_version,
-                capabilities,
-            } => {
-                debug!(
-                    "[EVENT] Connected: {} (os={}, caps={:?})",
-                    target_id, os_version, capabilities
-                );
-                let _ = targets.mark_connected(&target_id);
-                let _ = targets.update_health(&target_id);
-            }
-
-            TargetEvent::Disconnected { target_id, reason } => {
-                warn!("[EVENT] Disconnected: {} ({})", target_id, reason);
-                let _ = targets.mark_offline(&target_id);
-            }
-
-            TargetEvent::Message { target_id, msg } => {
-                handle_worker_message(&target_id, msg, &targets, &es_client).await;
-            }
-        }
-    }
-}
-
-async fn handle_worker_message(
-    target_id: &str,
-    msg: automutate::common::WorkerMessage,
-    targets: &Arc<TargetManager>,
-    es_client: &Elasticsearch,
-) {
-    match msg.payload {
-        Some(worker_message::Payload::Registration(reg)) => {
-            debug!(
-                "[EVENT] Registration: {} - OS: {}, Caps: {:?}",
-                target_id, reg.os_version, reg.capabilities
-            );
-
-            let tools = if let Some(tv) = reg.tools {
-                let mut m = HashMap::new();
-                if !tv.rededr_version.is_empty() {
-                    m.insert("rededr".to_string(), tv.rededr_version);
-                }
-                if !tv.defender_version.is_empty() {
-                    m.insert("defender".to_string(), tv.defender_version);
-                }
-                m
-            } else {
-                HashMap::new()
-            };
-
-            let _ = targets.register_with_metadata(
-                target_id.to_string(),
-                reg.ip_address,
-                reg.os_version,
-                reg.capabilities,
-                reg.metadata,
-                tools,
-            );
-        }
-
-        Some(worker_message::Payload::Status(status)) => {
-            debug!(
-                "[EVENT] Status: {} - CPU: {}%, Jobs: {}",
-                target_id, status.cpu_percent, status.active_jobs
-            );
-            let _ = targets.update_health(target_id);
-        }
-
-        Some(worker_message::Payload::Telemetry(batch)) => {
-            let count = batch.events.len();
-            debug!(
-                "[EVENT] Telemetry: {} - {} events (run: {})",
-                target_id, count, batch.run_id
-            );
-
-            // Index to ES
-            if !batch.events.is_empty() {
-                let es = es_client.clone();
-                let events = batch.events;
-                tokio::spawn(async move {
-                    if let Err(e) = index_telemetry(&es, &events).await {
-                        error!("Failed to index telemetry: {}", e);
-                    }
-                });
-            }
-        }
-
-        Some(worker_message::Payload::SampleResponse(response)) => {
-            debug!(
-                "[EVENT] SampleResponse: {} - success={}, exit={}",
-                target_id, response.success, response.exit_code
-            );
-            // Response already routed to Worker via result_tx in stream_handler
-            let _ = targets.release(target_id);
-        }
-
-        Some(worker_message::Payload::ExecutionStatus(status)) => {
-            debug!(
-                "[EVENT] ExecStatus: {} - {} (job: {})",
-                target_id, status.event_type, status.job_id
-            );
-        }
-
-        Some(worker_message::Payload::Ack(ack)) => {
-            debug!("[EVENT] Ack: {} - req: {}", target_id, ack.request_id);
-        }
-
-        _ => {}
-    }
-}
-
-async fn index_telemetry(
-    es: &Elasticsearch,
-    events: &[automutate::common::TelemetryData],
-) -> anyhow::Result<()> {
-    use elasticsearch::IndexParts;
-    use serde_json::json;
-
-    if events.is_empty() {
-        return Ok(());
-    }
-
-    let index_name = format!("telemetry-{}", chrono::Utc::now().format("%Y.%m"));
-
-    for event in events {
-        let doc = json!({
-            "event_type": event.event_type,
-            "timestamp": event.timestamp,
-            "job_id": event.job_id,
-            "metadata": event.metadata,
-        });
-
-        let response = es
-            .index(IndexParts::Index(&index_name))
-            .body(doc)
-            .send()
-            .await?;
-
-        if !response.status_code().is_success() {
-            return Err(anyhow::anyhow!(
-                "Index failed: {}",
-                response.status_code()
-            ));
-        }
-    }
 
     Ok(())
 }

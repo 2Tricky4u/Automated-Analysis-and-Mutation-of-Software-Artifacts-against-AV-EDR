@@ -1,80 +1,75 @@
-//! Orchestrator - manages pool groups and routes jobs.
+//! Orchestrator - central coordinator for jobs, VMs, and telemetry.
 //!
 //! Responsibilities:
-//! - Create and manage pool groups by capabilities
-//! - Route jobs to compatible pool groups
-//! - Handle worker connect/disconnect
-//! - Forward pool events
+//! - Spawns JobWorkers for job submissions
+//! - Handles VM lifecycle (connect/disconnect) via TargetEvent
+//! - Routes telemetry to ES indexing
+//! - Manages shared RunPool
 
-use super::channels::{OrchestratorEvent, WorkerEvent};
-use super::group_id::GroupId;
-use super::pool_group::{PoolEvent, PoolGroup};
-use super::types::{JobSession, WorkerId, WorkerInfo};
-use std::collections::{HashMap, VecDeque};
+use super::channels::JobWorkerEvent;
+use super::job_worker::JobWorker;
+use super::run_pool::RunPool;
+use super::types::{JobId, JobSession, WorkerId, WorkerInfo};
+use crate::target_manager::{TargetEvent, TargetManager};
+use elasticsearch::Elasticsearch;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
-
-// ============================================================================
-// Worker Handle
-// ============================================================================
-
-/// Handle to a connected worker.
-pub struct WorkerHandle {
-    pub info: WorkerInfo,
-    pub group_id: GroupId,
-}
-
-// ============================================================================
-// Orchestrator
-// ============================================================================
-
-use super::pool_group::PoolGroupRegistry;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 pub struct Orchestrator {
-    /// Shared pool group registry (same as TargetManager uses)
-    pool_registry: Arc<PoolGroupRegistry>,
+    /// Shared run pool
+    run_pool: Arc<RunPool>,
 
-    /// Connected workers
-    workers: HashMap<WorkerId, WorkerHandle>,
+    /// Target manager for VM state
+    targets: Arc<TargetManager>,
 
-    /// Jobs waiting for a compatible pool group
-    pending_jobs: VecDeque<JobSession>,
+    /// ES client for telemetry indexing
+    es_client: Elasticsearch,
 
-    /// Channel for orchestrator events (worker connect/disconnect)
-    orchestrator_rx: mpsc::Receiver<OrchestratorEvent>,
+    /// Active job workers: JobId -> CancellationToken
+    job_workers: HashMap<JobId, CancellationToken>,
+
+    /// Sender for job worker events (given to each JobWorker)
+    job_event_tx: mpsc::Sender<JobWorkerEvent>,
+
+    /// Receiver for job worker events
+    job_event_rx: mpsc::Receiver<JobWorkerEvent>,
+
+    /// Connected VMs: WorkerId -> WorkerInfo
+    vms: HashMap<WorkerId, WorkerInfo>,
+
+    /// Channel for target events (VM lifecycle + telemetry)
+    events_rx: mpsc::Receiver<TargetEvent>,
 
     /// Channel for job submissions
     job_submit_rx: mpsc::Receiver<JobSession>,
-
-    /// Channel for pool events
-    pool_event_rx: mpsc::Receiver<PoolEvent>,
-
-    /// Aggregated channel for worker events (all workers send to this)
-    worker_event_rx: mpsc::Receiver<WorkerEvent>,
 }
 
 impl Orchestrator {
     pub fn new(
-        orchestrator_rx: mpsc::Receiver<OrchestratorEvent>,
+        events_rx: mpsc::Receiver<TargetEvent>,
         job_submit_rx: mpsc::Receiver<JobSession>,
-        pool_registry: Arc<PoolGroupRegistry>,
-        pool_event_rx: mpsc::Receiver<PoolEvent>,
-        worker_event_rx: mpsc::Receiver<WorkerEvent>,
+        run_pool: Arc<RunPool>,
+        targets: Arc<TargetManager>,
+        es_client: Elasticsearch,
     ) -> Self {
+        let (job_event_tx, job_event_rx) = mpsc::channel(256);
         Self {
-            pool_registry,
-            workers: HashMap::new(),
-            pending_jobs: VecDeque::new(),
-            orchestrator_rx,
+            run_pool,
+            targets,
+            es_client,
+            job_workers: HashMap::new(),
+            job_event_tx,
+            job_event_rx,
+            vms: HashMap::new(),
+            events_rx,
             job_submit_rx,
-            pool_event_rx,
-            worker_event_rx,
         }
     }
 
     /// Main orchestrator loop.
-    /// Event-driven: wakes only when there's actual work to do.
     pub async fn run(mut self) {
         info!("Orchestrator started");
 
@@ -82,82 +77,21 @@ impl Orchestrator {
             tokio::select! {
                 biased;
 
-                // Job submissions
+                // Job submissions -> spawn JobWorker
                 Some(job) = self.job_submit_rx.recv() => {
-                    self.on_job_submitted(job).await;
+                    self.spawn_job_worker(job).await;
                 }
 
-                // Orchestrator events (worker connect/disconnect)
-                Some(event) = self.orchestrator_rx.recv() => {
-                    match event {
-                        OrchestratorEvent::WorkerConnected { worker_id, info } => {
-                            self.on_worker_connected(worker_id, info).await;
-                        }
-                        OrchestratorEvent::WorkerDisconnected { worker_id, reason } => {
-                            self.on_worker_disconnected(&worker_id, &reason).await;
-                        }
-                    }
+                // JobWorker events (round/job completion)
+                Some(event) = self.job_event_rx.recv() => {
+                    self.on_job_worker_event(event).await;
                 }
 
-                // Pool events
-                Some(event) = self.pool_event_rx.recv() => {
-                    self.on_pool_event(event).await;
-                }
-
-                // Worker events (aggregated bus - O(1) receive per event)
-                Some(event) = self.worker_event_rx.recv() => {
-                    self.on_worker_event(event).await;
+                // Target events (VM lifecycle + telemetry)
+                Some(event) = self.events_rx.recv() => {
+                    self.on_target_event(event).await;
                 }
             }
-        }
-    }
-
-    // ========================================================================
-    // Pool Group Management
-    // ========================================================================
-
-    /// Find a pool group that can run the given job.
-    async fn find_compatible_pool(&self, job: &JobSession) -> Option<Arc<PoolGroup>> {
-        self.pool_registry
-            .find_compatible(job.target_os.as_deref(), &job.required_capabilities)
-            .await
-    }
-
-    /// Get the pool registry.
-    pub fn pool_registry(&self) -> Arc<PoolGroupRegistry> {
-        Arc::clone(&self.pool_registry)
-    }
-
-    // ========================================================================
-    // Worker Management
-    // ========================================================================
-
-    async fn on_worker_connected(&mut self, worker_id: WorkerId, info: WorkerInfo) {
-        let group_id = GroupId::from_worker_info(&info);
-
-        info!(
-            "Worker {} connected (os={}, caps={:?}, group={})",
-            worker_id, info.os, info.capabilities, group_id
-        );
-
-        // Pool group is already created by TargetManager when Worker was spawned
-        // Just store the worker handle
-        let handle = WorkerHandle {
-            info,
-            group_id: group_id.clone(),
-        };
-        self.workers.insert(worker_id.clone(), handle);
-
-        // Try to assign pending jobs to this group
-        self.try_assign_pending_jobs(&group_id).await;
-    }
-
-    async fn on_worker_disconnected(&mut self, worker_id: &WorkerId, reason: &str) {
-        info!("Worker {} disconnected: {}", worker_id, reason);
-
-        if let Some(_handle) = self.workers.remove(worker_id) {
-            // Worker removed, pool group remains (other workers may still use it)
-            // TODO: Consider cleaning up empty pool groups
         }
     }
 
@@ -165,168 +99,264 @@ impl Orchestrator {
     // Job Management
     // ========================================================================
 
-    async fn on_job_submitted(&mut self, job: JobSession) {
+    async fn spawn_job_worker(&mut self, job: JobSession) {
+        let job_id = job.id.clone();
         info!(
-            "Job {} submitted (os={:?}, caps={:?})",
-            job.id, job.target_os, job.required_capabilities
+            "[Orchestrator] Spawning JobWorker for job {} (max_rounds={})",
+            job_id, job.max_rounds
         );
 
-        // Find compatible pool group
-        match self.find_compatible_pool(&job).await {
-            Some(pool) => {
-                info!("Assigning job {} to pool {}", job.id, pool.group_id());
-                pool.assign_job(job).await;
-            }
-            None => {
-                debug!(
-                    "No compatible pool for job {}, queueing",
-                    job.id
-                );
-                self.pending_jobs.push_back(job);
-            }
-        }
+        let worker = JobWorker::new(
+            job,
+            Arc::clone(&self.run_pool),
+            self.job_event_tx.clone(),
+        );
+
+        let shutdown_token = worker.cancellation_token();
+        tokio::spawn(worker.run());
+        self.job_workers.insert(job_id, shutdown_token);
     }
 
-    /// Try to assign pending jobs to a specific pool group.
-    async fn try_assign_pending_jobs(&mut self, group_id: &GroupId) {
-        let pool = match self.pool_registry.get(group_id).await {
-            Some(p) => p,
-            None => return,
-        };
-
-        // Find jobs compatible with this group
-        let mut assigned = Vec::new();
-        for (idx, job) in self.pending_jobs.iter().enumerate() {
-            if group_id.satisfies(job.target_os.as_deref(), &job.required_capabilities) {
-                assigned.push(idx);
-            }
-        }
-
-        // Assign jobs (reverse order to maintain indices)
-        for idx in assigned.into_iter().rev() {
-            if let Some(job) = self.pending_jobs.remove(idx) {
-                info!("Assigning queued job {} to pool {}", job.id, group_id);
-                pool.assign_job(job).await;
-            }
-        }
-    }
-
-    // ========================================================================
-    // Event Handling
-    // ========================================================================
-
-    async fn on_pool_event(&mut self, event: PoolEvent) {
+    async fn on_job_worker_event(&mut self, event: JobWorkerEvent) {
         match event {
-            PoolEvent::RunDispatched { pool_id, run_id, worker_id } => {
-                debug!(
-                    "Run {} dispatched to worker {} (pool={})",
-                    run_id, worker_id, pool_id
-                );
-            }
-            PoolEvent::RunCompleted { pool_id, run_id, outcome } => {
-                debug!(
-                    "Run {} completed: detected={} (pool={})",
-                    run_id, outcome.detected, pool_id
-                );
-            }
-            PoolEvent::RoundCompleted { pool_id, round_id, summary } => {
+            JobWorkerEvent::RoundCompleted {
+                job_id,
+                round_id,
+                summary,
+            } => {
                 info!(
-                    "Round {} completed: detected={}, evasion={:.2} (pool={})",
-                    round_id, summary.detected, summary.evasion_score, pool_id
+                    "[Orchestrator] Round {} completed for job {}: detected={}, evasion={:.2}",
+                    round_id, job_id, summary.detected, summary.evasion_score
                 );
-                // TODO: Index to ES
+                // TODO: Index round to ES
             }
-            PoolEvent::JobCompleted { pool_id, job_id, outcome } => {
-                info!(
-                    "Job {} completed: {:?} (pool={})",
-                    job_id, outcome, pool_id
-                );
-                // TODO: Index to ES
+            JobWorkerEvent::JobCompleted { job_id, outcome } => {
+                info!("[Orchestrator] Job {} completed: {:?}", job_id, outcome);
+                self.job_workers.remove(&job_id);
+                // TODO: Update job status in ES
             }
         }
     }
 
-    /// Handle worker event from aggregated bus.
-    async fn on_worker_event(&mut self, event: WorkerEvent) {
+    // ========================================================================
+    // Target Event Handling (VM lifecycle + telemetry)
+    // ========================================================================
+
+    async fn on_target_event(&mut self, event: TargetEvent) {
         match event {
-            WorkerEvent::Available { worker_id } => {
-                debug!("Worker {} available", worker_id);
-                // Workers now pull from pool, no action needed
-            }
-            WorkerEvent::JobCompleted { worker_id, job_id, outcome } => {
-                // This shouldn't happen in new architecture (jobs complete in pool)
-                warn!(
-                    "Received JobCompleted from worker {} (job={}, outcome={:?}) - unexpected",
-                    worker_id, job_id, outcome
-                );
-            }
-            WorkerEvent::RunCompleted { worker_id, run_id, outcome } => {
+            TargetEvent::Connected {
+                target_id,
+                os_version,
+                capabilities,
+            } => {
                 debug!(
-                    "Run {} completed on worker {}: detected={}",
-                    run_id, worker_id, outcome.detected
+                    "[Orchestrator] VM {} connected (os={}, caps={:?})",
+                    target_id, os_version, capabilities
                 );
-                // Observability only, aggregation happens in pool
+
+                // Update target state
+                let _ = self.targets.mark_connected(&target_id);
+
+                // Track in local map
+                let worker_id = WorkerId(target_id);
+                let info = WorkerInfo {
+                    id: worker_id.clone(),
+                    os: os_version,
+                    capabilities,
+                };
+                self.vms.insert(worker_id, info);
+            }
+
+            TargetEvent::Disconnected { target_id, reason } => {
+                info!("[Orchestrator] VM {} disconnected: {}", target_id, reason);
+
+                // Update target state
+                let _ = self.targets.mark_offline(&target_id);
+
+                // Remove from local tracking
+                self.vms.remove(&WorkerId(target_id));
+            }
+
+            TargetEvent::Message { target_id, msg } => {
+                self.handle_worker_message(&target_id, msg).await;
             }
         }
     }
 
+    async fn handle_worker_message(
+        &self,
+        target_id: &str,
+        msg: crate::automutate::common::WorkerMessage,
+    ) {
+        use crate::automutate::common::worker_message;
+
+        match msg.payload {
+            Some(worker_message::Payload::Registration(reg)) => {
+                debug!(
+                    "[Orchestrator] Registration: {} - OS: {}, Caps: {:?}",
+                    target_id, reg.os_version, reg.capabilities
+                );
+
+                let tools = if let Some(tv) = reg.tools {
+                    let mut m = HashMap::new();
+                    if !tv.rededr_version.is_empty() {
+                        m.insert("rededr".to_string(), tv.rededr_version);
+                    }
+                    if !tv.defender_version.is_empty() {
+                        m.insert("defender".to_string(), tv.defender_version);
+                    }
+                    m
+                } else {
+                    HashMap::new()
+                };
+
+                let _ = self.targets.register_with_metadata(
+                    target_id.to_string(),
+                    reg.ip_address,
+                    reg.os_version,
+                    reg.capabilities,
+                    reg.metadata,
+                    tools,
+                );
+            }
+
+            Some(worker_message::Payload::Status(status)) => {
+                debug!(
+                    "[Orchestrator] Status: {} - CPU: {}%, Jobs: {}",
+                    target_id, status.cpu_percent, status.active_jobs
+                );
+                let _ = self.targets.update_health(target_id);
+            }
+
+            Some(worker_message::Payload::Telemetry(batch)) => {
+                let count = batch.events.len();
+                debug!(
+                    "[Orchestrator] Telemetry: {} - {} events (run: {})",
+                    target_id, count, batch.run_id
+                );
+
+                if !batch.events.is_empty() {
+                    let es = self.es_client.clone();
+                    let events = batch.events;
+                    tokio::spawn(async move {
+                        if let Err(e) = index_telemetry(&es, &events).await {
+                            error!("Failed to index telemetry: {}", e);
+                        }
+                    });
+                }
+            }
+
+            Some(worker_message::Payload::SampleResponse(response)) => {
+                debug!(
+                    "[Orchestrator] SampleResponse: {} - success={}, exit={}",
+                    target_id, response.success, response.exit_code
+                );
+                // Release is handled by VMExecutor when it receives the result
+            }
+
+            Some(worker_message::Payload::ExecutionStatus(status)) => {
+                debug!(
+                    "[Orchestrator] ExecStatus: {} - {} (job: {})",
+                    target_id, status.event_type, status.job_id
+                );
+            }
+
+            Some(worker_message::Payload::Ack(ack)) => {
+                debug!("[Orchestrator] Ack: {} - req: {}", target_id, ack.request_id);
+            }
+
+            _ => {}
+        }
+    }
+
     // ========================================================================
-    // Stats (public API for monitoring/management)
-    // TODO: Expose these via gRPC service (ListWorkers, GetStats endpoints)
+    // Public API
     // ========================================================================
 
-    #[allow(dead_code)]
-    pub fn pending_count(&self) -> usize {
-        self.pending_jobs.len()
+    pub fn shutdown_job(&self, job_id: &JobId) {
+        if let Some(token) = self.job_workers.get(job_id) {
+            warn!("[Orchestrator] Shutting down job {}", job_id);
+            token.cancel();
+        }
     }
 
-    #[allow(dead_code)]
-    pub fn worker_count(&self) -> usize {
-        self.workers.len()
+    pub fn shutdown_all_jobs(&self) {
+        warn!("[Orchestrator] Shutting down all jobs");
+        for token in self.job_workers.values() {
+            token.cancel();
+        }
     }
 
-    #[allow(dead_code)]
-    pub async fn pool_count(&self) -> usize {
-        self.pool_registry.count().await
+    pub fn active_job_count(&self) -> usize {
+        self.job_workers.len()
     }
 
-    #[allow(dead_code)]
-    pub async fn pool_group_ids(&self) -> Vec<GroupId> {
-        self.pool_registry.list_ids().await
+    pub fn vm_count(&self) -> usize {
+        self.vms.len()
     }
+}
+
+// ============================================================================
+// Telemetry Indexing
+// ============================================================================
+
+async fn index_telemetry(
+    es: &Elasticsearch,
+    events: &[crate::automutate::common::TelemetryData],
+) -> anyhow::Result<()> {
+    use elasticsearch::IndexParts;
+    use serde_json::json;
+
+    if events.is_empty() {
+        return Ok(());
+    }
+
+    let index_name = format!("telemetry-{}", chrono::Utc::now().format("%Y.%m"));
+
+    for event in events {
+        let doc = json!({
+            "event_type": event.event_type,
+            "timestamp": event.timestamp,
+            "job_id": event.job_id,
+            "metadata": event.metadata,
+        });
+
+        let response = es
+            .index(IndexParts::Index(&index_name))
+            .body(doc)
+            .send()
+            .await?;
+
+        if !response.status_code().is_success() {
+            return Err(anyhow::anyhow!("Index failed: {}", response.status_code()));
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::types::{ModularBuildSpec, ModuleSelectionSpec};
-    use std::path::PathBuf;
+    use elasticsearch::http::transport::Transport;
 
-    fn test_build_spec() -> ModularBuildSpec {
-        ModularBuildSpec {
-            modules: ModuleSelectionSpec::default(),
-            payload_path: PathBuf::from("test.bin"),
-            encoding: "xor".to_string(),
-        }
-    }
+    #[tokio::test]
+    async fn test_orchestrator_creation() {
+        let (_events_tx, events_rx) = mpsc::channel(10);
+        let (_job_tx, job_rx) = mpsc::channel(10);
+        let run_pool = Arc::new(RunPool::new());
 
-    #[test]
-    fn test_group_id_satisfies() {
-        let group = GroupId::new("win10-defender+rededr");
+        // Create minimal TargetManager for test
+        let (target_events_tx, _) = mpsc::channel(10);
+        let targets = Arc::new(TargetManager::new(30, target_events_tx, Arc::clone(&run_pool)));
 
-        // No requirements
-        assert!(group.satisfies(None, &[]));
+        // Create ES client (won't actually connect in test)
+        let transport = Transport::single_node("http://localhost:9200").unwrap();
+        let es_client = Elasticsearch::new(transport);
 
-        // OS only
-        assert!(group.satisfies(Some("win10"), &[]));
-        assert!(!group.satisfies(Some("win11"), &[]));
+        let orchestrator = Orchestrator::new(events_rx, job_rx, run_pool, targets, es_client);
 
-        // Capabilities only
-        assert!(group.satisfies(None, &["defender".into()]));
-        assert!(group.satisfies(None, &["defender".into(), "rededr".into()]));
-        assert!(!group.satisfies(None, &["cortex".into()]));
-
-        assert!(group.satisfies(Some("win10"), &["defender".into()]));
-        assert!(!group.satisfies(Some("win11"), &["defender".into()]));
+        assert_eq!(orchestrator.active_job_count(), 0);
+        assert_eq!(orchestrator.vm_count(), 0);
     }
 }
