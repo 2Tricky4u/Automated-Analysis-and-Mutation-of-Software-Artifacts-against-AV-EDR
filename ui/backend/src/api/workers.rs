@@ -32,6 +32,26 @@ pub struct WorkerInfo {
     pub current_job: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct OrchestratorStatusResponse {
+    pub pending_jobs: u32,
+    pub active_pools: u32,
+    pub total_workers: u32,
+    pub available_workers: u32,
+    pub busy_workers: u32,
+    pub pool_ids: Vec<String>,
+    pub active_jobs: Vec<ActiveJobEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ActiveJobEntry {
+    pub job_id: String,
+    pub pool_id: String,
+    pub current_round: u32,
+    pub max_rounds: u32,
+    pub status: String,
+}
+
 // ============================================================================
 // Handlers
 // ============================================================================
@@ -76,6 +96,46 @@ pub async fn list_workers(
         }
         Err(e) => {
             error!("Failed to list workers: {}", e);
+            Err(ApiError::unavailable(format!(
+                "Controller unavailable: {}",
+                e
+            )))
+        }
+    }
+}
+
+/// GET /api/orchestrator/status - Get orchestrator status with active jobs
+pub async fn get_orchestrator_status(
+    State(client): State<Arc<ControllerGrpcClient>>,
+) -> Result<Json<ApiResponse<OrchestratorStatusResponse>>, ApiError> {
+    debug!("REST: Get orchestrator status");
+
+    match client.get_orchestrator_status().await {
+        Ok(resp) => {
+            let active_jobs: Vec<ActiveJobEntry> = resp
+                .active_jobs
+                .into_iter()
+                .map(|j| ActiveJobEntry {
+                    job_id: j.job_id,
+                    pool_id: j.pool_id,
+                    current_round: j.current_round,
+                    max_rounds: j.max_rounds,
+                    status: j.status,
+                })
+                .collect();
+
+            Ok(Json(ApiResponse::new(OrchestratorStatusResponse {
+                pending_jobs: resp.pending_jobs,
+                active_pools: resp.active_pools,
+                total_workers: resp.total_workers,
+                available_workers: resp.available_workers,
+                busy_workers: resp.busy_workers,
+                pool_ids: resp.pool_ids,
+                active_jobs,
+            })))
+        }
+        Err(e) => {
+            error!("Failed to get orchestrator status: {}", e);
             Err(ApiError::unavailable(format!(
                 "Controller unavailable: {}",
                 e
