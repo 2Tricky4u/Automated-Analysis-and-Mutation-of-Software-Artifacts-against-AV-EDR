@@ -10,7 +10,7 @@ use super::channels::{JobControlCommand, JobWorkerEvent};
 use super::job_worker::JobWorker;
 use super::run_pool::RunPool;
 use super::types::{JobId, JobOutcome, JobSession, WorkerId, WorkerInfo};
-use crate::target_manager::{TargetEvent, TargetManager};
+use crate::vm::{TargetEvent, TargetManager};
 use elasticsearch::Elasticsearch;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -193,7 +193,7 @@ impl Orchestrator {
         requested_os: Option<&str>,
         requested_caps: &[String],
     ) -> Option<(String, Vec<String>)> {
-        use crate::target_manager::TargetStatus;
+        use crate::vm::TargetStatus;
 
         let all_targets = self.targets.list_all();
 

@@ -1,12 +1,12 @@
-//! Service module - gRPC handlers for Controller service
+//! API module - gRPC handlers for Controller service
 //!
 //! Implements the Controller trait by delegating to handler modules.
 //! Uses JobWorker architecture (JobSession -> Orchestrator -> JobWorker -> RunPool -> VMExecutor)
 
-pub mod artifact_handlers;
-pub mod job_handlers;
-pub mod utility_handlers;
-pub mod worker_handlers;
+pub mod artifact;
+pub mod job;
+pub mod utility;
+pub mod worker;
 
 use crate::automutate::common::TelemetryData;
 use crate::automutate::controller::{
@@ -21,7 +21,7 @@ use crate::automutate::controller::{
     TriageRequest, TriageResponse,
 };
 use crate::dispatch::{JobControlCommand, JobSession, RunPool};
-use crate::target_manager::TargetManager;
+use crate::vm::TargetManager;
 use elasticsearch::Elasticsearch;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -185,7 +185,7 @@ impl SchedulerService {
 impl Controller for SchedulerService {
     // Utility handlers
     async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PingResponse>, Status> {
-        utility_handlers::ping(self, request).await
+        utility::ping(self, request).await
     }
 
     // Job handlers
@@ -193,42 +193,42 @@ impl Controller for SchedulerService {
         &self,
         request: Request<JobRequest>,
     ) -> Result<Response<JobResponse>, Status> {
-        job_handlers::schedule_job(self, request).await
+        job::schedule_job(self, request).await
     }
 
     async fn get_job_status(
         &self,
         request: Request<JobStatusRequest>,
     ) -> Result<Response<JobStatusResponse>, Status> {
-        job_handlers::get_job_status(self, request).await
+        job::get_job_status(self, request).await
     }
 
     async fn submit_triage(
         &self,
         request: Request<TriageRequest>,
     ) -> Result<Response<TriageResponse>, Status> {
-        utility_handlers::submit_triage(self, request).await
+        utility::submit_triage(self, request).await
     }
 
     async fn query_results(
         &self,
         request: Request<QueryRequest>,
     ) -> Result<Response<QueryResponse>, Status> {
-        utility_handlers::query_results(self, request).await
+        utility::query_results(self, request).await
     }
 
     async fn stream_telemetry(
         &self,
         request: Request<tonic::Streaming<TelemetryData>>,
     ) -> Result<Response<crate::automutate::common::TelemetryAck>, Status> {
-        worker_handlers::stream_telemetry(self, request).await
+        worker::stream_telemetry(self, request).await
     }
 
     async fn report_status(
         &self,
         request: Request<StatusReport>,
     ) -> Result<Response<StatusAck>, Status> {
-        job_handlers::report_status(self, request).await
+        job::report_status(self, request).await
     }
 
     // Artifact handlers
@@ -236,14 +236,14 @@ impl Controller for SchedulerService {
         &self,
         request: Request<BuildRequest>,
     ) -> Result<Response<BuildResponse>, Status> {
-        artifact_handlers::build_artifact(self, request).await
+        artifact::build_artifact(self, request).await
     }
 
     async fn deploy_artifact(
         &self,
         request: Request<DeployRequest>,
     ) -> Result<Response<DeployResponse>, Status> {
-        artifact_handlers::deploy_artifact(self, request).await
+        artifact::deploy_artifact(self, request).await
     }
 
     // Worker handlers
@@ -251,35 +251,35 @@ impl Controller for SchedulerService {
         &self,
         request: Request<ListWorkersRequest>,
     ) -> Result<Response<ListWorkersResponse>, Status> {
-        worker_handlers::list_workers(self, request).await
+        worker::list_workers(self, request).await
     }
 
     async fn get_job_progress(
         &self,
         request: Request<JobProgressRequest>,
     ) -> Result<Response<JobProgressResponse>, Status> {
-        job_handlers::get_job_progress(self, request).await
+        job::get_job_progress(self, request).await
     }
 
     async fn stop_job(
         &self,
         request: Request<StopJobRequest>,
     ) -> Result<Response<StopJobResponse>, Status> {
-        job_handlers::stop_job(self, request).await
+        job::stop_job(self, request).await
     }
 
     async fn get_round(
         &self,
         request: Request<GetRoundRequest>,
     ) -> Result<Response<GetRoundResponse>, Status> {
-        job_handlers::get_round(self, request).await
+        job::get_round(self, request).await
     }
 
     async fn compare_runs(
         &self,
         request: Request<CompareRunsRequest>,
     ) -> Result<Response<CompareRunsResponse>, Status> {
-        job_handlers::compare_runs(self, request).await
+        job::compare_runs(self, request).await
     }
 
     // Monitoring handlers
@@ -287,34 +287,34 @@ impl Controller for SchedulerService {
         &self,
         request: Request<GetWorkerRequest>,
     ) -> Result<Response<GetWorkerResponse>, Status> {
-        worker_handlers::get_worker(self, request).await
+        worker::get_worker(self, request).await
     }
 
     async fn get_available_workers(
         &self,
         request: Request<GetAvailableWorkersRequest>,
     ) -> Result<Response<GetAvailableWorkersResponse>, Status> {
-        worker_handlers::get_available_workers(self, request).await
+        worker::get_available_workers(self, request).await
     }
 
     async fn get_worker_metadata(
         &self,
         request: Request<GetWorkerMetadataRequest>,
     ) -> Result<Response<GetWorkerMetadataResponse>, Status> {
-        worker_handlers::get_worker_metadata(self, request).await
+        worker::get_worker_metadata(self, request).await
     }
 
     async fn get_pool_metrics(
         &self,
         request: Request<GetPoolMetricsRequest>,
     ) -> Result<Response<GetPoolMetricsResponse>, Status> {
-        worker_handlers::get_pool_metrics(self, request).await
+        worker::get_pool_metrics(self, request).await
     }
 
     async fn get_orchestrator_status(
         &self,
         request: Request<GetOrchestratorStatusRequest>,
     ) -> Result<Response<GetOrchestratorStatusResponse>, Status> {
-        worker_handlers::get_orchestrator_status(self, request).await
+        worker::get_orchestrator_status(self, request).await
     }
 }

@@ -10,7 +10,7 @@ use crate::automutate::controller::{
     StopJobRequest, StopJobResponse,
 };
 use crate::dispatch::{JobControlCommand, JobSession, ModularBuildSpec, ModuleSelectionSpec, JobId as DispatchJobId};
-use crate::service::SchedulerService;
+use crate::api::SchedulerService;
 use elasticsearch::SearchParts;
 use serde_json::{json, Value};
 use std::path::PathBuf;

@@ -2,12 +2,12 @@
 //
 // Core modules:
 // - dispatch: JobWorker-based job execution (JobWorker, RunPool, VMExecutor, Orchestrator)
-// - target_manager: Connection management and VMExecutor spawning
-// - service: gRPC handler implementations
+// - vm: Connection management and VMExecutor spawning
+// - api: gRPC handler implementations
 
+pub mod api;
 pub mod dispatch;
-pub mod service;
-pub mod target_manager;
+pub mod vm;
 
 // Protobuf definitions
 pub mod automutate {
@@ -23,8 +23,8 @@ pub mod automutate {
 }
 
 // Re-exports
+pub use api::SchedulerService;
 pub use dispatch::{
     JobSession, Orchestrator, RunPool, VMExecutor, VMInfo, WorkerId, WorkerInfo,
 };
-pub use service::SchedulerService;
-pub use target_manager::{Target, TargetConfig, TargetEvent, TargetManager, TargetStatus};
+pub use vm::{Target, TargetConfig, TargetEvent, TargetManager, TargetStatus};
