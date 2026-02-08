@@ -113,9 +113,9 @@ impl JobWorker {
             self.job.id, self.job.max_rounds, self.job.stop_on_evasion
         );
 
-        // Register with pool for result routing
+        // Register with pool for result routing and job tracking
         self.run_pool
-            .register_job(self.job.id.clone(), self.result_tx.clone())
+            .register_job(&self.job, self.result_tx.clone())
             .await;
 
         // Mark job as started
@@ -192,6 +192,9 @@ impl JobWorker {
                 reason: "Scheduler shutdown".to_string(),
             },
         };
+
+        // Update job registry with final status
+        self.run_pool.complete_job(&self.job.id, &outcome);
 
         let _ = self
             .event_tx
@@ -501,6 +504,9 @@ impl JobWorker {
 
         // Record in job session
         self.job.record_round_summary(summary.clone());
+
+        // Update job registry for API visibility
+        self.run_pool.update_job_progress(&self.job);
 
         // TODO: Report to mutation selector for feedback
 

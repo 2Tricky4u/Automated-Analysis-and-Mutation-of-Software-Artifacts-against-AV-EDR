@@ -361,6 +361,18 @@ impl JobSession {
         self.rounds.insert(summary.round_number, summary.clone());
         self.last_round = Some(summary);
     }
+
+    /// Create a lightweight snapshot for external visibility
+    pub fn to_info(&self, status: JobStatus) -> JobInfo {
+        JobInfo {
+            id: self.id.clone(),
+            status,
+            current_round: self.current_round,
+            max_rounds: self.max_rounds,
+            target_os: self.target_os.clone(),
+            started_at: self.started_at,
+        }
+    }
 }
 
 // ============================================================================
@@ -520,14 +532,60 @@ impl From<&WorkerInfo> for VMInfo {
 }
 
 // ============================================================================
-// Job Outcome
+// Job Status & Outcome
 // ============================================================================
+
+/// Job execution status for tracking
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JobStatus {
+    Running,
+    Completed,
+    Stopped,
+    Failed,
+}
+
+impl std::fmt::Display for JobStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JobStatus::Running => write!(f, "running"),
+            JobStatus::Completed => write!(f, "completed"),
+            JobStatus::Stopped => write!(f, "stopped"),
+            JobStatus::Failed => write!(f, "failed"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum JobOutcome {
     Completed { rounds_completed: u32 },
     Stopped { reason: String },
     Failed { error: String },
+}
+
+impl JobOutcome {
+    pub fn to_status(&self) -> JobStatus {
+        match self {
+            JobOutcome::Completed { .. } => JobStatus::Completed,
+            JobOutcome::Stopped { .. } => JobStatus::Stopped,
+            JobOutcome::Failed { .. } => JobStatus::Failed,
+        }
+    }
+}
+
+// ============================================================================
+// Job Info (lightweight snapshot for registry)
+// ============================================================================
+
+/// Lightweight job info for API responses.
+/// Snapshot of JobSession state for external visibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobInfo {
+    pub id: JobId,
+    pub status: JobStatus,
+    pub current_round: u32,
+    pub max_rounds: u32,
+    pub target_os: Option<String>,
+    pub started_at: Option<SystemTime>,
 }
 
 #[cfg(test)]
