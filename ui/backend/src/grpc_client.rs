@@ -4,11 +4,11 @@
 
 use crate::generated::controller::{
     controller_client::ControllerClient, BuildRequest, BuildResponse, CompareRunsRequest,
-    CompareRunsResponse, DeployRequest, DeployResponse, GetRoundRequest, GetRoundResponse,
-    JobProgressRequest, JobProgressResponse, JobRequest, JobResponse, JobStatusRequest,
-    JobStatusResponse, ListWorkersRequest, ListWorkersResponse, ModuleSelection, PingRequest,
-    PingResponse, QueryRequest, QueryResponse, StopJobRequest, StopJobResponse, TriageRequest,
-    TriageResponse,
+    CompareRunsResponse, DeployRequest, DeployResponse, GetOrchestratorStatusRequest,
+    GetOrchestratorStatusResponse, GetRoundRequest, GetRoundResponse, JobProgressRequest,
+    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
+    ListWorkersRequest, ListWorkersResponse, ModuleSelection, PingRequest, PingResponse,
+    QueryRequest, QueryResponse, StopJobRequest, StopJobResponse, TriageRequest, TriageResponse,
 };
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
@@ -252,6 +252,20 @@ impl ControllerGrpcClient {
             .list_workers(request)
             .await
             .map_err(|e| anyhow!("ListWorkers failed: {}", e))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Get orchestrator status (active jobs, queue depth, pool metrics)
+    pub async fn get_orchestrator_status(&self) -> Result<GetOrchestratorStatusResponse> {
+        let mut client = self.get_client().await?;
+
+        let request = GetOrchestratorStatusRequest {};
+
+        let response = client
+            .get_orchestrator_status(request)
+            .await
+            .map_err(|e| anyhow!("GetOrchestratorStatus failed: {}", e))?;
 
         Ok(response.into_inner())
     }

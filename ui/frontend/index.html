@@ -323,9 +323,28 @@
                 <div class="stat-label">Busy</div>
             </div>
             <div class="stat-box">
-                <div class="stat-value" id="statOffline">-</div>
-                <div class="stat-label">Offline</div>
+                <div class="stat-value" id="statPendingRuns">-</div>
+                <div class="stat-label">Pending Runs</div>
             </div>
+        </div>
+
+        <!-- Active Jobs Card -->
+        <div class="card" style="margin-bottom: 20px;">
+            <h2>Active Jobs</h2>
+            <button class="btn-secondary btn-sm mb-10" onclick="refreshOrchestratorStatus()">Refresh</button>
+            <table id="activeJobsTable">
+                <thead>
+                    <tr>
+                        <th>Job ID</th>
+                        <th>Progress</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="activeJobsBody">
+                    <tr><td colspan="4">Loading...</td></tr>
+                </tbody>
+            </table>
         </div>
 
         <div class="grid">
@@ -525,7 +544,6 @@
                 document.getElementById('statWorkers').textContent = data.data.total || 0;
                 document.getElementById('statAvailable').textContent = data.data.available || 0;
                 document.getElementById('statBusy').textContent = data.data.busy || 0;
-                document.getElementById('statOffline').textContent = data.data.offline || 0;
 
                 // Update table
                 const tbody = document.getElementById('workersBody');
@@ -545,6 +563,64 @@
             } catch (e) {
                 document.getElementById('workersBody').innerHTML =
                     `<tr><td colspan="4">Error: ${e.message}</td></tr>`;
+            }
+        }
+
+        // Orchestrator Status (Active Jobs)
+        async function refreshOrchestratorStatus() {
+            try {
+                const resp = await fetch(`${API_BASE}/api/orchestrator/status`);
+                const data = await resp.json();
+                const jobs = data.data.active_jobs || [];
+
+                // Update pending runs stat
+                document.getElementById('statPendingRuns').textContent = data.data.pending_jobs || 0;
+
+                // Update active jobs table
+                const tbody = document.getElementById('activeJobsBody');
+                if (jobs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4">No active jobs</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = jobs.map(j => {
+                    const progress = j.max_rounds > 0
+                        ? Math.round((j.current_round / j.max_rounds) * 100)
+                        : 0;
+                    const statusClass = j.status.toLowerCase();
+                    return `
+                        <tr>
+                            <td title="${j.job_id}">${j.job_id.substring(0, 20)}...</td>
+                            <td>
+                                <div class="progress-bar" style="width: 100px; display: inline-block; vertical-align: middle;">
+                                    <div class="progress-bar-fill" style="width: ${progress}%"></div>
+                                </div>
+                                <span style="margin-left: 5px;">${j.current_round}/${j.max_rounds}</span>
+                            </td>
+                            <td><span class="badge badge-${statusClass}">${j.status}</span></td>
+                            <td>
+                                <button class="btn-danger btn-sm" onclick="stopJobById('${j.job_id}')">Stop</button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            } catch (e) {
+                document.getElementById('activeJobsBody').innerHTML =
+                    `<tr><td colspan="4">Error: ${e.message}</td></tr>`;
+            }
+        }
+
+        // Stop job by ID (helper for active jobs table)
+        async function stopJobById(jobId) {
+            if (!confirm(`Stop job ${jobId}?`)) return;
+            try {
+                const resp = await fetch(`${API_BASE}/api/jobs/${jobId}/stop`, { method: 'POST' });
+                const data = await resp.json();
+                if (data.data) {
+                    refreshOrchestratorStatus();
+                }
+            } catch (e) {
+                alert(`Error stopping job: ${e.message}`);
             }
         }
 
@@ -795,8 +871,10 @@
         // Init
         checkHealth();
         refreshWorkers();
+        refreshOrchestratorStatus();
         setInterval(checkHealth, 10000);
         setInterval(refreshWorkers, 30000);
+        setInterval(refreshOrchestratorStatus, 5000);  // More frequent for active jobs
     </script>
 </body>
 </html>

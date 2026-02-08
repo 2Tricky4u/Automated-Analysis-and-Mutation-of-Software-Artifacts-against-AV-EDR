@@ -19,6 +19,9 @@
 //! ### Workers
 //! - GET /api/workers - List all workers
 //!
+//! ### Orchestrator
+//! - GET /api/orchestrator/status - Get orchestrator status (active jobs, pending runs)
+//!
 //! ### Query
 //! - POST /api/query - Execute ES query
 //! - POST /api/triage - Submit triage data
@@ -126,6 +129,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         // Worker endpoints
         .route("/api/workers", get(api::workers::list_workers))
+        // Orchestrator endpoints
+        .route("/api/orchestrator/status", get(api::workers::get_orchestrator_status))
         // Query endpoints
         .route("/api/query", post(api::query::query_results))
         .route("/api/triage", post(api::query::submit_triage))
