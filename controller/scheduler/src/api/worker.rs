@@ -8,8 +8,8 @@ use crate::automutate::controller::{
     GetWorkerResponse, ListWorkersRequest, ListWorkersResponse, PoolMetricsEntry, WorkerInfo,
     WorkerMetadataEntry,
 };
-use crate::service::SchedulerService;
-use crate::target_manager::{RegistrationType, TargetStatus};
+use crate::api::SchedulerService;
+use crate::vm::{RegistrationType, TargetStatus};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 

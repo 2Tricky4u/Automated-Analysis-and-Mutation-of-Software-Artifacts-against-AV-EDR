@@ -19,13 +19,13 @@ use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod api;
 mod dispatch;
-mod service;
-mod target_manager;
+mod vm;
 
+use api::SchedulerService;
 use dispatch::{JobControlCommand, JobSession, Orchestrator, RunPool};
-use service::SchedulerService;
-use target_manager::{TargetEvent, TargetManager};
+use vm::{TargetEvent, TargetManager};
 
 pub mod automutate {
     pub mod common {

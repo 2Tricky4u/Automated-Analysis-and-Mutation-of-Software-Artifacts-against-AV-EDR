@@ -1,7 +1,7 @@
 use crate::automutate::controller::{
     PingRequest, PingResponse, QueryRequest, QueryResponse, TriageRequest, TriageResponse,
 };
-use crate::service::SchedulerService;
+use crate::api::SchedulerService;
 use tonic::{Request, Response, Status};
 use tracing::info;
 

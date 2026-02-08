@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::automutate::common::{controller_message, ControllerMessage, RunSampleCommand, SampleRequest};
-use crate::target_manager::TargetManager;
+use crate::vm::TargetManager;
 
 use super::channels::{JobRunResult, RemoteRunResult};
 use super::run_pool::RunPool;
@@ -342,7 +342,7 @@ impl std::fmt::Debug for VMExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::target_manager::TargetEvent;
+    use crate::vm::TargetEvent;
     use std::path::Path;
 
     #[derive(Debug)]

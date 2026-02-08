@@ -485,7 +485,7 @@ pub struct RunEnvelope {
 }
 
 // ============================================================================
-// Worker Info (from target_manager)
+// Worker Info (from vm::manager)
 // ============================================================================
 
 #[derive(Debug, Clone)]
