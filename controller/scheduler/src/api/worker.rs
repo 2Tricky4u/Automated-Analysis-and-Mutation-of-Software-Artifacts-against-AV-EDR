@@ -397,18 +397,16 @@ pub async fn get_orchestrator_status(
     let pool_ids = vec!["shared-run-pool".to_string()];
     let active_pools = 1;
 
-    // Get active job count from RunPool
-    let active_job_count = service.run_pool.job_count().await;
-
-    // Create active job entries (we only know count, not details)
-    // TODO: Expose job details from Orchestrator
-    let active_jobs: Vec<ActiveJobEntry> = (0..active_job_count)
-        .map(|i| ActiveJobEntry {
-            job_id: format!("job-{}", i),  // Placeholder
+    // Get active jobs from RunPool registry
+    let running_jobs = service.run_pool.list_running_jobs();
+    let active_jobs: Vec<ActiveJobEntry> = running_jobs
+        .iter()
+        .map(|job| ActiveJobEntry {
+            job_id: job.id.0.clone(),
             pool_id: "shared-run-pool".to_string(),
-            current_round: 0,
-            max_rounds: 0,
-            status: "running".to_string(),
+            current_round: job.current_round,
+            max_rounds: job.max_rounds,
+            status: job.status.to_string(),
         })
         .collect();
 

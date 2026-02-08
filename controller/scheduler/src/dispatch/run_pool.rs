@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::channels::JobRunResult;
-use super::types::{JobId, RunEnvelope, RunId};
+use super::types::{JobId, JobInfo, JobOutcome, JobSession, JobStatus, RunEnvelope, RunId};
 
 // ============================================================================
 // Configuration
@@ -45,6 +45,9 @@ pub struct RunPool {
     /// Route results back to JobWorkers
     result_routers: RwLock<HashMap<JobId, mpsc::Sender<JobRunResult>>>,
 
+    /// Job info registry for API visibility
+    job_registry: DashMap<JobId, JobInfo>,
+
     /// Global shutdown token
     shutdown_token: CancellationToken,
 
@@ -69,6 +72,7 @@ impl RunPool {
             by_os: DashMap::new(),
             runs_available: Notify::new(),
             result_routers: RwLock::new(HashMap::new()),
+            job_registry: DashMap::new(),
             shutdown_token: CancellationToken::new(),
             metrics: Mutex::new(RunPoolMetrics::default()),
         }
@@ -78,15 +82,40 @@ impl RunPool {
     // Job Registration (JobWorker calls these)
     // ========================================================================
 
-    /// Register a job's result channel.
-    pub async fn register_job(&self, job_id: JobId, result_tx: mpsc::Sender<JobRunResult>) {
+    /// Register a job's result channel and track its info.
+    pub async fn register_job(
+        &self,
+        job: &JobSession,
+        result_tx: mpsc::Sender<JobRunResult>,
+    ) {
+        let job_id = job.id.clone();
+
+        // Store job info for API visibility
+        self.job_registry.insert(job_id.clone(), job.to_info(JobStatus::Running));
+
+        // Register result router
         let mut routers = self.result_routers.write().await;
         routers.insert(job_id.clone(), result_tx);
         self.metrics.lock().await.active_jobs = routers.len();
         debug!("[RunPool] Job {} registered", job_id);
     }
 
+    /// Update job progress (called by JobWorker after each round).
+    pub fn update_job_progress(&self, job: &JobSession) {
+        if let Some(mut info) = self.job_registry.get_mut(&job.id) {
+            info.current_round = job.current_round;
+        }
+    }
+
+    /// Mark job as completed with outcome.
+    pub fn complete_job(&self, job_id: &JobId, outcome: &JobOutcome) {
+        if let Some(mut info) = self.job_registry.get_mut(job_id) {
+            info.status = outcome.to_status();
+        }
+    }
+
     /// Unregister a job and remove all its pending runs.
+    /// Note: Job info is kept in registry for API visibility.
     pub async fn unregister_job(&self, job_id: &JobId) {
         // Remove from result routers
         let mut routers = self.result_routers.write().await;
@@ -103,6 +132,29 @@ impl RunPool {
         } else {
             debug!("[RunPool] Job {} unregistered", job_id);
         }
+    }
+
+    // ========================================================================
+    // Job Registry Queries (for API)
+    // ========================================================================
+
+    /// List all jobs (running and completed).
+    pub fn list_jobs(&self) -> Vec<JobInfo> {
+        self.job_registry.iter().map(|r| r.value().clone()).collect()
+    }
+
+    /// List only running jobs.
+    pub fn list_running_jobs(&self) -> Vec<JobInfo> {
+        self.job_registry
+            .iter()
+            .filter(|r| r.value().status == JobStatus::Running)
+            .map(|r| r.value().clone())
+            .collect()
+    }
+
+    /// Get info for a specific job.
+    pub fn get_job_info(&self, job_id: &JobId) -> Option<JobInfo> {
+        self.job_registry.get(job_id).map(|r| r.value().clone())
     }
 
     /// Remove all pending runs for a specific job.
@@ -343,9 +395,21 @@ impl std::fmt::Debug for RunPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::types::{ArtifactRef, RoundId, RunType};
+    use crate::dispatch::types::{ArtifactRef, ModularBuildSpec, ModuleSelectionSpec, RoundId, RunType};
     use std::path::PathBuf;
     use std::sync::Arc;
+
+    fn test_job(job_id: &str) -> JobSession {
+        JobSession::new(
+            job_id,
+            5,
+            ModularBuildSpec {
+                modules: ModuleSelectionSpec::default(),
+                payload_path: PathBuf::from("test.bin"),
+                encoding: "xor".to_string(),
+            },
+        )
+    }
 
     fn test_run(job_id: &str, run_id: &str, os: &str, caps: Vec<String>) -> RunEnvelope {
         RunEnvelope {
@@ -438,7 +502,8 @@ mod tests {
         let pool = Arc::new(RunPool::new());
         let (tx, mut rx) = mpsc::channel(10);
 
-        pool.register_job(JobId("job-1".to_string()), tx).await;
+        let job = test_job("job-1");
+        pool.register_job(&job, tx).await;
 
         let result = JobRunResult {
             run_id: RunId("run-1".to_string()),
@@ -464,10 +529,17 @@ mod tests {
         let (tx1, _) = mpsc::channel(10);
         let (tx2, _) = mpsc::channel(10);
 
-        pool.register_job(JobId("job-1".to_string()), tx1).await;
-        pool.register_job(JobId("job-2".to_string()), tx2).await;
+        let job1 = test_job("job-1");
+        let job2 = test_job("job-2");
+
+        pool.register_job(&job1, tx1).await;
+        pool.register_job(&job2, tx2).await;
 
         assert_eq!(pool.job_count().await, 2);
+
+        // Check job info is tracked
+        let jobs = pool.list_running_jobs();
+        assert_eq!(jobs.len(), 2);
 
         pool.unregister_job(&JobId("job-1".to_string())).await;
         assert_eq!(pool.job_count().await, 1);
