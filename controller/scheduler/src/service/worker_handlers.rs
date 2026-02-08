@@ -29,10 +29,10 @@ pub async fn list_workers(
                 .unwrap_or(0);
 
             WorkerInfo {
-                worker_id: w.id.clone(),
+                worker_id: w.id.to_string(),
                 address: w.address.clone(),
                 status: w.status.to_string(),
-                current_job_id: w.current_job.clone().unwrap_or_default(),
+                current_job_id: w.current_job.as_ref().map(|j| j.0.clone()).unwrap_or_default(),
                 last_ping_seconds_ago: last_ping_secs,
                 enabled: w.enabled,
                 os_version: w.os_version.clone(),
@@ -155,10 +155,10 @@ pub async fn get_worker(
                 .unwrap_or(0);
 
             let worker_info = WorkerInfo {
-                worker_id: w.id.clone(),
+                worker_id: w.id.to_string(),
                 address: w.address.clone(),
                 status: w.status.to_string(),
-                current_job_id: w.current_job.clone().unwrap_or_default(),
+                current_job_id: w.current_job.as_ref().map(|j| j.0.clone()).unwrap_or_default(),
                 last_ping_seconds_ago: last_ping_secs,
                 enabled: w.enabled,
                 os_version: w.os_version.clone(),
@@ -234,10 +234,10 @@ pub async fn get_available_workers(
                 .unwrap_or(0);
 
             WorkerInfo {
-                worker_id: w.id.clone(),
+                worker_id: w.id.to_string(),
                 address: w.address.clone(),
                 status: w.status.to_string(),
-                current_job_id: w.current_job.clone().unwrap_or_default(),
+                current_job_id: w.current_job.as_ref().map(|j| j.0.clone()).unwrap_or_default(),
                 last_ping_seconds_ago: last_ping_secs,
                 enabled: w.enabled,
                 os_version: w.os_version.clone(),
@@ -308,7 +308,7 @@ pub async fn get_worker_metadata(
                 .unwrap_or(0);
 
             WorkerMetadataEntry {
-                worker_id: w.id.clone(),
+                worker_id: w.id.to_string(),
                 address: w.address.clone(),
                 status: w.status.to_string(),
                 os_version: w.os_version.clone(),
@@ -322,7 +322,7 @@ pub async fn get_worker_metadata(
                 }),
                 last_seen_seconds_ago: last_seen_secs as i64,
                 healthy,
-                current_job_id: w.current_job.clone().unwrap_or_default(),
+                current_job_id: w.current_job.as_ref().map(|j| j.0.clone()).unwrap_or_default(),
                 connected_at,
             }
         })

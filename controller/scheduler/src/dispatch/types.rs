@@ -85,6 +85,10 @@ pub struct RunId(pub String);
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WorkerId(pub String);
 
+// ============================================================================
+// TargetId implementations
+// ============================================================================
+
 /// TargetId - stable machine identity (persists across reconnects)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TargetId(pub String);
@@ -92,6 +96,10 @@ pub struct TargetId(pub String);
 impl TargetId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -101,9 +109,81 @@ impl std::fmt::Display for TargetId {
     }
 }
 
+impl std::borrow::Borrow<str> for TargetId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for TargetId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for TargetId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl AsRef<str> for TargetId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+// ============================================================================
+// JobId implementations
+// ============================================================================
+
+impl JobId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 impl std::fmt::Display for JobId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl std::borrow::Borrow<str> for JobId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for JobId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for JobId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for JobId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+// ============================================================================
+// RoundId implementations
+// ============================================================================
+
+impl RoundId {
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -113,15 +193,75 @@ impl std::fmt::Display for RoundId {
     }
 }
 
+impl AsRef<str> for RoundId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+// ============================================================================
+// RunId implementations
+// ============================================================================
+
+impl RunId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 impl std::fmt::Display for RunId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
+impl AsRef<str> for RunId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+// ============================================================================
+// WorkerId implementations
+// ============================================================================
+
+impl WorkerId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 impl std::fmt::Display for WorkerId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl std::borrow::Borrow<str> for WorkerId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for WorkerId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for WorkerId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for WorkerId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
     }
 }
 
