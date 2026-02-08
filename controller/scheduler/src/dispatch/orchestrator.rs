@@ -314,7 +314,7 @@ impl Orchestrator {
                 let _ = self.targets.mark_connected(&target_id);
 
                 // Track in local map
-                let worker_id = WorkerId(target_id);
+                let worker_id = WorkerId(target_id.0.clone());
                 let info = WorkerInfo {
                     id: worker_id.clone(),
                     os: os_version,
@@ -330,11 +330,11 @@ impl Orchestrator {
                 let _ = self.targets.mark_offline(&target_id);
 
                 // Remove from local tracking
-                self.vms.remove(&WorkerId(target_id));
+                self.vms.remove(&WorkerId(target_id.0.clone()));
             }
 
             TargetEvent::Message { target_id, msg } => {
-                self.handle_worker_message(&target_id, msg).await;
+                self.handle_worker_message(target_id.as_str(), msg).await;
             }
         }
     }

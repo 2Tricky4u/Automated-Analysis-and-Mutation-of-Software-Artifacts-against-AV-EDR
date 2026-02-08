@@ -28,7 +28,8 @@ use crate::automutate::worker::{
     worker_agent_client::WorkerAgentClient, WorkerInfoRequest, WorkerInfoResponse,
 };
 use crate::dispatch::{
-    ArtifactSender, RemoteRunResult, RunId, RunPool, VMExecutor, VMInfo, WorkerId, WorkerInfo,
+    ArtifactSender, JobId, RemoteRunResult, RunId, RunPool, TargetId, VMExecutor, VMInfo,
+    WorkerId, WorkerInfo,
 };
 
 // ============================================================================
@@ -62,30 +63,30 @@ pub enum RegistrationType {
 #[derive(Debug, Clone)]
 pub enum TargetEvent {
     Connected {
-        target_id: String,
+        target_id: TargetId,
         os_version: String,
         capabilities: Vec<String>,
     },
     Disconnected {
-        target_id: String,
+        target_id: TargetId,
         reason: String,
     },
     Message {
-        target_id: String,
+        target_id: TargetId,
         msg: WorkerMessage,
     },
 }
 
 #[derive(Debug, Clone)]
 pub struct TargetConfig {
-    pub id: String,
+    pub id: TargetId,
     pub address: String,
     pub enabled: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct Target {
-    pub id: String,
+    pub id: TargetId,
     pub address: String,
     pub os_version: String,
     pub capabilities: Vec<String>,
@@ -94,7 +95,7 @@ pub struct Target {
     pub status: TargetStatus,
     pub enabled: bool,
     pub registration_type: RegistrationType,
-    pub current_job: Option<String>,
+    pub current_job: Option<JobId>,
     pub last_seen: SystemTime,
     pub connected_at: Option<SystemTime>,
     channel: Option<Channel>,
@@ -129,7 +130,7 @@ fn load_target_config(path: &Path) -> Result<(String, String)> {
 }
 
 impl Target {
-    fn new(id: String, address: String) -> Self {
+    fn new(id: TargetId, address: String) -> Self {
         Self {
             id,
             address,
@@ -159,7 +160,7 @@ impl Target {
 
 #[derive(Debug)]
 pub struct TargetManager {
-    targets: DashMap<String, Target>,
+    targets: DashMap<TargetId, Target>,
     events_tx: mpsc::Sender<TargetEvent>,
     rpc_timeout: Duration,
     run_pool: Arc<RunPool>,
@@ -203,13 +204,14 @@ impl TargetManager {
 
     pub fn register_with_metadata(
         &self,
-        id: String,
+        id: impl Into<TargetId>,
         address: String,
         os_version: String,
         capabilities: Vec<String>,
         metadata: HashMap<String, String>,
         tools: HashMap<String, String>,
     ) -> Result<()> {
+        let id: TargetId = id.into();
         if let Some(mut target) = self.targets.get_mut(&id) {
             target.os_version = os_version.clone();
             target.capabilities = capabilities.clone();
@@ -235,11 +237,11 @@ impl TargetManager {
     // ========================================================================
 
     #[allow(dead_code)]
-    pub fn get(&self, id: &str) -> Option<Target> {
-        self.targets.get(id).map(|t| t.clone())
+    pub fn get(&self, id: impl AsRef<str>) -> Option<Target> {
+        self.targets.get(id.as_ref()).map(|t| t.clone())
     }
 
-    pub fn list_ids(&self) -> Vec<String> {
+    pub fn list_ids(&self) -> Vec<TargetId> {
         self.targets.iter().map(|e| e.key().clone()).collect()
     }
 
@@ -252,7 +254,7 @@ impl TargetManager {
     }
 
     #[allow(dead_code)]
-    pub fn get_available(&self) -> Vec<String> {
+    pub fn get_available(&self) -> Vec<TargetId> {
         self.targets
             .iter()
             .filter(|t| t.status == TargetStatus::Available && t.enabled)
@@ -264,8 +266,8 @@ impl TargetManager {
     pub fn get_available_by_os_and_capabilities(
         &self,
         required_capabilities: &[String],
-    ) -> HashMap<String, Vec<String>> {
-        let mut by_os: HashMap<String, Vec<String>> = HashMap::new();
+    ) -> HashMap<String, Vec<TargetId>> {
+        let mut by_os: HashMap<String, Vec<TargetId>> = HashMap::new();
         for entry in self.targets.iter() {
             let t = entry.value();
             if t.status != TargetStatus::Available || !t.enabled {
@@ -291,7 +293,8 @@ impl TargetManager {
     // State Management
     // ========================================================================
 
-    pub fn reserve(&self, id: &str) -> Result<()> {
+    pub fn reserve(&self, id: impl AsRef<str>) -> Result<()> {
+        let id = id.as_ref();
         let mut target = self
             .targets
             .get_mut(id)
@@ -308,7 +311,8 @@ impl TargetManager {
         Ok(())
     }
 
-    pub fn release(&self, id: &str) -> Result<()> {
+    pub fn release(&self, id: impl AsRef<str>) -> Result<()> {
+        let id = id.as_ref();
         let mut target = self
             .targets
             .get_mut(id)
@@ -322,7 +326,8 @@ impl TargetManager {
         Ok(())
     }
 
-    pub fn mark_connected(&self, id: &str) -> Result<()> {
+    pub fn mark_connected(&self, id: impl AsRef<str>) -> Result<()> {
+        let id = id.as_ref();
         let mut target = self
             .targets
             .get_mut(id)
@@ -336,7 +341,8 @@ impl TargetManager {
         Ok(())
     }
 
-    pub fn mark_offline(&self, id: &str) -> Result<()> {
+    pub fn mark_offline(&self, id: impl AsRef<str>) -> Result<()> {
+        let id = id.as_ref();
         let mut target = self
             .targets
             .get_mut(id)
@@ -354,7 +360,8 @@ impl TargetManager {
         Ok(())
     }
 
-    pub fn update_health(&self, id: &str) -> Result<()> {
+    pub fn update_health(&self, id: impl AsRef<str>) -> Result<()> {
+        let id = id.as_ref();
         let mut target = self
             .targets
             .get_mut(id)
@@ -367,7 +374,8 @@ impl TargetManager {
     // Connection Management
     // ========================================================================
 
-    async fn get_channel(&self, id: &str) -> Result<Channel> {
+    async fn get_channel(&self, id: impl AsRef<str>) -> Result<Channel> {
+        let id = id.as_ref();
         if let Some(target) = self.targets.get(id) {
             if let Some(ref channel) = target.channel {
                 return Ok(channel.clone());
@@ -399,7 +407,8 @@ impl TargetManager {
     }
 
     /// Establish bidirectional stream and spawn Worker task
-    pub async fn establish_stream(self: &Arc<Self>, id: &str) -> Result<()> {
+    pub async fn establish_stream(self: &Arc<Self>, id: impl AsRef<str>) -> Result<()> {
+        let id = id.as_ref();
         debug!("Establishing stream with target {}", id);
 
         let channel = self.get_channel(id).await?;
@@ -433,13 +442,13 @@ impl TargetManager {
         let vm_info = VMInfo::from(&worker_info);
 
         // Spawn stream handler
-        let id_clone = id.to_string();
+        let target_id = TargetId::from(id);
         let events_tx = self.events_tx.clone();
         let targets = self.targets.clone();
         let result_tx_clone = result_tx.clone();
 
         tokio::spawn(async move {
-            Self::stream_handler(id_clone, incoming, events_tx, targets, result_tx_clone).await;
+            Self::stream_handler(target_id, incoming, events_tx, targets, result_tx_clone).await;
         });
 
         // Create artifact sender
@@ -472,10 +481,10 @@ impl TargetManager {
     }
 
     async fn stream_handler(
-        id: String,
+        id: TargetId,
         mut incoming: tonic::Streaming<WorkerMessage>,
         events_tx: mpsc::Sender<TargetEvent>,
-        targets: DashMap<String, Target>,
+        targets: DashMap<TargetId, Target>,
         result_tx: mpsc::Sender<RemoteRunResult>,
     ) {
         debug!("Stream handler started for target {}", id);
@@ -557,8 +566,8 @@ impl TargetManager {
         warn!("Target {} disconnected", id);
     }
 
-    fn spawn_heartbeat(&self, id: &str, tx: mpsc::Sender<ControllerMessage>) {
-        let id = id.to_string();
+    fn spawn_heartbeat(&self, id: impl AsRef<str>, tx: mpsc::Sender<ControllerMessage>) {
+        let id = TargetId::from(id.as_ref());
         let targets = self.targets.clone();
 
         tokio::spawn(async move {
@@ -595,7 +604,7 @@ impl TargetManager {
         });
     }
 
-    pub async fn establish_all_streams(self: &Arc<Self>) -> HashMap<String, Result<()>> {
+    pub async fn establish_all_streams(self: &Arc<Self>) -> HashMap<TargetId, Result<()>> {
         let ids = self.list_ids();
         let mut results = HashMap::new();
         for id in ids {
@@ -605,7 +614,8 @@ impl TargetManager {
         results
     }
 
-    pub async fn send_command(&self, id: &str, msg: ControllerMessage) -> Result<()> {
+    pub async fn send_command(&self, id: impl AsRef<str>, msg: ControllerMessage) -> Result<()> {
+        let id = id.as_ref();
         let tx = self
             .targets
             .get(id)
@@ -623,7 +633,7 @@ impl TargetManager {
                 let _ = self
                     .events_tx
                     .send(TargetEvent::Disconnected {
-                        target_id: id.to_string(),
+                        target_id: TargetId::from(id),
                         reason: "Send failed".to_string(),
                     })
                     .await;
@@ -635,8 +645,8 @@ impl TargetManager {
     pub async fn broadcast(&self, msg: ControllerMessage) -> usize {
         let ids = self.list_ids();
         let mut success = 0;
-        for id in ids {
-            if self.send_command(&id, msg.clone()).await.is_ok() {
+        for id in &ids {
+            if self.send_command(id, msg.clone()).await.is_ok() {
                 success += 1;
             }
         }
@@ -674,7 +684,8 @@ impl TargetManager {
     // Artifact Operations
     // ========================================================================
 
-    pub async fn send_artifact(&self, id: &str, artifact_id: &str, path: &Path) -> Result<()> {
+    pub async fn send_artifact(&self, id: impl AsRef<str>, artifact_id: &str, path: &Path) -> Result<()> {
+        let id = id.as_ref();
         debug!("[{}] Sending artifact to target {}...", artifact_id, id);
 
         let data = tokio::fs::read(path).await?;
@@ -711,7 +722,8 @@ impl TargetManager {
     // Info Queries
     // ========================================================================
 
-    pub async fn get_worker_info(&self, id: &str) -> Result<WorkerInfoResponse> {
+    pub async fn get_worker_info(&self, id: impl AsRef<str>) -> Result<WorkerInfoResponse> {
+        let id = id.as_ref();
         let channel = self.get_channel(id).await?;
         let mut client = WorkerAgentClient::new(channel);
         let response = tokio::time::timeout(
@@ -724,7 +736,7 @@ impl TargetManager {
         Ok(response.into_inner())
     }
 
-    pub async fn query_all_info(&self) -> HashMap<String, WorkerInfoResponse> {
+    pub async fn query_all_info(&self) -> HashMap<TargetId, WorkerInfoResponse> {
         let ids = self.list_ids();
         let mut results = HashMap::new();
         for id in ids {
@@ -795,7 +807,7 @@ impl TargetManager {
 
                         // Register target
                         if let Err(e) = self.register(TargetConfig {
-                            id: target_id.clone(),
+                            id: TargetId::from(target_id.as_str()),
                             address: address.clone(),
                             enabled: true,
                         }) {
@@ -873,14 +885,14 @@ mod tests {
 
         manager
             .register(TargetConfig {
-                id: "test-1".to_string(),
+                id: TargetId::from("test-1"),
                 address: "127.0.0.1:50052".to_string(),
                 enabled: true,
             })
             .unwrap();
 
         let target = manager.get("test-1").unwrap();
-        assert_eq!(target.id, "test-1");
+        assert_eq!(target.id.as_str(), "test-1");
         assert_eq!(target.status, TargetStatus::Offline);
     }
 
@@ -890,7 +902,7 @@ mod tests {
 
         manager
             .register(TargetConfig {
-                id: "test-1".to_string(),
+                id: TargetId::from("test-1"),
                 address: "127.0.0.1:50052".to_string(),
                 enabled: true,
             })
