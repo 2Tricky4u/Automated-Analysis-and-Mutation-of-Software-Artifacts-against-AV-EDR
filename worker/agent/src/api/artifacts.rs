@@ -4,10 +4,8 @@ use crate::WorkerAgentService;
 use tonic::{Request, Response, Status};
 use tracing::info;
 
-const ARTIFACTS_PATH: &str = "C:\\temp\\artifacts";
-
 pub async fn send_artifact(
-    _service: &WorkerAgentService,
+    service: &WorkerAgentService,
     request: Request<tonic::Streaming<ArtifactChunk>>,
 ) -> Result<Response<TransferAck>, Status> {
     use sha2::{Digest, Sha256};
@@ -61,7 +59,7 @@ pub async fn send_artifact(
     }
 
     // Write to disk (artifacts directory)
-    let artifacts_dir = std::path::Path::new(ARTIFACTS_PATH);
+    let artifacts_dir = std::path::Path::new(&service.config.storage.artifacts_path);
     std::fs::create_dir_all(artifacts_dir).map_err(|e| {
         Status::internal(format!("Failed to create artifacts directory: {}", e))
     })?;
