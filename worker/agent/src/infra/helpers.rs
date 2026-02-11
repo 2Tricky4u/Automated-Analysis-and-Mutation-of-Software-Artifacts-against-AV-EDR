@@ -86,7 +86,7 @@ pub async fn collect_api_checkpoints(
             continue;
         }
 
-        // Parse JSON line: {"ts_us":1234567,"checkpoint":"api:VirtualAlloc"}
+        // Parse JSON line: {"ts_us":N,"checkpoint":"name"} or {"ts_us":N,"checkpoint":"msg","type":"success",...}
         match serde_json::from_str::<serde_json::Value>(line) {
             Ok(checkpoint_json) => {
                 let ts_us = checkpoint_json["ts_us"].as_u64().unwrap_or(0);
@@ -95,12 +95,38 @@ pub async fn collect_api_checkpoints(
                     .unwrap_or("unknown")
                     .to_string();
 
+                // Parse optional "type" field for artifact status events
+                let type_field = checkpoint_json["type"].as_str().unwrap_or("checkpoint");
+                let (event_type, mut metadata) = match type_field {
+                    "success" => {
+                        info!("[OK] ARTIFACT SUCCESS from checkpoints.log: '{}'", name);
+                        ("artifact_success".to_string(), std::collections::HashMap::new())
+                    }
+                    "failure" => {
+                        let mut meta = std::collections::HashMap::new();
+                        if let Some(code) = checkpoint_json["error_code"].as_i64() {
+                            meta.insert("error_code".to_string(), code.to_string());
+                        }
+                        warn!("[ERROR] ARTIFACT FAILURE from checkpoints.log: '{}' (error_code={})",
+                            name, checkpoint_json["error_code"].as_i64().unwrap_or(0));
+                        ("artifact_failure".to_string(), meta)
+                    }
+                    "artifact_checkpoint" | "checkpoint" | _ => {
+                        ("checkpoint".to_string(), std::collections::HashMap::new())
+                    }
+                };
+
+                // Preserve the original type field in metadata for traceability
+                if type_field != "checkpoint" {
+                    metadata.insert("status_type".to_string(), type_field.to_string());
+                }
+
                 events.push(crate::automutate::common::TelemetryData {
                     job_id: job_id.to_string(),
-                    event_type: "checkpoint".to_string(),
+                    event_type,
                     timestamp: (ts_us / 1000) as i64, // Convert to milliseconds for consistency
                     payload: vec![],
-                    metadata: std::collections::HashMap::new(),
+                    metadata,
                     typed_event: Some(
                         crate::automutate::common::telemetry_data::TypedEvent::Checkpoint(
                             crate::automutate::common::CheckpointEvent { name, ts_us },

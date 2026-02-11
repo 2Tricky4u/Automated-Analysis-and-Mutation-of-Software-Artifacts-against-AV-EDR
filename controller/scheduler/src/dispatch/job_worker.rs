@@ -279,7 +279,7 @@ impl JobWorker {
             .await
             .map_err(|e| {
                 error!(
-                    "[JobWorker:{}] Failed to build baseline artifact: {}",
+                    "[JobWorker:{}] Failed to build baseline artifact: {:#}",
                     self.job.id, e
                 );
                 e
@@ -291,7 +291,7 @@ impl JobWorker {
             .await
             .map_err(|e| {
                 error!(
-                    "[JobWorker:{}] Failed to build instrumented artifact: {}",
+                    "[JobWorker:{}] Failed to build instrumented artifact: {:#}",
                     self.job.id, e
                 );
                 e

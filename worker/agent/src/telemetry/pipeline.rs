@@ -349,9 +349,6 @@ pub fn collect_trace_log_binary(
     };
 
     let mut file_trace_count = 0;
-    let mut checkpoint_count = 0;
-    let mut success_count = 0;
-    let mut failure_count = 0;
 
     let mut offset = 0;
     while offset + 32 <= trace_bytes.len() {
@@ -407,29 +404,11 @@ pub fn collect_trace_log_binary(
                     file_trace_count += 1;
                 }
             }
-            2 => {
-                if let Ok(checkpoint_name) = std::str::from_utf8(payload) {
-                    info!("[OK] CHECKPOINT from file: '{}'", checkpoint_name);
-                    checkpoint_count += 1;
-                }
-            }
-            3 => {
-                if let Ok(success_msg) = std::str::from_utf8(payload) {
-                    info!("[OK] ARTIFACT SUCCESS from file: '{}'", success_msg);
-                    success_count += 1;
-                }
-            }
-            4 => {
-                if let Ok(failure_data) = std::str::from_utf8(payload) {
-                    let parts: Vec<&str> = failure_data.splitn(2, '|').collect();
-                    let message = parts.first().unwrap_or(&"unknown");
-                    let error_code = parts.get(1).unwrap_or(&"0");
-                    warn!(
-                        "[ERROR] ARTIFACT FAILURE from file: '{}' (error_code={})",
-                        message, error_code
-                    );
-                    failure_count += 1;
-                }
+            2..=4 => {
+                warn!(
+                    "Found artifact status event (type={}) in trace.log; expected in checkpoints.log. Ignoring.",
+                    event_type
+                );
             }
             _ => {
                 tracing::debug!("Unknown event_type {} in trace.log", event_type);
@@ -438,7 +417,7 @@ pub fn collect_trace_log_binary(
     }
 
     info!(
-        "[OK] Collected from trace.log: {} line traces, {} checkpoints, {} success, {} failure",
-        file_trace_count, checkpoint_count, success_count, failure_count
+        "[OK] Collected from trace.log: {} line traces",
+        file_trace_count
     );
 }

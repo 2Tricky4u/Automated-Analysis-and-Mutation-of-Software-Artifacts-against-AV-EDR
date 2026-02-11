@@ -609,6 +609,9 @@ struct ExecutionMonitor {
 ```json
 {"ts_us":1234567,"checkpoint":"api:VirtualAlloc"}
 {"ts_us":1234600,"checkpoint":"api:VirtualProtect"}
+{"ts_us":1234700,"checkpoint":"setup_done","type":"artifact_checkpoint"}
+{"ts_us":1234800,"checkpoint":"All stages completed","type":"success"}
+{"ts_us":1234900,"checkpoint":"alloc failed","type":"failure","error_code":42}
 ```
 
 ---
@@ -707,9 +710,8 @@ struct TraceCollector {
 | `start_server()` | Windows-only: create pipe, accept connections, auto-detect protocol |
 | `read_binary_stream(stream, first_bytes)` | Parse ISTR binary records |
 | `read_text_stream(stream, first_bytes)` | Parse Base64 lines |
-| `parse_on_event_type(hdr, type, payload)` | Dispatch binary event by type |
+| `parse_on_event_type(hdr, type, payload)` | Dispatch binary event by type (warns on 2-4) |
 | `handle_binary_line_trace(hdr, payload)` | Type 1: parse "file:line:func" |
-| `handle_artifact_status(hdr, payload, type)` | Types 2-4: checkpoint/success/failure |
 | `handle_trace_line(line)` | Text protocol: decode Base64 -> parse |
 
 **Trace Event**
@@ -732,7 +734,7 @@ struct TraceEvent {
 struct InstRecordHeader {
     magic: u32,        // 0x49535452 ('ISTR')
     version: u16,
-    event_type: u16,   // 1=line, 2=checkpoint, 3=success, 4=failure
+    event_type: u16,   // 1=line_trace (status events 2-4 now use checkpoint pipe)
     thread_id: u32,
     seq_no: u64,
     ts_us: u64,
@@ -743,9 +745,7 @@ struct InstRecordHeader {
 | event_type | Name | Payload Format |
 |------------|------|---------------|
 | 1 | LINE_TRACE | `"file:line:func"` (UTF-8) |
-| 2 | CHECKPOINT | `"checkpoint_name"` (UTF-8) |
-| 3 | SUCCESS | `"success_message"` (UTF-8) |
-| 4 | FAILURE | `"message\|error_code"` (UTF-8) |
+| 2-4 | (deprecated on trace pipe) | Artifact status events now use checkpoint pipe. Warned and ignored if received here. |
 
 **Protocol Auto-Detection**
 

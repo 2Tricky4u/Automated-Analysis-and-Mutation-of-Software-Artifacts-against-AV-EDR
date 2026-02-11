@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 struct InstRecordHeader {
     magic: u32, // 0x49535452 ('ISTR')
     version: u16,
-    event_type: u16, // 1=line, 2=func, 3=syscall, 4=bb
+    event_type: u16, // 1=line_trace (status events 2-4 now use checkpoint pipe)
     thread_id: u32,
     seq_no: u64,
     ts_us: u64,
@@ -315,10 +315,12 @@ impl TraceCollector {
                 }
             }
             2..=4 => {
-                // CHECKPOINT (2), SUCCESS (3), FAILURE (4)
-                if let Err(e) = self.handle_artifact_status(hdr, payload, event_type) {
-                    warn!("Failed to parse artifact status event: {}", e);
-                }
+                // Artifact status events now use the checkpoint pipe/file.
+                // Warn if an old-format artifact sends them here.
+                warn!(
+                    "Received artifact status event (type={}) on trace pipe; expected on checkpoint pipe. Ignoring.",
+                    event_type
+                );
             }
             _ => {
                 debug!("Unknown event_type: {}", event_type);
@@ -410,78 +412,6 @@ impl TraceCollector {
         // Send to gRPC stream
         if let Err(e) = self.event_tx.try_send(event) {
             warn!("Failed to send trace event to gRPC stream: {}", e);
-        }
-
-        Ok(())
-    }
-
-    /// Handle artifact status events (checkpoint, success, failure)
-    fn handle_artifact_status(
-        &self,
-        hdr: &InstRecordHeader,
-        payload: &[u8],
-        event_type: u16,
-    ) -> Result<()> {
-        let payload_str =
-            String::from_utf8(payload.to_vec()).context("Payload is not valid UTF-8")?;
-
-        // Read packed struct fields
-        let seq_no = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.seq_no)) };
-        let thread_id = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.thread_id)) };
-        let ts_us = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(hdr.ts_us)) };
-
-        // Create a pseudo-TraceEvent for status events (using special file/line markers)
-        let (event_label, log_message) = match event_type {
-            2 => {
-                // CHECKPOINT: payload is just the checkpoint name
-                info!(
-                    "[OK] CHECKPOINT reached: '{}' (seq={}, thread={}, ts={}µs)",
-                    payload_str, seq_no, thread_id, ts_us
-                );
-                ("CHECKPOINT", format!("[OK] CHECKPOINT: {}", payload_str))
-            }
-            3 => {
-                // SUCCESS: payload is success message
-                info!(
-                    "[SUCCESS] ARTIFACT SUCCESS: '{}' (seq={}, thread={}, ts={}µs)",
-                    payload_str, seq_no, thread_id, ts_us
-                );
-                ("SUCCESS", format!("SUCCESS: {}", payload_str))
-            }
-            4 => {
-                // FAILURE: payload is "message|error_code"
-                let parts: Vec<&str> = payload_str.splitn(2, '|').collect();
-                let message = parts.first().unwrap_or(&"unknown");
-                let error_code = parts.get(1).unwrap_or(&"0");
-                warn!(
-                    "[ERROR] ARTIFACT FAILURE: '{}' (error_code={}, seq={}, thread={}, ts={}µs)",
-                    message, error_code, seq_no, thread_id, ts_us
-                );
-                (
-                    "FAILURE",
-                    format!("[ERROR] FAILURE: {} (error_code={})", message, error_code),
-                )
-            }
-            _ => {
-                warn!("Unknown status event_type: {}", event_type);
-                return Ok(());
-            }
-        };
-
-        // Send as TraceEvent to be included in trace_events.jsonl
-        // Use special markers so they're distinguishable from regular line traces
-        let event = TraceEvent {
-            seq: seq_no as u32,
-            thread_id,
-            file: format!("__STATUS__:{}", event_label), // Special marker
-            line: event_type as u32,                     // Event type as line number
-            func: log_message,                           // Full message in func field
-            ts_us,
-        };
-
-        // Send to streaming writer
-        if let Err(e) = self.event_tx.try_send(event) {
-            warn!("Failed to send status event to trace file: {}", e);
         }
 
         Ok(())
