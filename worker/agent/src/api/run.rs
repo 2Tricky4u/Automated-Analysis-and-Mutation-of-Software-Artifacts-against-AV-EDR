@@ -6,8 +6,6 @@ use crate::WorkerAgentService;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
-const ARTIFACTS_PATH: &str = "C:\\temp\\artifacts"; //TODO read from config.storage.artifact_path
-
 pub async fn run_sample(
     service: &WorkerAgentService,
     request: Request<SampleRequest>,
@@ -52,7 +50,7 @@ pub async fn run_sample(
     };
 
     // Build typed request and context
-    let artifacts_base = std::path::Path::new(ARTIFACTS_PATH);
+    let artifacts_base = std::path::Path::new(&service.config.storage.artifacts_path);
     let artifact_path = artifacts_base.join(format!("{}.exe", req.artifact_id));
     let telemetry_dir = artifacts_base.join(format!("telemetry_{}", req.artifact_id));
 

@@ -5,8 +5,6 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::AsyncRead;
-use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::dispatch::guards::{DELAY, MonitorGuard, ProcessGuard, RedEdrGuard};
@@ -224,18 +222,9 @@ pub async fn execute_run(
     // ====================================================================
 
     // Create telemetry directory (clean if exists to avoid stale files)
-    if context.telemetry_dir.exists() {
-        let _ = std::fs::remove_dir_all(&context.telemetry_dir);
-    }
-    std::fs::create_dir_all(&context.telemetry_dir).map_err(|e| {
-        error!("Failed to create telemetry directory: {}", e);
+    crate::infra::system::prepare_telemetry_dir(&context.telemetry_dir).map_err(|e| {
         RunError::EnvironmentSetupFailed(format!("Failed to create telemetry directory: {}", e))
     })?;
-
-    info!(
-        "Created artifact-specific telemetry directory: {:?}",
-        context.telemetry_dir
-    );
 
     // Start line-level trace collector with streaming to file
     let trace_events_file = context.telemetry_dir.join("trace_events.jsonl");
@@ -321,12 +310,7 @@ pub async fn execute_run(
 
     let spawn_start = Instant::now();
 
-    let child = tokio::process::Command::new(&context.artifact_path)
-        .current_dir(&context.telemetry_dir)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+    let child = crate::infra::process::spawn_artifact(&context.artifact_path, &context.telemetry_dir)
         .map_err(|e| {
             error!("Failed to spawn process: {}", e);
             RunError::ProcessSpawnFailed(format!("Failed to spawn process: {}", e))
@@ -350,8 +334,8 @@ pub async fn execute_run(
     let stdout = process_guard.child_mut().stdout.take();
     let stderr = process_guard.child_mut().stderr.take();
 
-    let stdout_handle = capture_stream(stdout);
-    let stderr_handle = capture_stream(stderr);
+    let stdout_handle = crate::infra::process::capture_stream(stdout);
+    let stderr_handle = crate::infra::process::capture_stream(stderr);
 
     // ====================================================================
     // Phase 5: Start monitoring
@@ -451,36 +435,11 @@ pub async fn execute_run(
                         request.timeout_seconds
                     );
 
-                    #[cfg(target_os = "windows")]
+                    crate::infra::process::kill_process_tree(process_guard.child_mut(), pid).await;
+
                     if let Some(pid) = pid {
-                        info!("Timeout: Forcefully killing process tree for PID {}", pid);
-                        let kill_result = std::process::Command::new("taskkill")
-                            .args(["/F", "/T", "/PID", &pid.to_string()])
-                            .output();
-
-                        if let Err(e) = kill_result {
-                            error!("Failed to run taskkill: {}", e);
-                        }
-                    }
-
-                    let _ = process_guard.child_mut().kill().await;
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-
-                    #[cfg(target_os = "windows")]
-                    if let Some(pid) = pid {
-                        use windows::Win32::Foundation::CloseHandle;
-                        use windows::Win32::System::Threading::OpenProcess;
-                        unsafe {
-                            if let Ok(handle) = OpenProcess(
-                                windows::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
-                                false,
-                                pid,
-                            ) {
-                                if !handle.is_invalid() {
-                                    let _ = CloseHandle(handle);
-                                    warn!("Process {} still alive after kill attempt!", pid);
-                                }
-                            }
+                        if crate::infra::process::is_process_alive(pid) {
+                            warn!("Process {} still alive after kill attempt!", pid);
                         }
                     }
 
@@ -735,24 +694,5 @@ pub async fn execute_run(
         telemetry_events,
         elapsed: actual_elapsed,
         phase_timings,
-    })
-}
-
-/// Spawn a task to capture an async read stream into a String
-fn capture_stream<R>(stream: Option<R>) -> JoinHandle<String>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    tokio::spawn(async move {
-        if let Some(stream) = stream {
-            use tokio::io::AsyncReadExt;
-
-            let mut reader = tokio::io::BufReader::new(stream);
-            let mut output = String::new();
-            let _ = reader.read_to_string(&mut output).await;
-            output
-        } else {
-            String::new()
-        }
     })
 }

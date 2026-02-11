@@ -37,12 +37,12 @@ impl RedEdrGuard {
 impl Drop for RedEdrGuard {
     fn drop(&mut self) {
         if self.reset_on_drop {
-            // Spawn blocking task
             let base_url = self.collector.config().base_url.clone();
-            std::thread::spawn(move || {
-                // Create minimal runtime for cleanup
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
+
+            // Try to use the existing tokio runtime (always available in execute_run context)
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                // Fire-and-forget: spawn cleanup on the existing runtime
+                handle.spawn(async move {
                     let client = reqwest::Client::builder()
                         .timeout(Duration::from_secs(DELAY))
                         .build()
@@ -54,7 +54,11 @@ impl Drop for RedEdrGuard {
                         eprintln!("RedEDR cleanup in Drop succeeded (error path)");
                     }
                 });
-            });
+            } else {
+                // Fallback: no runtime available (shouldn't happen, but defensive)
+                eprintln!("RedEDR cleanup skipped: no tokio runtime available in Drop");
+                eprintln!("WARNING: RedEDR may be contaminated for the next run");
+            }
         }
     }
 }
@@ -137,20 +141,15 @@ impl ProcessGuard {
 
 impl Drop for ProcessGuard {
     fn drop(&mut self) {
-        if self.should_kill
-            && let Some(mut child) = self.child.take()
-        {
-            // Spawn blocking task to kill process
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    if let Err(e) = child.kill().await {
-                        eprintln!("Failed to kill process in Drop: {}", e);
-                    } else {
-                        eprintln!("Process killed in Drop (error path)");
-                    }
-                });
-            });
+        if self.should_kill {
+            if let Some(ref mut child) = self.child {
+                // start_kill() is synchronous — sends kill signal without awaiting
+                if let Err(e) = child.start_kill() {
+                    eprintln!("Failed to kill process in Drop: {}", e);
+                } else {
+                    eprintln!("Process kill signal sent in Drop (error path)");
+                }
+            }
         }
     }
 }

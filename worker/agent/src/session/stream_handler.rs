@@ -191,8 +191,7 @@ impl StreamHandler {
             };
 
             // Build typed request and context
-            const ARTIFACTS_PATH: &str = "C:\\temp\\artifacts";
-            let artifacts_base = std::path::Path::new(ARTIFACTS_PATH);
+            let artifacts_base = std::path::Path::new(&config.storage.artifacts_path);
             let artifact_path = artifacts_base.join(format!("{}.exe", sample_request.artifact_id));
             let telemetry_dir = artifacts_base.join(format!("telemetry_{}", sample_request.artifact_id));
 
