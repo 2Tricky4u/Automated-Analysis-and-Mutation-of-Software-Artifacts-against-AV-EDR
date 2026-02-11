@@ -43,7 +43,11 @@ impl AstMutator {
 
     /// Inject line-level tracing with configurable delay (microseconds)
     /// delay_us: 0 = no delay, 50 = 50µs (narrowing mode), 1000000 = 1s (blocking mode)
-    pub fn inject_line_tracing_with_delay(&self, source_code: &str, delay_us: u32) -> Result<String> {
+    pub fn inject_line_tracing_with_delay(
+        &self,
+        source_code: &str,
+        delay_us: u32,
+    ) -> Result<String> {
         let mut result = String::new();
 
         // Add trace infrastructure at the top (Lepori-style with Base64)
@@ -76,7 +80,9 @@ impl AstMutator {
         result.push_str("        a4[0] = (a3[0] & 0xfc) >> 2;\n");
         result.push_str("        a4[1] = ((a3[0] & 0x03) << 4) + ((a3[1] & 0xf0) >> 4);\n");
         result.push_str("        a4[2] = ((a3[1] & 0x0f) << 2) + ((a3[2] & 0xc0) >> 6);\n");
-        result.push_str("        for (int k = 0; k < i + 1; k++) output[j++] = __b64_table[a4[k]];\n");
+        result.push_str(
+            "        for (int k = 0; k < i + 1; k++) output[j++] = __b64_table[a4[k]];\n",
+        );
         result.push_str("        while (i++ < 3) output[j++] = '=';\n");
         result.push_str("    }\n");
         result.push_str("    output[j] = 0;\n");
@@ -104,7 +110,10 @@ impl AstMutator {
         // Add delay if specified (Lepori thesis Section 6.4.2 - helps pinpoint exact detection line)
         if delay_us > 0 {
             result.push_str("    volatile long __inst_wait = 1; \\\n");
-            result.push_str(&format!("    for (; __inst_wait < {}; __inst_wait += 2) {{}} \\\n", delay_us * 10));
+            result.push_str(&format!(
+                "    for (; __inst_wait < {}; __inst_wait += 2) {{}} \\\n",
+                delay_us * 10
+            ));
         }
 
         result.push_str("} while(0)\n\n");
@@ -119,8 +128,12 @@ impl AstMutator {
             let trimmed = line.trim();
 
             // Track function boundaries
-            if trimmed.contains("(") && trimmed.contains(")") && trimmed.contains("{")
-                && !trimmed.starts_with("//") && !trimmed.starts_with("/*") {
+            if trimmed.contains("(")
+                && trimmed.contains(")")
+                && trimmed.contains("{")
+                && !trimmed.starts_with("//")
+                && !trimmed.starts_with("/*")
+            {
                 in_function = true;
             }
 

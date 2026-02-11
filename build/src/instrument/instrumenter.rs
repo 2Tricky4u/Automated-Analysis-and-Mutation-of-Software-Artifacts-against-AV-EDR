@@ -18,7 +18,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::Command;
-use tracing::{debug};
+use tracing::debug;
 
 pub struct Instrumenter {
     bb_counter: u32,
@@ -41,16 +41,27 @@ impl Instrumenter {
         output_path: &Path,
     ) -> Result<()> {
         let abs_ir_path = std::fs::canonicalize(ir_path).unwrap_or_else(|_| ir_path.to_path_buf());
-        let abs_output_path = std::fs::canonicalize(output_path).unwrap_or_else(|_| output_path.to_path_buf());
-        eprintln!("[INSTRUMENTER] Starting instrumentation: {:?} mode={:?}", abs_ir_path, trace_mode);
+        let abs_output_path =
+            std::fs::canonicalize(output_path).unwrap_or_else(|_| output_path.to_path_buf());
+        eprintln!(
+            "[INSTRUMENTER] Starting instrumentation: {:?} mode={:?}",
+            abs_ir_path, trace_mode
+        );
         eprintln!("[INSTRUMENTER] Output path: {:?}", abs_output_path);
-        debug!("Instrumenting LLVM IR: {:?} (mode: {:?})", abs_ir_path, trace_mode);
+        debug!(
+            "Instrumenting LLVM IR: {:?} (mode: {:?})",
+            abs_ir_path, trace_mode
+        );
 
         // Determine what instrumentation we need
-        let needs_bb = matches!(trace_mode,
-            crate::TraceMode::BB | crate::TraceMode::ApiPlusBB | crate::TraceMode::All);
-        let needs_api = matches!(trace_mode,
-            crate::TraceMode::Api | crate::TraceMode::ApiPlusBB | crate::TraceMode::All);
+        let needs_bb = matches!(
+            trace_mode,
+            crate::TraceMode::BB | crate::TraceMode::ApiPlusBB | crate::TraceMode::All
+        );
+        let needs_api = matches!(
+            trace_mode,
+            crate::TraceMode::Api | crate::TraceMode::ApiPlusBB | crate::TraceMode::All
+        );
 
         // Apply SanitizerCoverage for BB instrumentation (if needed)
         let ir_after_bb = if needs_bb {
@@ -95,7 +106,11 @@ impl Instrumenter {
     }
 
     /// Inject BB coverage using LLVM SanitizerCoverage (industry-standard)
-    async fn inject_bb_coverage_sancov(&mut self, ir_path: &Path, output_path: &Path) -> Result<()> {
+    async fn inject_bb_coverage_sancov(
+        &mut self,
+        ir_path: &Path,
+        output_path: &Path,
+    ) -> Result<()> {
         debug!("Applying LLVM SanitizerCoverage pass for BB instrumentation");
         eprintln!("[INSTRUMENTER] Running opt with SanitizerCoverage pass");
 
@@ -104,16 +119,17 @@ impl Instrumenter {
         // For Windows COFF: use trace-pc (simple callback) instead of trace-pc-guard (requires section support)
         let mut cmd = Command::new("opt");
         cmd.arg("-passes=sancov-module")
-            .arg("-sanitizer-coverage-level=3")  // BB-level coverage
-            .arg("-sanitizer-coverage-trace-pc")  // Simple PC callback (works on Windows COFF)
+            .arg("-sanitizer-coverage-level=3") // BB-level coverage
+            .arg("-sanitizer-coverage-trace-pc") // Simple PC callback (works on Windows COFF)
             .arg(ir_path)
-            .arg("-S")  // Output as text IR
+            .arg("-S") // Output as text IR
             .arg("-o")
             .arg(output_path);
 
         eprintln!("[INSTRUMENTER] opt command: {:?}", cmd);
 
-        let output = cmd.output()
+        let output = cmd
+            .output()
             .context("Failed to execute opt - ensure LLVM toolchain is in PATH")?;
 
         if !output.status.success() {
@@ -132,11 +148,19 @@ impl Instrumenter {
             .await
             .context("Failed to read instrumented IR")?;
 
-        let call_count = ir_content.matches("call void @__sanitizer_cov_trace_pc()").count();
+        let call_count = ir_content
+            .matches("call void @__sanitizer_cov_trace_pc()")
+            .count();
         self.bb_counter = call_count as u32;
 
-        eprintln!("[INSTRUMENTER] SanitizerCoverage injected {} BB callbacks", self.bb_counter);
-        debug!("SanitizerCoverage complete: {} basic blocks instrumented", self.bb_counter);
+        eprintln!(
+            "[INSTRUMENTER] SanitizerCoverage injected {} BB callbacks",
+            self.bb_counter
+        );
+        debug!(
+            "SanitizerCoverage complete: {} basic blocks instrumented",
+            self.bb_counter
+        );
 
         Ok(())
     }
@@ -238,11 +262,18 @@ impl Instrumenter {
 
         // Add necessary runtime function declarations based on trace mode
         // Determine what declarations we need
-        let needs_bb = matches!(trace_mode,
-            crate::TraceMode::BB | crate::TraceMode::ApiPlusBB | crate::TraceMode::All);
-        let needs_api = matches!(trace_mode,
-            crate::TraceMode::Api | crate::TraceMode::ApiPlusBB |
-            crate::TraceMode::Lines | crate::TraceMode::LinesAroundBB(_) | crate::TraceMode::All);
+        let needs_bb = matches!(
+            trace_mode,
+            crate::TraceMode::BB | crate::TraceMode::ApiPlusBB | crate::TraceMode::All
+        );
+        let needs_api = matches!(
+            trace_mode,
+            crate::TraceMode::Api
+                | crate::TraceMode::ApiPlusBB
+                | crate::TraceMode::Lines
+                | crate::TraceMode::LinesAroundBB(_)
+                | crate::TraceMode::All
+        );
 
         if !needs_bb && !needs_api {
             // No instrumentation, return IR as-is
@@ -277,11 +308,12 @@ impl Instrumenter {
             let trimmed = line.trim();
 
             // Insert declarations before the first actual definition (define, declare, @global, or %)
-            if !found_first_definition &&
-               (trimmed.starts_with("define ") ||
-                trimmed.starts_with("declare ") ||
-                (trimmed.starts_with('@') && !trimmed.is_empty()) ||
-                (trimmed.starts_with('%') && trimmed.contains(" = type "))) {
+            if !found_first_definition
+                && (trimmed.starts_with("define ")
+                    || trimmed.starts_with("declare ")
+                    || (trimmed.starts_with('@') && !trimmed.is_empty())
+                    || (trimmed.starts_with('%') && trimmed.contains(" = type ")))
+            {
                 // Found first definition, insert declarations here
                 result.push_str(&declarations);
                 found_first_definition = true;

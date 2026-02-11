@@ -3,14 +3,14 @@
 //! Provides typed methods for all Controller gRPC endpoints.
 
 use crate::generated::controller::{
-    controller_client::ControllerClient, BuildRequest, BuildResponse, CompareRunsRequest,
-    CompareRunsResponse, DeployRequest, DeployResponse, GetOrchestratorStatusRequest,
-    GetOrchestratorStatusResponse, GetRoundRequest, GetRoundResponse, JobProgressRequest,
-    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
-    ListWorkersRequest, ListWorkersResponse, ModuleSelection, PingRequest, PingResponse,
-    QueryRequest, QueryResponse, StopJobRequest, StopJobResponse, TriageRequest, TriageResponse,
+    BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse, DeployRequest,
+    DeployResponse, GetOrchestratorStatusRequest, GetOrchestratorStatusResponse, GetRoundRequest,
+    GetRoundResponse, JobProgressRequest, JobProgressResponse, JobRequest, JobResponse,
+    JobStatusRequest, JobStatusResponse, ListWorkersRequest, ListWorkersResponse, ModuleSelection,
+    PingRequest, PingResponse, QueryRequest, QueryResponse, StopJobRequest, StopJobResponse,
+    TriageRequest, TriageResponse, controller_client::ControllerClient,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::transport::Channel;

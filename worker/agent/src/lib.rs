@@ -16,10 +16,10 @@ pub mod automutate {
 
 // New module structure
 pub mod api;
-pub mod dispatch;
-pub mod session;
-pub mod infra;
 pub mod capabilities;
+pub mod dispatch;
+pub mod infra;
+pub mod session;
 pub mod telemetry;
 
 // Re-export WorkerAgentService for use in session and main
@@ -38,7 +38,8 @@ pub struct WorkerAgentService {
     /// This ensures clean telemetry collection with no cross-contamination
     pub(crate) execution_lock: Arc<Mutex<ExecutionState>>,
     /// StreamHandler for bidirectional communication
-    pub(crate) stream_handler: Arc<tokio::sync::RwLock<Option<Arc<session::stream_handler::StreamHandler>>>>,
+    pub(crate) stream_handler:
+        Arc<tokio::sync::RwLock<Option<Arc<session::stream_handler::StreamHandler>>>>,
 }
 
 impl WorkerAgentService {

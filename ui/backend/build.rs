@@ -1,9 +1,6 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Paths are relative to the crate root where build.rs lives
-    let protos = &[
-        "../../proto/common.proto",
-        "../../proto/controller.proto",
-    ];
+    let protos = &["../../proto/common.proto", "../../proto/controller.proto"];
     let includes = &["../../proto"];
 
     // Build client only (no server)

@@ -146,7 +146,10 @@ fn package_large_trace(
     immediate_metadata.insert("event_count".to_string(), trace_events_count.to_string());
     immediate_metadata.insert("original_size_bytes".to_string(), original_size.to_string());
     immediate_metadata.insert("compression".to_string(), "none".to_string());
-    immediate_metadata.insert("payload_type".to_string(), "last_complete_jsonl".to_string());
+    immediate_metadata.insert(
+        "payload_type".to_string(),
+        "last_complete_jsonl".to_string(),
+    );
     immediate_metadata.insert(
         "immediate_line_count".to_string(),
         immediate_line_count.to_string(),
@@ -212,10 +215,7 @@ fn compress_and_prepare_trace(
 ) {
     use crate::telemetry::trace_compressor;
 
-    info!(
-        "Async compression task started for trace: {:?}",
-        trace_file
-    );
+    info!("Async compression task started for trace: {:?}", trace_file);
 
     let mut metadata = std::collections::HashMap::new();
     metadata.insert(

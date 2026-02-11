@@ -46,12 +46,46 @@ impl ModuleSelection {
         let modules_dir = template_dir.join("modules");
 
         let checks = [
-            ("carrier", &self.carrier, modules_dir.join("carrier").join(format!("{}.c", self.carrier))),
-            ("decoder", &self.decoder, modules_dir.join("decoder").join(format!("{}.c", self.decoder))),
-            ("antiemulation", &self.antiemulation, modules_dir.join("antiemulation").join(format!("{}.c", self.antiemulation))),
-            ("guardrail", &self.guardrail, modules_dir.join("guardrails").join(format!("{}.c", self.guardrail))),
-            ("virtualprotect", &self.virtualprotect, modules_dir.join("virtualprotect").join(format!("{}.c", self.virtualprotect))),
-            ("decoy", &self.decoy, modules_dir.join("decoy").join(format!("{}.c", self.decoy))),
+            (
+                "carrier",
+                &self.carrier,
+                modules_dir
+                    .join("carrier")
+                    .join(format!("{}.c", self.carrier)),
+            ),
+            (
+                "decoder",
+                &self.decoder,
+                modules_dir
+                    .join("decoder")
+                    .join(format!("{}.c", self.decoder)),
+            ),
+            (
+                "antiemulation",
+                &self.antiemulation,
+                modules_dir
+                    .join("antiemulation")
+                    .join(format!("{}.c", self.antiemulation)),
+            ),
+            (
+                "guardrail",
+                &self.guardrail,
+                modules_dir
+                    .join("guardrails")
+                    .join(format!("{}.c", self.guardrail)),
+            ),
+            (
+                "virtualprotect",
+                &self.virtualprotect,
+                modules_dir
+                    .join("virtualprotect")
+                    .join(format!("{}.c", self.virtualprotect)),
+            ),
+            (
+                "decoy",
+                &self.decoy,
+                modules_dir.join("decoy").join(format!("{}.c", self.decoy)),
+            ),
         ];
 
         for (category, name, path) in checks {
@@ -88,11 +122,7 @@ impl Assembler {
     }
 
     /// Assemble a complete source file from the template and selected modules
-    pub fn assemble(
-        &mut self,
-        modules: &ModuleSelection,
-        payload_code: &str,
-    ) -> Result<String> {
+    pub fn assemble(&mut self, modules: &ModuleSelection, payload_code: &str) -> Result<String> {
         // Validate module selection
         modules.validate(&self.template_dir)?;
 
@@ -114,18 +144,36 @@ impl Assembler {
         // Replace @MODULE markers with module content
         let output = template
             .replace("// @MODULE:payload", payload_code)
-            .replace("// @MODULE:definitions", &self.read_module("header/definitions.h")?)
-            .replace("// @MODULE:decoder", &self.read_module(&format!("decoder/{}.c", modules.decoder))?)
-            .replace("// @MODULE:virtualprotect", &self.read_module(&format!("virtualprotect/{}.c", modules.virtualprotect))?)
-            .replace("// @MODULE:antiemulation", &self.read_module(&format!("antiemulation/{}.c", modules.antiemulation))?)
-            .replace("// @MODULE:guardrail", &self.read_module(&format!("guardrails/{}.c", modules.guardrail))?)
-            .replace("// @MODULE:decoy", &self.read_module(&format!("decoy/{}.c", modules.decoy))?)
-            .replace("// @MODULE:carrier", &self.read_module(&format!("carrier/{}.c", modules.carrier))?);
+            .replace(
+                "// @MODULE:definitions",
+                &self.read_module("header/definitions.h")?,
+            )
+            .replace(
+                "// @MODULE:decoder",
+                &self.read_module(&format!("decoder/{}.c", modules.decoder))?,
+            )
+            .replace(
+                "// @MODULE:virtualprotect",
+                &self.read_module(&format!("virtualprotect/{}.c", modules.virtualprotect))?,
+            )
+            .replace(
+                "// @MODULE:antiemulation",
+                &self.read_module(&format!("antiemulation/{}.c", modules.antiemulation))?,
+            )
+            .replace(
+                "// @MODULE:guardrail",
+                &self.read_module(&format!("guardrails/{}.c", modules.guardrail))?,
+            )
+            .replace(
+                "// @MODULE:decoy",
+                &self.read_module(&format!("decoy/{}.c", modules.decoy))?,
+            )
+            .replace(
+                "// @MODULE:carrier",
+                &self.read_module(&format!("carrier/{}.c", modules.carrier))?,
+            );
 
-        debug!(
-            output_len = output.len(),
-            "Assembly complete"
-        );
+        debug!(output_len = output.len(), "Assembly complete");
 
         Ok(output)
     }
@@ -153,7 +201,8 @@ impl Assembler {
             .join("\n");
 
         // Cache for future use
-        self.module_cache.insert(relative_path.to_string(), cleaned.clone());
+        self.module_cache
+            .insert(relative_path.to_string(), cleaned.clone());
 
         Ok(cleaned)
     }
@@ -278,7 +327,10 @@ int main() {
         assert_eq!(markers[0].name, "timing_jitter");
         assert!(markers[0].params.is_empty());
         assert_eq!(markers[1].name, "execution_method");
-        assert_eq!(markers[1].params, vec!["direct", "callback", "fiber", "threadpool"]);
+        assert_eq!(
+            markers[1].params,
+            vec!["direct", "callback", "fiber", "threadpool"]
+        );
     }
 
     #[test]

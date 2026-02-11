@@ -4,7 +4,7 @@
 
 use super::{ApiError, ApiResponse};
 use crate::grpc_client::ControllerGrpcClient;
-use axum::{extract::State, Json};
+use axum::{Json, extract::State};
 use serde::Serialize;
 use std::sync::Arc;
 use tracing::{debug, error};

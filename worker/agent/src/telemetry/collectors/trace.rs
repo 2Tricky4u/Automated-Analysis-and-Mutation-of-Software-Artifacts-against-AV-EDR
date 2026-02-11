@@ -57,7 +57,7 @@ impl TraceCollector {
     /// Auto-detects Base64 text vs binary protocol by peeking at first 4 bytes
     #[cfg(windows)]
     pub async fn start_server(&self) -> Result<()> {
-        use tokio::io::{AsyncReadExt};
+        use tokio::io::AsyncReadExt;
         use tokio::net::windows::named_pipe::ServerOptions;
 
         info!(
@@ -361,7 +361,8 @@ impl TraceCollector {
         line_start.push_str(&String::from_utf8_lossy(&rest_of_line));
 
         // Process first line
-        if !line_start.is_empty() && let Err(e) = self.handle_trace_line(&line_start)
+        if !line_start.is_empty()
+            && let Err(e) = self.handle_trace_line(&line_start)
         {
             warn!("Failed to parse trace line: {} - {}", line_start, e);
         }

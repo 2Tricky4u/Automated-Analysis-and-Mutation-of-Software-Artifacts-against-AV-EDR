@@ -2,7 +2,6 @@
 ///
 /// Extracted from capabilities.rs to separate runtime state
 /// from capability detection logic.
-
 use std::collections::HashMap;
 use sysinfo::CpuRefreshKind;
 

@@ -399,7 +399,7 @@ mod tests {
             1234,
             "http://localhost:8081".to_string(),
             Arc::new(NullSink),
-            30,   // timeout_seconds
+            30, // timeout_seconds
         );
 
         assert_eq!(monitor.run_id, "run-test-001");

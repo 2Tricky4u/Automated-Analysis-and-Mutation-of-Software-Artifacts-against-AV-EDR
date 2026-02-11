@@ -6,5 +6,7 @@ pub mod assembler;
 pub mod payload;
 
 // Re-exports
-pub use assembler::{Assembler, ModuleSelection, MutationMarker, extract_mutation_markers, strip_mutation_markers};
-pub use payload::{PayloadEncoder, EncodingType, EncodedPayload, generate_test_payload};
+pub use assembler::{
+    Assembler, ModuleSelection, MutationMarker, extract_mutation_markers, strip_mutation_markers,
+};
+pub use payload::{EncodedPayload, EncodingType, PayloadEncoder, generate_test_payload};

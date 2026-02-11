@@ -1,8 +1,8 @@
+use crate::WorkerAgentService;
 use crate::automutate::common::{SampleRequest, SampleResponse};
 use crate::dispatch::engine;
 use crate::dispatch::state::ExecutionLockGuard;
-use crate::dispatch::types::{resolve_run_id, RunContext, RunRequest};
-use crate::WorkerAgentService;
+use crate::dispatch::types::{RunContext, RunRequest, resolve_run_id};
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
@@ -14,13 +14,13 @@ pub async fn run_sample(
 
     // Resolve run_id: prefer controller-assigned, fallback to UUID
     let run_id = {
-        let controller_run_id =
-            if let Some(handler) = service.stream_handler.read().await.as_ref() {
-                let state = handler.worker_state.read().await;
-                state.current_run_id.clone()
-            } else {
-                None
-            };
+        let controller_run_id = if let Some(handler) = service.stream_handler.read().await.as_ref()
+        {
+            let state = handler.worker_state.read().await;
+            state.current_run_id.clone()
+        } else {
+            None
+        };
         resolve_run_id(controller_run_id.as_deref())
     };
 
@@ -114,10 +114,7 @@ pub async fn run_sample(
 
 /// Format human-readable output string from RunOutcome.
 /// Public so the stream handler can reuse this for consistent output formatting.
-pub fn format_output(
-    outcome: &crate::dispatch::types::RunOutcome,
-    timeout_seconds: u32,
-) -> String {
+pub fn format_output(outcome: &crate::dispatch::types::RunOutcome, timeout_seconds: u32) -> String {
     if outcome.timed_out {
         format!("Execution timed out after {}s", timeout_seconds)
     } else if outcome.exit_code == 0 {
@@ -183,14 +180,14 @@ fn describe_exit(exit_code: i32) -> String {
 
 #[cfg(target_os = "windows")]
 fn ntstatus_to_message(status: u32) -> Option<String> {
-    use windows::core::PWSTR;
     use windows::Win32::Foundation::{
         GetLastError, HLOCAL, LocalFree, NTSTATUS, RtlNtStatusToDosError,
     };
     use windows::Win32::System::Diagnostics::Debug::{
-        FormatMessageW, FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM,
-        FORMAT_MESSAGE_IGNORE_INSERTS,
+        FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
+        FormatMessageW,
     };
+    use windows::core::PWSTR;
 
     let dos: u32 = unsafe { RtlNtStatusToDosError(NTSTATUS(status as i32)) };
     if dos == 0 {

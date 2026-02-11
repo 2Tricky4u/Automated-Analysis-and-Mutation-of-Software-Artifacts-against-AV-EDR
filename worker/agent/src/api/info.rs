@@ -1,8 +1,6 @@
 use crate::automutate::common::TelemetryData;
-use crate::automutate::worker::{
-    HealthRequest, HealthResponse, PingRequest, PingResponse,
-};
-use crate::{capabilities, telemetry, WorkerAgentService};
+use crate::automutate::worker::{HealthRequest, HealthResponse, PingRequest, PingResponse};
+use crate::{WorkerAgentService, capabilities, telemetry};
 use std::time::SystemTime;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tonic::{Request, Response, Status};
@@ -114,8 +112,7 @@ pub async fn get_worker_info(
     let cpu_percent =
         sys.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32;
     let cpu_percent = cpu_percent as i32;
-    let memory_percent =
-        ((sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0) as i32;
+    let memory_percent = ((sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0) as i32;
     let disk_percent = 0; // TODO: Implement disk usage
 
     // Check if currently executing a job
@@ -187,9 +184,7 @@ pub async fn get_telemetry(
     request: Request<crate::automutate::worker::TelemetryRequest>,
 ) -> Result<
     Response<
-        std::pin::Pin<
-            Box<dyn tokio_stream::Stream<Item = Result<TelemetryData, Status>> + Send>,
-        >,
+        std::pin::Pin<Box<dyn tokio_stream::Stream<Item = Result<TelemetryData, Status>> + Send>>,
     >,
     Status,
 > {

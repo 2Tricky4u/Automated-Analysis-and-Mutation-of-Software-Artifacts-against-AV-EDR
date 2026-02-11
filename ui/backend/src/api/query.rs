@@ -4,7 +4,7 @@
 
 use super::{ApiError, ApiResponse};
 use crate::grpc_client::ControllerGrpcClient;
-use axum::{extract::State, Json};
+use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, error};
@@ -105,7 +105,10 @@ pub async fn query_results(
             // Check if it's a connection error vs internal error
             let err_str = e.to_string();
             if err_str.contains("connect") || err_str.contains("timeout") {
-                Err(ApiError::unavailable(format!("Controller unavailable: {}", e)))
+                Err(ApiError::unavailable(format!(
+                    "Controller unavailable: {}",
+                    e
+                )))
             } else {
                 Err(ApiError::internal(format!("Query failed: {}", e)))
             }

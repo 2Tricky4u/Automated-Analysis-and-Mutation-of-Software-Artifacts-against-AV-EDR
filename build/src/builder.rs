@@ -7,13 +7,13 @@
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use tracing::{error, info, warn, debug};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 // Use modules from crate root
-use crate::template::assembler::{Assembler, ModuleSelection};
-use crate::template::payload::{PayloadEncoder, EncodingType};
 use crate::mutator;
+use crate::template::assembler::{Assembler, ModuleSelection};
+use crate::template::payload::{EncodingType, PayloadEncoder};
 
 /// Configuration for the artifact builder
 #[derive(Debug, Clone)]
@@ -833,42 +833,42 @@ impl ArtifactBuilder {
 
         // Base flags
         let mut args = vec![
-            "-target", "x86_64-pc-windows-msvc",
-
-            "-isystem", crt_include.as_str(),
-            "-isystem", sdk_ucrt_include.as_str(),
-            "-isystem", sdk_shared_include.as_str(),
-            "-isystem", sdk_um_include.as_str(),
-            "-isystem", sdk_winrt_include.as_str(),
-
-            "-L", crt_lib.as_str(),
-            "-L", sdk_ucrt_lib.as_str(),
-            "-L", sdk_um_lib.as_str(),
-
+            "-target",
+            "x86_64-pc-windows-msvc",
+            "-isystem",
+            crt_include.as_str(),
+            "-isystem",
+            sdk_ucrt_include.as_str(),
+            "-isystem",
+            sdk_shared_include.as_str(),
+            "-isystem",
+            sdk_um_include.as_str(),
+            "-isystem",
+            sdk_winrt_include.as_str(),
+            "-L",
+            crt_lib.as_str(),
+            "-L",
+            sdk_ucrt_lib.as_str(),
+            "-L",
+            sdk_um_lib.as_str(),
             // TODO could use MSVC linker (link.exe , WINE?), not lld-link
             //"-fuse-ld=link",
             "-fuse-ld=lld",
             // Codegen
             "-O2",
-
             // --- link.exe flags for "MSVC-ish" release ---
             "-Wl,/subsystem:console",
-
             // no debug directory / no PDB
             "-Wl,/DEBUG:NONE",
-
             // reproducible-ish + no incremental
             "-Wl,/Brepro",
             "-Wl,/INCREMENTAL:NO",
-
             // typical release link opts
             "-Wl,/OPT:REF",
             "-Wl,/OPT:ICF",
-
             // Keep consistent runtime model: /MT == libcmt (static CRT)
             // (If you prefer /MD, replace libcmt with msvcrt and ensure matching libs everywhere.)
             "-Wl,-defaultlib:libcmt",
-
             // Keep the system libs you truly need
             "-Wl,-defaultlib:kernel32",
         ];
@@ -967,11 +967,7 @@ impl ArtifactBuilder {
     }
 
     /// Compile C source to LLVM IR
-    async fn compile_source_to_ir(
-        &self,
-        source_path: &Path,
-        ir_path: &Path
-    ) -> Result<()> {
+    async fn compile_source_to_ir(&self, source_path: &Path, ir_path: &Path) -> Result<()> {
         let xwin_root = PathBuf::from("/root/.xwin");
         let crt_include = xwin_root.join("crt/include");
         let sdk_ucrt_include = xwin_root.join("sdk/include/ucrt");
@@ -1470,9 +1466,7 @@ impl ArtifactBuilder {
         }
 
         // Step 5.5: Verify runtime has required symbols for line tracing (non-fatal)
-        if trace_mode == crate::TraceMode::Lines
-            || trace_mode == crate::TraceMode::All
-        {
+        if trace_mode == crate::TraceMode::Lines || trace_mode == crate::TraceMode::All {
             if let Err(e) = self.verify_runtime_symbols(&runtime_obj, trace_mode).await {
                 warn!("Runtime symbol verification failed (non-fatal): {}", e);
                 warn!("Build will continue, but linking may fail if symbols are missing");
@@ -1784,8 +1778,7 @@ impl ArtifactBuilder {
         }
 
         // Step 3: Assemble the template with selected modules
-        let mut assembler = Assembler::new(&template_dir)
-            .context("Failed to create assembler")?;
+        let mut assembler = Assembler::new(&template_dir).context("Failed to create assembler")?;
 
         let assembled_source = assembler
             .assemble(&modules, &payload_header)
@@ -1821,14 +1814,15 @@ impl ArtifactBuilder {
             "modular_{}_{}_{}",
             modules.carrier,
             modules.decoder,
-            Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown")
+            Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("unknown")
         );
 
         // Write assembled source to temp file
-        let temp_source = self
-            .config
-            .output_dir
-            .join(format!("{}.c", artifact_name));
+        let temp_source = self.config.output_dir.join(format!("{}.c", artifact_name));
 
         tokio::fs::write(&temp_source, &final_source)
             .await
@@ -1954,9 +1948,7 @@ impl ArtifactBuilder {
         // Check for required symbols based on trace mode
         let mut missing_symbols = Vec::new();
 
-        if trace_mode == crate::TraceMode::Lines
-            || trace_mode == crate::TraceMode::All
-        {
+        if trace_mode == crate::TraceMode::Lines || trace_mode == crate::TraceMode::All {
             // Binary protocol is the default, check for __trace_line_binary
             if !symbols.contains("__trace_line_binary") {
                 missing_symbols.push("__trace_line_binary");

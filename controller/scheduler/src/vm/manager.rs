@@ -7,7 +7,7 @@
 // - Spawning Worker tasks on connection
 // - Artifact deployment
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -16,20 +16,20 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use tonic::transport::{Channel, Endpoint};
 use tonic::Request;
+use tonic::transport::{Channel, Endpoint};
 use tracing::{debug, error, info, warn};
 
 use crate::automutate::common::{
-    controller_message, worker_message, ArtifactChunk, ControllerMessage, DisconnectNotice,
-    Heartbeat, WorkerMessage,
+    ArtifactChunk, ControllerMessage, DisconnectNotice, Heartbeat, WorkerMessage,
+    controller_message, worker_message,
 };
 use crate::automutate::worker::{
-    worker_agent_client::WorkerAgentClient, WorkerInfoRequest, WorkerInfoResponse,
+    WorkerInfoRequest, WorkerInfoResponse, worker_agent_client::WorkerAgentClient,
 };
 use crate::dispatch::{
-    ArtifactSender, JobId, RemoteRunResult, RunId, RunPool, TargetId, VMExecutor, VMInfo,
-    WorkerId, WorkerInfo,
+    ArtifactSender, JobId, RemoteRunResult, RunId, RunPool, TargetId, VMExecutor, VMInfo, WorkerId,
+    WorkerInfo,
 };
 
 // ============================================================================
@@ -228,7 +228,10 @@ impl TargetManager {
             target.registration_type = RegistrationType::Dynamic;
             self.targets.insert(id.clone(), target);
         }
-        info!("Target {} updated: OS={}, caps={:?}", id, os_version, capabilities);
+        info!(
+            "Target {} updated: OS={}, caps={:?}",
+            id, os_version, capabilities
+        );
         Ok(())
     }
 
@@ -274,9 +277,11 @@ impl TargetManager {
                 continue;
             }
             if !required_capabilities.is_empty() {
-                let has_all = required_capabilities
-                    .iter()
-                    .all(|req| t.capabilities.iter().any(|cap| cap.eq_ignore_ascii_case(req)));
+                let has_all = required_capabilities.iter().all(|req| {
+                    t.capabilities
+                        .iter()
+                        .any(|cap| cap.eq_ignore_ascii_case(req))
+                });
                 if !has_all {
                     continue;
                 }
@@ -431,7 +436,10 @@ impl TargetManager {
 
         // Get worker/VM info
         let worker_info = {
-            let target = self.targets.get(id).ok_or_else(|| anyhow!("Target not found"))?;
+            let target = self
+                .targets
+                .get(id)
+                .ok_or_else(|| anyhow!("Target not found"))?;
             WorkerInfo {
                 id: WorkerId(id.to_string()),
                 os: target.os_version.clone(),
@@ -499,7 +507,8 @@ impl TargetManager {
 
                         // Handle registration message -> send Connected event
                         if !registration_received {
-                            if let Some(worker_message::Payload::Registration(ref reg)) = msg.payload
+                            if let Some(worker_message::Payload::Registration(ref reg)) =
+                                msg.payload
                             {
                                 t.capabilities = reg.capabilities.clone();
                                 t.os_version = reg.os_version.clone();
@@ -653,7 +662,8 @@ impl TargetManager {
         success
     }
 
-    pub async fn disconnect_all(&self, reason: &str, reconnect_allowed: bool) { // TODO use it
+    pub async fn disconnect_all(&self, reason: &str, reconnect_allowed: bool) {
+        // TODO use it
         info!("Disconnecting all targets: {}", reason);
 
         // Signal graceful shutdown to all VMExecutors via run pool
@@ -684,7 +694,12 @@ impl TargetManager {
     // Artifact Operations
     // ========================================================================
 
-    pub async fn send_artifact(&self, id: impl AsRef<str>, artifact_id: &str, path: &Path) -> Result<()> {
+    pub async fn send_artifact(
+        &self,
+        id: impl AsRef<str>,
+        artifact_id: &str,
+        path: &Path,
+    ) -> Result<()> {
         let id = id.as_ref();
         debug!("[{}] Sending artifact to target {}...", artifact_id, id);
 
@@ -746,8 +761,10 @@ impl TargetManager {
                     if let Some(mut target) = self.targets.get_mut(&id) {
                         target.os_version = info.os_version.clone();
                         target.capabilities = info.capabilities.clone();
-                        debug!("Updated target {} info: os={}, caps={:?}",
-                            id, info.os_version, info.capabilities);
+                        debug!(
+                            "Updated target {} info: os={}, caps={:?}",
+                            id, info.os_version, info.capabilities
+                        );
                     }
                     results.insert(id, info);
                 }
@@ -759,11 +776,10 @@ impl TargetManager {
         results
     }
 
-
     /// Discover targets from automation/generated/win*-worker-*.toml files
     pub async fn discover_and_register_targets(&self) {
-        use std::path::Path;
         use std::collections::HashMap as StdHashMap;
+        use std::path::Path;
 
         let generated_dir = Path::new("automation/generated");
 
@@ -790,7 +806,10 @@ impl TargetManager {
             let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
             // Match pattern: win*-worker-*.toml
-            if filename.starts_with("win") && filename.contains("-worker-") && filename.ends_with(".toml") {
+            if filename.starts_with("win")
+                && filename.contains("-worker-")
+                && filename.ends_with(".toml")
+            {
                 match load_target_config(&path) {
                     Ok((target_id, address)) => {
                         let ip = address.split(':').next().unwrap_or(&address).to_string();
@@ -798,9 +817,9 @@ impl TargetManager {
                         // Check for duplicate IP
                         if let Some((existing_id, existing_file)) = registered_ips.get(&ip) {
                             warn!(
-                            "Duplicate IP: {} in '{}' (target: {}) - already from '{}' (target: {}). Skipping.",
-                            ip, filename, target_id, existing_file, existing_id
-                        );
+                                "Duplicate IP: {} in '{}' (target: {}) - already from '{}' (target: {}). Skipping.",
+                                ip, filename, target_id, existing_file, existing_id
+                            );
                             duplicate_count += 1;
                             continue;
                         }
@@ -827,14 +846,20 @@ impl TargetManager {
         }
 
         if duplicate_count > 0 {
-            warn!("{} duplicate target config(s) were skipped (same IP)", duplicate_count);
+            warn!(
+                "{} duplicate target config(s) were skipped (same IP)",
+                duplicate_count
+            );
         }
 
         if target_count == 0 {
             warn!("No targets registered! Scheduler will not be able to execute jobs.");
             warn!("Create target configs in automation/generated/ (e.g., win10-worker-01.toml)");
         } else {
-            info!("Target pool initialized with {} unique targets", target_count);
+            info!(
+                "Target pool initialized with {} unique targets",
+                target_count
+            );
         }
     }
 }
@@ -858,7 +883,11 @@ impl ArtifactSender for TargetArtifactSender {
         let worker_id = worker_id.to_string();
         let artifact_id = artifact_id.to_string();
         let path = path.to_path_buf();
-        Box::pin(async move { self.manager.send_artifact(&worker_id, &artifact_id, &path).await })
+        Box::pin(async move {
+            self.manager
+                .send_artifact(&worker_id, &artifact_id, &path)
+                .await
+        })
     }
 }
 

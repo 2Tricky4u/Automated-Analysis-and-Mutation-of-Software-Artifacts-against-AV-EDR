@@ -2,6 +2,7 @@
 //!
 //! Uses JobSession -> Orchestrator -> Worker pattern
 
+use crate::api::SchedulerService;
 use crate::automutate::common::JobId;
 use crate::automutate::controller::{
     BehaviorComparisonProto, CompareRunsRequest, CompareRunsResponse, GetRoundRequest,
@@ -9,10 +10,11 @@ use crate::automutate::controller::{
     JobStatusRequest, JobStatusResponse, RoundSummaryProto, StatusAck, StatusReport,
     StopJobRequest, StopJobResponse,
 };
-use crate::dispatch::{JobControlCommand, JobSession, ModularBuildSpec, ModuleSelectionSpec, JobId as DispatchJobId};
-use crate::api::SchedulerService;
+use crate::dispatch::{
+    JobControlCommand, JobId as DispatchJobId, JobSession, ModularBuildSpec, ModuleSelectionSpec,
+};
 use elasticsearch::SearchParts;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -25,7 +27,11 @@ pub async fn schedule_job(
     let req = request.into_inner();
 
     // Get max_rounds (default to 10)
-    let max_rounds = if req.max_rounds == 0 { 10 } else { req.max_rounds };
+    let max_rounds = if req.max_rounds == 0 {
+        10
+    } else {
+        req.max_rounds
+    };
 
     // Validate source (payload path to .bin file)
     if req.source.is_empty() {
@@ -49,19 +55,47 @@ pub async fn schedule_job(
     let default_modules = ModuleSelectionSpec::default();
     let modules = if let Some(m) = &req.modules {
         ModuleSelectionSpec {
-            carrier: if m.carrier.is_empty() { default_modules.carrier } else { m.carrier.clone() },
-            decoder: if m.decoder.is_empty() { default_modules.decoder } else { m.decoder.clone() },
-            antiemulation: if m.antiemulation.is_empty() { default_modules.antiemulation } else { m.antiemulation.clone() },
-            guardrail: if m.guardrail.is_empty() { default_modules.guardrail } else { m.guardrail.clone() },
-            virtualprotect: if m.virtualprotect.is_empty() { default_modules.virtualprotect } else { m.virtualprotect.clone() },
-            decoy: if m.decoy.is_empty() { default_modules.decoy } else { m.decoy.clone() },
+            carrier: if m.carrier.is_empty() {
+                default_modules.carrier
+            } else {
+                m.carrier.clone()
+            },
+            decoder: if m.decoder.is_empty() {
+                default_modules.decoder
+            } else {
+                m.decoder.clone()
+            },
+            antiemulation: if m.antiemulation.is_empty() {
+                default_modules.antiemulation
+            } else {
+                m.antiemulation.clone()
+            },
+            guardrail: if m.guardrail.is_empty() {
+                default_modules.guardrail
+            } else {
+                m.guardrail.clone()
+            },
+            virtualprotect: if m.virtualprotect.is_empty() {
+                default_modules.virtualprotect
+            } else {
+                m.virtualprotect.clone()
+            },
+            decoy: if m.decoy.is_empty() {
+                default_modules.decoy
+            } else {
+                m.decoy.clone()
+            },
         }
     } else {
         default_modules
     };
 
     // Get encoding (default to xor)
-    let encoding = if req.encoding.is_empty() { "xor".to_string() } else { req.encoding.clone() };
+    let encoding = if req.encoding.is_empty() {
+        "xor".to_string()
+    } else {
+        req.encoding.clone()
+    };
 
     // Create build spec from request
     let build_spec = ModularBuildSpec {
@@ -72,18 +106,29 @@ pub async fn schedule_job(
 
     info!(
         "Job submission: {} (payload={}, target_os={}, caps={:?}, carrier={}, decoder={}, encoding={}, max_rounds={})",
-        job_id, req.source,
-        if req.target_os.is_empty() { "any" } else { &req.target_os },
+        job_id,
+        req.source,
+        if req.target_os.is_empty() {
+            "any"
+        } else {
+            &req.target_os
+        },
         req.required_capabilities,
-        build_spec.modules.carrier, build_spec.modules.decoder,
-        build_spec.encoding, max_rounds
+        build_spec.modules.carrier,
+        build_spec.modules.decoder,
+        build_spec.encoding,
+        max_rounds
     );
 
     // Create JobSession with build spec
     let mut job = JobSession::new(&job_id, max_rounds, build_spec);
 
     // Set constraints
-    job.target_os = if req.target_os.is_empty() { None } else { Some(req.target_os.clone()) };
+    job.target_os = if req.target_os.is_empty() {
+        None
+    } else {
+        Some(req.target_os.clone())
+    };
     job.required_capabilities = req.required_capabilities.clone();
     job.stop_on_evasion = req.stop_on_evasion;
 
@@ -249,7 +294,11 @@ pub async fn get_job_progress(
                         round_number: source["round_number"].as_u64().unwrap_or(0) as u32,
                         mutations: source["mutations"]
                             .as_array()
-                            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect()
+                            })
                             .unwrap_or_default(),
                         detected: source["detected"].as_bool().unwrap_or(false),
                         behavior_match: source["behavior_match"].as_bool().unwrap_or(false),
@@ -311,7 +360,10 @@ pub async fn stop_job(
             }))
         }
         Err(e) => {
-            error!("[RPC] StopJob: Failed to send stop command for job {}: {}", job_id, e);
+            error!(
+                "[RPC] StopJob: Failed to send stop command for job {}: {}",
+                job_id, e
+            );
             Ok(Response::new(StopJobResponse {
                 stopped: false,
                 message: format!("Failed to stop job {}: channel closed", job_id),
@@ -328,7 +380,10 @@ pub async fn get_round(
     use crate::automutate::controller::RoundProto;
 
     let req = request.get_ref();
-    debug!("[RPC] GetRound: job_id={}, round_id={}", req.job_id, req.round_id);
+    debug!(
+        "[RPC] GetRound: job_id={}, round_id={}",
+        req.job_id, req.round_id
+    );
 
     // Query ES for round document
     let round_result = service
@@ -359,11 +414,11 @@ pub async fn get_round(
                         round_id: source["round_id"].as_str().unwrap_or("").to_string(),
                         job_id: source["job_id"].as_str().unwrap_or("").to_string(),
                         round_number: source["round_number"].as_u64().unwrap_or(0) as u32,
-                        mutations: vec![], // TODO: Parse mutations from ES
+                        mutations: vec![],      // TODO: Parse mutations from ES
                         baseline_run: None,     // TODO: Query run details from runs-* index
                         instrumented_run: None, // TODO: Query run details from runs-* index
                         status: source["status"].as_str().unwrap_or("unknown").to_string(),
-                        behavior_match: None,   // TODO: Parse comparison from round document
+                        behavior_match: None, // TODO: Parse comparison from round document
                     };
 
                     return Ok(Response::new(GetRoundResponse { round: Some(round) }));
@@ -476,7 +531,7 @@ pub async fn report_status(
     request: Request<StatusReport>,
 ) -> Result<Response<StatusAck>, Status> {
     use tokio::time::Duration;
-    
+
     let report = request.into_inner();
 
     // Log status
@@ -505,12 +560,8 @@ pub async fn report_status(
     let _ = service.targets.update_health(&report.worker_id);
 
     // Store final status to ES
-    if matches!(
-        report.event_type.as_str(),
-        "success" | "error" | "timeout"
-    ) {
-        match tokio::time::timeout(Duration::from_secs(10), service.store_run_result(&report))
-            .await
+    if matches!(report.event_type.as_str(), "success" | "error" | "timeout") {
+        match tokio::time::timeout(Duration::from_secs(10), service.store_run_result(&report)).await
         {
             Ok(Ok(())) => {
                 debug!("[OK] Run result stored: {}", report.run_id);

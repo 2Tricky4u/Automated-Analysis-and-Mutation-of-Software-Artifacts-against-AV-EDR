@@ -12,8 +12,8 @@ use tokio::sync::mpsc;
 #[cfg(windows)]
 #[tokio::test]
 async fn test_named_pipe_trace_collection() {
+    use base64::{Engine as _, engine::general_purpose};
     use worker_agent::telemetry::collectors::trace::TraceCollector;
-    use base64::{engine::general_purpose, Engine as _};
 
     println!("🧪 Testing named pipe trace collection...");
 
@@ -37,7 +37,7 @@ async fn test_named_pipe_trace_collection() {
         println!("   Artifact: Connecting to named pipe...");
 
         use windows::Win32::Storage::FileSystem::{
-            CreateFileA, WriteFile, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE, OPEN_EXISTING,
+            CreateFileA, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE, OPEN_EXISTING, WriteFile,
         };
         use windows::core::PCSTR;
 
@@ -142,8 +142,14 @@ async fn test_named_pipe_trace_collection() {
     assert_eq!(events[2].seq, 2);
 
     println!("   [OK] All events parsed correctly!");
-    println!("   [OK] Sequence numbers: {} {} {}", events[0].seq, events[1].seq, events[2].seq);
-    println!("   [OK] Timestamps present: {} {} {}", events[0].ts_us, events[1].ts_us, events[2].ts_us);
+    println!(
+        "   [OK] Sequence numbers: {} {} {}",
+        events[0].seq, events[1].seq, events[2].seq
+    );
+    println!(
+        "   [OK] Timestamps present: {} {} {}",
+        events[0].ts_us, events[1].ts_us, events[2].ts_us
+    );
 
     // Abort collector (it's in infinite loop)
     collector_handle.abort();

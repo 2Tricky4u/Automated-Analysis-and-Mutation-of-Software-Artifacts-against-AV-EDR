@@ -67,12 +67,11 @@ impl PayloadEncoder {
     /// Generate the 256-word dictionary for English encoding
     fn generate_dictionary() -> Vec<String> {
         let common_words = [
-            "the", "be", "to", "of", "and", "a", "in", "that", "have", "i",
-            "it", "for", "not", "on", "with", "he", "as", "you", "do", "at",
-            "this", "but", "his", "by", "from", "they", "we", "say", "her", "she",
-            "or", "an", "will", "my", "one", "all", "would", "there", "their", "what",
-            "so", "up", "out", "if", "about", "who", "get", "which", "go", "me",
-            "when", "make", "can", "like", "time", "no", "just", "him", "know", "take",
+            "the", "be", "to", "of", "and", "a", "in", "that", "have", "i", "it", "for", "not",
+            "on", "with", "he", "as", "you", "do", "at", "this", "but", "his", "by", "from",
+            "they", "we", "say", "her", "she", "or", "an", "will", "my", "one", "all", "would",
+            "there", "their", "what", "so", "up", "out", "if", "about", "who", "get", "which",
+            "go", "me", "when", "make", "can", "like", "time", "no", "just", "him", "know", "take",
         ];
 
         let mut dictionary: Vec<String> = common_words.iter().map(|s| s.to_string()).collect();
@@ -106,8 +105,14 @@ impl PayloadEncoder {
             data: encoded,
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("xor_key_0".to_string(), format!("0x{:02X}", self.xor_key[0]));
-                m.insert("xor_key_1".to_string(), format!("0x{:02X}", self.xor_key[1]));
+                m.insert(
+                    "xor_key_0".to_string(),
+                    format!("0x{:02X}", self.xor_key[0]),
+                );
+                m.insert(
+                    "xor_key_1".to_string(),
+                    format!("0x{:02X}", self.xor_key[1]),
+                );
                 m
             },
         }
@@ -169,7 +174,8 @@ unsigned char supermega_payload[PAYLOAD_LEN] = {{
         let word_count = word_string.split_whitespace().count();
 
         // Generate dictionary array
-        let dict_entries: Vec<String> = self.dictionary
+        let dict_entries: Vec<String> = self
+            .dictionary
             .iter()
             .map(|w| format!("\"{}\"", w))
             .collect();
@@ -250,7 +256,8 @@ mod tests {
         let encoded = encoder.encode(&original, EncodingType::Xor);
 
         // Decode manually to verify
-        let decoded: Vec<u8> = encoded.data
+        let decoded: Vec<u8> = encoded
+            .data
             .iter()
             .enumerate()
             .map(|(i, &b)| b ^ [0xAA, 0x55][i % 2])
@@ -289,7 +296,10 @@ mod tests {
     fn test_encoding_type_parsing() {
         assert_eq!(EncodingType::from_str("xor").unwrap(), EncodingType::Xor);
         assert_eq!(EncodingType::from_str("XOR").unwrap(), EncodingType::Xor);
-        assert_eq!(EncodingType::from_str("english").unwrap(), EncodingType::English);
+        assert_eq!(
+            EncodingType::from_str("english").unwrap(),
+            EncodingType::English
+        );
         assert!(EncodingType::from_str("unknown").is_err());
     }
 

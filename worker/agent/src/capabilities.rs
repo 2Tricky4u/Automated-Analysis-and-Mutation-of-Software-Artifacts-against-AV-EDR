@@ -1,8 +1,8 @@
 /// Capability detection for worker self-registration
 use anyhow::Result;
+use regex::Regex;
 use std::collections::HashMap;
 use tracing::debug;
-use regex::Regex;
 
 #[derive(Debug, Clone)]
 pub struct WorkerCapabilities {
@@ -43,24 +43,24 @@ pub async fn detect_capabilities() -> Result<WorkerCapabilities> {
             tools.insert("defender_version".to_string(), version);
         }
     }
-    // Check for MDE 
+    // Check for MDE
     if is_mde_onboarded() {
         capabilities.push("mde".to_string());
     }
-    if is_cortex_xdr_present(){
+    if is_cortex_xdr_present() {
         capabilities.push("cortex".to_string());
     }
     // System metadata
     metadata.insert("hostname".to_string(), get_hostname());
     metadata.insert("cpu_cores".to_string(), get_cpu_cores().to_string());
     metadata.insert("ram_gb".to_string(), get_total_ram_gb().to_string());
-    
+
     #[cfg(windows)]
     {
         let w = get_windows_version_info();
         let is_win11 = w.is_windows_11.unwrap_or(false);
         let build = w.build.unwrap_or(0);
-        
+
         metadata.insert(
             "os_key".to_string(),
             format!("win{}-build-{}", if is_win11 { 11 } else { 10 }, build),
@@ -137,9 +137,9 @@ fn check_defender_available() -> bool {
 
 #[cfg(windows)]
 fn is_mde_onboarded() -> bool {
-    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
     use winreg::RegKey;
     use winreg::RegValue;
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
 
@@ -167,20 +167,20 @@ fn is_mde_onboarded() -> bool {
 
 #[cfg(windows)]
 fn is_cortex_xdr_installed() -> bool {
-    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
     use winreg::RegKey;
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
 
     // Service registration is a strong indicator of installation.
-    hklm.open_subkey_with_flags(
-        r"SYSTEM\CurrentControlSet\Services\CyveraService",
-        KEY_READ,
-    ).is_ok()
+    hklm.open_subkey_with_flags(r"SYSTEM\CurrentControlSet\Services\CyveraService", KEY_READ)
+        .is_ok()
 }
 
 #[cfg(not(windows))]
-fn is_cortex_xdr_installed() -> bool { false }
+fn is_cortex_xdr_installed() -> bool {
+    false
+}
 
 #[cfg(windows)]
 fn is_cortex_xdr_footprint_present() -> bool {
@@ -196,7 +196,9 @@ fn is_cortex_xdr_footprint_present() -> bool {
 }
 
 #[cfg(not(windows))]
-fn is_cortex_xdr_footprint_present() -> bool { false }
+fn is_cortex_xdr_footprint_present() -> bool {
+    false
+}
 
 #[cfg(windows)]
 fn is_cortex_xdr_present() -> bool {
@@ -204,18 +206,19 @@ fn is_cortex_xdr_present() -> bool {
 }
 
 #[cfg(not(windows))]
-fn is_cortex_xdr_present() -> bool { false }
+fn is_cortex_xdr_present() -> bool {
+    false
+}
 
 #[cfg(windows)]
 pub fn get_windows_version_info() -> WindowsVersionInfo {
-    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
     use winreg::RegKey;
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let key = match hklm.open_subkey_with_flags(
-        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
-        KEY_READ,
-    ) {
+    let key = match hklm
+        .open_subkey_with_flags(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion", KEY_READ)
+    {
         Ok(k) => k,
         Err(_) => {
             return WindowsVersionInfo {
@@ -226,7 +229,7 @@ pub fn get_windows_version_info() -> WindowsVersionInfo {
                 build: None,
                 ubr: None,
                 is_windows_11: None,
-            }
+            };
         }
     };
 
@@ -270,7 +273,6 @@ pub fn get_windows_version_info() -> WindowsVersionInfo {
         is_windows_11: None,
     }
 }
-
 
 fn get_defender_version() -> Option<String> {
     #[cfg(windows)]

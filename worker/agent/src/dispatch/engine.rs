@@ -121,7 +121,9 @@ pub async fn execute_run(
     let strict_mode = context.config.telemetry.rededr.strict_contamination_check;
 
     if leftover_count == 1 {
-        info!("Sanity check: Found 1 event (likely initialization noise), silently discarding and continuing");
+        info!(
+            "Sanity check: Found 1 event (likely initialization noise), silently discarding and continuing"
+        );
     } else if has_real_contamination {
         warn!(
             "SANITY CHECK FAILED: Found {} leftover events in RedEDR before starting new run!",
@@ -302,7 +304,9 @@ pub async fn execute_run(
         }
     });
 
-    info!("Async trace collector started on named pipe: \\\\.\\pipe\\rededr_trace (streaming to file)");
+    info!(
+        "Async trace collector started on named pipe: \\\\.\\pipe\\rededr_trace (streaming to file)"
+    );
 
     // ====================================================================
     // Phase 4: Spawn process
@@ -310,11 +314,12 @@ pub async fn execute_run(
 
     let spawn_start = Instant::now();
 
-    let child = crate::infra::process::spawn_artifact(&context.artifact_path, &context.telemetry_dir)
-        .map_err(|e| {
-            error!("Failed to spawn process: {}", e);
-            RunError::ProcessSpawnFailed(format!("Failed to spawn process: {}", e))
-        })?;
+    let child =
+        crate::infra::process::spawn_artifact(&context.artifact_path, &context.telemetry_dir)
+            .map_err(|e| {
+                error!("Failed to spawn process: {}", e);
+                RunError::ProcessSpawnFailed(format!("Failed to spawn process: {}", e))
+            })?;
 
     let mut process_guard = ProcessGuard::new(child);
 
@@ -392,7 +397,9 @@ pub async fn execute_run(
                 (code, false)
             }
             None => {
-                warn!("Process was terminated externally (likely by AV/EDR) - no exit code available");
+                warn!(
+                    "Process was terminated externally (likely by AV/EDR) - no exit code available"
+                );
                 (-2, false)
             }
         },
@@ -589,9 +596,7 @@ pub async fn execute_run(
         }
     } else {
         warn!("API checkpoints file NOT found: {:?}", checkpoints_path);
-        warn!(
-            "  Artifact may not be instrumented for API tracing, or runtime did not flush file"
-        );
+        warn!("  Artifact may not be instrumented for API tracing, or runtime did not flush file");
     }
 
     let telemetry_count = telemetry_events.len() as i32;
@@ -602,10 +607,22 @@ pub async fn execute_run(
     // Add phase timings as a telemetry event for observability
     {
         let mut timing_metadata = std::collections::HashMap::new();
-        timing_metadata.insert("rededr_setup_ms".to_string(), phase_timings.rededr_setup_ms.to_string());
-        timing_metadata.insert("process_spawn_ms".to_string(), phase_timings.process_spawn_ms.to_string());
-        timing_metadata.insert("process_wait_ms".to_string(), phase_timings.process_wait_ms.to_string());
-        timing_metadata.insert("telemetry_collect_ms".to_string(), phase_timings.telemetry_collect_ms.to_string());
+        timing_metadata.insert(
+            "rededr_setup_ms".to_string(),
+            phase_timings.rededr_setup_ms.to_string(),
+        );
+        timing_metadata.insert(
+            "process_spawn_ms".to_string(),
+            phase_timings.process_spawn_ms.to_string(),
+        );
+        timing_metadata.insert(
+            "process_wait_ms".to_string(),
+            phase_timings.process_wait_ms.to_string(),
+        );
+        timing_metadata.insert(
+            "telemetry_collect_ms".to_string(),
+            phase_timings.telemetry_collect_ms.to_string(),
+        );
 
         telemetry_events.push(crate::automutate::common::TelemetryData {
             job_id: request.job_id.clone(),
@@ -682,9 +699,8 @@ pub async fn execute_run(
     // ====================================================================
 
     // Use the actual wall-clock elapsed time from process spawn to completion
-    let actual_elapsed = Duration::from_millis(
-        phase_timings.process_spawn_ms + phase_timings.process_wait_ms,
-    );
+    let actual_elapsed =
+        Duration::from_millis(phase_timings.process_spawn_ms + phase_timings.process_wait_ms);
 
     Ok(RunOutcome {
         exit_code,

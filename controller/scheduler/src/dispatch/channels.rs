@@ -61,10 +61,7 @@ pub enum JobWorkerEvent {
         summary: RoundSummary,
     },
     /// Job completed (all rounds done or stopped early)
-    JobCompleted {
-        job_id: JobId,
-        outcome: JobOutcome,
-    },
+    JobCompleted { job_id: JobId, outcome: JobOutcome },
 }
 
 // ============================================================================

@@ -25,7 +25,7 @@ fn main() {
             //    "    - Confidence threshold: {}",
             //    config.triage.confidence_threshold
             //);
-//
+            //
             //println!("\n  Mutator:");
             //println!(
             //    "    - Max mutations per artifact: {}",
@@ -35,7 +35,7 @@ fn main() {
             //    "    - Selector weights: {:?}",
             //    config.mutator.selector_weights
             //);
-//
+            //
             //println!("\n  Telemetry:");
             //println!("    - RedEDR enabled: {}", config.telemetry.rededr_enabled);
             //println!(

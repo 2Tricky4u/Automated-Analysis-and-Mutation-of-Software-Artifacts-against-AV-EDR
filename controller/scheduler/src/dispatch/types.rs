@@ -42,12 +42,12 @@ impl Default for ModuleSelectionSpec {
     fn default() -> Self {
         // Must match actual module files in build/templates/modules/
         Self {
-            carrier: "alloc_rw_rx".to_string(),      // alloc_rw_rx, change_rw_rx, peb_walk
-            decoder: "xor".to_string(),              // xor, english
-            antiemulation: "none".to_string(),       // none, sirallocalot, timeraw
-            guardrail: "none".to_string(),           // none, env
+            carrier: "alloc_rw_rx".to_string(), // alloc_rw_rx, change_rw_rx, peb_walk
+            decoder: "xor".to_string(),         // xor, english
+            antiemulation: "none".to_string(),  // none, sirallocalot, timeraw
+            guardrail: "none".to_string(),      // none, env
             virtualprotect: "standard".to_string(), // standard, undersized
-            decoy: "none".to_string(),               // none, calc, winexec
+            decoy: "none".to_string(),          // none, calc, winexec
         }
     }
 }

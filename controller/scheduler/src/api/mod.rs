@@ -10,15 +10,15 @@ pub mod worker;
 
 use crate::automutate::common::TelemetryData;
 use crate::automutate::controller::{
-    controller_server::Controller, BuildRequest, BuildResponse, CompareRunsRequest,
-    CompareRunsResponse, DeployRequest, DeployResponse, GetAvailableWorkersRequest,
-    GetAvailableWorkersResponse, GetOrchestratorStatusRequest, GetOrchestratorStatusResponse,
-    GetPoolMetricsRequest, GetPoolMetricsResponse, GetRoundRequest, GetRoundResponse,
-    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkerRequest, GetWorkerResponse,
-    JobProgressRequest, JobProgressResponse, JobRequest, JobResponse, JobStatusRequest,
-    JobStatusResponse, ListWorkersRequest, ListWorkersResponse, PingRequest, PingResponse,
-    QueryRequest, QueryResponse, StatusAck, StatusReport, StopJobRequest, StopJobResponse,
-    TriageRequest, TriageResponse,
+    BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse, DeployRequest,
+    DeployResponse, GetAvailableWorkersRequest, GetAvailableWorkersResponse,
+    GetOrchestratorStatusRequest, GetOrchestratorStatusResponse, GetPoolMetricsRequest,
+    GetPoolMetricsResponse, GetRoundRequest, GetRoundResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, GetWorkerRequest, GetWorkerResponse, JobProgressRequest,
+    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
+    ListWorkersRequest, ListWorkersResponse, PingRequest, PingResponse, QueryRequest,
+    QueryResponse, StatusAck, StatusReport, StopJobRequest, StopJobResponse, TriageRequest,
+    TriageResponse, controller_server::Controller,
 };
 use crate::dispatch::{JobControlCommand, JobSession, RunPool};
 use crate::vm::TargetManager;
@@ -59,10 +59,7 @@ impl SchedulerService {
     }
 
     /// Index telemetry events to Elasticsearch
-    pub async fn index_telemetry_batch(
-        &self,
-        events: &[TelemetryData],
-    ) -> anyhow::Result<()> {
+    pub async fn index_telemetry_batch(&self, events: &[TelemetryData]) -> anyhow::Result<()> {
         use elasticsearch::IndexParts;
         use serde_json::json;
 
@@ -89,10 +86,7 @@ impl SchedulerService {
                 .await?;
 
             if !response.status_code().is_success() {
-                return Err(anyhow::anyhow!(
-                    "Index failed: {}",
-                    response.status_code()
-                ));
+                return Err(anyhow::anyhow!("Index failed: {}", response.status_code()));
             }
         }
 
@@ -131,10 +125,7 @@ impl SchedulerService {
             .await?;
 
         if !response.status_code().is_success() {
-            return Err(anyhow::anyhow!(
-                "Index failed: {}",
-                response.status_code()
-            ));
+            return Err(anyhow::anyhow!("Index failed: {}", response.status_code()));
         }
 
         Ok(())
@@ -167,10 +158,7 @@ impl SchedulerService {
             .await?;
 
         if !response.status_code().is_success() {
-            return Err(anyhow::anyhow!(
-                "Index failed: {}",
-                response.status_code()
-            ));
+            return Err(anyhow::anyhow!("Index failed: {}", response.status_code()));
         }
 
         Ok(())

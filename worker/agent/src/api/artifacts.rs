@@ -1,6 +1,6 @@
+use crate::WorkerAgentService;
 use crate::automutate::common::ArtifactChunk;
 use crate::automutate::worker::TransferAck;
-use crate::WorkerAgentService;
 use tonic::{Request, Response, Status};
 use tracing::info;
 
@@ -60,9 +60,8 @@ pub async fn send_artifact(
 
     // Write to disk (artifacts directory)
     let artifacts_dir = std::path::Path::new(&service.config.storage.artifacts_path);
-    std::fs::create_dir_all(artifacts_dir).map_err(|e| {
-        Status::internal(format!("Failed to create artifacts directory: {}", e))
-    })?;
+    std::fs::create_dir_all(artifacts_dir)
+        .map_err(|e| Status::internal(format!("Failed to create artifacts directory: {}", e)))?;
 
     let artifact_path = artifacts_dir.join(format!("{}.exe", artifact_id));
     std::fs::write(&artifact_path, &file_data)

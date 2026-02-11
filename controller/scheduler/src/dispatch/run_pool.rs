@@ -10,7 +10,7 @@
 
 use dashmap::DashMap;
 use std::collections::{HashMap, VecDeque};
-use tokio::sync::{mpsc, Mutex, Notify, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -83,15 +83,12 @@ impl RunPool {
     // ========================================================================
 
     /// Register a job's result channel and track its info.
-    pub async fn register_job(
-        &self,
-        job: &JobSession,
-        result_tx: mpsc::Sender<JobRunResult>,
-    ) {
+    pub async fn register_job(&self, job: &JobSession, result_tx: mpsc::Sender<JobRunResult>) {
         let job_id = job.id.clone();
 
         // Store job info for API visibility
-        self.job_registry.insert(job_id.clone(), job.to_info(JobStatus::Running));
+        self.job_registry
+            .insert(job_id.clone(), job.to_info(JobStatus::Running));
 
         // Register result router
         let mut routers = self.result_routers.write().await;
@@ -140,7 +137,10 @@ impl RunPool {
 
     /// List all jobs (running and completed).
     pub fn list_jobs(&self) -> Vec<JobInfo> {
-        self.job_registry.iter().map(|r| r.value().clone()).collect()
+        self.job_registry
+            .iter()
+            .map(|r| r.value().clone())
+            .collect()
     }
 
     /// List only running jobs.
@@ -395,7 +395,9 @@ impl std::fmt::Debug for RunPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::types::{ArtifactRef, ModularBuildSpec, ModuleSelectionSpec, RoundId, RunType};
+    use crate::dispatch::types::{
+        ArtifactRef, ModularBuildSpec, ModuleSelectionSpec, RoundId, RunType,
+    };
     use std::path::PathBuf;
     use std::sync::Arc;
 
