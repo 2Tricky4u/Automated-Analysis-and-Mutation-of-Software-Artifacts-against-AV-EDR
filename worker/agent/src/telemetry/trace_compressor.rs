@@ -1,5 +1,5 @@
 /// Advanced trace log compression inspired by CLP, Matrix Profile, and Grammar Induction
-///
+/// NOT WORKING
 /// Three-stage pipeline:
 /// 1. CLP-inspired columnar decomposition (extract line numbers, deduplicate strings)
 /// 2. Matrix Profile pattern detection (find recurring motifs in line sequences)

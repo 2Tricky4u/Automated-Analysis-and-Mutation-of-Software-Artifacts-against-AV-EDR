@@ -6,10 +6,11 @@
 /// - Process status (alive/dead)
 /// - Resource usage (CPU, memory)
 ///
-/// Sends status updates via StreamHandler if available (new architecture),
-/// otherwise skips remote reporting (worker-only mode).
+/// Sends status updates via ControlPlaneSink (StreamSink in stream mode,
+/// NullSink in worker-only mode).
+use crate::automutate::common::ExecutionStatusReport;
 use crate::automutate::worker::{ExecutionStatus, MonitorEvent};
-use crate::stream_handler::StreamHandler;
+use crate::dispatch::sink::ControlPlaneSink;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
@@ -23,7 +24,7 @@ pub struct ExecutionMonitor {
     pub artifact_name: String,
     pub pid: u32,
     pub rededr_base_url: String,
-    pub stream_handler: Option<Arc<StreamHandler>>,
+    pub sink: Arc<dyn ControlPlaneSink>,
     pub start_time: Instant,
     pub timeout_seconds: i32,
     client: reqwest::Client,
@@ -39,7 +40,7 @@ impl ExecutionMonitor {
         artifact_name: String,
         pid: u32,
         rededr_base_url: String,
-        stream_handler: Option<Arc<StreamHandler>>,
+        sink: Arc<dyn ControlPlaneSink>,
         timeout_seconds: i32,
     ) -> Self {
         use sysinfo::System;
@@ -52,7 +53,7 @@ impl ExecutionMonitor {
             artifact_name,
             pid,
             rededr_base_url,
-            stream_handler,
+            sink,
             start_time: Instant::now(),
             timeout_seconds,
             client: reqwest::Client::builder()
@@ -77,9 +78,12 @@ impl ExecutionMonitor {
         let mut interval = tokio::time::interval(Duration::from_secs(3));
         let mut last_event_count = 0;
         let mut idle_count = 0;
-
         let timeout_thr = 5;
         let idle_count_thr = 3;
+        /// CPU threshold (%) below which the process is considered idle.
+        /// If CPU is above this and events are stale, the process is busy
+        /// but not generating telemetry (different from truly idle).
+        const CPU_IDLE_THRESHOLD: i32 = 5;
 
         // Send initial "started" event
         let started_details = format!("Process started: pid={}", self.pid);
@@ -115,9 +119,25 @@ impl ExecutionMonitor {
                             let event_count = status.telemetry_events_count;
                             let process_is_alive = status.process_alive;
 
-                            // Detect stuck state (no new events for 3+ heartbeats = 9+ seconds)
-                            if event_count == last_event_count && process_is_alive {
+                            // Detect idle state using both event count AND CPU activity.
+                            // Only increment idle_count when events are stale AND CPU is low.
+                            // If CPU is high but events are stale, the process is busy
+                            // without generating telemetry (not truly idle).
+                            let events_stale = event_count == last_event_count && process_is_alive;
+                            let cpu_idle = status.cpu_percent <= CPU_IDLE_THRESHOLD;
+
+                            if events_stale && cpu_idle {
                                 idle_count += 1;
+                            } else if events_stale && !cpu_idle {
+                                // Process is busy but no new events - reset idle
+                                // but log for observability
+                                if idle_count > 0 {
+                                    debug!(
+                                        "Process active (cpu={}%) but no new events - not idle",
+                                        status.cpu_percent
+                                    );
+                                }
+                                idle_count = 0;
                             } else {
                                 idle_count = 0;
                             }
@@ -129,7 +149,7 @@ impl ExecutionMonitor {
                             let event_type = if approaching_timeout && process_is_alive {
                                 "approaching_timeout".to_string()
                             } else if idle_count >= idle_count_thr && status.elapsed_seconds > 0{
-                                "stuck".to_string()
+                                "telemetry_idle".to_string()
                             } else if process_is_alive {
                                 "heartbeat".to_string()
                             } else {
@@ -144,7 +164,7 @@ impl ExecutionMonitor {
                                 status.memory_mb,
                                 status.elapsed_seconds,
                                 if approaching_timeout { " [TIMEOUT APPROACHING]" } else { "" },
-                                if idle_count >= 3 { " [STUCK?]" } else { "" }
+                                if idle_count >= 3 { " [TELEMETRY_IDLE]" } else { "" }
                             );
 
                             debug!("{}: {}", event_type, details);
@@ -255,60 +275,52 @@ impl ExecutionMonitor {
         })
     }
 
-    /// Send execution status via StreamHandler if available
-    /// Sends all execution details: job_id, run_id, artifact, pid, metrics, etc.
+    /// Send execution status via ControlPlaneSink.
+    /// In stream mode this sends via the bidirectional gRPC stream.
+    /// In worker-only mode this is a no-op (NullSink).
     async fn send_status_to_controller(
         &self,
         event_type: &str,
         status: &ExecutionStatus,
         details: &str,
     ) {
-        if let Some(handler) = &self.stream_handler {
-            // Send comprehensive execution status via bidirectional stream
-            let send_future = handler.send_execution_status(
-                self.job_id.clone(),
-                self.run_id.clone(),
-                self.artifact_name.clone(),
-                status.pid,
-                status.elapsed_seconds,
-                status.process_alive,
-                status.telemetry_events_count,
-                event_type.to_string(),
-                status.cpu_percent,
-                status.memory_mb,
-                details.to_string(),
-            );
+        let report = ExecutionStatusReport {
+            worker_id: self.worker_id.clone(),
+            worker_ip: self.worker_ip.clone(),
+            job_id: self.job_id.clone(),
+            run_id: self.run_id.clone(),
+            artifact_name: self.artifact_name.clone(),
+            pid: status.pid,
+            elapsed_seconds: status.elapsed_seconds,
+            process_alive: status.process_alive,
+            telemetry_events_count: status.telemetry_events_count,
+            event_type: event_type.to_string(),
+            cpu_percent: status.cpu_percent,
+            memory_mb: status.memory_mb,
+            details: details.to_string(),
+        };
 
-            // Wrap in timeout to prevent monitor from blocking indefinitely
-            match tokio::time::timeout(Duration::from_secs(1), send_future).await {
-                Ok(Ok(())) => {
-                    // Success - status sent via stream
-                    debug!(
-                        "Monitor: Execution status sent via stream [event: {}, job: {}]",
-                        event_type, self.job_id
-                    );
-                }
-                Ok(Err(e)) => {
-                    warn!(
-                        "[!] Monitor: Failed to send execution status via stream [event: {}, job: {}]: {}",
-                        event_type, self.job_id, e
-                    );
-                }
-                Err(_) => {
-                    warn!(
-                        "[!] Monitor: Execution status send timeout (>1s) [event: {}, job: {}]",
-                        event_type, self.job_id
-                    );
-                    warn!("   Stream may be blocked - monitoring will continue");
-                }
+        // Wrap in timeout to prevent monitor from blocking indefinitely
+        match tokio::time::timeout(Duration::from_secs(1), self.sink.send_status(report)).await {
+            Ok(Ok(())) => {
+                debug!(
+                    "Monitor: Execution status sent [event: {}, job: {}]",
+                    event_type, self.job_id
+                );
             }
-        } else {
-            // No StreamHandler available - worker-only mode
-            // Status is still available via local event channel for logging
-            debug!(
-                "Monitor: No StreamHandler, execution status available locally only [event: {}, job: {}, elapsed: {}s]",
-                event_type, self.job_id, status.elapsed_seconds
-            );
+            Ok(Err(e)) => {
+                warn!(
+                    "[!] Monitor: Failed to send execution status [event: {}, job: {}]: {}",
+                    event_type, self.job_id, e
+                );
+            }
+            Err(_) => {
+                warn!(
+                    "[!] Monitor: Execution status send timeout (>1s) [event: {}, job: {}]",
+                    event_type, self.job_id
+                );
+                warn!("   Stream may be blocked - monitoring will continue");
+            }
         }
     }
 
@@ -374,6 +386,7 @@ impl ExecutionMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dispatch::sink::NullSink;
 
     #[test]
     fn test_monitor_creation() {
@@ -385,7 +398,7 @@ mod tests {
             "test-artifact.exe".to_string(),
             1234,
             "http://localhost:8081".to_string(),
-            None, // No StreamHandler in test
+            Arc::new(NullSink),
             30,   // timeout_seconds
         );
 
@@ -396,7 +409,6 @@ mod tests {
         assert_eq!(monitor.artifact_name, "test-artifact.exe");
         assert_eq!(monitor.pid, 1234);
         assert_eq!(monitor.rededr_base_url, "http://localhost:8081");
-        assert!(monitor.stream_handler.is_none());
         assert_eq!(monitor.timeout_seconds, 30);
     }
 }

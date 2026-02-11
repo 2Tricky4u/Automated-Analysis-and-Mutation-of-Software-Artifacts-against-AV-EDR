@@ -55,20 +55,20 @@ pub async fn health_check(
 
     // Get execution state (busy/idle)
     let exec_state = service.get_execution_state().await;
-    let active_jobs = if exec_state.busy { 1 } else { 0 };
+    let active_jobs = if exec_state.is_busy() { 1 } else { 0 };
 
     // Determine health status
     // Unhealthy if: CPU > 95% OR memory > 95%
     let healthy = cpu_percent < 95 && memory_percent < 95;
 
     // Log health check with execution state
-    if exec_state.busy {
+    if exec_state.is_busy() {
         info!(
             "Health check: cpu={}%, mem={}%, status=BUSY (job_id={}, artifact={})",
             cpu_percent,
             memory_percent,
-            exec_state.current_job_id.as_deref().unwrap_or("unknown"),
-            exec_state.current_artifact.as_deref().unwrap_or("unknown")
+            exec_state.current_job_id().unwrap_or("unknown"),
+            exec_state.current_artifact().unwrap_or("unknown")
         );
     } else if !healthy {
         warn!(
@@ -120,7 +120,10 @@ pub async fn get_worker_info(
 
     // Check if currently executing a job
     let execution_state = service.execution_lock.lock().await;
-    let current_job_id = execution_state.current_job_id.clone().unwrap_or_default();
+    let current_job_id = execution_state
+        .current_job_id()
+        .unwrap_or_default()
+        .to_string();
 
     let active_jobs = if current_job_id.is_empty() { 0 } else { 1 };
 

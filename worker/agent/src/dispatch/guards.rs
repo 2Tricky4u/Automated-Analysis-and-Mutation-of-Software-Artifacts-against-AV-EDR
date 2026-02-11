@@ -1,8 +1,5 @@
 use crate::telemetry;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
-use tracing::info;
 
 pub const DELAY: u64 = 10;
 
@@ -158,49 +155,3 @@ impl Drop for ProcessGuard {
     }
 }
 
-// ============================================================================
-// Execution Lock Guard
-// ============================================================================
-
-/// RAII guard for single execution lock
-/// Automatically releases lock on drop
-pub struct ExecutionLockGuard {
-    lock: Arc<Mutex<ExecutionState>>,
-}
-
-impl ExecutionLockGuard {
-    pub fn new(lock: Arc<Mutex<ExecutionState>>) -> Self {
-        Self { lock }
-    }
-}
-
-impl Drop for ExecutionLockGuard {
-    fn drop(&mut self) {
-        // Release lock by spawning task
-        let lock = self.lock.clone();
-        tokio::spawn(async move {
-            let mut state = lock.lock().await;
-            let job_id = state
-                .current_job_id
-                .take()
-                .unwrap_or_else(|| "unknown".to_string());
-            let artifact = state
-                .current_artifact
-                .take()
-                .unwrap_or_else(|| "unknown".to_string());
-            state.busy = false;
-            info!(
-                "Execution lock RELEASED: job_id={}, artifact={}",
-                job_id, artifact
-            );
-        });
-    }
-}
-
-/// Execution state for single-job worker
-#[derive(Debug, Clone)]
-pub struct ExecutionState {
-    pub busy: bool,
-    pub current_job_id: Option<String>,
-    pub current_artifact: Option<String>,
-}

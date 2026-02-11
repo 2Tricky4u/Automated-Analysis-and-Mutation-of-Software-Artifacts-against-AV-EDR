@@ -1,55 +1,76 @@
-//! Phase 2: Bidirectional stream handler for worker-controller communication
+//! Bidirectional stream handler for worker-controller communication.
 //!
 //! This module handles the bidirectional gRPC stream established by the controller.
 //! The stream allows real-time communication in both directions:
-//! - Controller → Worker: commands (run sample, health checks, heartbeats)
-//! - Worker → Controller: registration, status updates, telemetry, results
+//! - Controller -> Worker: commands (run sample, health checks, heartbeats)
+//! - Worker -> Controller: registration, status updates, telemetry, results
+//!
+//! NOTE: This struct does NOT hold Arc<WorkerAgentService> to avoid a reference
+//! cycle (WorkerAgentService -> StreamHandler -> WorkerAgentService).
+//! Instead it stores the individual fields it needs.
 
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{Mutex, RwLock, mpsc};
 use tonic::{Status, Streaming};
 use tracing::{debug, error, info, warn};
 
 // Import generated protobuf types
 use crate::automutate::common::{
-    Ack, ControllerMessage, DisconnectNotice, ExecutionStatusReport, HealthCheckRequest, Heartbeat, RunSampleCommand,
+    Ack, ControllerMessage, DisconnectNotice, HealthCheckRequest, Heartbeat, RunSampleCommand,
     SampleResponse, StatusReport, TelemetryBatch, WorkerMessage, WorkerRegistration,
     controller_message, worker_message,
 };
 
-use crate::capabilities::WorkerState;
-use crate::WorkerAgentService;
+use crate::dispatch::state::ExecutionState;
+use crate::session::worker_state::WorkerState;
+use edr_config::WorkerConfig;
 
-/// Handles incoming controller messages and sends worker responses via bidirectional stream
+/// Handles incoming controller messages and sends worker responses via bidirectional stream.
+///
+/// Does NOT hold a reference to WorkerAgentService (breaks Arc cycle).
 pub struct StreamHandler {
-    /// Shared worker state (public for access from run_sample)
+    /// Shared worker state
     pub worker_state: Arc<RwLock<WorkerState>>,
 
     /// Channel for sending messages to controller
     tx: mpsc::Sender<Result<WorkerMessage, Status>>,
 
-    /// Reference to worker service (for accessing execution logic)
-    service: Arc<WorkerAgentService>,
+    /// Worker identity and config (extracted from WorkerAgentService)
+    worker_id: String,
+    config: WorkerConfig,
+
+    /// Execution lock shared with the service
+    execution_lock: Arc<Mutex<ExecutionState>>,
 }
 
 impl StreamHandler {
-    /// Create a new stream handler
+    /// Create a new stream handler.
     ///
-    /// Returns the handler and a receiver for outgoing messages
+    /// Returns the handler and a receiver for outgoing messages.
     pub fn new(
         worker_state: Arc<RwLock<WorkerState>>,
-        service: Arc<WorkerAgentService>,
+        worker_id: String,
+        config: WorkerConfig,
+        execution_lock: Arc<Mutex<ExecutionState>>,
     ) -> (Self, mpsc::Receiver<Result<WorkerMessage, Status>>) {
         let (tx, rx) = mpsc::channel(100);
 
         let handler = StreamHandler {
             worker_state,
             tx,
-            service,
+            worker_id,
+            config,
+            execution_lock,
         };
 
         (handler, rx)
+    }
+
+    /// Get a reference to the outgoing message sender.
+    /// Used by external code to build a ControlPlaneSink.
+    pub fn sender(&self) -> &mpsc::Sender<Result<WorkerMessage, Status>> {
+        &self.tx
     }
 
     /// Handle incoming messages from controller via stream
@@ -92,7 +113,6 @@ impl StreamHandler {
             }
             Some(controller_message::Payload::ArtifactChunks(_chunks)) => {
                 warn!("Artifact chunks via stream not yet implemented");
-                // TODO: Implement artifact transfer via stream in future
             }
             None => {
                 warn!("Received empty controller message");
@@ -102,8 +122,15 @@ impl StreamHandler {
         Ok(())
     }
 
-    /// Handle RunSample command from controller
+    /// Handle RunSample command from controller.
+    ///
+    /// Calls engine::execute_run() directly instead of going through
+    /// api::run::run_sample(), avoiding the need to hold Arc<WorkerAgentService>.
     async fn handle_run_sample(&self, cmd: RunSampleCommand) -> Result<()> {
+        use crate::dispatch::engine;
+        use crate::dispatch::state::ExecutionLockGuard;
+        use crate::dispatch::types::{RunContext, RunRequest};
+
         let request_id = cmd.request_id.clone();
         let sample_request = cmd
             .request
@@ -117,51 +144,108 @@ impl StreamHandler {
         // Send immediate acknowledgement
         self.send_ack(&request_id, true, "").await?;
 
-        // Execute sample asynchronously and send response via stream
+        // Clone fields needed by the spawned task
         let tx = self.tx.clone();
         let worker_state = self.worker_state.clone();
-        let service = self.service.clone();
+        let worker_id = self.worker_id.clone();
+        let config = self.config.clone();
+        let execution_lock = self.execution_lock.clone();
 
         tokio::spawn(async move {
-            // Update worker state to indicate job is running AND store request_id for telemetry
+            let job_id = sample_request.job_id.clone();
+            let artifact_name = format!("{}.exe", sample_request.artifact_id);
+            let run_id = request_id.clone();
+
+            // Update worker state to indicate job is running
             {
                 let mut state = worker_state.write().await;
-                state.current_job_id = Some(sample_request.job_id.clone());
-                state.current_run_id = Some(request_id.clone());  // Store request_id for telemetry correlation
+                state.current_job_id = Some(job_id.clone());
+                state.current_run_id = Some(run_id.clone());
             }
 
-            // Execute the sample using actual execution logic
-            debug!("Executing sample: {} [run_id: {}]", sample_request.job_id, request_id);
+            // Acquire execution lock
+            let _execution_lock = {
+                let mut state = execution_lock.lock().await;
+                if let Err(e) = state.acquire(job_id.clone(), artifact_name.clone(), run_id.clone()) {
+                    warn!("[ERROR] REJECTED: {}", e);
+                    // Send error response
+                    let _ = tx.send(Ok(WorkerMessage {
+                        payload: Some(worker_message::Payload::SampleResponse(SampleResponse {
+                            job_id: job_id.clone(),
+                            success: false,
+                            exit_code: -1,
+                            output: format!("Execution rejected: {}", e),
+                            telemetry_ids: vec![],
+                            run_id: run_id.clone(),
+                            detected: false,
+                            error: e.to_string(),
+                        })),
+                    })).await;
+                    // Clear worker state
+                    let mut ws = worker_state.write().await;
+                    ws.current_job_id = None;
+                    ws.current_run_id = None;
+                    return;
+                }
+                ExecutionLockGuard::new(execution_lock.clone())
+            };
 
-            // Call the actual run_sample execution function
-            // Wrap SampleRequest in tonic::Request for compatibility with RPC handler
-            let request = tonic::Request::new(sample_request.clone());
+            // Build typed request and context
+            const ARTIFACTS_PATH: &str = "C:\\temp\\artifacts";
+            let artifacts_base = std::path::Path::new(ARTIFACTS_PATH);
+            let artifact_path = artifacts_base.join(format!("{}.exe", sample_request.artifact_id));
+            let telemetry_dir = artifacts_base.join(format!("telemetry_{}", sample_request.artifact_id));
 
-            let result = match crate::service::sample_handlers::run_sample(&service, request).await {
-                Ok(response) => {
-                    let mut sample_response = response.into_inner();
-                    // Populate run_id in response for controller to match
-                    sample_response.run_id = request_id.clone();
+            let run_request = RunRequest {
+                job_id: job_id.clone(),
+                artifact_id: sample_request.artifact_id.clone(),
+                timeout_seconds: sample_request.timeout_seconds as u32,
+                run_id: run_id.clone(),
+            };
 
-                    debug!(
-                        "Sample execution completed successfully: job_id={}, success={}, exit_code={}",
-                        sample_response.job_id, sample_response.success, sample_response.exit_code
+            let run_context = RunContext {
+                worker_id,
+                config,
+                telemetry_dir,
+                artifact_path,
+                artifact_name: artifact_name.clone(),
+            };
+
+            // Build sink from tx channel (no Arc<StreamHandler> needed)
+            let sink = crate::dispatch::sink::build_sink(Some(&tx));
+
+            // Execute via engine
+            let result = match engine::execute_run(&run_request, &run_context, sink).await {
+                Ok(outcome) => {
+                    // Reuse format_output from api::run for consistent output
+                    // (includes NTSTATUS interpretation, stderr/stdout)
+                    let output = crate::api::run::format_output(
+                        &outcome,
+                        sample_request.timeout_seconds as u32,
                     );
 
-                    sample_response
-                }
-                Err(status) => {
-                    error!("Sample execution failed with status: {}", status);
-                    // Return error response with run_id
                     SampleResponse {
-                        job_id: sample_request.job_id.clone(),
+                        job_id: job_id.clone(),
+                        success: !outcome.timed_out && outcome.exit_code == 0,
+                        exit_code: outcome.exit_code,
+                        output,
+                        telemetry_ids: vec![run_id.clone()],
+                        run_id: run_id.clone(),
+                        detected: false,
+                        error: String::new(),
+                    }
+                }
+                Err(e) => {
+                    error!("Sample execution failed: {}", e);
+                    SampleResponse {
+                        job_id: job_id.clone(),
                         success: false,
                         exit_code: -1,
-                        output: format!("Execution error: {}", status.message()),
+                        output: format!("Execution error: {}", e),
                         telemetry_ids: vec![],
-                        run_id: request_id.clone(),
+                        run_id: run_id.clone(),
                         detected: false,
-                        error: status.message().to_string(),
+                        error: e.to_string(),
                     }
                 }
             };
@@ -170,6 +254,7 @@ impl StreamHandler {
             {
                 let mut state = worker_state.write().await;
                 state.current_job_id = None;
+                state.current_run_id = None;
             }
 
             // Send response via stream
@@ -181,7 +266,7 @@ impl StreamHandler {
             {
                 error!("Failed to send sample response: {}", e);
             } else {
-                debug!("Sample execution completed: {}", sample_request.job_id);
+                debug!("Sample execution completed: {}", job_id);
             }
         });
 
@@ -342,7 +427,7 @@ impl StreamHandler {
     ) -> Result<()> {
         let state = self.worker_state.read().await;
 
-        let execution_status = ExecutionStatusReport {
+        let execution_status = crate::automutate::common::ExecutionStatusReport {
             worker_id: state.worker_id.clone(),
             worker_ip: state
                 .metadata
@@ -376,16 +461,12 @@ impl StreamHandler {
     pub async fn send_registration(&self) -> Result<()> {
         let state = self.worker_state.read().await;
 
-        // Use config values for IP address and OS version (authoritative source)
-        // Metadata from detect_capabilities() doesn't include these
-        let ip_address = format!("{}:{}",
-            self.service.config.worker.ip_address,
-            self.service.config.worker.listen_port);
+        let ip_address = format!("{}:{}", self.config.worker.ip_address, self.config.worker.listen_port);
 
         let registration = WorkerRegistration {
             worker_id: state.worker_id.clone(),
             ip_address: ip_address.clone(),
-            os_version: self.service.config.worker.os_version.clone(),
+            os_version: self.config.worker.os_version.clone(),
             capabilities: state.capabilities.clone(),
             metadata: state.metadata.clone(),
             tools: state.tools.clone(),

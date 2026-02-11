@@ -300,6 +300,10 @@ pub struct RedEdrConfig {
     pub base_url: String,
     //pub data_path: String,
     //pub file_watch_enabled: bool,
+    /// If true, fail immediately when RedEDR has >1 leftover events (contamination).
+    /// Default: false (attempt reset and continue).
+    #[serde(default)]
+    pub strict_contamination_check: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -688,6 +692,7 @@ impl WorkerConfig {
             telemetry: WorkerTelemetryConfig {
                 rededr: RedEdrConfig {
                     base_url: "http://localhost:8080".to_string(),
+                    strict_contamination_check: false,
                 },
             },
             storage: StorageConfig {

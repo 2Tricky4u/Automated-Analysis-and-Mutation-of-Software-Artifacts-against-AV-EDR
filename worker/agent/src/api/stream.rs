@@ -1,5 +1,5 @@
 use crate::automutate::common::{ControllerMessage, WorkerMessage};
-use crate::{capabilities, stream_handler, WorkerAgentService};
+use crate::{capabilities, session, WorkerAgentService};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
@@ -13,8 +13,8 @@ pub async fn establish_stream(
     Response<tokio_stream::wrappers::ReceiverStream<Result<WorkerMessage, Status>>>,
     Status,
 > {
-    use capabilities::WorkerState;
-    use stream_handler::StreamHandler;
+    use crate::session::worker_state::WorkerState;
+    use session::stream_handler::StreamHandler;
     use tokio::sync::RwLock;
 
     info!("EstablishStream RPC called - establishing bidirectional stream with controller");
@@ -28,15 +28,16 @@ pub async fn establish_stream(
     let worker_state = WorkerState::new(service.worker_id.clone(), capabilities_data);
     let worker_state = Arc::new(RwLock::new(worker_state));
 
-    // Wrap service in Arc for sharing with stream handler
-    // Clone the service (it's already cheap to clone since all fields are Arc/shared)
-    let service_arc = Arc::new(service.clone());
-
-    // Create stream handler
-    let (handler, rx) = StreamHandler::new(worker_state.clone(), service_arc);
+    // Create stream handler with individual fields (no Arc<WorkerAgentService> → breaks cycle)
+    let (handler, rx) = StreamHandler::new(
+        worker_state.clone(),
+        service.worker_id.clone(),
+        service.config.clone(),
+        service.execution_lock.clone(),
+    );
     let handler = Arc::new(handler);
 
-    // Store handler in service for use by run_sample()
+    // Store handler in service for use by run_sample() (unary RPC path)
     {
         let mut stream_handler_lock = service.stream_handler.write().await;
         *stream_handler_lock = Some(handler.clone());
@@ -67,7 +68,7 @@ pub async fn establish_stream(
     // Spawn heartbeat task
     let handler_clone = handler.clone();
     tokio::spawn(async move {
-        stream_handler::heartbeat_loop(handler_clone, 30).await;
+        session::stream_handler::heartbeat_loop(handler_clone, 30).await;
     });
 
     info!("Bidirectional stream established successfully");

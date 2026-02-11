@@ -1,9 +1,8 @@
-// Service modules - RPC handler implementations
-pub mod artifact_handlers;
-pub mod helpers;
-pub mod info_handlers;
-pub mod sample_handlers;
-pub mod stream_handlers;
+// API modules - gRPC handler implementations (thin adapters)
+pub mod artifacts;
+pub mod info;
+pub mod run;
+pub mod stream;
 
 use crate::automutate::common::{
     ArtifactChunk, ControllerMessage, SampleRequest, SampleResponse, TelemetryData, WorkerMessage,
@@ -20,35 +19,35 @@ use tonic::{Request, Response, Status};
 #[tonic::async_trait]
 impl WorkerAgent for WorkerAgentService {
     async fn ping(&self, request: Request<PingRequest>) -> Result<Response<PingResponse>, Status> {
-        info_handlers::ping(self, request).await
+        info::ping(self, request).await
     }
 
     async fn run_sample(
         &self,
         request: Request<SampleRequest>,
     ) -> Result<Response<SampleResponse>, Status> {
-        sample_handlers::run_sample(self, request).await
+        run::run_sample(self, request).await
     }
 
     async fn health_check(
         &self,
         request: Request<HealthRequest>,
     ) -> Result<Response<HealthResponse>, Status> {
-        info_handlers::health_check(self, request).await
+        info::health_check(self, request).await
     }
 
     async fn send_artifact(
         &self,
         request: Request<tonic::Streaming<ArtifactChunk>>,
     ) -> Result<Response<TransferAck>, Status> {
-        artifact_handlers::send_artifact(self, request).await
+        artifacts::send_artifact(self, request).await
     }
 
     async fn get_worker_info(
         &self,
         request: Request<WorkerInfoRequest>,
     ) -> Result<Response<WorkerInfoResponse>, Status> {
-        info_handlers::get_worker_info(self, request).await
+        info::get_worker_info(self, request).await
     }
 
     type GetTelemetryStream = std::pin::Pin<
@@ -59,7 +58,7 @@ impl WorkerAgent for WorkerAgentService {
         &self,
         request: Request<TelemetryRequest>,
     ) -> Result<Response<Self::GetTelemetryStream>, Status> {
-        info_handlers::get_telemetry(self, request).await
+        info::get_telemetry(self, request).await
     }
 
     type EstablishStreamStream =
@@ -69,6 +68,6 @@ impl WorkerAgent for WorkerAgentService {
         &self,
         request: Request<tonic::Streaming<ControllerMessage>>,
     ) -> Result<Response<Self::EstablishStreamStream>, Status> {
-        stream_handlers::establish_stream(self, request).await
+        stream::establish_stream(self, request).await
     }
 }
