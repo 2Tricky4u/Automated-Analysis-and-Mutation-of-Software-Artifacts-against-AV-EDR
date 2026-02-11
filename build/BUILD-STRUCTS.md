@@ -18,7 +18,7 @@ crate build
 │
 ├── mod transform                       AST & IR mutation (pub)
 │   ├── mod ast_mutator                 Source-level transforms
-│   │   └── ast_mutator.rs              AstMutator (line tracing, planned mutations)
+│   │   └── ast_mutator.rs              AstMutator (stub, planned mutations)
 │   └── mod ir_mutator                  LLVM IR transforms
 │       └── ir_mutator.rs               IrMutator (stub)
 │
@@ -113,7 +113,7 @@ struct BuiltArtifact {
 | `build_template_with_runtime(name, file, trace)` | self async | Compile source + runtime, link |
 | `build_template_with_mutations_and_runtime(name, file, muts, trace)` | self async | Mutate → compile → link |
 | `build_modular_template(modules, payload, enc, muts, trace)` | self async | Encode → assemble → mutate → compile |
-| `apply_instrumentation(artifact, source, trace)` | self async | Post-build: inject line traces → IR instrument → recompile |
+| `apply_instrumentation(built, trace_mode_str)` | self async | Post-build: inject line traces → IR instrument → recompile |
 | `compile_source_to_ir(source, output)` | self async | `clang -S -emit-llvm -O0` |
 | `compile_ir_to_object(ir, output)` | self async | `clang -c` on IR file |
 | `compile_ir_to_exe(ir, output)` | self async | `clang` IR directly to .exe |
@@ -321,33 +321,44 @@ struct Instrumenter {
 | `inject_bb_coverage_sancov(ir, output)` | self async | `opt -passes=sancov-module` on LLVM IR |
 | `inject_api_tracing(ir_content)` | self | Text scan for API calls → insert `__checkpoint()` |
 | `inject_string_constants(ir_content, constants)` | self | Add `@.str.checkpoint.N` string globals |
-| `add_runtime_declarations(ir_content, needs_bb, needs_api)` | self | Add `declare` for runtime functions |
+| `add_runtime_declarations(ir, trace_mode)` | self | Add `declare` for runtime functions |
 
 **instrument() Logic:**
 ```
-TraceMode → needs_bb?  (BB | ApiPlusBB | All)
-          → needs_api? (Api | ApiPlusBB | Lines | LinesAroundBB | All)
+instrument(ir_path, trace_mode, output_path):
 
-if needs_bb:
-    opt -passes=sancov-module
-        -sanitizer-coverage-level=3
-        -sanitizer-coverage-trace-pc
-        input.ll → output.bb.ll
+  needs_bb  = (BB | ApiPlusBB | All)
+  needs_api = (Api | ApiPlusBB | All)        ← NARROW scope (injection)
 
-if needs_api:
-    Scan IR for: VirtualAlloc, VirtualProtect, WriteProcessMemory,
-                 CreateRemoteThread, LoadLibrary, GetProcAddress,
-                 CreateProcess, OpenProcess
-    Insert: call void @__checkpoint(i8* @.str.checkpoint.N)
-    Add:    @.str.checkpoint.N = "api:APIName\00"
+  if needs_bb:
+      opt -passes=sancov-module
+          -sanitizer-coverage-level=3
+          -sanitizer-coverage-trace-pc
+          input.ll → output.bb.ll
 
-add_runtime_declarations:
-    declare void @__coverage_init()
-    declare void @__coverage_flush()
-    declare void @__checkpoint(i8*)
-    declare void @__trace_line(i32, i8*, i32, i8*)
-    declare void @__trace_init(i8*)
-    declare void @__trace_flush()
+  if needs_api:
+      Scan IR for: VirtualAlloc, VirtualProtect, WriteProcessMemory,
+                   CreateRemoteThread, LoadLibrary, GetProcAddress,
+                   CreateProcess, OpenProcess
+      Insert: call void @__checkpoint(i8* @.str.checkpoint.N)
+      Add:    @.str.checkpoint.N = "api:APIName\00"
+
+  add_runtime_declarations(ir, trace_mode):
+    needs_bb  = (BB | ApiPlusBB | All)
+    needs_api = (Api | ApiPlusBB | Lines | LinesAroundBB | All)  ← WIDER scope (declarations)
+
+    if needs_bb:
+      declare void @__coverage_init()
+      declare void @__coverage_flush()
+    if needs_api:
+      declare void @__checkpoint(i8*)
+      declare void @__trace_line(i32, i8*, i32, i8*)
+      declare void @__trace_init(i8*)
+      declare void @__trace_flush()
+
+  NOTE: Lines/LinesAroundBB modes get runtime declarations but NO
+        inject_api_tracing() or inject_bb_coverage_sancov() calls.
+        The extra declarations are harmless but unused at IR level.
 ```
 
 ---

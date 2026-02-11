@@ -194,7 +194,7 @@
 │   BB ──────────── Basic-block coverage (LLVM SanitizerCoverage)                │
 │   ApiPlusBB ───── BB + API (DEFAULT for mutation loop)                         │
 │   Lines ───────── Line-level tracing (diagnostic, source-level)                │
-│   LinesAroundBB ─ Targeted line tracing near specific BB (narrowing)           │
+│   LinesAroundBB(u32) ─ Targeted line tracing near specific BB ID (narrowing)  │
 │   All ─────────── Everything (debug mode)                                      │
 │                                                                                 │
 │   Serde: #[serde(rename_all = "lowercase")]                                    │
@@ -398,8 +398,8 @@
 │ BB          │    ✓     │    ✗     │    ✗     │    ✓     │ full     │ coverage.bin      │
 │             │ (SanCov) │          │          │          │          │ coverage_bbs.txt  │
 │ ApiPlusBB   │    ✓     │    ✓     │    ✗     │    ✓     │ full     │ coverage + chkpts │
-│ Lines       │    ✗     │    ✗     │    ✓     │    ✗     │ full     │ trace.log (binary)│
-│ LinesArndBB │    ✗     │    ✗     │    ✓     │    ✗     │ full     │ trace.log         │
+│ Lines       │    ✗     │    ✗     │    ✓     │  decl†   │ full     │ trace.log (binary)│
+│ LinesArndBB │    ✗     │    ✗     │    ✓     │  decl†   │ full     │ trace.log         │
 │ All         │    ✓     │    ✓     │    ✓     │    ✓     │ full     │ all of the above  │
 ├─────────────┴──────────┴──────────┴──────────┴──────────┴──────────┴───────────────────┤
 │                                                                                         │
@@ -408,6 +408,11 @@
 │                                                                                         │
 │ AST Line tracing uses tree-sitter to inject trace calls into C source before compile   │
 │ IR Instrumentation uses LLVM opt with SanitizerCoverage pass or text-based injection   │
+│                                                                                         │
+│ † Lines/LinesAroundBB: add_runtime_declarations() adds extern declarations for         │
+│   __checkpoint, __trace_line, __trace_init, __trace_flush to the IR, but NO BB or      │
+│   API instrumentation is injected. The AST line tracer's __trace_line_binary() calls   │
+│   are already declared in the C source. The extra declarations are harmless but unused.│
 │                                                                                         │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -645,7 +650,7 @@
 │                           │                                                     │
 │                           ▼                                                     │
 │  ┌────────────────────────────────────────────────────────────────────────┐    │
-│  │ API Tracing (needs_api = Api | ApiPlusBB | Lines | LinesAroundBB | All)│   │
+│  │ API Tracing (needs_api = Api | ApiPlusBB | All)                        │   │
 │  │                                                                        │    │
 │  │   Text-based LLVM IR scanning (not opt pass):                          │    │
 │  │                                                                        │    │
@@ -663,13 +668,17 @@
 │                           │                                                     │
 │                           ▼                                                     │
 │  ┌────────────────────────────────────────────────────────────────────────┐    │
-│  │ Runtime Declarations                                                  │    │
+│  │ Runtime Declarations (add_runtime_declarations)                       │    │
 │  │                                                                        │    │
-│  │   If needs_bb:                                                         │    │
+│  │   NOTE: needs_api scope is WIDER here than in inject_api_tracing:     │    │
+│  │     inject_api_tracing:       Api | ApiPlusBB | All                   │    │
+│  │     add_runtime_declarations: Api | ApiPlusBB | Lines | LinesArndBB | All│  │
+│  │                                                                        │    │
+│  │   If needs_bb (BB | ApiPlusBB | All):                                  │    │
 │  │     declare void @__coverage_init()                                    │    │
 │  │     declare void @__coverage_flush()                                   │    │
 │  │                                                                        │    │
-│  │   If needs_api:                                                        │    │
+│  │   If needs_api (Api | ApiPlusBB | Lines | LinesAroundBB | All):       │    │
 │  │     declare void @__checkpoint(i8*)                                    │    │
 │  │     declare void @__trace_line(i32, i8*, i32, i8*)                     │    │
 │  │     declare void @__trace_init(i8*)                                    │    │
@@ -947,26 +956,25 @@ The build system uses a single builder: **ArtifactBuilder** (`builder.rs`).
 │ File                                          │ Lines    │ Status               │
 ├──────────────────────────────────────────────┼──────────┼───────────────────────┤
 │ Cargo.toml                                    │    37    │ Complete             │
-│ src/lib.rs                                    │   437    │ Complete             │
-│ src/builder.rs                                │  2005    │ Complete (largest)   │
-│ src/mutator/mod.rs                            │   307    │ Complete (2 mutations)│
-│ src/template/mod.rs                           │    10    │ Re-export barrel     │
-│ src/template/assembler.rs                     │   298    │ Complete             │
-│ src/template/payload.rs                       │   305    │ Complete             │
+│ src/lib.rs                                    │   116    │ Complete             │
+│ src/builder.rs                                │  1538    │ Complete (largest)   │
+│ src/mutator/mod.rs                            │   306    │ Complete (2 mutations)│
+│ src/template/mod.rs                           │    12    │ Re-export barrel     │
+│ src/template/assembler.rs                     │   349    │ Complete             │
+│ src/template/payload.rs                       │   314    │ Complete             │
 │ src/transform/mod.rs                          │    10    │ Re-export barrel     │
-│ src/transform/ast_mutator.rs                  │   165    │ Partial (line trace) │
-│ src/transform/ir_mutator.rs                   │    41    │ Stub only            │
-│ src/instrument/mod.rs                         │    10    │ Re-export barrel     │
-│ src/instrument/instrumenter.rs                │   337    │ Complete (SanCov)    │
-│ src/instrument/line_tracer.rs                 │   324    │ Complete (tree-sitter)│
+│ src/transform/ast_mutator.rs                  │    23    │ Stub only            │
+│ src/transform/ir_mutator.rs                   │    23    │ Stub only            │
+│ src/instrument/mod.rs                         │    12    │ Re-export barrel     │
+│ src/instrument/instrumenter.rs                │   368    │ Complete (SanCov)    │
+│ src/instrument/line_tracer.rs                 │   323    │ Complete (tree-sitter)│
 │ src/compiler/mod.rs                           │     7    │ Placeholder          │
-│ runtime/minimal_runtime.c                     │   200    │ Complete             │
-│ runtime/minimal_runtime.h                     │    47    │ Complete             │
-│ runtime/instrumentation_runtime.c             │   889    │ Complete             │
-│ runtime/instrumentation.h                     │    84    │ Complete             │
-│ test_instrumentation.rs                       │   528    │ Integration test     │
+│ runtime/minimal_runtime.c                     │   199    │ Complete             │
+│ runtime/minimal_runtime.h                     │    46    │ Complete             │
+│ runtime/instrumentation_runtime.c             │   831    │ Complete             │
+│ runtime/instrumentation.h                     │    83    │ Complete             │
 ├──────────────────────────────────────────────┼──────────┼───────────────────────┤
-│ SUBTOTAL (Rust + Runtime)                    │  ~5045   │                      │
+│ SUBTOTAL (Rust + Runtime)                    │  ~4596   │                      │
 └──────────────────────────────────────────────┴──────────┴───────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────────┐
@@ -997,7 +1005,7 @@ The build system uses a single builder: **ArtifactBuilder** (`builder.rs`).
 ├──────────────────────────────────────────────┼──────────┼───────────────────────┤
 │ SUBTOTAL (Templates)                         │   ~905   │ 20 files             │
 ├──────────────────────────────────────────────┼──────────┼───────────────────────┤
-│ GRAND TOTAL                                  │  ~5950   │ 39 files             │
+│ GRAND TOTAL                                  │  ~5501   │ 38 files             │
 └──────────────────────────────────────────────┴──────────┴───────────────────────┘
 ```
 
@@ -1586,7 +1594,7 @@ The build system uses a single builder: **ArtifactBuilder** (`builder.rs`).
 │  │ Template Artifact       │ Rust Code             │ Integration Mechanism │   │
 │  ├─────────────────────────┼───────────────────────┼───────────────────────┤   │
 │  │ loader_template.c       │ assembler.rs:         │ Read as String,       │   │
-│  │ (8 @MODULE markers)     │   assemble()          │ regex replace markers │   │
+│  │ (8 @MODULE markers)     │   assemble()          │ str::replace() chain  │   │
 │  ├─────────────────────────┼───────────────────────┼───────────────────────┤   │
 │  │ modules/**/*.c          │ assembler.rs:         │ read_module() reads,  │   │
 │  │ (module source files)   │   read_module()       │ strips own #includes, │   │
