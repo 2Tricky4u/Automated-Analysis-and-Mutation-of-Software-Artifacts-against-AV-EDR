@@ -129,10 +129,9 @@ impl Orchestrator {
         let needs_caps = job.required_capabilities.is_empty();
 
         if needs_os || needs_caps {
-            if let Some((resolved_os, resolved_caps)) = self.resolve_job_constraints(
-                job.target_os.as_deref(),
-                &job.required_capabilities,
-            ) {
+            if let Some((resolved_os, resolved_caps)) =
+                self.resolve_job_constraints(job.target_os.as_deref(), &job.required_capabilities)
+            {
                 if needs_os {
                     debug!(
                         "[Orchestrator] Job {} auto-assigned OS: {}",
@@ -154,7 +153,7 @@ impl Orchestrator {
                 );
                 if needs_os {
                     job.target_os = Some("win10".to_string());
-                    job.required_capabilities = vec!["rededr".to_string(),"mde".to_string()];
+                    job.required_capabilities = vec!["rededr".to_string(), "mde".to_string()];
                 }
             }
         }
@@ -164,11 +163,7 @@ impl Orchestrator {
             job_id, job.max_rounds, job.target_os, job.required_capabilities
         );
 
-        let worker = JobWorker::new(
-            job,
-            Arc::clone(&self.run_pool),
-            self.job_event_tx.clone(),
-        );
+        let worker = JobWorker::new(job, Arc::clone(&self.run_pool), self.job_event_tx.clone());
 
         let shutdown_token = worker.cancellation_token();
         tokio::spawn(worker.run());
@@ -214,9 +209,11 @@ impl Orchestrator {
 
             // Check capabilities match if requested
             if !requested_caps.is_empty() {
-                let has_all = requested_caps
-                    .iter()
-                    .all(|req| t.capabilities.iter().any(|cap| cap.eq_ignore_ascii_case(req)));
+                let has_all = requested_caps.iter().all(|req| {
+                    t.capabilities
+                        .iter()
+                        .any(|cap| cap.eq_ignore_ascii_case(req))
+                });
                 if !has_all {
                     continue;
                 }
@@ -241,12 +238,10 @@ impl Orchestrator {
         }
 
         // Sort: available targets first, then by OS for determinism
-        candidates.sort_by(|a, b| {
-            match (a.2, b.2) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.0.cmp(&b.0),
-            }
+        candidates.sort_by(|a, b| match (a.2, b.2) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.0.cmp(&b.0),
         });
 
         // Pick the best candidate
@@ -276,16 +271,10 @@ impl Orchestrator {
                         );
                     }
                     JobOutcome::Stopped { reason } => {
-                        warn!(
-                            "[Orchestrator] Job {} stopped: {}",
-                            job_id, reason
-                        );
+                        warn!("[Orchestrator] Job {} stopped: {}", job_id, reason);
                     }
                     JobOutcome::Failed { error } => {
-                        error!(
-                            "[Orchestrator] Job {} failed: {}",
-                            job_id, error
-                        );
+                        error!("[Orchestrator] Job {} failed: {}", job_id, error);
                     }
                 }
                 self.job_workers.remove(&job_id);
@@ -418,7 +407,10 @@ impl Orchestrator {
             }
 
             Some(worker_message::Payload::Ack(ack)) => {
-                debug!("[Orchestrator] Ack: {} - req: {}", target_id, ack.request_id);
+                debug!(
+                    "[Orchestrator] Ack: {} - req: {}",
+                    target_id, ack.request_id
+                );
             }
 
             _ => {}
@@ -505,13 +497,24 @@ mod tests {
 
         // Create minimal TargetManager for test
         let (target_events_tx, _) = mpsc::channel(10);
-        let targets = Arc::new(TargetManager::new(30, target_events_tx, Arc::clone(&run_pool)));
+        let targets = Arc::new(TargetManager::new(
+            30,
+            target_events_tx,
+            Arc::clone(&run_pool),
+        ));
 
         // Create ES client (won't actually connect in test)
         let transport = Transport::single_node("http://localhost:9200").unwrap();
         let es_client = Elasticsearch::new(transport);
 
-        let orchestrator = Orchestrator::new(events_rx, job_rx, job_control_rx, run_pool, targets, es_client);
+        let orchestrator = Orchestrator::new(
+            events_rx,
+            job_rx,
+            job_control_rx,
+            run_pool,
+            targets,
+            es_client,
+        );
 
         assert_eq!(orchestrator.active_job_count(), 0);
         assert_eq!(orchestrator.vm_count(), 0);

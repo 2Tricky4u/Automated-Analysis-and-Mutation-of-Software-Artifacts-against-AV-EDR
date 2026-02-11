@@ -4,15 +4,14 @@ pub mod info;
 pub mod run;
 pub mod stream;
 
+use crate::WorkerAgentService; // Now available from lib.rs
 use crate::automutate::common::{
     ArtifactChunk, ControllerMessage, SampleRequest, SampleResponse, TelemetryData, WorkerMessage,
 };
 use crate::automutate::worker::{
     HealthRequest, HealthResponse, PingRequest, PingResponse, TelemetryRequest, TransferAck,
-    WorkerInfoRequest, WorkerInfoResponse,
-    worker_agent_server::WorkerAgent,
+    WorkerInfoRequest, WorkerInfoResponse, worker_agent_server::WorkerAgent,
 };
-use crate::WorkerAgentService;  // Now available from lib.rs
 use tonic::{Request, Response, Status};
 
 /// Implement WorkerAgent trait for WorkerAgentService by delegating to handler modules
@@ -50,9 +49,8 @@ impl WorkerAgent for WorkerAgentService {
         info::get_worker_info(self, request).await
     }
 
-    type GetTelemetryStream = std::pin::Pin<
-        Box<dyn tokio_stream::Stream<Item = Result<TelemetryData, Status>> + Send>,
-    >;
+    type GetTelemetryStream =
+        std::pin::Pin<Box<dyn tokio_stream::Stream<Item = Result<TelemetryData, Status>> + Send>>;
 
     async fn get_telemetry(
         &self,

@@ -1,5 +1,6 @@
 //! Worker handlers - worker listing, telemetry streaming, and monitoring
 
+use crate::api::SchedulerService;
 use crate::automutate::common::{TelemetryAck, TelemetryData, ToolVersions};
 use crate::automutate::controller::{
     ActiveJobEntry, GetAvailableWorkersRequest, GetAvailableWorkersResponse,
@@ -8,7 +9,6 @@ use crate::automutate::controller::{
     GetWorkerResponse, ListWorkersRequest, ListWorkersResponse, PoolMetricsEntry, WorkerInfo,
     WorkerMetadataEntry,
 };
-use crate::api::SchedulerService;
 use crate::vm::{RegistrationType, TargetStatus};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -32,7 +32,11 @@ pub async fn list_workers(
                 worker_id: w.id.to_string(),
                 address: w.address.clone(),
                 status: w.status.to_string(),
-                current_job_id: w.current_job.as_ref().map(|j| j.0.clone()).unwrap_or_default(),
+                current_job_id: w
+                    .current_job
+                    .as_ref()
+                    .map(|j| j.0.clone())
+                    .unwrap_or_default(),
                 last_ping_seconds_ago: last_ping_secs,
                 enabled: w.enabled,
                 os_version: w.os_version.clone(),
@@ -62,7 +66,7 @@ pub async fn stream_telemetry(
     service: &SchedulerService,
     request: Request<tonic::Streaming<TelemetryData>>,
 ) -> Result<Response<TelemetryAck>, Status> {
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
 
     let remote_addr = request
         .remote_addr()
@@ -117,7 +121,12 @@ pub async fn stream_telemetry(
 
     // Index to Elasticsearch
     if !batch.is_empty() {
-        match timeout(Duration::from_secs(10), service.index_telemetry_batch(&batch)).await {
+        match timeout(
+            Duration::from_secs(10),
+            service.index_telemetry_batch(&batch),
+        )
+        .await
+        {
             Ok(Ok(())) => {
                 info!("[OK] Indexed {} telemetry events", events_count);
             }
@@ -158,7 +167,11 @@ pub async fn get_worker(
                 worker_id: w.id.to_string(),
                 address: w.address.clone(),
                 status: w.status.to_string(),
-                current_job_id: w.current_job.as_ref().map(|j| j.0.clone()).unwrap_or_default(),
+                current_job_id: w
+                    .current_job
+                    .as_ref()
+                    .map(|j| j.0.clone())
+                    .unwrap_or_default(),
                 last_ping_seconds_ago: last_ping_secs,
                 enabled: w.enabled,
                 os_version: w.os_version.clone(),
@@ -237,7 +250,11 @@ pub async fn get_available_workers(
                 worker_id: w.id.to_string(),
                 address: w.address.clone(),
                 status: w.status.to_string(),
-                current_job_id: w.current_job.as_ref().map(|j| j.0.clone()).unwrap_or_default(),
+                current_job_id: w
+                    .current_job
+                    .as_ref()
+                    .map(|j| j.0.clone())
+                    .unwrap_or_default(),
                 last_ping_seconds_ago: last_ping_secs,
                 enabled: w.enabled,
                 os_version: w.os_version.clone(),
@@ -295,8 +312,8 @@ pub async fn get_worker_metadata(
                 .map(|d| d.as_secs())
                 .unwrap_or(u64::MAX);
 
-            let healthy = last_seen_secs < HEALTH_THRESHOLD_SECS
-                && w.status != TargetStatus::Offline;
+            let healthy =
+                last_seen_secs < HEALTH_THRESHOLD_SECS && w.status != TargetStatus::Offline;
 
             let connected_at = w
                 .connected_at
@@ -322,13 +339,19 @@ pub async fn get_worker_metadata(
                 }),
                 last_seen_seconds_ago: last_seen_secs as i64,
                 healthy,
-                current_job_id: w.current_job.as_ref().map(|j| j.0.clone()).unwrap_or_default(),
+                current_job_id: w
+                    .current_job
+                    .as_ref()
+                    .map(|j| j.0.clone())
+                    .unwrap_or_default(),
                 connected_at,
             }
         })
         .collect();
 
-    Ok(Response::new(GetWorkerMetadataResponse { workers: entries }))
+    Ok(Response::new(GetWorkerMetadataResponse {
+        workers: entries,
+    }))
 }
 
 /// Get pool metrics
@@ -356,10 +379,10 @@ pub async fn get_pool_metrics(
 
     let entry = PoolMetricsEntry {
         pool_id: "shared-run-pool".to_string(),
-        total_runs_dispatched: metrics.total_runs_added,  // Renamed in new architecture
+        total_runs_dispatched: metrics.total_runs_added, // Renamed in new architecture
         total_runs_completed: metrics.total_runs_taken,
-        total_rounds_completed: 0,  // TODO: Track in RunPool or Orchestrator
-        total_jobs_completed: 0,    // TODO: Track in Orchestrator
+        total_rounds_completed: 0, // TODO: Track in RunPool or Orchestrator
+        total_jobs_completed: 0,   // TODO: Track in Orchestrator
         current_queue_size: queue_size as u32,
         worker_count: vm_count as u32,
         current_job_id: format!("{} active jobs", job_count),
@@ -411,7 +434,7 @@ pub async fn get_orchestrator_status(
         .collect();
 
     Ok(Response::new(GetOrchestratorStatusResponse {
-        pending_jobs: service.run_pool.pool_size().await as u32,  // Pending runs in pool
+        pending_jobs: service.run_pool.pool_size().await as u32, // Pending runs in pool
         active_pools,
         total_workers,
         available_workers,

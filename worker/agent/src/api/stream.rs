@@ -1,5 +1,5 @@
 use crate::automutate::common::{ControllerMessage, WorkerMessage};
-use crate::{capabilities, session, WorkerAgentService};
+use crate::{WorkerAgentService, capabilities, session};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
@@ -9,10 +9,8 @@ use tracing::{error, info};
 pub async fn establish_stream(
     service: &WorkerAgentService,
     request: Request<tonic::Streaming<ControllerMessage>>,
-) -> Result<
-    Response<tokio_stream::wrappers::ReceiverStream<Result<WorkerMessage, Status>>>,
-    Status,
-> {
+) -> Result<Response<tokio_stream::wrappers::ReceiverStream<Result<WorkerMessage, Status>>>, Status>
+{
     use crate::session::worker_state::WorkerState;
     use session::stream_handler::StreamHandler;
     use tokio::sync::RwLock;

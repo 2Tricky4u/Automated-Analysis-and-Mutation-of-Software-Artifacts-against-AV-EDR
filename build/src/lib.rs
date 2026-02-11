@@ -37,19 +37,19 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::process::{Command};
+use std::process::Command;
 use tracing::{debug, info, warn};
 
 // ============================================================================
 // Submodules (new organization)
 // ============================================================================
 
-pub mod transform;
-pub mod instrument;
-pub mod template;
-pub mod mutator;
 pub mod builder;
 pub mod compiler;
+pub mod instrument;
+pub mod mutator;
+pub mod template;
+pub mod transform;
 
 // ============================================================================
 // Re-exports from submodules
@@ -59,14 +59,18 @@ pub mod compiler;
 pub use transform::{AstMutator, IrMutator};
 
 // Instrument module
-pub use instrument::{Instrumenter, inject_line_traces, inject_line_traces_with_opts, SourceLanguage, TraceFormat};
+pub use instrument::{
+    Instrumenter, SourceLanguage, TraceFormat, inject_line_traces, inject_line_traces_with_opts,
+};
 
 // Template module
-pub use template::{Assembler, ModuleSelection, PayloadEncoder, EncodingType, EncodedPayload, MutationMarker};
-pub use template::{extract_mutation_markers, strip_mutation_markers, generate_test_payload};
+pub use template::{
+    Assembler, EncodedPayload, EncodingType, ModuleSelection, MutationMarker, PayloadEncoder,
+};
+pub use template::{extract_mutation_markers, generate_test_payload, strip_mutation_markers};
 
 // Builder module (main API)
-pub use builder::{ArtifactBuilder, BuilderConfig, BuildInput, BuiltArtifact};
+pub use builder::{ArtifactBuilder, BuildInput, BuilderConfig, BuiltArtifact};
 
 // ============================================================================
 // Core Types
@@ -188,7 +192,8 @@ impl LowLevelBuilder {
         mutations: &[Mutation],
         output_path: &Path,
     ) -> Result<ArtifactMetadata> {
-        let abs_source = std::fs::canonicalize(source_path).unwrap_or_else(|_| source_path.to_path_buf());
+        let abs_source =
+            std::fs::canonicalize(source_path).unwrap_or_else(|_| source_path.to_path_buf());
         debug!("Building artifact from: {:?}", abs_source);
         debug!("Applying {} mutations", mutations.len());
 
@@ -198,7 +203,8 @@ impl LowLevelBuilder {
 
         // Step 1: Apply AST-level mutations
         let mutated_source = temp_path.join("mutated.c");
-        self.apply_ast_mutations(source_path, mutations, &mutated_source).await?;
+        self.apply_ast_mutations(source_path, mutations, &mutated_source)
+            .await?;
 
         // Step 2: Compile to LLVM IR
         let ir_path = temp_path.join("artifact.ll");
@@ -206,11 +212,13 @@ impl LowLevelBuilder {
 
         // Step 3: Apply IR-level mutations
         let mutated_ir = temp_path.join("mutated.ll");
-        self.apply_ir_mutations(&ir_path, mutations, &mutated_ir).await?;
+        self.apply_ir_mutations(&ir_path, mutations, &mutated_ir)
+            .await?;
 
         // Step 4: Inject instrumentation
         let instrumented_ir = temp_path.join("instrumented.ll");
-        self.inject_instrumentation(&mutated_ir, &instrumented_ir).await?;
+        self.inject_instrumentation(&mutated_ir, &instrumented_ir)
+            .await?;
 
         // Step 5: Compile IR → Object file
         let obj_path = temp_path.join("artifact.obj");
@@ -236,8 +244,16 @@ impl LowLevelBuilder {
         Ok(metadata)
     }
 
-    async fn apply_ast_mutations(&self, source: &Path, mutations: &[Mutation], output: &Path) -> Result<()> {
-        let ast_mutations: Vec<_> = mutations.iter().filter(|m| m.id.starts_with("ast.")).collect();
+    async fn apply_ast_mutations(
+        &self,
+        source: &Path,
+        mutations: &[Mutation],
+        output: &Path,
+    ) -> Result<()> {
+        let ast_mutations: Vec<_> = mutations
+            .iter()
+            .filter(|m| m.id.starts_with("ast."))
+            .collect();
         let needs_line_tracing = matches!(
             self.config.trace_mode,
             TraceMode::Lines | TraceMode::LinesAroundBB(_) | TraceMode::All
@@ -267,7 +283,10 @@ impl LowLevelBuilder {
             std::env::current_dir()?.join("build/runtime"),
             PathBuf::from("build/emitter/runtime"),
         ];
-        possible_paths.iter().find(|p| p.exists()).cloned()
+        possible_paths
+            .iter()
+            .find(|p| p.exists())
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("Runtime include directory not found"))
     }
 
@@ -282,19 +301,34 @@ impl LowLevelBuilder {
             .arg(format!("-isystem{}/sdk/include/shared", xwin.display()))
             .arg(format!("-isystem{}/sdk/include/um", xwin.display()))
             .arg(format!("-I{}", runtime_include.display()))
-            .arg("-emit-llvm").arg("-S")
+            .arg("-emit-llvm")
+            .arg("-S")
             .arg(format!("-O{}", self.config.optimization))
-            .arg("-o").arg(output).arg(source)
-            .output().context("Failed to run clang")?;
+            .arg("-o")
+            .arg(output)
+            .arg(source)
+            .output()
+            .context("Failed to run clang")?;
 
         if !output_result.status.success() {
-            anyhow::bail!("clang failed: {}", String::from_utf8_lossy(&output_result.stderr));
+            anyhow::bail!(
+                "clang failed: {}",
+                String::from_utf8_lossy(&output_result.stderr)
+            );
         }
         Ok(())
     }
 
-    async fn apply_ir_mutations(&self, ir: &Path, mutations: &[Mutation], output: &Path) -> Result<()> {
-        let ir_mutations: Vec<_> = mutations.iter().filter(|m| m.id.starts_with("ir.")).collect();
+    async fn apply_ir_mutations(
+        &self,
+        ir: &Path,
+        mutations: &[Mutation],
+        output: &Path,
+    ) -> Result<()> {
+        let ir_mutations: Vec<_> = mutations
+            .iter()
+            .filter(|m| m.id.starts_with("ir."))
+            .collect();
         if ir_mutations.is_empty() {
             tokio::fs::copy(ir, output).await?;
             return Ok(());
@@ -306,10 +340,14 @@ impl LowLevelBuilder {
 
     async fn inject_instrumentation(&self, ir: &Path, output: &Path) -> Result<()> {
         match self.config.trace_mode {
-            TraceMode::Off => { tokio::fs::copy(ir, output).await?; }
+            TraceMode::Off => {
+                tokio::fs::copy(ir, output).await?;
+            }
             _ => {
                 let mut instrumenter = Instrumenter::new();
-                instrumenter.instrument(ir, self.config.trace_mode, output).await?;
+                instrumenter
+                    .instrument(ir, self.config.trace_mode, output)
+                    .await?;
             }
         }
         Ok(())
@@ -318,11 +356,18 @@ impl LowLevelBuilder {
     async fn compile_to_obj(&self, ir: &Path, output: &Path) -> Result<()> {
         let output_result = Command::new("llc")
             .arg(format!("-mtriple={}", self.config.target))
-            .arg("-filetype=obj").arg("-o").arg(output).arg(ir)
-            .output().context("Failed to run llc")?;
+            .arg("-filetype=obj")
+            .arg("-o")
+            .arg(output)
+            .arg(ir)
+            .output()
+            .context("Failed to run llc")?;
 
         if !output_result.status.success() {
-            anyhow::bail!("llc failed: {}", String::from_utf8_lossy(&output_result.stderr));
+            anyhow::bail!(
+                "llc failed: {}",
+                String::from_utf8_lossy(&output_result.stderr)
+            );
         }
         Ok(())
     }
@@ -332,7 +377,9 @@ impl LowLevelBuilder {
             PathBuf::from("build/runtime/instrumentation_runtime.c"),
             PathBuf::from("build/emitter/runtime/instrumentation_runtime.c"),
         ];
-        let runtime_source = possible_paths.iter().find(|p| p.exists())
+        let runtime_source = possible_paths
+            .iter()
+            .find(|p| p.exists())
             .ok_or_else(|| anyhow::anyhow!("Runtime source not found"))?;
 
         let runtime_obj = temp_dir.join("instrumentation_runtime.obj");
@@ -342,9 +389,13 @@ impl LowLevelBuilder {
             .arg(format!("--target={}", self.config.target))
             .arg(format!("-isystem{}/crt/include", xwin.display()))
             .arg(format!("-isystem{}/sdk/include/ucrt", xwin.display()))
-            .arg("-c").arg(format!("-O{}", self.config.optimization))
-            .arg("-o").arg(&runtime_obj).arg(runtime_source)
-            .output().context("Failed to compile runtime")?;
+            .arg("-c")
+            .arg(format!("-O{}", self.config.optimization))
+            .arg("-o")
+            .arg(&runtime_obj)
+            .arg(runtime_source)
+            .output()
+            .context("Failed to compile runtime")?;
 
         if !output_result.status.success() {
             anyhow::bail!("Runtime compilation failed");
@@ -357,7 +408,9 @@ impl LowLevelBuilder {
             PathBuf::from("build/runtime/minimal_runtime.c"),
             PathBuf::from("build/emitter/runtime/minimal_runtime.c"),
         ];
-        let runtime_source = possible_paths.iter().find(|p| p.exists())
+        let runtime_source = possible_paths
+            .iter()
+            .find(|p| p.exists())
             .ok_or_else(|| anyhow::anyhow!("Minimal runtime source not found"))?;
 
         let runtime_obj = temp_dir.join("minimal_runtime.obj");
@@ -367,9 +420,13 @@ impl LowLevelBuilder {
             .arg(format!("--target={}", self.config.target))
             .arg(format!("-isystem{}/crt/include", xwin.display()))
             .arg(format!("-isystem{}/sdk/include/ucrt", xwin.display()))
-            .arg("-c").arg(format!("-O{}", self.config.optimization))
-            .arg("-o").arg(&runtime_obj).arg(runtime_source)
-            .output().context("Failed to compile minimal runtime")?;
+            .arg("-c")
+            .arg(format!("-O{}", self.config.optimization))
+            .arg("-o")
+            .arg(&runtime_obj)
+            .arg(runtime_source)
+            .output()
+            .context("Failed to compile minimal runtime")?;
 
         if !output_result.status.success() {
             anyhow::bail!("Minimal runtime compilation failed");
@@ -380,25 +437,39 @@ impl LowLevelBuilder {
     async fn link_to_pe(&self, obj_files: &[PathBuf], output: &Path) -> Result<()> {
         let xwin = &self.config.xwin_path;
         let mut cmd = Command::new("ld.lld");
-        cmd.arg("-flavor").arg("link")
-            .arg("-subsystem:console").arg("-entry:mainCRTStartup")
+        cmd.arg("-flavor")
+            .arg("link")
+            .arg("-subsystem:console")
+            .arg("-entry:mainCRTStartup")
             .arg(format!("-libpath:{}/crt/lib/x86_64", xwin.display()))
             .arg(format!("-libpath:{}/sdk/lib/um/x86_64", xwin.display()))
             .arg(format!("-libpath:{}/sdk/lib/ucrt/x86_64", xwin.display()))
             .arg(format!("-out:{}", output.display()));
 
-        if self.config.deterministic { cmd.arg("-Brepro"); }
-        for obj in obj_files { cmd.arg(obj); }
+        if self.config.deterministic {
+            cmd.arg("-Brepro");
+        }
+        for obj in obj_files {
+            cmd.arg(obj);
+        }
         cmd.arg("libcmt.lib").arg("libucrt.lib").arg("kernel32.lib");
 
         let output_result = cmd.output().context("Failed to run lld-link")?;
         if !output_result.status.success() {
-            anyhow::bail!("lld-link failed: {}", String::from_utf8_lossy(&output_result.stderr));
+            anyhow::bail!(
+                "lld-link failed: {}",
+                String::from_utf8_lossy(&output_result.stderr)
+            );
         }
         Ok(())
     }
 
-    fn generate_metadata(&self, source: &Path, mutations: &[Mutation], artifact: &Path) -> Result<ArtifactMetadata> {
+    fn generate_metadata(
+        &self,
+        source: &Path,
+        mutations: &[Mutation],
+        artifact: &Path,
+    ) -> Result<ArtifactMetadata> {
         let artifact_bytes = std::fs::read(artifact)?;
         let mut hasher = Sha256::new();
         hasher.update(&artifact_bytes);
@@ -426,7 +497,14 @@ mod tests {
 
     #[test]
     fn test_trace_mode_serialization() {
-        let modes = vec![TraceMode::Off, TraceMode::Api, TraceMode::BB, TraceMode::ApiPlusBB, TraceMode::Lines, TraceMode::All];
+        let modes = vec![
+            TraceMode::Off,
+            TraceMode::Api,
+            TraceMode::BB,
+            TraceMode::ApiPlusBB,
+            TraceMode::Lines,
+            TraceMode::All,
+        ];
         for mode in modes {
             let json = serde_json::to_string(&mode).unwrap();
             let deserialized: TraceMode = serde_json::from_str(&json).unwrap();

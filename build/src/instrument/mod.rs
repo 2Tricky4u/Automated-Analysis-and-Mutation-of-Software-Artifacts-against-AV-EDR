@@ -2,9 +2,11 @@
 //!
 //! Provides line-level tracing and basic-block coverage instrumentation.
 
-pub mod line_tracer;
 pub mod instrumenter;
+pub mod line_tracer;
 
 // Re-exports
-pub use line_tracer::{inject_line_traces, inject_line_traces_with_opts, SourceLanguage, TraceFormat};
 pub use instrumenter::Instrumenter;
+pub use line_tracer::{
+    SourceLanguage, TraceFormat, inject_line_traces, inject_line_traces_with_opts,
+};

@@ -1,5 +1,5 @@
-use crate::automutate::controller::{BuildRequest, BuildResponse, DeployRequest, DeployResponse};
 use crate::api::SchedulerService;
+use crate::automutate::controller::{BuildRequest, BuildResponse, DeployRequest, DeployResponse};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
 

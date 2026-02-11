@@ -16,7 +16,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::automutate::common::{controller_message, ControllerMessage, RunSampleCommand, SampleRequest};
+use crate::automutate::common::{
+    ControllerMessage, RunSampleCommand, SampleRequest, controller_message,
+};
 use crate::vm::TargetManager;
 
 use super::channels::{JobRunResult, RemoteRunResult};
@@ -223,7 +225,8 @@ impl VMExecutor {
         if self.remote_tx.send(command).await.is_err() {
             error!("[VM:{}] Remote channel closed", self.id);
             self.in_flight = None;
-            self.route_error(&envelope, "VM disconnected".to_string()).await;
+            self.route_error(&envelope, "VM disconnected".to_string())
+                .await;
             return;
         }
 

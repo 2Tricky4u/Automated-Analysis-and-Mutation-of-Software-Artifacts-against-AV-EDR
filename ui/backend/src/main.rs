@@ -38,17 +38,17 @@ mod websocket;
 
 use api::{ApiResponse, HealthResponse};
 use axum::{
-    extract::{FromRef, State},
-    http::{header, Method},
-    routing::{get, post},
     Json, Router,
+    extract::{FromRef, State},
+    http::{Method, header},
+    routing::{get, post},
 };
 use grpc_client::{ControllerConfig, ControllerGrpcClient};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
-use tracing::{info, Level};
+use tracing::{Level, info};
 use websocket::TelemetryBroadcaster;
 
 /// Application state shared across handlers
@@ -81,11 +81,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     // Configuration from environment
-    let controller_addr =
-        std::env::var("CONTROLLER_ADDR").unwrap_or_else(|_| "http://10.200.200.1:50051".to_string());
+    let controller_addr = std::env::var("CONTROLLER_ADDR")
+        .unwrap_or_else(|_| "http://10.200.200.1:50051".to_string());
     let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
-    let frontend_dir =
-        std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "../frontend".to_string());
+    let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "../frontend".to_string());
 
     info!("UI Backend starting...");
     info!("  Controller: {}", controller_addr);
@@ -130,14 +129,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Worker endpoints
         .route("/api/workers", get(api::workers::list_workers))
         // Orchestrator endpoints
-        .route("/api/orchestrator/status", get(api::workers::get_orchestrator_status))
+        .route(
+            "/api/orchestrator/status",
+            get(api::workers::get_orchestrator_status),
+        )
         // Query endpoints
         .route("/api/query", post(api::query::query_results))
         .route("/api/triage", post(api::query::submit_triage))
         .route("/api/runs/compare", get(api::jobs::compare_runs))
         // WebSocket endpoints
         .route("/ws/telemetry", get(websocket::ws_handler))
-        .route("/ws/telemetry/filtered", get(websocket::ws_handler_filtered))
+        .route(
+            "/ws/telemetry/filtered",
+            get(websocket::ws_handler_filtered),
+        )
         // Middleware
         .layer(TraceLayer::new_for_http())
         .layer(cors)

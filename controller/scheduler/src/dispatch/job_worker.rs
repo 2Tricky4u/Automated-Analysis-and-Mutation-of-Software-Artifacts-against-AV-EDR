@@ -20,13 +20,15 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use build::{ArtifactBuilder, BuilderConfig, BuildInput, BuiltArtifact, EncodingType, ModuleSelection};
+use build::{
+    ArtifactBuilder, BuildInput, BuilderConfig, BuiltArtifact, EncodingType, ModuleSelection,
+};
 
 use super::channels::{JobRunResult, JobWorkerEvent};
 use super::run_pool::RunPool;
 use super::types::{
-    ArtifactRef, JobId, JobOutcome, JobSession, ModularBuildSpec, RoundAgg, RoundId,
-    RoundSpec, RunEnvelope, RunId, RunType,
+    ArtifactRef, JobId, JobOutcome, JobSession, ModularBuildSpec, RoundAgg, RoundId, RoundSpec,
+    RunEnvelope, RunId, RunType,
 };
 
 // ============================================================================
@@ -122,7 +124,8 @@ impl JobWorker {
         self.job.mark_started();
 
         // Production check interval
-        let mut check_interval = tokio::time::interval(Duration::from_millis(PRODUCTION_CHECK_INTERVAL_MS));
+        let mut check_interval =
+            tokio::time::interval(Duration::from_millis(PRODUCTION_CHECK_INTERVAL_MS));
 
         // Get pool cancellation token (needs to be bound to a variable for the select!)
         let pool_shutdown = self.run_pool.cancellation_token();
@@ -350,10 +353,7 @@ impl JobWorker {
 
         info!(
             "[JobWorker:{}] Built runs for round {} (baseline={}, instrumented={})",
-            self.job.id,
-            round_id,
-            baseline_built.artifact_id,
-            instrumented_built.artifact_id
+            self.job.id, round_id, baseline_built.artifact_id, instrumented_built.artifact_id
         );
 
         // Add runs to shared pool
@@ -453,7 +453,7 @@ impl JobWorker {
         );
 
         //TODO should use result.round_id?
-        
+
         // Find which round this belongs to and update
         let mut round_to_finalize = None;
 

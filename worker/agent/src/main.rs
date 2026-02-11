@@ -32,14 +32,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "WARN" => tracing::Level::WARN,
         "ERROR" => tracing::Level::ERROR,
         _ => {
-            eprintln!("Invalid log level '{}', defaulting to INFO", config.logging.level);
+            eprintln!(
+                "Invalid log level '{}', defaulting to INFO",
+                config.logging.level
+            );
             tracing::Level::INFO
         }
     };
 
-    tracing_subscriber::fmt()
-        .with_max_level(log_level)
-        .init();
+    tracing_subscriber::fmt().with_max_level(log_level).init();
 
     let worker_id = config.worker.worker_id.clone();
 

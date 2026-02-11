@@ -100,15 +100,21 @@ pub async fn collect_api_checkpoints(
                 let (event_type, mut metadata) = match type_field {
                     "success" => {
                         info!("[OK] ARTIFACT SUCCESS from checkpoints.log: '{}'", name);
-                        ("artifact_success".to_string(), std::collections::HashMap::new())
+                        (
+                            "artifact_success".to_string(),
+                            std::collections::HashMap::new(),
+                        )
                     }
                     "failure" => {
                         let mut meta = std::collections::HashMap::new();
                         if let Some(code) = checkpoint_json["error_code"].as_i64() {
                             meta.insert("error_code".to_string(), code.to_string());
                         }
-                        warn!("[ERROR] ARTIFACT FAILURE from checkpoints.log: '{}' (error_code={})",
-                            name, checkpoint_json["error_code"].as_i64().unwrap_or(0));
+                        warn!(
+                            "[ERROR] ARTIFACT FAILURE from checkpoints.log: '{}' (error_code={})",
+                            name,
+                            checkpoint_json["error_code"].as_i64().unwrap_or(0)
+                        );
                         ("artifact_failure".to_string(), meta)
                     }
                     "artifact_checkpoint" | "checkpoint" | _ => {

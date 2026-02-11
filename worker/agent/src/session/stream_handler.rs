@@ -166,21 +166,26 @@ impl StreamHandler {
             // Acquire execution lock
             let _execution_lock = {
                 let mut state = execution_lock.lock().await;
-                if let Err(e) = state.acquire(job_id.clone(), artifact_name.clone(), run_id.clone()) {
+                if let Err(e) = state.acquire(job_id.clone(), artifact_name.clone(), run_id.clone())
+                {
                     warn!("[ERROR] REJECTED: {}", e);
                     // Send error response
-                    let _ = tx.send(Ok(WorkerMessage {
-                        payload: Some(worker_message::Payload::SampleResponse(SampleResponse {
-                            job_id: job_id.clone(),
-                            success: false,
-                            exit_code: -1,
-                            output: format!("Execution rejected: {}", e),
-                            telemetry_ids: vec![],
-                            run_id: run_id.clone(),
-                            detected: false,
-                            error: e.to_string(),
-                        })),
-                    })).await;
+                    let _ = tx
+                        .send(Ok(WorkerMessage {
+                            payload: Some(worker_message::Payload::SampleResponse(
+                                SampleResponse {
+                                    job_id: job_id.clone(),
+                                    success: false,
+                                    exit_code: -1,
+                                    output: format!("Execution rejected: {}", e),
+                                    telemetry_ids: vec![],
+                                    run_id: run_id.clone(),
+                                    detected: false,
+                                    error: e.to_string(),
+                                },
+                            )),
+                        }))
+                        .await;
                     // Clear worker state
                     let mut ws = worker_state.write().await;
                     ws.current_job_id = None;
@@ -193,7 +198,8 @@ impl StreamHandler {
             // Build typed request and context
             let artifacts_base = std::path::Path::new(&config.storage.artifacts_path);
             let artifact_path = artifacts_base.join(format!("{}.exe", sample_request.artifact_id));
-            let telemetry_dir = artifacts_base.join(format!("telemetry_{}", sample_request.artifact_id));
+            let telemetry_dir =
+                artifacts_base.join(format!("telemetry_{}", sample_request.artifact_id));
 
             let run_request = RunRequest {
                 job_id: job_id.clone(),
@@ -460,7 +466,10 @@ impl StreamHandler {
     pub async fn send_registration(&self) -> Result<()> {
         let state = self.worker_state.read().await;
 
-        let ip_address = format!("{}:{}", self.config.worker.ip_address, self.config.worker.listen_port);
+        let ip_address = format!(
+            "{}:{}",
+            self.config.worker.ip_address, self.config.worker.listen_port
+        );
 
         let registration = WorkerRegistration {
             worker_id: state.worker_id.clone(),
@@ -478,7 +487,10 @@ impl StreamHandler {
             .await
             .map_err(|e| anyhow!("Failed to send registration: {}", e))?;
 
-        debug!("Sent worker registration to controller (IP: {})", ip_address);
+        debug!(
+            "Sent worker registration to controller (IP: {})",
+            ip_address
+        );
         Ok(())
     }
 }

@@ -3,13 +3,13 @@
 //! Wraps gRPC calls to Controller service.
 
 pub mod jobs;
-pub mod workers;
 pub mod query;
+pub mod workers;
 
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Serialize;
 

@@ -3,11 +3,11 @@
 //! Wraps Controller gRPC job endpoints.
 
 use super::{ApiError, ApiResponse};
-use crate::grpc_client::ControllerGrpcClient;
 use crate::generated::controller::ModuleSelection;
+use crate::grpc_client::ControllerGrpcClient;
 use axum::{
-    extract::{Path, State},
     Json,
+    extract::{Path, State},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -136,7 +136,9 @@ pub async fn submit_job(
 ) -> Result<Json<ApiResponse<JobResponse>>, ApiError> {
     // Validate required fields
     if payload.source.is_empty() {
-        return Err(ApiError::bad_request("source field is required (path to .bin payload)"));
+        return Err(ApiError::bad_request(
+            "source field is required (path to .bin payload)",
+        ));
     }
 
     if payload.max_rounds == 0 {
@@ -282,10 +284,7 @@ pub async fn get_round(
     State(client): State<Arc<ControllerGrpcClient>>,
     Path((job_id, round_id)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<RoundDetailResponse>>, ApiError> {
-    debug!(
-        "REST: Get round (job_id={}, round_id={})",
-        job_id, round_id
-    );
+    debug!("REST: Get round (job_id={}, round_id={})", job_id, round_id);
 
     match client.get_round(&job_id, &round_id).await {
         Ok(resp) => {

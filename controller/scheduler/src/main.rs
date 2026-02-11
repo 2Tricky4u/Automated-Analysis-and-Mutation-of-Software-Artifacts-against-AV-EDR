@@ -8,15 +8,15 @@
 //! 5. Orchestrator spawns JobWorkers and handles all events
 
 use edr_config::ControllerConfig;
-use elasticsearch::http::transport::Transport;
 use elasticsearch::Elasticsearch;
+use elasticsearch::http::transport::Transport;
 use std::fs::OpenOptions;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tonic::transport::Server;
 use tracing::{debug, info, warn};
-use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::Layer;
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
