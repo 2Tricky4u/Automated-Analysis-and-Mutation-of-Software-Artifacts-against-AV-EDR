@@ -13,32 +13,54 @@ crate worker_agent
 │   ├── mod controller              Controller-side service definitions
 │   └── mod worker                  Worker-side service definitions
 │
-├── mod capabilities                System detection & runtime state (pub)
-│   ├── struct WorkerCapabilities   Detection results snapshot
-│   ├── struct WorkerState          Mutable runtime state (shared via RwLock)
-│   ├── struct HealthMetrics        CPU/memory/disk metrics
-│   └── struct WindowsVersionInfo   OS build info from registry
+├── mod api                         gRPC handler implementations (thin adapters)
+│   ├── mod.rs                      WorkerAgent trait impl (dispatches to handlers)
+│   ├── mod run                     run_sample() - unary RPC → engine
+│   ├── mod stream                  establish_stream() - bidirectional setup
+│   ├── mod artifacts               send_artifact() - chunked binary transfer
+│   └── mod info                    ping, health_check, get_worker_info, get_telemetry
 │
-├── mod stream_handler              Bidirectional gRPC stream (pub)
-│   ├── struct StreamHandler        Message router + outbound channel
-│   └── fn heartbeat_loop           30s periodic status sender
-│
-├── mod service                     gRPC RPC handler implementations (pub)
-│   ├── mod sample_handlers         run_sample() - core execution (~1370 lines)
-│   ├── mod stream_handlers         establish_stream() - bidirectional setup
-│   ├── mod artifact_handlers       send_artifact() - chunked binary transfer
-│   ├── mod info_handlers           ping, health_check, get_worker_info, get_telemetry
-│   └── mod helpers                 BB coverage + API checkpoint parsers
-│
-├── mod execution                   Execution management (pub)
+├── mod dispatch                    Execution orchestration (pub)
+│   ├── mod engine                  execute_run() - 9-phase pipeline (~698 lines)
+│   │   └── enum RunError           Setup error variants → tonic::Status
 │   ├── mod guards                  RAII guards with Drop cleanup
 │   │   ├── struct RedEdrGuard      Resets RedEDR HTTP API on drop
 │   │   ├── struct ProcessGuard     Kills child process on drop
-│   │   ├── struct MonitorGuard     Stops monitor tasks on drop
-│   │   ├── struct ExecutionLockGuard  Releases execution lock on drop
-│   │   └── struct ExecutionState   Busy flag + current job/artifact
-│   └── mod monitor                 Process monitoring during execution
-│       └── struct ExecutionMonitor Polls PID + RedEDR every 3s
+│   │   └── struct MonitorGuard     Stops monitor tasks on drop
+│   ├── mod state                   Execution state + lock
+│   │   ├── enum ExecutionState     Idle | Running { job_id, artifact, run_id }
+│   │   ├── struct ExecutionBusyError  Error when lock is held
+│   │   └── struct ExecutionLockGuard  RAII lock release on drop
+│   ├── mod sink                    Transport-agnostic output
+│   │   ├── trait ControlPlaneSink  send_status, send_telemetry, send_ack
+│   │   ├── struct StreamSink       Delegates to mpsc::Sender (stream mode)
+│   │   ├── struct NullSink         No-op (worker-only mode)
+│   │   └── fn build_sink()         Factory: Option<&Sender> → Arc<dyn ControlPlaneSink>
+│   ├── mod monitor                 Process monitoring during execution
+│   │   └── struct ExecutionMonitor Polls PID + RedEDR every 3s
+│   └── mod types                   Typed domain types
+│       ├── struct RunRequest       Typed execution request
+│       ├── struct RunContext       Worker-level context for a run
+│       ├── struct RunOutcome       Completed run result
+│       ├── struct RunPhaseTimings  Per-phase timing breakdown
+│       └── fn resolve_run_id()     Optional request_id → UUID fallback
+│
+├── mod session                     Stream session & worker runtime (pub)
+│   ├── mod stream_handler          Bidirectional gRPC stream
+│   │   ├── struct StreamHandler    Message router + outbound channel
+│   │   └── fn heartbeat_loop       30s periodic status sender
+│   └── mod worker_state            Mutable runtime state
+│       ├── struct WorkerState      Capabilities, health, job tracking
+│       └── struct HealthMetrics    CPU/memory/disk metrics
+│
+├── mod capabilities                System detection (pub)
+│   ├── struct WorkerCapabilities   Detection results snapshot
+│   └── struct WindowsVersionInfo   OS build info from registry
+│
+├── mod infra                       OS + side effects (pluggable boundary)
+│   ├── mod helpers                 BB coverage + API checkpoint parsers
+│   ├── mod process                 Process lifecycle (spawn, kill, verify, capture)
+│   └── mod system                  Telemetry directory management
 │
 └── mod telemetry                   Telemetry collection & compression (pub)
     ├── mod collectors
@@ -51,7 +73,8 @@ crate worker_agent
     │       ├── struct TraceCollector        Pipe server + protocol detection
     │       ├── struct TraceEvent            Parsed line trace event
     │       └── struct InstRecordHeader      Binary protocol header (32 bytes)
-    └── mod trace_compressor        3-stage compression pipeline
+    ├── mod pipeline                Trace gather → size → compress → batch
+    └── mod trace_compressor        3-stage compression pipeline (experimental)
         ├── struct CompressedTrace          Output container
         ├── struct CompressionStatistics    Metrics about compression
         ├── struct ColumnarTrace            Stage 1: CLP decomposition
@@ -70,9 +93,10 @@ crate worker_agent
 ### `lib.rs` -- Central Service Struct
 
 ```rust
+#[derive(Clone)]
 struct WorkerAgentService {
     worker_id: String,
-    config: WorkerConfig,                                    // TOML config
+    config: WorkerConfig,                                    // TOML config (edr_config)
     system_info: Arc<Mutex<System>>,                         // sysinfo for health
     execution_lock: Arc<Mutex<ExecutionState>>,               // ONE run at a time
     stream_handler: Arc<RwLock<Option<Arc<StreamHandler>>>>,  // Lazy init on stream
@@ -82,7 +106,7 @@ struct WorkerAgentService {
 | Method | Description |
 |--------|-------------|
 | `new(worker_id, config)` | Create service with idle execution state |
-| `get_execution_state()` | Clone current ExecutionState (for health check) |
+| `get_execution_state()` | Clone current ExecutionState (async, locks Mutex) |
 | `truncate_middle_output(output)` | Keep first/last 400 chars, truncate middle |
 
 ---
@@ -96,47 +120,6 @@ struct WorkerCapabilities {
     capabilities: Vec<String>,          // ["rededr", "mde", "cortex"]
     tools: HashMap<String, String>,     // {"rededr_version": "1.2.3", ...}
     metadata: HashMap<String, String>,  // {"hostname": "VM1", "os_key": "win11-build-22621"}
-}
-```
-
-**Runtime State (mutable, shared via RwLock)**
-
-```rust
-struct WorkerState {
-    worker_id: String,
-    capabilities: Vec<String>,
-    metadata: HashMap<String, String>,
-    tools: Option<ToolVersions>,               // Proto type
-
-    // Health
-    health: HealthMetrics,
-
-    // Execution tracking
-    current_job_id: Option<String>,
-    current_run_id: Option<String>,            // Correlates telemetry batches
-
-    // Controller connectivity
-    last_controller_heartbeat: Option<i64>,
-    controller_disconnected: bool,
-    disconnect_reason: Option<String>,
-    reconnect_allowed: bool,
-}
-```
-
-| `WorkerState` Method | Description |
-|----------------------|-------------|
-| `new(worker_id, capabilities)` | Initialize from detection results |
-| `update_health()` | Refresh CPU/mem via sysinfo |
-
-**Health Metrics**
-
-```rust
-struct HealthMetrics {
-    cpu_percent: i32,
-    memory_percent: i32,
-    disk_percent: i32,       // TODO: always 0
-    active_jobs: i32,        // 0 or 1
-    uptime_seconds: i64,     // TODO: always 0
 }
 ```
 
@@ -169,21 +152,73 @@ struct WindowsVersionInfo {
 
 ---
 
-### `stream_handler` -- Bidirectional gRPC Stream
+### `session::worker_state` -- Mutable Runtime State
+
+**Runtime State (mutable, shared via RwLock)**
+
+```rust
+#[derive(Debug, Clone)]
+struct WorkerState {
+    worker_id: String,
+    capabilities: Vec<String>,
+    metadata: HashMap<String, String>,
+    tools: Option<ToolVersions>,               // Proto type
+
+    // Health
+    health: HealthMetrics,
+
+    // Execution tracking
+    current_job_id: Option<String>,
+    current_run_id: Option<String>,            // Correlates telemetry batches
+
+    // Controller connectivity
+    last_controller_heartbeat: Option<i64>,
+    controller_disconnected: bool,
+    disconnect_reason: Option<String>,
+    reconnect_allowed: bool,
+}
+```
+
+| `WorkerState` Method | Description |
+|----------------------|-------------|
+| `new(worker_id, capabilities)` | Initialize from detection results |
+| `update_health()` | Refresh CPU/mem via sysinfo |
+
+**Health Metrics**
+
+```rust
+#[derive(Debug, Clone, Default)]
+struct HealthMetrics {
+    cpu_percent: i32,
+    memory_percent: i32,
+    disk_percent: i32,       // TODO: always 0
+    active_jobs: i32,        // 0 or 1
+    uptime_seconds: i64,     // TODO: always 0
+}
+```
+
+---
+
+### `session::stream_handler` -- Bidirectional gRPC Stream
 
 ```rust
 struct StreamHandler {
     worker_state: Arc<RwLock<WorkerState>>,
     tx: mpsc::Sender<Result<WorkerMessage, Status>>,  // capacity: 100
-    service: Arc<WorkerAgentService>,                  // back-reference
+
+    // Individual fields (NO Arc<WorkerAgentService> — breaks cycle)
+    worker_id: String,
+    config: WorkerConfig,
+    execution_lock: Arc<Mutex<ExecutionState>>,
 }
 ```
 
 | Method | Direction | Description |
 |--------|-----------|-------------|
-| `new(worker_state, service)` | -- | Returns `(Self, mpsc::Receiver)` |
+| `new(worker_state, worker_id, config, execution_lock)` | -- | Returns `(Self, mpsc::Receiver)` |
+| `sender()` | -- | Reference to tx (for building ControlPlaneSink) |
 | `handle_stream(stream)` | Inbound | Message loop dispatching controller messages |
-| `handle_run_sample(cmd)` | Inbound | ACK + spawn async execution |
+| `handle_run_sample(cmd)` | Inbound | ACK + spawn async execution via engine |
 | `handle_health_check(req)` | Inbound | Reply with StatusReport |
 | `handle_heartbeat(hb)` | Inbound | Update last_controller_heartbeat |
 | `handle_disconnect(notice)` | Inbound | Set disconnected flag |
@@ -201,37 +236,47 @@ struct StreamHandler {
 
 ---
 
-### `service` -- gRPC RPC Handlers
+### `api` -- gRPC RPC Handlers
 
-#### `service::mod.rs` -- WorkerAgent Trait Implementation
+#### `api::mod.rs` -- WorkerAgent Trait Implementation
 
 Implements `WorkerAgent` gRPC trait, delegates to handler modules:
 
 | RPC | Handler | Direction | Description |
 |-----|---------|-----------|-------------|
-| `Ping` | `info_handlers::ping` | Unary | Liveness check |
-| `RunSample` | `sample_handlers::run_sample` | Unary | Execute artifact |
-| `HealthCheck` | `info_handlers::health_check` | Unary | CPU/mem/busy status |
-| `SendArtifact` | `artifact_handlers::send_artifact` | Client streaming | Chunked transfer |
-| `GetWorkerInfo` | `info_handlers::get_worker_info` | Unary | Capabilities + tools |
-| `GetTelemetry` | `info_handlers::get_telemetry` | Server streaming | Pull telemetry |
-| `EstablishStream` | `stream_handlers::establish_stream` | Bidirectional | Real-time stream |
+| `Ping` | `info::ping` | Unary | Liveness check |
+| `RunSample` | `run::run_sample` | Unary | Execute artifact |
+| `HealthCheck` | `info::health_check` | Unary | CPU/mem/busy status |
+| `SendArtifact` | `artifacts::send_artifact` | Client streaming | Chunked transfer |
+| `GetWorkerInfo` | `info::get_worker_info` | Unary | Capabilities + tools |
+| `GetTelemetry` | `info::get_telemetry` | Server streaming | Pull telemetry |
+| `EstablishStream` | `stream::establish_stream` | Bidirectional | Real-time stream |
 
 ---
 
-#### `service::sample_handlers` -- Core Execution
+#### `api::run` -- Unary Execution Entry Point
 
-Single function `run_sample()` (~1370 lines) orchestrating all execution phases.
+```
+run_sample(service, Request<SampleRequest>) -> Response<SampleResponse>
 
-**Key Helper Functions**
+Flow:
+1. Resolve run_id (from worker_state.current_run_id or UUID)
+2. Acquire execution lock (ExecutionState.acquire)
+3. Build RunRequest + RunContext from config
+4. Build ControlPlaneSink from stream handler's tx
+5. Call engine::execute_run()
+6. Map RunOutcome → SampleResponse
+```
+
+**Helper Functions**
 
 | Function | Visibility | Description |
 |----------|-----------|-------------|
-| `run_sample(service, request)` | pub | Full execution lifecycle |
+| `run_sample(service, request)` | pub | Full unary execution lifecycle |
+| `format_output(outcome, timeout)` | pub | Human-readable output string |
 | `describe_exit(exit_code)` | private | Human-readable exit code description |
 | `ntstatus_to_message(status)` | private | Windows NTSTATUS -> message string |
 | `looks_like_ntstatus(code)` | private | Check if code has 0x8000_0000 bit set |
-| `get_handle(stream)` | private | Spawn async stdout/stderr capture task |
 
 **Exit Code Semantics**
 
@@ -246,7 +291,7 @@ Single function `run_sample()` (~1370 lines) orchestrating all execution phases.
 
 ---
 
-#### `service::artifact_handlers` -- Binary Transfer
+#### `api::artifacts` -- Binary Transfer
 
 ```
 send_artifact(service, request: Streaming<ArtifactChunk>) -> TransferAck
@@ -256,13 +301,13 @@ Flow:
 2. Sort by chunk_index
 3. Reassemble flat byte array
 4. SHA256 verify against expected hash
-5. Write to C:\temp\artifacts\{artifact_id}.exe
+5. Write to {config.storage.artifacts_path}\{artifact_id}.exe
 6. Return TransferAck { received, chunks_received, storage_path }
 ```
 
 ---
 
-#### `service::info_handlers` -- Information RPCs
+#### `api::info` -- Information RPCs
 
 | Function | Returns | Description |
 |----------|---------|-------------|
@@ -273,7 +318,278 @@ Flow:
 
 ---
 
-#### `service::helpers` -- Telemetry Parsers
+#### `api::stream` -- Stream Establishment
+
+```
+establish_stream(service, request: Streaming<ControllerMessage>)
+    -> ReceiverStream<WorkerMessage>
+
+Flow:
+1. detect_capabilities()          -> WorkerCapabilities
+2. WorkerState::new()             -> Arc<RwLock<WorkerState>>
+3. StreamHandler::new(            -> (handler, rx)
+       worker_state, worker_id,
+       config, execution_lock)
+4. Store handler in service.stream_handler
+5. send_registration()            -> Controller
+6. Spawn: handle_stream(stream)   -> message loop
+7. Spawn: heartbeat_loop(30s)     -> periodic status
+8. Return: ReceiverStream(rx)     -> outbound messages
+```
+
+---
+
+### `dispatch::state` -- Execution State & Lock
+
+**ExecutionState (enum, not struct)**
+
+```rust
+#[derive(Debug, Clone)]
+enum ExecutionState {
+    Idle,
+    Running {
+        job_id: String,
+        artifact: String,
+        run_id: String,
+    },
+}
+```
+
+| Method | Description |
+|--------|-------------|
+| `is_busy()` | Returns `true` if `Running` variant |
+| `current_job_id()` | `Option<&str>` — `Some` if Running |
+| `current_artifact()` | `Option<&str>` — `Some` if Running |
+| `acquire(job_id, artifact, run_id)` | `Idle → Running` or `Err(ExecutionBusyError)` |
+| `release()` | `Running → Idle`, returns `(job_id, artifact)` |
+
+**ExecutionBusyError**
+
+```rust
+struct ExecutionBusyError {
+    current_job_id: String,
+    current_artifact: String,
+}
+// impl Display + Error
+```
+
+**ExecutionLockGuard**
+
+```rust
+struct ExecutionLockGuard {
+    lock: Arc<Mutex<ExecutionState>>,
+}
+// Drop: tokio::spawn -> state.release()
+```
+
+---
+
+### `dispatch::types` -- Typed Domain Types
+
+```rust
+struct RunRequest {
+    job_id: String,
+    artifact_id: String,
+    timeout_seconds: u32,
+    run_id: String,           // Resolved from controller request_id or UUID
+}
+
+struct RunContext {
+    worker_id: String,
+    config: WorkerConfig,
+    telemetry_dir: PathBuf,
+    artifact_path: PathBuf,
+    artifact_name: String,    // "{artifact_id}.exe"
+}
+
+struct RunOutcome {
+    exit_code: i32,
+    timed_out: bool,
+    stdout: String,
+    stderr: String,
+    telemetry_events: Vec<TelemetryData>,
+    elapsed: Duration,
+    phase_timings: RunPhaseTimings,
+}
+
+#[derive(Debug, Default)]
+struct RunPhaseTimings {
+    rededr_setup_ms: u64,
+    process_spawn_ms: u64,
+    process_wait_ms: u64,
+    telemetry_collect_ms: u64,
+    rededr_reset_ms: u64,
+}
+```
+
+| Function | Description |
+|----------|-------------|
+| `resolve_run_id(requested: Option<&str>)` | Non-empty string → use it; else UUID v4 |
+
+---
+
+### `dispatch::sink` -- Control Plane Sink
+
+```rust
+#[tonic::async_trait]
+trait ControlPlaneSink: Send + Sync {
+    async fn send_status(&self, status: ExecutionStatusReport) -> Result<()>;
+    async fn send_telemetry(&self, batch: TelemetryBatch) -> Result<()>;
+    async fn send_ack(&self, request_id: &str, success: bool, error: &str) -> Result<()>;
+}
+```
+
+**Implementations**
+
+```rust
+struct StreamSink {
+    tx: mpsc::Sender<Result<WorkerMessage, Status>>,
+}
+// Wraps the stream channel — used when bidirectional stream is active
+
+struct NullSink;
+// No-op — used when no bidirectional stream is available (worker-only mode)
+```
+
+| Function | Description |
+|----------|-------------|
+| `build_sink(tx: Option<&Sender>)` | `Some` → `StreamSink`, `None` → `NullSink` |
+
+---
+
+### `dispatch::guards` -- RAII Guards
+
+```rust
+struct RedEdrGuard {
+    collector: RedEdrCollector,
+    reset_on_drop: bool,
+}
+// Drop: Handle::try_current() → spawn POST /api/trace/reset (fire-and-forget)
+// Normal: reset_now() → explicit reset, set reset_on_drop=false
+
+struct MonitorGuard {
+    stop_tx: Option<watch::Sender<bool>>,
+    handle: Option<JoinHandle<()>>,
+    event_consumer: Option<JoinHandle<()>>,
+}
+// Drop: send stop signal + abort consumer (synchronous)
+// Normal: stop() → graceful shutdown with 10s timeout
+
+struct ProcessGuard {
+    child: Option<tokio::process::Child>,
+    should_kill: bool,
+}
+// Drop: child.start_kill() (synchronous — no runtime needed)
+// Normal: disarm() → take child, prevent kill
+```
+
+| Guard | Normal Exit | Error/Panic Exit (Drop) |
+|-------|-------------|-------------------------|
+| `ExecutionLockGuard` | (dropped) → tokio::spawn release | (dropped) → tokio::spawn release |
+| `RedEdrGuard` | `reset_now()` → POST reset | `Handle::try_current()` → spawn POST reset |
+| `ProcessGuard` | `disarm()` → take child | `start_kill()` (synchronous) |
+| `MonitorGuard` | `stop()` → signal + wait 10s | send stop signal + abort consumer |
+
+---
+
+### `dispatch::engine` -- Execution Engine
+
+**RunError**
+
+```rust
+enum RunError {
+    ArtifactNotFound(String),
+    RedEdrSetupFailed(String),
+    EnvironmentSetupFailed(String),
+    ProcessSpawnFailed(String),
+    FailedPrecondition(String),    // RedEDR contamination (strict mode)
+}
+```
+
+| Method | Description |
+|--------|-------------|
+| `into_status()` | Convert to `tonic::Status` with appropriate code |
+
+**Main Function**
+
+```
+execute_run(request: &RunRequest, context: &RunContext, sink: Arc<dyn ControlPlaneSink>)
+    -> Result<RunOutcome, RunError>
+
+9-Phase Pipeline:
+1. Validate artifact exists
+2. Setup RedEDR (sanity check, start tracing)
+3. Prepare environment (telemetry dir, trace collectors, streaming writer)
+4. Spawn artifact process
+5. Start monitoring (ExecutionMonitor + event consumer)
+6. Wait for process completion or timeout
+7. Collect telemetry (RedEDR, trace, coverage, checkpoints)
+8. Stream telemetry to controller via sink
+9. Reset RedEDR
+```
+
+---
+
+### `dispatch::monitor` -- Process Monitoring
+
+```rust
+struct ExecutionMonitor {
+    run_id: String,
+    job_id: String,
+    worker_id: String,
+    worker_ip: String,
+    artifact_name: String,
+    pid: u32,
+    rededr_base_url: String,
+    sink: Arc<dyn ControlPlaneSink>,    // NOT Arc<StreamHandler>
+    start_time: Instant,
+    timeout_seconds: i32,
+    client: reqwest::Client,            // 3s timeout
+    sys: Arc<Mutex<sysinfo::System>>,   // per-PID refresh
+}
+```
+
+| Method | Description |
+|--------|-------------|
+| `new(...)` | Create with all execution context (9 params) |
+| `start(stop_rx, event_tx)` | Main poll loop: 3s interval, select! with stop |
+| `collect_status()` | PID alive? + CPU/mem + RedEDR event count |
+| `send_status_to_controller(...)` | Via `sink.send_status()` with 1s timeout |
+| `is_process_alive(pid)` | Windows `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` |
+| `get_process_metrics(pid)` | sysinfo per-PID refresh -> (cpu%, mem_mb) |
+
+**Event Types Emitted**
+
+| Event | Trigger | Threshold |
+|-------|---------|-----------|
+| `started` | Initial | Once on start |
+| `heartbeat` | Process alive, events growing | Every 3s |
+| `telemetry_idle` | Process alive, no new events AND CPU < 5% | 3+ idle cycles (9s) |
+| `approaching_timeout` | Process alive, near timeout | elapsed >= timeout - 5s |
+| `terminated` | PID no longer exists | Process check fails |
+
+---
+
+### `infra::process` -- Process Lifecycle
+
+| Function | Description |
+|----------|-------------|
+| `spawn_artifact(artifact_path, working_dir)` | `tokio::process::Command` with piped stdout/stderr |
+| `kill_process_tree(child, pid)` | Windows: `taskkill /F /T /PID` + `child.kill()` |
+| `is_process_alive(pid)` | Windows: `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` |
+| `capture_stream(stream)` | Spawn task to read async stream into `String` |
+
+---
+
+### `infra::system` -- System Operations
+
+| Function | Description |
+|----------|-------------|
+| `prepare_telemetry_dir(dir)` | Remove stale files if exists, create fresh directory |
+
+---
+
+### `infra::helpers` -- Telemetry Parsers
 
 | Function | Input | Output |
 |----------|-------|--------|
@@ -294,117 +610,6 @@ Flow:
 {"ts_us":1234567,"checkpoint":"api:VirtualAlloc"}
 {"ts_us":1234600,"checkpoint":"api:VirtualProtect"}
 ```
-
----
-
-#### `service::stream_handlers` -- Stream Establishment
-
-```
-establish_stream(service, request: Streaming<ControllerMessage>)
-    -> ReceiverStream<WorkerMessage>
-
-Flow:
-1. detect_capabilities()          -> WorkerCapabilities
-2. WorkerState::new()             -> Arc<RwLock<WorkerState>>
-3. StreamHandler::new()           -> (handler, rx)
-4. Store handler in service.stream_handler
-5. send_registration()            -> Controller
-6. Spawn: handle_stream(stream)   -> message loop
-7. Spawn: heartbeat_loop(30s)     -> periodic status
-8. Return: ReceiverStream(rx)     -> outbound messages
-```
-
----
-
-### `execution::guards` -- RAII Guards
-
-**ExecutionState**
-
-```rust
-struct ExecutionState {
-    busy: bool,
-    current_job_id: Option<String>,
-    current_artifact: Option<String>,
-}
-```
-
-**Guards**
-
-```rust
-struct ExecutionLockGuard {
-    lock: Arc<Mutex<ExecutionState>>,
-}
-// Drop: tokio::spawn -> set busy=false, clear job_id/artifact
-
-struct RedEdrGuard {
-    collector: RedEdrCollector,
-    reset_on_drop: bool,
-}
-// Drop: std::thread::spawn -> POST /api/trace/reset
-// Normal: reset_now() -> explicit reset, prevent double-reset
-
-struct ProcessGuard {
-    child: Option<tokio::process::Child>,
-    should_kill: bool,
-}
-// Drop: std::thread::spawn -> child.kill()
-// Normal: disarm() -> take child, prevent kill
-
-struct MonitorGuard {
-    stop_tx: Option<watch::Sender<bool>>,
-    handle: Option<JoinHandle<()>>,
-    event_consumer: Option<JoinHandle<()>>,
-}
-// Drop: send stop signal + abort consumer
-// Normal: stop() -> graceful shutdown with 10s timeout
-```
-
-| Guard | Normal Exit | Error/Panic Exit |
-|-------|-------------|------------------|
-| `ExecutionLockGuard` | (dropped) -> release | (dropped) -> tokio::spawn release |
-| `RedEdrGuard` | `reset_now()` -> POST reset | (dropped) -> std::thread POST reset |
-| `ProcessGuard` | `disarm()` -> take child | (dropped) -> std::thread kill |
-| `MonitorGuard` | `stop()` -> signal + wait | (dropped) -> signal + abort |
-
----
-
-### `execution::monitor` -- Process Monitoring
-
-```rust
-struct ExecutionMonitor {
-    run_id: String,
-    job_id: String,
-    worker_id: String,
-    worker_ip: String,
-    artifact_name: String,
-    pid: u32,
-    rededr_base_url: String,
-    stream_handler: Option<Arc<StreamHandler>>,
-    start_time: Instant,
-    timeout_seconds: i32,
-    client: reqwest::Client,            // 3s timeout
-    sys: Arc<Mutex<sysinfo::System>>,   // per-PID refresh
-}
-```
-
-| Method | Description |
-|--------|-------------|
-| `new(...)` | Create with all execution context (9 params) |
-| `start(stop_rx, event_tx)` | Main poll loop: 3s interval, select! with stop |
-| `collect_status()` | PID alive? + CPU/mem + RedEDR event count |
-| `send_status_to_controller(...)` | Via StreamHandler with 1s timeout |
-| `is_process_alive(pid)` | Windows `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` |
-| `get_process_metrics(pid)` | sysinfo per-PID refresh -> (cpu%, mem_mb) |
-
-**Event Types Emitted**
-
-| Event | Trigger | Threshold |
-|-------|---------|-----------|
-| `started` | Initial | Once on start |
-| `heartbeat` | Process alive, events growing | Every 3s |
-| `stuck` | Process alive, no new events | 3+ idle cycles (9s) |
-| `approaching_timeout` | Process alive, near timeout | elapsed >= timeout - 5s |
-| `terminated` | PID no longer exists | Process check fails |
 
 ---
 
@@ -554,6 +759,29 @@ Decoded payload: "line:file.c:42:main"
 
 ---
 
+### `telemetry::pipeline` -- Trace Packaging
+
+**Constants**
+
+| Name | Value | Description |
+|------|-------|-------------|
+| `MAX_IMMEDIATE_SIZE` | 2MB | Threshold for small vs large trace |
+| `MAX_PAYLOAD_SIZE` | 4MB | gRPC message limit |
+
+**Public Functions**
+
+| Function | Description |
+|----------|-------------|
+| `package_trace_log(file, job_id, events)` | Two-phase: small → inline, large → tail + async compress |
+| `collect_trace_log_binary(file, job_id, events)` | Parse binary trace.log, extract telemetry events |
+
+**Large Trace Strategy**
+
+1. Send last 2MB of JSONL immediately (complete lines)
+2. Spawn async task: CLP+MatrixProfile+Sequitur → gzip → base64
+
+---
+
 ### `telemetry::trace_compressor` -- 3-Stage Compression
 
 **Output**
@@ -649,45 +877,54 @@ enum Symbol {
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
 │  main.rs creates:                                                               │
-│    └── WorkerAgentService ────────────────────────────────────────────────────┐│
-│         ├── config: WorkerConfig (owned)                                      ││
-│         ├── system_info: Arc<Mutex<System>> ──── health_check, get_worker_info││
-│         ├── execution_lock: Arc<Mutex<ExecutionState>> ──── run_sample        ││
-│         └── stream_handler: Arc<RwLock<Option<Arc<StreamHandler>>>>           ││
-│                                                    │                          ││
-│                                                    │ set on EstablishStream   ││
-│                                                    ▼                          ││
-│  ┌───────────────────────────────────────────────────────────────────────────┐││
-│  │                      StreamHandler (Arc-shared)                           │││
-│  │  ├── worker_state: Arc<RwLock<WorkerState>> ──── mutable runtime state   │││
-│  │  │   ├── capabilities, metadata, tools                                   │││
-│  │  │   ├── health: HealthMetrics                                           │││
-│  │  │   ├── current_job_id, current_run_id ──── telemetry correlation       │││
-│  │  │   └── controller_disconnected, reconnect_allowed                      │││
-│  │  ├── tx: mpsc::Sender ──── 100-capacity outbound channel ──→ Controller  │││
-│  │  └── service: Arc<WorkerAgentService> ──── back-reference                │││
-│  └───────────────────────────────────────────────────────────────────────────┘││
-│                                                                               ││
-│  Per-execution (created in run_sample, scoped to function):                   ││
-│  ┌───────────────────────────────────────────────────────────────────────────┐││
-│  │  ExecutionLockGuard ──── guards Arc<Mutex<ExecutionState>>               │││
-│  │  RedEdrGuard ──── owns RedEdrCollector                                   │││
-│  │  │                ├── config: RedEdrCollectorConfig                       │││
-│  │  │                ├── client: reqwest::Client                             │││
-│  │  │                └── seen_trace_ids: HashSet<u64>                        │││
-│  │  ProcessGuard ──── owns tokio::process::Child                            │││
-│  │  MonitorGuard ──── owns stop_tx, monitor handle, event consumer          │││
-│  │                                                                           │││
-│  │  Spawned tasks:                                                           │││
-│  │  ├── ExecutionMonitor.start() ──── polls PID + /api/stats                │││
-│  │  │   ├── stream_handler: Option<Arc<StreamHandler>> ◄───── (cloned)      │││
-│  │  │   └── sys: Arc<Mutex<System>> ──── per-PID metrics                    │││
-│  │  ├── TraceCollector.start_server() ──── named pipe reader                │││
-│  │  │   └── event_tx: mpsc::Sender<TraceEvent> ──→ streaming writer         │││
-│  │  ├── streaming_handle ──── BufWriter 256KB -> trace_events.jsonl         │││
-│  │  ├── stdout_handle, stderr_handle ──── async stream capture              │││
-│  │  └── event_consumer ──── log monitor events                              │││
-│  └───────────────────────────────────────────────────────────────────────────┘││
+│    └── WorkerAgentService ─────────────────────────────────────────────────────┐│
+│         ├── config: WorkerConfig (owned)                                       ││
+│         ├── system_info: Arc<Mutex<System>> ──── health_check, get_worker_info ││
+│         ├── execution_lock: Arc<Mutex<ExecutionState>> ──── run_sample, stream ││
+│         └── stream_handler: Arc<RwLock<Option<Arc<StreamHandler>>>>            ││
+│                                                    │                           ││
+│                                                    │ set on EstablishStream    ││
+│                                                    ▼                           ││
+│  ┌───────────────────────────────────────────────────────────────────────────┐ ││
+│  │                   StreamHandler (Arc-shared)                              │ ││
+│  │  ├── worker_state: Arc<RwLock<WorkerState>> ──── mutable runtime state   │ ││
+│  │  │   ├── capabilities, metadata, tools                                   │ ││
+│  │  │   ├── health: HealthMetrics                                           │ ││
+│  │  │   ├── current_job_id, current_run_id ──── telemetry correlation       │ ││
+│  │  │   └── controller_disconnected, reconnect_allowed                      │ ││
+│  │  ├── tx: mpsc::Sender ──── 100-capacity outbound channel ──→ Controller  │ ││
+│  │  ├── worker_id: String (cloned from service)                             │ ││
+│  │  ├── config: WorkerConfig (cloned from service)                          │ ││
+│  │  └── execution_lock: Arc<Mutex<ExecutionState>> ──── shared with service │ ││
+│  │       (NO Arc<WorkerAgentService> back-reference — breaks cycle)         │ ││
+│  └───────────────────────────────────────────────────────────────────────────┘ ││
+│                                                                                ││
+│  Per-execution (created in engine::execute_run, scoped to function):           ││
+│  ┌───────────────────────────────────────────────────────────────────────────┐ ││
+│  │  ExecutionLockGuard ──── guards Arc<Mutex<ExecutionState>>               │ ││
+│  │  RedEdrGuard ──── owns RedEdrCollector                                   │ ││
+│  │  │                ├── config: RedEdrCollectorConfig                       │ ││
+│  │  │                ├── client: reqwest::Client                             │ ││
+│  │  │                └── seen_trace_ids: HashSet<u64>                        │ ││
+│  │  ProcessGuard ──── owns tokio::process::Child                            │ ││
+│  │  MonitorGuard ──── owns stop_tx, monitor handle, event consumer          │ ││
+│  │                                                                           │ ││
+│  │  Injected via trait:                                                       │ ││
+│  │  sink: Arc<dyn ControlPlaneSink> ──── StreamSink(tx) or NullSink         │ ││
+│  │    │                                                                       │ ││
+│  │    └── StreamSink.tx: mpsc::Sender ──── cloned from StreamHandler.tx     │ ││
+│  │        (NO Arc<StreamHandler> held — breaks second cycle)                 │ ││
+│  │                                                                           │ ││
+│  │  Spawned tasks:                                                           │ ││
+│  │  ├── ExecutionMonitor.start() ──── polls PID + /api/stats                │ ││
+│  │  │   ├── sink: Arc<dyn ControlPlaneSink> ◄───── (cloned from engine)     │ ││
+│  │  │   └── sys: Arc<Mutex<System>> ──── per-PID metrics                    │ ││
+│  │  ├── TraceCollector.start_server() ──── named pipe reader                │ ││
+│  │  │   └── event_tx: mpsc::Sender<TraceEvent> ──→ streaming writer         │ ││
+│  │  ├── streaming_handle ──── BufWriter 256KB -> trace_events.jsonl         │ ││
+│  │  ├── stdout_handle, stderr_handle ──── infra::process::capture_stream    │ ││
+│  │  └── event_consumer ──── log monitor events                              │ ││
+│  └───────────────────────────────────────────────────────────────────────────┘ ││
 │                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -714,39 +951,41 @@ enum Symbol {
 │       │       │                                                                 │
 │       │       │ tokio::spawn                                                    │
 │       │       ▼                                                                 │
-│       │   sample_handlers::run_sample(service, SampleRequest)                   │
+│       │   ExecutionState.acquire(job_id, artifact, run_id)                      │
 │       │       │                                                                 │
-│       │       ├── ExecutionState.busy = true                                    │
+│       │       ├── RunRequest + RunContext built from config                      │
+│       │       ├── sink = build_sink(Some(&tx))                                  │
+│       │       │                                                                 │
+│       │       ▼                                                                 │
+│       │   engine::execute_run(request, context, sink)                           │
+│       │       │                                                                 │
 │       │       ├── RedEdrCollector.start_trace([artifact.exe])                   │
-│       │       ├── tokio::process::Command::new(artifact.exe)                    │
+│       │       ├── infra::process::spawn_artifact(path, dir)                     │
 │       │       ├── TraceCollector.start_server() ──→ TraceEvent                  │
 │       │       │                                        │                        │
 │       │       │                                        ▼ mpsc (100K)            │
 │       │       │                                   trace_events.jsonl            │
 │       │       │                                                                 │
-│       │       ├── ExecutionMonitor.start() ──→ MonitorEvent                     │
-│       │       │                                    │                            │
-│       │       │                                    ▼                            │
-│       │       │                               send_execution_status()           │
-│       │       │                                    │                            │
-│       │       │                                    ▼                            │
-│       │       │                            ExecutionStatusReport ──→ Controller  │
+│       │       ├── ExecutionMonitor.start(stop_rx, event_tx)                     │
+│       │       │   sink.send_status() ──→ ExecutionStatusReport ──→ Controller   │
 │       │       │                                                                 │
 │       │       ├── (process completes or timeout)                                │
+│       │       │   ├── infra::process::kill_process_tree() (on timeout)          │
+│       │       │   └── infra::process::is_process_alive() (verification)         │
 │       │       │                                                                 │
 │       │       ├── RedEdrCollector.collect_all() ──→ Vec<TelemetryData>          │
-│       │       ├── trace_events.jsonl ──→ TelemetryData (trace_log)              │
-│       │       ├── coverage_bbs.txt ──→ TelemetryData (CoverageEvent)            │
-│       │       ├── checkpoints.log ──→ Vec<TelemetryData> (CheckpointEvent)      │
+│       │       ├── pipeline::package_trace_log() ──→ TelemetryData (trace_log)   │
+│       │       ├── pipeline::collect_trace_log_binary() ──→ TelemetryData        │
+│       │       ├── helpers::collect_bb_coverage() ──→ TelemetryData (coverage)   │
+│       │       ├── helpers::collect_api_checkpoints() ──→ Vec<TelemetryData>     │
 │       │       │                                                                 │
 │       │       ▼                                                                 │
-│       │   TelemetryBatch { job_id, run_id, events[], is_final: true }           │
+│       │   sink.send_telemetry(TelemetryBatch { events, is_final: true })        │
 │       │       │                                                                 │
-│       │       │ send_telemetry()                                                │
 │       │       ▼                                                                 │
 │       │   WorkerMessage::Telemetry ──────────────────────────→ Controller        │
 │       │                                                                         │
-│       │   SampleResponse { job_id, exit_code, success, output }                 │
+│       │   RunOutcome → SampleResponse (via format_output)                       │
 │       │       │                                                                 │
 │       │       │ via tx channel                                                  │
 │       │       ▼                                                                 │
@@ -759,6 +998,10 @@ enum Symbol {
 │  Background:                                                                    │
 │  heartbeat_loop(30s) ──→ StatusReport ──→ WorkerMessage::Status ──→ Controller  │
 │                                                                                 │
+│  Unary RPC path (api::run::run_sample):                                         │
+│  SampleRequest ──→ engine::execute_run(sink from handler.sender())              │
+│  ──→ SampleResponse (via tonic::Response)                                       │
+│                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -768,10 +1011,10 @@ enum Symbol {
 
 | Channel | Message Type | Capacity | Sender | Receiver |
 |---------|-------------|----------|--------|----------|
-| gRPC outbound `tx` | `Result<WorkerMessage, Status>` | 100 | StreamHandler methods | Controller (via ReceiverStream) |
+| gRPC outbound `tx` | `Result<WorkerMessage, Status>` | 100 | StreamHandler methods / StreamSink | Controller (via ReceiverStream) |
 | Trace events | `TraceEvent` | 100,000 | TraceCollector (pipe) | Streaming JSONL writer |
 | Monitor events | `MonitorEvent` | 100 | ExecutionMonitor | Event consumer (logger) |
-| Monitor stop | `bool` (watch) | 1 | run_sample | ExecutionMonitor |
+| Monitor stop | `bool` (watch) | 1 | engine (or MonitorGuard Drop) | ExecutionMonitor |
 
 ---
 
@@ -779,12 +1022,13 @@ enum Symbol {
 
 | Primitive | Location | Purpose |
 |-----------|----------|---------|
-| `Arc<Mutex<ExecutionState>>` | WorkerAgentService | One-at-a-time execution lock |
+| `Arc<Mutex<ExecutionState>>` | WorkerAgentService, StreamHandler | One-at-a-time execution lock |
 | `Arc<Mutex<System>>` | WorkerAgentService | Shared sysinfo for health checks |
 | `Arc<RwLock<Option<Arc<StreamHandler>>>>` | WorkerAgentService | Lazy stream handler initialization |
 | `Arc<RwLock<WorkerState>>` | StreamHandler | Mutable runtime state (capabilities, health, job tracking) |
 | `Arc<Mutex<System>>` | ExecutionMonitor | Per-PID process metric refresh |
 | `Arc<AtomicU32>` | TraceCollector | Lock-free sequence counter (text protocol) |
+| `Arc<dyn ControlPlaneSink>` | engine, ExecutionMonitor | Transport-agnostic status/telemetry delivery |
 | `mpsc::Sender` (tokio) | StreamHandler.tx | Outbound gRPC messages (bounded: 100) |
 | `mpsc::Sender` (tokio) | TraceCollector.event_tx | Trace events (bounded: 100,000) |
 | `mpsc::Sender` (tokio) | ExecutionMonitor event_tx | Monitor events (bounded: 100) |

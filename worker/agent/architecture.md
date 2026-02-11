@@ -1,214 +1,323 @@
-# Big Picture
+# Global
 
 ```mermaid
 flowchart TB
-%% --- main.rs ---
-    subgraph sg_main["main.rs (tokio runtime + tonic server)"]
-        main_node["main()"]
-        svc["WorkerAgentService (Arc-clone)"]
-        main_node --> svc
-    end
+  %% ===== Control plane =====
+  C[Controller]
+  subgraph GRPC[gRPC Service Surface]
+    ES[EstablishStream<br/>bidirectional]
+    UR[RunSample<br/>unary]
+    HI[Info RPCs<br/>ping health worker_info telemetry]
+    AR[SendArtifact<br/>streaming upload]
+  end
 
-%% --- WorkerAgentService fields ---
-    subgraph sg_svc["WorkerAgentService fields"]
-        cfg["config: WorkerConfig"]
-        sys["system_info: Arc<Mutex<System>>"]
-        exlock["execution_lock: Arc<Mutex<ExecutionState>>"]
-        shoptslot["stream_handler: Arc<RwLock<Option<Arc<StreamHandler>>>>"]
-    end
+  %% ===== Worker core =====
+  subgraph W[Worker Agent]
+    SVC[WorkerAgentService<br/>config + system_info + execution_lock + stream_handler_opt]
+    SH[StreamHandler<br/>handle_stream + heartbeat_loop]
+    WS[WorkerState<br/>caps + health + job tracking]
+    TX[mpsc tx cap 100<br/>WorkerMessage outbound]
+  end
 
-    svc --> cfg
-    svc --> sys
-    svc --> exlock
-    svc --> shoptslot
+  %% ===== Execution orchestration =====
+  subgraph D[dispatch]
+    LOCK[ExecutionState + ExecutionLockGuard<br/>Idle or Running]
+    SINK[ControlPlaneSink<br/>StreamSink or NullSink]
+    ENG[engine.execute_run<br/>9-phase pipeline]
+    MON[ExecutionMonitor<br/>poll every 3s]
+    G[RAII guards<br/>RedEdrGuard ProcessGuard MonitorGuard]
+    TYPES[RunRequest + RunContext + RunOutcome<br/>RunPhaseTimings]
+  end
 
-%% --- stream_handler.rs ---
-    subgraph sg_stream["stream_handler.rs"]
-        stream_node["StreamHandler (Arc)"]
-        ws["worker_state: Arc<RwLock<WorkerState>>"]
-        tx["tx: mpsc::Sender<WorkerMessage> (cap=100)"]
-        back["service: Arc<WorkerAgentService> (backref)"]
-        stream_node --> ws
-        stream_node --> tx
-        stream_node --> back
-    end
+  %% ===== Infra boundary =====
+  subgraph I[infra]
+    SYS[system.prepare_telemetry_dir]
+    PROC[process.spawn_artifact<br/>kill_tree + is_alive + capture_stream]
+    HELP[helpers<br/>coverage + checkpoints parsers]
+  end
 
-    shoptslot -->|"Some(Arc)"| stream_node
-    back --> svc
+  %% ===== Telemetry =====
+  subgraph T[telemetry]
+    RED[collectors.rededr<br/>HTTP poll and batch collect_all]
+    PIPE[collectors.trace<br/>named pipe server<br/>binary ISTR or base64 text]
+    CH[mpsc TraceEvent cap 100000]
+    WR[trace JSONL writer<br/>BufWriter 256KB]
+    PKG[pipeline.package_trace_log<br/>size check then compress or tail]
+    COMP[trace_compressor<br/>CLP then motifs then grammar<br/>optional gzip]
+  end
 
-%% --- per-execution scope ---
-    subgraph sg_exec["Per-execution scope (run_sample)"]
-        exec_node["run_sample() scope"]
-        lkg["ExecutionLockGuard"]
-        reg["RedEdrGuard"]
-        prg["ProcessGuard"]
-        mog["MonitorGuard"]
+  %% ===== Wiring: service and stream =====
+  C --> ES --> SH
+  SH --> TX --> C
+  SH --> WS
+  ES -->|creates| WS
+  ES -->|stores handler| SVC
+  SVC --> LOCK
+  SH --> LOCK
 
-        exec_node --> lkg
-        exec_node --> reg
-        exec_node --> prg
-        exec_node --> mog
-    end
+  %% ===== Two entrypoints converge to engine =====
+  C --> UR
+  UR -->|build request and context| TYPES
+  SH -->|RunSample command| TYPES
+  TYPES -->|build| SINK
+  TX -->|StreamSink uses tx| SINK
+  TYPES --> ENG
+  SINK --> ENG
 
-    exlock --> lkg
+  %% ===== Engine phases (collapsed) =====
+  ENG -->|validate artifact exists| AR
+  ENG -->|setup and sanity check| RED
+  ENG -->|prepare dirs and collectors| SYS
+  ENG -->|start pipe + writer| PIPE
+  PIPE --> CH --> WR
+  ENG -->|spawn artifact| PROC
+  ENG -->|start monitor| MON
+  MON -->|status reports| SINK
+  ENG -->|wait or timeout| PROC
+  ENG -->|collect telemetry| RED
+  ENG -->|collect trace package| PKG
+  WR --> PKG
+  PKG --> COMP
+  ENG -->|parse coverage and checkpoints| HELP
+  ENG -->|send telemetry batch final true| SINK
+  ENG -->|reset rededr| RED
+  ENG --> G
+  G --> LOCK
+```
 
-%% --- collectors ---
-    subgraph sg_collect["Telemetry collectors"]
-        red["RedEdrCollector (HTTP)"]
-        trc["TraceCollector (named pipe)"]
-        parsers["coverage/checkpoints parsers"]
-        comp["TraceCompressor (CLP + motifs + Sequitur)"]
-    end
+# Big picture
 
-    exec_node --> red
-    exec_node --> trc
-    exec_node --> parsers
-    exec_node --> comp
+```mermaid
+flowchart TB
+  %% --- main.rs / lib.rs ---
+  subgraph SG_MAIN["main.rs + lib.rs"]
+    MAIN["main(): tokio runtime + tonic server"]
+    SVC["WorkerAgentService (Clone)"]
+    MAIN --> SVC
+  end
 
-    red --> reg
-    prg --> exec_node
-    mog --> exec_node
+  subgraph SG_SVC["WorkerAgentService fields"]
+    WID["worker_id: String"]
+    CFG["config: WorkerConfig"]
+    SYS["system_info: Arc<Mutex<System>>"]
+    EXLOCK["execution_lock: Arc<Mutex<ExecutionState>>"]
+    SHSLOT["stream_handler: Arc<RwLock<Option<Arc<StreamHandler>>>>"]
+  end
 
+  SVC --> WID
+  SVC --> CFG
+  SVC --> SYS
+  SVC --> EXLOCK
+  SVC --> SHSLOT
+
+  %% --- gRPC adapter layer ---
+  subgraph SG_API["api/ (thin gRPC adapters)"]
+    API_MOD["api::mod (WorkerAgent trait impl)"]
+    API_RUN["api::run::run_sample (unary)"]
+    API_STREAM["api::stream::establish_stream (bidir setup)"]
+    API_INFO["api::info (ping/health/info/telemetry)"]
+    API_ART["api::artifacts (send_artifact)"]
+  end
+
+  SVC --> API_MOD
+  API_MOD --> API_RUN
+  API_MOD --> API_STREAM
+  API_MOD --> API_INFO
+  API_MOD --> API_ART
+
+  %% --- session (stream + runtime state) ---
+  subgraph SG_SESSION["session/ (stream session + runtime state)"]
+    SH["StreamHandler (Arc)"]
+    WS["WorkerState: Arc<RwLock<WorkerState>>"]
+    TX["tx: mpsc Sender WorkerMessage (cap 100)"]
+    SH --> WS
+    SH --> TX
+  end
+
+  SHSLOT -->|"Some Arc"| SH
+
+  %% --- dispatch (core execution) ---
+  subgraph SG_DISPATCH["dispatch/ (core execution)"]
+    SINK["ControlPlaneSink trait"]
+    SS["StreamSink (wraps tx)"]
+    NS["NullSink (no-op)"]
+    ENG["engine::execute_run (9-phase pipeline)"]
+    MON["ExecutionMonitor (poll 3s)"]
+    GUARDS["guards: ExecutionLockGuard, RedEdrGuard, ProcessGuard, MonitorGuard"]
+    STATE["state::ExecutionState enum Idle | Running"]
+    TYPES["types: RunRequest, RunContext, RunOutcome, PhaseTimings"]
+  end
+
+  TX --> SS
+  SINK --> SS
+  SINK --> NS
+  API_RUN --> ENG
+  API_STREAM --> SH
+  SH -->|"spawns run task"| ENG
+  ENG --> MON
+  ENG --> GUARDS
+  EXLOCK --> STATE
+  STATE --> GUARDS
+  ENG --> TYPES
+
+  %% --- infra + telemetry ---
+  subgraph SG_INFRA["infra/ (side effects)"]
+    PROC["infra::process (spawn/kill/capture)"]
+    SYSOP["infra::system (telemetry dir)"]
+    HELP["infra::helpers (coverage/checkpoints parsers)"]
+  end
+
+  subgraph SG_TELE["telemetry/"]
+    RED["collectors::rededr (HTTP)"]
+    TRC["collectors::trace (named pipe)"]
+    COMP["trace_compressor"]
+  end
+
+  ENG --> PROC
+  ENG --> SYSOP
+  ENG --> HELP
+  ENG --> RED
+  ENG --> TRC
+  ENG --> COMP
 ```
 
 # Control plane
 
 ```mermaid
 flowchart LR
-    CTRL["Controller (gRPC)"]
+  CTRL["Controller (gRPC)"]
 
-    subgraph BIDIR["EstablishStream (bidirectional stream)"]
-        IN["Inbound ControllerMessage"]
-        OUT["Outbound WorkerMessage"]
-    end
+  subgraph BIDIR["EstablishStream bidirectional stream"]
+    IN["Inbound ControllerMessage"]
+    OUT["Outbound WorkerMessage"]
+  end
 
-    subgraph WORKER["Worker Agent"]
-        SH["StreamHandler\n(handle_stream loop)"]
-        RXTX["mpsc tx (cap=100)\nWorkerMessage -> tonic stream"]
-        SVC["WorkerAgentService"]
-        RUN["run_sample()\n(sample_handlers.rs)"]
-    end
+  subgraph WORKER["Worker agent"]
+    EST["api::stream::establish_stream"]
+    SH["session::StreamHandler handle_stream"]
+    HB["heartbeat_loop 30s"]
+    TX["tx mpsc cap 100"]
+    RUNU["api::run::run_sample (unary)"]
+    ENG["dispatch::engine::execute_run"]
+    SINKF["dispatch::sink::build_sink"]
+    SS["StreamSink"]
+    NS["NullSink"]
+  end
 
-    CTRL --> IN --> SH
-    SH --> RXTX --> OUT --> CTRL
+  CTRL --> IN --> SH
+  SH --> TX --> OUT --> CTRL
 
-    SH -->|RunSample cmd| RUN
-    SH -->|HealthCheck cmd| SVC
-    SH -->|Heartbeat| SH
-    SH -->|Disconnect| SH
+  EST --> SH
+  EST --> HB
+  SH -->|RunSample cmd| SINKF
+  RUNU -->|RunSample unary| SINKF
 
-    subgraph TELE_SG["Per-run telemetry sources"]
-        TELE_NODE["Telemetry fan-in"]
-        STD["stdout/stderr capture"]
-        PIPE["TraceCollector -> TraceEvent chan (cap=100k)\n-> trace_events.jsonl"]
-        RED["RedEDR HTTP collect_all()"]
-        COV["BB coverage files"]
-        CKP["API checkpoints log"]
+  SINKF -->|tx present| SS
+  SINKF -->|no tx| NS
 
-        TELE_NODE --> STD
-        TELE_NODE --> PIPE
-        TELE_NODE --> RED
-        TELE_NODE --> COV
-        TELE_NODE --> CKP
-    end
+  SS --> ENG
+  NS --> ENG
 
-    RUN --> STD
-    RUN --> PIPE
-    RUN --> RED
-    RUN --> COV
-    RUN --> CKP
-
-    TELE_NODE -->|TelemetryBatch final:true| SH
-    RUN -->|SampleResponse| SH
-    RUN -->|ExecutionStatus updates| SH
+  ENG -->|ExecutionStatus| SS
+  ENG -->|TelemetryBatch| SS
+  ENG -->|Ack| SS
 
 ```
 
-# RunSample 
+# RunSample
 
 ```mermaid
 sequenceDiagram
-    autonumber
-    participant C as Controller
-    participant SH as StreamHandler
-    participant RS as run_sample
-    participant L as ExecutionLock
-    participant RE as RedEDR
-    participant P as ChildProcess
-    participant T as TraceCollector
-    participant M as ExecutionMonitor
-    participant FS as TelemetryFiles
+  autonumber
+  participant C as Controller
+  participant SH as StreamHandler
+  participant U as UnaryRunSample
+  participant L as ExecutionState lock
+  participant S as ControlPlaneSink
+  participant E as execute_run engine
+  participant RE as RedEDR collector
+  participant T as TraceCollector
+  participant P as Artifact process
+  participant M as ExecutionMonitor
+  participant FS as Telemetry files and parsers
 
-    C->>SH: RunSample command
-    SH->>C: Ack request
+  alt Bidirectional stream command
+    C->>SH: ControllerMessage RunSample
+    SH->>S: build_sink using tx
+    SH->>S: send_ack request_id
+    SH->>E: spawn execute_run RunRequest RunContext
+  else Unary RPC
+    C->>U: RunSample unary RPC
+    U->>S: build_sink using stream_handler tx if present else NullSink
+    U->>E: call execute_run RunRequest RunContext
+  end
 
-    SH->>RS: spawn run_sample
+  E->>L: acquire Idle to Running job_id artifact run_id
+  L-->>E: lock acquired
 
-    RS->>L: acquire execution lock
-    L-->>RS: lock acquired and state marked busy
-    Note over RS: run_id resolved from worker state or uuid
+  E->>RE: collect_all sanity check
+  alt contaminated and strict_mode true
+    RE-->>E: leftover events found
+    E-->>S: send_status FailedPrecondition
+    E->>L: release via guard drop
+  else clean or strict_mode false
+    E->>RE: start_trace for artifact
+  end
 
-    RS->>RE: sanity telemetry check and reset if needed
-    RS->>RE: start trace for artifact
+  E->>FS: prepare telemetry directory
+  E->>T: start named pipe server and writer
+  E->>P: spawn artifact with stdout stderr piped
+  E->>M: start monitor poll loop every 3s
 
-    RS->>T: start named pipe trace server
-    RS->>FS: start trace file writer
-    RS->>P: spawn artifact process
+  loop until exit or timeout
+    M-->>S: send_status started or heartbeat or telemetry_idle or approaching_timeout
+  end
 
-    RS->>M: start execution monitor
-    M-->>SH: execution status updates
+  alt process exits
+    P-->>E: exit code
+  else timeout
+    E->>P: kill process tree
+  end
 
-    RS->>P: wait with timeout
-    alt process exits normally
-        P-->>RS: exit code returned
-    else timeout occurs
-        RS->>P: force terminate process
-    end
-
-    RS->>M: stop execution monitor
-    RS->>T: stop trace collector
-    RS->>FS: finalize trace files
-
-    RS->>RE: collect final rededr events
-    RS->>FS: parse trace coverage and checkpoints
-
-    RS-->>SH: send final telemetry batch
-    RS-->>SH: send sample response
-
-    RS->>RE: reset rededr state
-    RS->>L: release execution lock
+  E->>M: stop monitor
+  E->>T: stop collector and finalize trace files
+  E->>RE: collect_all post execution
+  E->>FS: parse trace coverage checkpoints and package telemetry
+  E-->>S: send_telemetry final true
+  E->>RE: reset
+  E->>L: release via guard drop
 
 ```
 
-# state machine
+# State machine
 
 ```mermaid
 stateDiagram-v2
-  state "ExecutionLock" as EL {
+  state "ExecutionState" as ES {
     [*] --> IDLE
-    IDLE --> BUSY: acquire (busy=false)
-    BUSY --> IDLE: drop guard / cleanup
-    BUSY --> BUSY: reject new run (RESOURCE_EXHAUSTED)
+    IDLE --> RUNNING: acquire succeeds
+    RUNNING --> IDLE: ExecutionLockGuard drop releases
+    RUNNING --> RUNNING: acquire fails BusyError
   }
 
-  state "StreamHandler Lifecycle" as SL {
+  state "Stream session" as SS {
     [*] --> NULL
     NULL --> ACTIVE: EstablishStream
-    ACTIVE --> DISCONNECTED: Disconnect msg OR heartbeat fails
-    DISCONNECTED --> ACTIVE: reconnect + heartbeat ok (flags reset)
+    ACTIVE --> DISCONNECTED: Disconnect notice or heartbeat fails
+    DISCONNECTED --> ACTIVE: heartbeat ok reconnect flags reset
   }
 
   state "ExecutionMonitor" as EM {
     [*] --> STARTED
     STARTED --> HEARTBEAT
-    HEARTBEAT --> HEARTBEAT: events grow OR periodic poll
-    HEARTBEAT --> STUCK: idle >= 3 cycles
-    HEARTBEAT --> APPROACHING_TIMEOUT: elapsed >= timeout-5s
-    STUCK --> HEARTBEAT: events resume
-    APPROACHING_TIMEOUT --> HEARTBEAT: (if still alive and not yet timed out)
+    HEARTBEAT --> HEARTBEAT: events grow or CPU active
+    HEARTBEAT --> TELEMETRY_IDLE: no new events 3 cycles and CPU under 5
+    HEARTBEAT --> APPROACHING_TIMEOUT: elapsed near timeout
+    TELEMETRY_IDLE --> HEARTBEAT: events resume or CPU rises
+    APPROACHING_TIMEOUT --> HEARTBEAT: still alive not yet timed out
     HEARTBEAT --> TERMINATED: pid dead
-    STUCK --> TERMINATED: pid dead
-    APPROACHING_TIMEOUT --> TERMINATED: pid dead / killed
+    TELEMETRY_IDLE --> TERMINATED: pid dead
+    APPROACHING_TIMEOUT --> TERMINATED: killed or pid dead
   }
 
 ```
@@ -217,72 +326,82 @@ stateDiagram-v2
 
 ```mermaid
 flowchart TB
-  RS["run_sample() task"] --> LOCK["ExecutionLockGuard (scoped)"]
+  REQ["execute_run task"]
+  REQ --> LOCK["ExecutionLockGuard (scoped)"]
 
-  RS --> PROC["Child process task (OS process)"]
-  RS --> MON["ExecutionMonitor task (3s poll loop)"]
-  RS --> PIPE["TraceCollector task (named pipe server)"]
-  RS --> WR["Trace JSONL writer task (BufWriter 256KB)"]
-  RS --> OUT1["stdout capture task"]
-  RS --> OUT2["stderr capture task"]
-  RS --> CONS["Monitor event consumer task"]
+  %% spawned / concurrent activities
+  REQ --> PROC["Artifact OS process"]
+  REQ --> MON["ExecutionMonitor task (3s poll)"]
+  REQ --> PIPE["TraceCollector pipe server task"]
+  REQ --> WR["Trace writer task (JSONL)"]
+  REQ --> OUT1["stdout capture task"]
+  REQ --> OUT2["stderr capture task"]
+  REQ --> CONS["Monitor event consumer task"]
+  REQ --> RED["RedEDR HTTP calls (setup collect reset)"]
+  REQ --> PARSE["Coverage + Checkpoints parsers"]
+  REQ --> COMP["Trace compressor (optional if large)"]
 
-  PIPE -->|"TraceEvent chan cap=100k"| WR
-  MON -->|"MonitorEvent chan cap=100"| CONS
-  RS -->|"watch stop (cap=1)"| MON
+  %% channels / signals
+  PIPE -->|"TraceEvent chan cap 100000"| WR
+  MON -->|"MonitorEvent chan cap 100"| CONS
+  REQ -->|"watch stop cap 1"| MON
 
-  RS --> RED["RedEDR HTTP (post-exec collect_all + reset)"]
-  RS --> PARSE["coverage/checkpoints parsers"]
-  RS --> COMP["Trace compression (async if large)"]
+  %% controller plumbing via sink
+  subgraph CP["ControlPlaneSink"]
+    SINK["Sink dyn trait"]
+    SS["StreamSink uses tx"]
+    NS["NullSink no-op"]
+    TX["mpsc WorkerMessage cap 100"]
+    SINK --> SS
+    SINK --> NS
+    SS --> TX
+  end
 
-  RS --> SH["StreamHandler.send_* (tx cap=100)"]
+  REQ --> SINK
+  TX --> CTRL["Controller stream"]
 
 ```
 
-# Named pipe
+# Named Pipe
 
 ```mermaid
 flowchart LR
-  %% ---- Producer side ----
   A["Instrumented artifact process"]
-  A -->|"connect and write"| P["Named pipe\nrededr_trace"]
+  P["Named pipe \\\\.\\pipe\\rededr_trace"]
 
-  %% ---- Worker side entry ----
-  RS["run_sample"]
-  RS -->|"spawn task"| S["TraceCollector.start_server"]
-  S -->|"CreateNamedPipe and accept"| P
+  RS["engine phase: start collectors"]
+  TC["TraceCollector.start_server()"]
+  RS --> TC
+  A -->|"connect + write"| P
+  TC -->|"CreateNamedPipe + accept"| P
 
-  %% ---- Protocol sniff ----
-  P --> B["Read first 4 bytes"]
-  B -->|"magic is ISTR"| BIN["Binary protocol path"]
-  B -->|"otherwise"| TXT["Text protocol path"]
+  SNIFF["Read first 4 bytes"]
+  P --> SNIFF
 
-  %% ---- Binary path ----
-  subgraph SB["Binary ISTR parsing"]
-    BIN --> H["Read InstRecordHeader\nmagic version type tid seq ts len"]
-    H --> PL["Read payload bytes\nlen from header"]
-    PL --> EV["Dispatch by event type\nline checkpoint success failure"]
-    EV --> L1["Parse line payload\nfile line func"]
-    EV --> O1["Parse status payload\ncheckpoint or success or failure"]
+  SNIFF -->|"magic ISTR"| BIN["Binary protocol"]
+  SNIFF -->|"otherwise"| TXT["Base64 text protocol"]
+
+  subgraph BPATH["Binary ISTR parsing"]
+    BIN --> H["Read InstRecordHeader (packed 32B)"]
+    H --> PL["Read payload bytes (payload_len)"]
+    PL --> D["Dispatch event_type 1/2/3/4"]
+    D --> L["Type1 LINE_TRACE parse file line func"]
+    D --> ST["Type2-4 checkpoint/success/failure"]
   end
 
-  %% ---- Text path ----
-  subgraph ST["Text base64 parsing"]
-    TXT --> R["Read line from pipe"]
-    R --> D["Decode base64"]
-    D --> F["Parse fields\nline file line func\nor checkpoint"]
+  subgraph TPATH["Text parsing"]
+    TXT --> R["Read line"]
+    R --> D64["Decode base64"]
+    D64 --> PF["Parse fields into line/file/func or checkpoint"]
   end
 
-  %% ---- Common output ----
-  L1 --> TE["TraceEvent struct\nseq tid file line func ts_us"]
-  F --> TE
-  O1 --> TS["Trace status event\ncheckpoint or success or failure"]
+  L --> EV["TraceEvent {seq, thread_id, file, line, func, ts_us}"]
+  PF --> EV
 
-  TE --> CH["mpsc TraceEvent channel\ncap 100k"]
-  CH --> W["Trace writer task\nappend JSONL"]
-  W --> FILE["trace_events.jsonl"]
+  EV --> CH["mpsc TraceEvent chan cap=100000"]
+  CH --> WR["Writer appends JSONL"]
+  WR --> FILE["trace_events.jsonl"]
 
-  %% optional: status events can be logged or folded into telemetry later
-  TS --> LOG["log or convert to telemetry later"]
+  ST --> OPT["Optional: convert to telemetry later"]
 
 ```
