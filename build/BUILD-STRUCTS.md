@@ -5,7 +5,7 @@
 ```
 crate build
 │
-├── lib.rs                              Crate root, core types, LowLevelBuilder
+├── lib.rs                              Crate root, core types (TraceMode)
 │
 ├── mod builder                         High-level artifact builder (pub)
 │   └── builder.rs                      ArtifactBuilder, BuilderConfig, BuildInput, BuiltArtifact
@@ -57,86 +57,6 @@ enum TraceMode {
 // ApiPlusBB → "api+bb", LinesAroundBB → "lines-around-bb"
 ```
 
-**Core Structs**
-
-```rust
-struct BuildConfig {
-    target: String,           // "x86_64-pc-windows-msvc"
-    optimization: String,     // "0" | "1" | "2" | "3" | "s" | "z"
-    trace_mode: TraceMode,    // Default: Lines
-    deterministic: bool,      // Pin timestamps, disable ASLR entropy
-    xwin_path: PathBuf,       // Default: ~/.xwin
-    llvm_passes: Vec<String>, // Custom opt passes
-    seed: u64,                // Mutation seed for reproducibility
-}
-// Used by: LowLevelBuilder
-
-struct Mutation {
-    id: String,                          // "ast.import_reshape", "ir.opaque_predicates"
-    params: HashMap<String, String>,     // Key-value mutation parameters
-}
-// Used by: LowLevelBuilder, ArtifactMetadata
-
-struct ArtifactMetadata {
-    artifact_id: String,           // SHA256 of final PE ("sha256:...")
-    artifact_path: PathBuf,        // Location of .exe
-    source_template: String,       // Original source filename
-    mutations: Vec<Mutation>,      // Applied mutations
-    config: BuildConfig,           // Build settings used
-    build_timestamp: String,       // RFC3339
-    toolchain: ToolchainInfo,      // Compiler versions
-}
-// Produced by: LowLevelBuilder.generate_metadata()
-
-struct ToolchainInfo {
-    clang_version: String,
-    llvm_version: String,
-    xwin_version: String,
-}
-```
-
-**LowLevelBuilder — LLVM IR Pipeline**
-
-```rust
-struct LowLevelBuilder {
-    config: BuildConfig,
-}
-```
-
-| Method | Visibility | Description |
-|--------|------------|-------------|
-| `new(config)` | pub | Create builder with given config |
-| `build(source, mutations, output)` | pub async | Full pipeline: Source → PE executable |
-| `apply_ast_mutations(source, mutations, output)` | pub(crate) async | Filter `ast.*` mutations, inject line tracing if needed |
-| `compile_to_ir(source, output)` | pub(crate) async | `clang -emit-llvm -S` with xwin headers |
-| `apply_ir_mutations(ir, mutations, output)` | pub(crate) async | Filter `ir.*` mutations (stub: copies input) |
-| `inject_instrumentation(ir, output)` | pub(crate) async | Delegate to Instrumenter based on trace_mode |
-| `compile_to_obj(ir, output)` | pub(crate) async | `llc -filetype=obj` |
-| `compile_runtime_library(temp_dir)` | pub(crate) async | Compile instrumentation_runtime.c → .obj |
-| `compile_minimal_runtime(temp_dir)` | pub(crate) async | Compile minimal_runtime.c → .obj |
-| `link_to_pe(obj_files, output)` | pub(crate) async | `ld.lld -flavor link` with xwin libs |
-| `find_runtime_include_dir()` | pub(crate) | Locate build/runtime include path |
-| `generate_metadata(source, mutations, artifact)` | pub(crate) | SHA256 hash + metadata struct |
-
-**LowLevelBuilder.build() Pipeline:**
-```
-source.c → apply_ast_mutations → mutated.c
-                                      │
-                         compile_to_ir ▼
-                                  artifact.ll → apply_ir_mutations → mutated.ll
-                                                                          │
-                                                  inject_instrumentation ▼
-                                                                  instrumented.ll
-                                                                          │
-                                                          compile_to_obj ▼
-                                                                  artifact.obj
-                                                                          │
-                                     + minimal_runtime.obj ──────► link_to_pe
-                                     + [instrumentation_runtime.obj]       │
-                                                                          ▼
-                                                                  artifact.exe
-```
-
 ---
 
 ### `builder` — High-Level Artifact Builder
@@ -162,18 +82,6 @@ enum BuildInput {
         source_file: String,             // Source filename
         mutations: Vec<MutationSpec>,    // Mutations to apply
         trace_mode: String,              // "off"|"lines"|"api"|"bb"|"api+bb"|"all"
-    },
-    LlvmIr {
-        ir_code: Vec<u8>,               // Raw IR bytes
-        artifact_name: String,           // Name for temp files
-        mutations: Vec<MutationSpec>,    // LLVM IR mutations
-        trace_mode: String,
-    },
-    SourceCode {
-        source_code: Vec<u8>,           // Raw C code bytes
-        artifact_name: String,
-        mutations: Vec<MutationSpec>,
-        trace_mode: String,
     },
     ModularTemplate {                    // PREFERRED
         modules: ModuleSelection,        // Carrier, decoder, etc.
@@ -202,25 +110,14 @@ struct BuiltArtifact {
 |--------|------------|-------------|
 | `new(config)` | pub | Create builder, validate xwin_dir exists |
 | `build(input)` | pub async | Dispatch to build variant by BuildInput |
-| `build_template(name, file, trace)` | pub async | Build from template source (no mutations) |
-| `build_template_with_mutations(name, file, mutations, trace)` | pub async | Build from template with mutations |
 | `build_template_with_runtime(name, file, trace)` | self async | Compile source + runtime, link |
 | `build_template_with_mutations_and_runtime(name, file, muts, trace)` | self async | Mutate → compile → link |
 | `build_modular_template(modules, payload, enc, muts, trace)` | self async | Encode → assemble → mutate → compile |
-| `build_from_source_code(code, name, muts, trace)` | self async | Build from in-memory C source |
-| `build_from_source_code_internal(code, name, trace)` | self async | Compile in-memory source (no mutations) |
-| `build_from_source_code_with_mutations(code, name, muts, trace)` | self async | Mutate in-memory source → compile |
-| `build_from_llvm_ir(ir, name, muts, trace)` | self async | Build from LLVM IR bytes |
-| `build_from_llvm_ir_internal(ir, name, trace)` | self async | Compile IR (no mutations) |
-| `build_from_llvm_ir_with_mutations(ir, name, muts, trace)` | self async | Mutate IR → compile |
 | `apply_instrumentation(artifact, source, trace)` | self async | Post-build: inject line traces → IR instrument → recompile |
 | `compile_source_to_ir(source, output)` | self async | `clang -S -emit-llvm -O0` |
 | `compile_ir_to_object(ir, output)` | self async | `clang -c` on IR file |
 | `compile_ir_to_exe(ir, output)` | self async | `clang` IR directly to .exe |
-| `invoke_clang(source, output)` | self async | Full clang compile+link (source → .exe) |
 | `invoke_clang_internal(source, output, trace, extra_sources)` | self async | Core clang invocation with xwin flags |
-| `invoke_clang_on_ir(ir, output)` | self async | Clang compile IR → .exe |
-| `link_object_to_exe(obj, output)` | self async | `lld-link` object to PE |
 | `link_instrumented_exe(source_obj, runtime_obj, minimal_obj, output)` | self async | `lld-link` all objects → PE |
 | `compile_runtime(trace_mode)` | self async | Compile runtime .c → .obj |
 | `verify_runtime_symbols(obj_path)` | self async | `llvm-nm` to check exported symbols |
@@ -248,12 +145,6 @@ build(input)
     │     │                  │                 compile_ir_to_exe()    │
     │     │                  └── else → invoke_clang_internal()       │
     │     └── trace != "off"? → apply_instrumentation()              │
-    │                                                                 │
-    ├── LlvmIr ──► build_from_llvm_ir_with_mutations()               │
-    │                  Mutator::apply(ir) → invoke_clang_on_ir()     │
-    │                                                                 │
-    ├── SourceCode ──► build_from_source_code_with_mutations()       │
-    │                  Mutator::apply(src) → invoke_clang()           │
     │                                                                 │
     └── ModularTemplate ──► build_modular_template()                 │
              PayloadEncoder.encode() → Assembler.assemble()          │
@@ -398,20 +289,6 @@ struct AstMutator;
 | Method | Visibility | Description |
 |--------|------------|-------------|
 | `new()` | pub | Create (no-op) |
-| `inject_line_tracing(source)` | pub | Legacy macro-based line tracing injection |
-| `inject_line_tracing_with_delay(source, delay_us)` | pub | Line tracing with configurable delay |
-| `mutate(source, mutations)` | pub async | **NOT IMPLEMENTED** — returns error |
-
-**inject_line_tracing() Detail:**
-- Emits `#define __TRACE_LINE()` macro at file top
-  - Uses `snprintf` → Base64 encode → write to `\\.\pipe\rededr_trace`
-  - Falls back to `stderr` if pipe unavailable
-  - Optional delay loop (configurable microseconds)
-- Inserts `__TRACE_LINE();` after each `;`-terminated statement
-- Tracks function boundaries via `{`/`}` matching
-- Skips: preprocessor directives, comments, empty lines
-
-**Status:** Legacy — superseded by `line_tracer.rs` (tree-sitter based) for production use. Still used by `LowLevelBuilder.apply_ast_mutations()`.
 
 ---
 
@@ -425,9 +302,6 @@ struct IrMutator;
 | Method | Visibility | Description |
 |--------|------------|-------------|
 | `new()` | pub | Create (no-op) |
-| `mutate(ir, mutations)` | pub async | **NOT IMPLEMENTED** — returns error |
-
-**Status:** Stub only. Planned: opaque predicates, CFG flattening, API indirection, bogus control flow. Actual LLVM IR mutations are handled by `Mutator::apply()` via text-based transforms.
 
 ---
 
@@ -629,16 +503,6 @@ Unknown mutation IDs: silently skipped (not an error)
 │                   │ mutations_applied                                       │  │
 │                   └── consumed by: controller dispatch, test harness       │  │
 │                                                                             │  │
-│  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │  │
-│                                                                             │  │
-│  LowLevelBuilder (alternative, LLVM IR-focused pipeline)                   │  │
-│    │ config: BuildConfig (owned)                                            │  │
-│    │                                                                        │  │
-│    ├── uses ► AstMutator.inject_line_tracing() (legacy)                    │  │
-│    ├── uses ► Instrumenter.instrument() (same as above)                    │  │
-│    ├── invokes: clang, llc, ld.lld (CLI tools)                            │  │
-│    └── produces ► ArtifactMetadata                                         │  │
-│                                                                             │  │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -737,50 +601,11 @@ Unknown mutation IDs: silently skipped (not an error)
 
 ---
 
-## Dual Builder Comparison
-
-```
-┌──────────────────────────────┬──────────────────────────────────────────┐
-│   LowLevelBuilder (lib.rs)  │   ArtifactBuilder (builder.rs)          │
-├──────────────────────────────┼──────────────────────────────────────────┤
-│ Config: BuildConfig          │ Config: BuilderConfig                   │
-│   (target, optimization,     │   (templates_dir, output_dir, xwin_dir, │
-│    trace_mode, seed, ...)    │    runtime_src, modular_template_dir)   │
-├──────────────────────────────┼──────────────────────────────────────────┤
-│ Input: &Path + &[Mutation]   │ Input: BuildInput (enum, 4 variants)    │
-├──────────────────────────────┼──────────────────────────────────────────┤
-│ Mutation type: Mutation      │ Mutation type: MutationSpec             │
-│   {id, params}               │   {id, params} + parse()               │
-├──────────────────────────────┼──────────────────────────────────────────┤
-│ Pipeline: explicit LLVM IR   │ Pipeline: Clang direct or LLVM IR      │
-│   source → clang -emit-llvm  │   source → clang → exe                 │
-│   → opt → llc → ld.lld      │   or source → clang -S → mutate → exe  │
-│                              │   or assemble → clang → exe             │
-├──────────────────────────────┼──────────────────────────────────────────┤
-│ Template support: NO         │ Template support: YES (ModularTemplate) │
-│                              │   Assembler + PayloadEncoder            │
-├──────────────────────────────┼──────────────────────────────────────────┤
-│ Instrumentation: inline      │ Instrumentation: post-build             │
-│   (during IR pipeline)       │   apply_instrumentation() after compile │
-├──────────────────────────────┼──────────────────────────────────────────┤
-│ Linker: ld.lld -flavor link  │ Linker: clang -fuse-ld=lld             │
-├──────────────────────────────┼──────────────────────────────────────────┤
-│ Output: ArtifactMetadata     │ Output: BuiltArtifact                   │
-├──────────────────────────────┼──────────────────────────────────────────┤
-│ Use when: Direct LLVM IR     │ Use when: ALL OTHER CASES (PREFERRED)   │
-│   pipeline control needed    │   especially ModularTemplate builds     │
-└──────────────────────────────┴──────────────────────────────────────────┘
-```
-
----
-
 ## External Tool Dependencies
 
 | Tool | Invoked By | Usage |
 |------|-----------|-------|
-| `clang` | LowLevelBuilder, ArtifactBuilder | C → LLVM IR, C → .obj, C → .exe |
-| `llc` | LowLevelBuilder | LLVM IR → .obj |
-| `ld.lld` | LowLevelBuilder | .obj → PE |
+| `clang` | ArtifactBuilder | C → LLVM IR, C → .obj, C → .exe |
 | `lld-link` | ArtifactBuilder | .obj → PE (instrumented builds) |
 | `opt` | Instrumenter | SanitizerCoverage pass on LLVM IR |
 | `llvm-nm` | ArtifactBuilder | Verify runtime symbols in .obj |
@@ -792,7 +617,6 @@ Unknown mutation IDs: silently skipped (not an error)
 | Struct | State | Lifetime |
 |--------|-------|----------|
 | `ArtifactBuilder` | `config: BuilderConfig` | Per-session (reused across builds) |
-| `LowLevelBuilder` | `config: BuildConfig` | Per-session |
 | `Assembler` | `template_dir` + `module_cache` | Per-call (created fresh) |
 | `PayloadEncoder` | `xor_key` + `dictionary` | Per-call |
 | `Instrumenter` | `bb_counter` + `line_counter` | Per-call (counters grow) |
@@ -804,4 +628,3 @@ Unknown mutation IDs: silently skipped (not an error)
 | `ModuleSelection` | 6 × String | Value type (passed in) |
 | `EncodedPayload` | `data` + `metadata` | Value type (returned) |
 | `BuiltArtifact` | Full metadata | Value type (returned) |
-| `ArtifactMetadata` | Full metadata | Value type (returned) |

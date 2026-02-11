@@ -6,8 +6,7 @@
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                           LIB.RS (Crate Root)                                   │
 │  Declares: 6 submodules, re-exports public API, core types                      │
-│  Core Types: TraceMode, BuildConfig, Mutation, ArtifactMetadata, ToolchainInfo  │
-│  Owns: LowLevelBuilder (LLVM IR pipeline)                                       │
+│  Core Types: TraceMode                                                          │
 └────────────────────────────────────┬────────────────────────────────────────────┘
                                      │
           ┌──────────┬───────────┬───┴───────┬───────────┬──────────┐
@@ -126,28 +125,6 @@
 └─────────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│ PATH B: LOW-LEVEL LLVM IR BUILD (LowLevelBuilder)                              │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  source.c ──► AST Mutations ──► clang -emit-llvm -S ──► artifact.ll            │
-│                                                              │                  │
-│                                                              ▼                  │
-│                                        IR Mutations ──► mutated.ll              │
-│                                                              │                  │
-│                                                              ▼                  │
-│                                   Instrumenter.instrument() ──► instrumented.ll │
-│                                                              │                  │
-│                                                              ▼                  │
-│                                              llc -filetype=obj ──► artifact.obj │
-│                                                              │                  │
-│                                                              ▼                  │
-│                                   ld.lld -flavor link ──► artifact.exe          │
-│                                        + minimal_runtime.obj                    │
-│                                        + [instrumentation_runtime.obj]          │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────────┐
 │ PATH C: INSTRUMENTATION (apply_instrumentation)                                │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
@@ -225,49 +202,6 @@
 │   LinesAroundBB serializes as "lines-around-bb"                                │
 │                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           BuildConfig (struct)                                  │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   target: String            "x86_64-pc-windows-msvc"                           │
-│   optimization: String      "0" | "1" | "2" | "3" | "s" | "z"                 │
-│   trace_mode: TraceMode     Default: Lines                                     │
-│   deterministic: bool       Pin timestamps, disable ASLR entropy               │
-│   xwin_path: PathBuf        Default: ~/.xwin                                   │
-│   llvm_passes: Vec<String>  Custom opt passes                                  │
-│   seed: u64                 Mutation seed for reproducibility                  │
-│                                                                                 │
-│   Used by: LowLevelBuilder (LLVM IR pipeline)                                  │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                             Mutation (struct)                                   │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   id: String                      "ast.import_reshape", "ir.opaque_predicates" │
-│   params: HashMap<String, String>  Key-value mutation parameters               │
-│                                                                                 │
-│   Used by: LowLevelBuilder                                                     │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                         ArtifactMetadata (struct)                               │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   artifact_id: String       SHA256 of final PE ("sha256:...")                  │
-│   artifact_path: PathBuf    Location of .exe                                   │
-│   source_template: String   Original source filename                           │
-│   mutations: Vec<Mutation>  Applied mutations                                  │
-│   config: BuildConfig       Build settings used                                │
-│   build_timestamp: String   RFC3339                                            │
-│   toolchain: ToolchainInfo  Compiler versions                                  │
-│                                                                                 │
-│   Produced by: LowLevelBuilder.generate_metadata()                             │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Builder Module (`builder.rs`)
@@ -297,20 +231,6 @@
 │     source_file: String             Source filename                            │
 │     mutations: Vec<MutationSpec>    Mutations to apply                         │
 │     trace_mode: String              "off"|"lines"|"api"|"bb"|"api+bb"|"all"   │
-│   }                                                                            │
-│                                                                                 │
-│   LlvmIr {                     ─── Build from pre-compiled LLVM IR            │
-│     ir_code: Vec<u8>                Raw IR bytes                               │
-│     artifact_name: String           Name for temp files                        │
-│     mutations: Vec<MutationSpec>    LLVM IR mutations                          │
-│     trace_mode: String                                                         │
-│   }                                                                            │
-│                                                                                 │
-│   SourceCode {                  ─── Build from in-memory C source              │
-│     source_code: Vec<u8>            Raw C code bytes                           │
-│     artifact_name: String                                                      │
-│     mutations: Vec<MutationSpec>                                               │
-│     trace_mode: String                                                         │
 │   }                                                                            │
 │                                                                                 │
 │   ModularTemplate {             ─── PREFERRED: @MODULE-based assembly          │
@@ -446,14 +366,6 @@
 │       │     │     YES ──► apply_instrumentation()                │              │
 │       │     │                                                    │              │
 │       │     └──► BuiltArtifact                                   │              │
-│       │                                                          │              │
-│       ├── LlvmIr ──► build_from_llvm_ir_with_mutations()         │              │
-│       │                  Mutator::apply(ir, mutations)            │              │
-│       │                  invoke_clang_on_ir()                     │              │
-│       │                                                          │              │
-│       ├── SourceCode ──► build_from_source_code_with_mutations() │              │
-│       │                  Mutator::apply(source, mutations)        │              │
-│       │                  invoke_clang()                           │              │
 │       │                                                          │              │
 │       └── ModularTemplate ──► build_modular_template()           │              │
 │                  PayloadEncoder.encode()                          │              │
@@ -907,35 +819,26 @@
 │  ┌────────────────────────────────────────────────────────────────────────┐    │
 │  │ AstMutator (transform/ast_mutator.rs)                                 │    │
 │  │                                                                        │    │
-│  │  STATUS: Partially implemented                                        │    │
+│  │  STATUS: Placeholder for future tree-sitter AST mutations             │    │
+│  │  Provides: struct + new() + Default                                   │    │
 │  │                                                                        │    │
-│  │  ✓ inject_line_tracing() ─── Legacy macro-based tracing               │    │
-│  │    • Emits #define __TRACE_LINE() macro with:                          │    │
-│  │      - snprintf → Base64 encode → write to \\.\pipe\rededr_trace     │    │
-│  │      - Fallback to stderr if pipe unavailable                         │    │
-│  │      - Optional delay loop (configurable microseconds)                │    │
-│  │    • Injects __TRACE_LINE(); after each statement ending with ';'     │    │
-│  │    • Tracks function boundaries ({/} matching)                        │    │
-│  │    • Skips preprocessor directives, comments, empty lines             │    │
-│  │                                                                        │    │
-│  │  ✗ mutate() ─── NOT YET IMPLEMENTED (returns error)                   │    │
-│  │    Planned: tree-sitter AST mutations                                 │    │
+│  │  Planned:                                                             │    │
 │  │    • Control-flow jitter                                              │    │
 │  │    • Constant encoding (XOR, stack strings)                           │    │
 │  │    • Import reshaping (delay-load, hash-based)                        │    │
 │  │    • Function inlining/outlining                                      │    │
 │  │                                                                        │    │
-│  │  NOTE: Used by LowLevelBuilder.apply_ast_mutations()                  │    │
-│  │  NOTE: line_tracer.rs (tree-sitter based) supersedes inject_line_tracing()│ │
+│  │  NOTE: Production AST mutations use Mutator::apply() (mutator/mod.rs) │    │
+│  │  NOTE: Line tracing uses line_tracer.rs (tree-sitter based)           │    │
 │  └────────────────────────────────────────────────────────────────────────┘    │
 │                                                                                 │
 │  ┌────────────────────────────────────────────────────────────────────────┐    │
 │  │ IrMutator (transform/ir_mutator.rs)                                   │    │
 │  │                                                                        │    │
-│  │  STATUS: Stub only                                                    │    │
+│  │  STATUS: Placeholder for future LLVM IR transforms                    │    │
+│  │  Provides: struct + new() + Default                                   │    │
 │  │                                                                        │    │
-│  │  ✗ mutate() ─── NOT YET IMPLEMENTED (returns error)                   │    │
-│  │    Planned: LLVM IR semantic-preserving transforms                    │    │
+│  │  Planned:                                                             │    │
 │  │    • Opaque predicates (always-true/false branches)                   │    │
 │  │    • CFG flattening (dispatcher-based control flow)                   │    │
 │  │    • API call indirection (via function pointers)                     │    │
@@ -958,43 +861,21 @@
 
 ---
 
-## 12. Two Builder APIs
+## 12. Builder API
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                       Two Builder APIs Comparison                               │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  ┌──────────────────────────────┬──────────────────────────────────────────┐   │
-│  │   LowLevelBuilder (lib.rs)  │   ArtifactBuilder (builder.rs)          │   │
-│  ├──────────────────────────────┼──────────────────────────────────────────┤   │
-│  │ Config: BuildConfig          │ Config: BuilderConfig                   │   │
-│  │ Uses: LLVM IR pipeline       │ Uses: Clang direct compilation          │   │
-│  │ Pipeline:                    │ Pipeline:                               │   │
-│  │   source → AST mut → IR     │   source → clang → exe                  │   │
-│  │   → IR mut → instrument     │   or: source → clang → IR → mut → exe  │   │
-│  │   → llc → ld.lld → exe     │   or: assemble → clang → exe            │   │
-│  │                              │                                         │   │
-│  │ Linker: ld.lld -flavor link │ Linker: clang -fuse-ld=lld             │   │
-│  │ Opt: configurable O0-O3     │ Opt: O2 (direct) / O0 (IR path)        │   │
-│  │                              │                                         │   │
-│  │ Mutation: Mutation struct    │ Mutation: MutationSpec struct           │   │
-│  │                              │   (from mutator/mod.rs)                 │   │
-│  │ Template: none               │ Template: ModularTemplate support       │   │
-│  │ Instrumentation: inline      │ Instrumentation: apply_instrumentation()│   │
-│  │                              │                                         │   │
-│  │ Use when: Direct LLVM IR     │ Use when: All other cases (PREFERRED)  │   │
-│  │   pipeline needed            │   especially ModularTemplate builds     │   │
-│  └──────────────────────────────┴──────────────────────────────────────────┘   │
-│                                                                                 │
-│  Both share:                                                                   │
-│  • Same xwin SDK for Windows cross-compilation                                 │
-│  • Same runtime libraries (minimal_runtime.o, instrumentation_runtime.o)       │
-│  • Same SHA256 artifact naming                                                 │
-│  • Target: x86_64-pc-windows-msvc                                              │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
+The build system uses a single builder: **ArtifactBuilder** (`builder.rs`).
+
+- **Config:** `BuilderConfig`
+- **Pipeline:** source -> clang -> exe, or: source -> clang -> IR -> mut -> exe, or: assemble -> clang -> exe
+- **Linker:** clang -fuse-ld=lld
+- **Optimization:** O2 (direct) / O0 (IR path)
+- **Mutation:** `MutationSpec` struct (from `mutator/mod.rs`)
+- **Template:** ModularTemplate support
+- **Instrumentation:** `apply_instrumentation()`
+- **xwin SDK** for Windows cross-compilation
+- **Runtime libraries:** `minimal_runtime.o`, `instrumentation_runtime.o`
+- **SHA256 artifact naming**
+- **Target:** `x86_64-pc-windows-msvc`
 
 ---
 
@@ -1009,8 +890,6 @@
 │  │ Required Tools (in PATH)                                              │    │
 │  │                                                                        │    │
 │  │   clang ──── C compiler (Clang 17+)                                   │    │
-│  │   llc ────── LLVM static compiler (IR → object)                       │    │
-│  │   ld.lld ─── LLVM linker (object → PE)                               │    │
 │  │   lld-link ─ MSVC-compatible linker (for instrumented builds)         │    │
 │  │   opt ────── LLVM optimizer (SanitizerCoverage pass)                  │    │
 │  │   llvm-nm ── Symbol viewer (runtime symbol verification)              │    │
@@ -1754,7 +1633,7 @@
 
 | Decision | Implementation | Benefit |
 |----------|---------------|---------|
-| **Two builder APIs** | `LowLevelBuilder` (LLVM IR) + `ArtifactBuilder` (Clang direct) | LowLevelBuilder for fine-grained IR control; ArtifactBuilder for template workflows |
+| **Single builder API** | `ArtifactBuilder` (Clang direct) | Unified builder for all workflows: SourceFile, ModularTemplate, and IR mutation paths |
 | **Modular templates** | `@MODULE` markers in `loader_template.c` replaced at assembly time | Combinatorial artifact generation from independent gene modules |
 | **Two-level mutation** | `@MODULE` (gene selection) → `@MUTATE` (within-gene transforms) | Separate macro and micro mutation axes |
 | **Weak symbol linking** | `minimal_runtime.c` uses `__attribute__((weak))` for flush functions | Single runtime binary works with/without instrumentation |
