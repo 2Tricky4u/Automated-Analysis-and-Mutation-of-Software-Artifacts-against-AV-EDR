@@ -366,42 +366,71 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  A["Instrumented artifact process"]
-  P["Named pipe \\\\.\\pipe\\rededr_trace"]
+%% =========================
+%% Producers (inside artifact)
+%% =========================
+    A["Instrumented artifact process"]
 
-  RS["engine phase: start collectors"]
-  TC["TraceCollector.start_server()"]
-  RS --> TC
-  A -->|"connect + write"| P
-  TC -->|"CreateNamedPipe + accept"| P
+%% Two pipe paths exist on the runtime side
+    P_TRACE["Named pipe path\n\\\\.\\pipe\\rededr_trace"]
+    P_CKP["Named pipe path\n\\\\.\\pipe\\rededr_checkpoints"]
 
-  SNIFF["Read first 4 bytes"]
-  P --> SNIFF
+    A -->|"line traces (ISTR)"| P_TRACE
+    A -->|"checkpoints + status events (JSON)"| P_CKP
 
-  SNIFF -->|"magic ISTR"| BIN["Binary protocol"]
-  SNIFF -->|"otherwise"| TXT["Base64 text protocol"]
+%% =========================
+%% Worker side
+%% =========================
+    RS["run_sample()"]
 
-  subgraph BPATH["Binary ISTR parsing"]
-    BIN --> H["Read InstRecordHeader (packed 32B)"]
-    H --> PL["Read payload bytes (payload_len)"]
-    PL --> D["Dispatch event_type 1/2/3/4"]
-    D --> L["Type1 LINE_TRACE parse file line func"]
-    D --> ST["Type2-4 checkpoint/success/failure"]
-  end
+%% Worker actually runs ONLY the trace pipe server
+    RS -->|"spawn"| TC["TraceCollector.start_server()"]
+    TC -->|"listens on"| P_TRACE
 
-  subgraph TPATH["Text parsing"]
-    TXT --> R["Read line"]
-    R --> D64["Decode base64"]
-    D64 --> PF["Parse fields into line/file/func or checkpoint"]
-  end
+%% =========================
+%% TRACE PIPE: protocol sniff + parsing -> trace_events.jsonl
+%% =========================
+    P_TRACE --> SNIFF["Read first 4 bytes"]
+    SNIFF -->|"ISTR"| BIN["Binary protocol"]
+    SNIFF -->|"other"| TXT["Base64 text protocol"]
 
-  L --> EV["TraceEvent {seq, thread_id, file, line, func, ts_us}"]
-  PF --> EV
+    subgraph TRACE_BIN["TRACE PIPE parsing"]
+        BIN --> HDR["Read InstRecordHeader\nmagic version type tid seq ts len"]
+        HDR --> PAY["Read payload bytes"]
+        PAY --> DISP["Dispatch event_type"]
+        DISP -->|"1 line_trace"| PLINE["Parse file:line:func"]
+        DISP -->|"2-4 seen"| WARN["WARN/IGNORE\n(these belong to checkpoint pipe)"]
+    end
 
-  EV --> CH["mpsc TraceEvent chan cap=100000"]
-  CH --> WR["Writer appends JSONL"]
-  WR --> FILE["trace_events.jsonl"]
+    subgraph TRACE_TXT["Legacy text parsing"]
+        TXT --> L1["Read line"]
+        L1 --> D64["Decode Base64"]
+        D64 --> PTXT["Parse into line trace"]
+    end
 
-  ST --> OPT["Optional: convert to telemetry later"]
+    PLINE --> TE["TraceEvent struct"]
+    PTXT --> TE
+    TE --> CH["mpsc TraceEvent chan\ncap 100000"]
+    CH --> WR["Writer task -> JSONL"]
+    WR --> FILE_TRACE["trace_events.jsonl"]
+
+%% =========================
+%% CHECKPOINTS: pipe exists but no server; runtime falls back to file
+%% =========================
+    P_CKP --> TRY["Runtime tries to connect"]
+    TRY -->|"connect fails (no server)"| FALL["Fallback to file logging"]
+    FALL --> FILE_CKP["checkpoints.log on disk"]
+
+%% =========================
+%% Post-exec fan-in (worker reads files)
+%% =========================
+    RS -->|"post-exec"| READ_CKP["Read checkpoints.log\ncollect_api_checkpoints()"]
+    FILE_CKP --> READ_CKP
+
+    FILE_TRACE --> PACK_TRACE["Package trace telemetry"]
+    READ_CKP --> PACK_CKP["CheckpointEvent telemetry"]
+
+    PACK_TRACE --> EVENTS["telemetry_events[]"]
+    PACK_CKP --> EVENTS
 
 ```

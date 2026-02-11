@@ -481,43 +481,56 @@ The monitor distinguishes true idle (no events + low CPU) from busy-but-silent (
 ### 6.1 Five Telemetry Sources
 
 ```
-    ┌──────────────────────────────────────────────────────┐
-    │                  Artifact Execution                   │
-    │                                                      │
-    │  ┌─────────┐  ┌─────────┐  ┌────────┐  ┌──────────────┐│
-    │  │ stdout  │  │ stderr  │  │coverage│  │checkpoints   ││
-    │  │ (piped) │  │ (piped) │  │.bin    │  │.log (JSON)   ││
-    │  └────┬────┘  └────┬────┘  │+bbs.txt│  │+ status evts ││
-    │       │            │       └───┬────┘  └─────┬───────┘│
-    └───────┼────────────┼───────────┼────────────┼──────┘
-            │            │           │            │
-            ▼            ▼           ▼            ▼
-    ┌───────────┐  ┌──────────┐  ┌────────┐  ┌──────────┐
-    │  stdout   │  │  stderr  │  │   BB   │  │   API    │
-    │  capture  │  │  capture │  │coverage│  │checkpoint│
-    │  (async)  │  │  (async) │  │parser  │  │ parser   │
-    └───────────┘  └──────────┘  └────────┘  └──────────┘
-            │            │           │            │
-    ┌───────┼────────────┼───────────┼────────────┼──────┐
-    │       ▼            ▼           ▼            ▼      │
-    │         ┌─ telemetry_events: Vec<TelemetryData> ─┐ │
-    │         │                                        │ │
-    │         │  + RedEDR events (HTTP /api/logs/rededr)│ │
-    │         │  + trace_log (named pipe → JSONL)      │ │
-    │         │  + trace.log (binary protocol fallback) │ │
-    │         │  + coverage (typed CoverageEvent)      │ │
-    │         │  + checkpoints (typed CheckpointEvent) │ │
-    │         │  + phase_timings (observability event)  │ │
-    │         └────────────────────────────────────────┘ │
-    │                                                    │
-    │  ┌──────────────────┐   ┌────────────────────┐    │
-    │  │   Named Pipe     │   │   RedEDR HTTP API  │    │
-    │  │\\.\pipe\rededr_  │   │ GET /api/logs/rededr│    │
-    │  │    trace         │   │ GET /api/stats      │    │
-    │  │  (binary/b64)    │   │ POST /api/trace/    │    │
-    │  └──────────────────┘   │      start|reset    │    │
-    │                         └────────────────────┘    │
-    └────────────────────────────────────────────────────┘
+    ┌───────────────────────────────────────────────────────────────┐
+    │                      Artifact Execution                       │
+    │                                                               │
+    │  ┌─────────┐  ┌─────────┐  ┌────────┐  ┌──────────────────┐ │
+    │  │ stdout  │  │ stderr  │  │coverage│  │ checkpoints.log  │ │
+    │  │ (piped) │  │ (piped) │  │.bin    │  │ (JSON lines)     │ │
+    │  └────┬────┘  └────┬────┘  │+bbs.txt│  │ checkpoints +    │ │
+    │       │            │       └───┬────┘  │ status events    │ │
+    │       │            │           │       └────────┬─────────┘ │
+    └───────┼────────────┼───────────┼────────────────┼───────────┘
+            │            │           │                │
+            ▼            ▼           ▼                ▼
+    ┌───────────┐  ┌──────────┐  ┌────────┐  ┌──────────────────┐
+    │  stdout   │  │  stderr  │  │   BB   │  │   checkpoint     │
+    │  capture  │  │  capture │  │coverage│  │   parser         │
+    │  (async)  │  │  (async) │  │parser  │  │ (reads file)     │
+    └───────────┘  └──────────┘  └────────┘  └──────────────────┘
+            │            │           │                │
+    ┌───────┼────────────┼───────────┼────────────────┼──────┐
+    │       ▼            ▼           ▼                ▼      │
+    │         ┌─ telemetry_events: Vec<TelemetryData> ─────┐ │
+    │         │                                            │ │
+    │         │  + RedEDR events (HTTP /api/logs/rededr)   │ │
+    │         │  + trace_log (named pipe → JSONL)          │ │
+    │         │  + trace.log (binary protocol fallback)    │ │
+    │         │  + coverage (typed CoverageEvent)          │ │
+    │         │  + checkpoints (typed CheckpointEvent)     │ │
+    │         │  + artifact status (success/failure)       │ │
+    │         │  + phase_timings (observability event)     │ │
+    │         └────────────────────────────────────────────┘ │
+    │                                                        │
+    │  Named Pipes (artifact → worker):                      │
+    │  ┌──────────────────────────────────────────────────┐  │
+    │  │ \\.\pipe\rededr_trace     (worker runs server)   │  │
+    │  │   → line traces (binary ISTR / Base64)           │  │
+    │  │   → streams to trace_events.jsonl via channel    │  │
+    │  │                                                  │  │
+    │  │ \\.\pipe\rededr_checkpoints (NO server)          │  │
+    │  │   → artifact tries pipe, fails, falls back to    │  │
+    │  │     checkpoints.log file in telemetry_dir (CWD)  │  │
+    │  │   → worker reads file after execution completes  │  │
+    │  └──────────────────────────────────────────────────┘  │
+    │                                                        │
+    │  ┌──────────────────────────────────────────────────┐  │
+    │  │ RedEDR HTTP API                                  │  │
+    │  │   GET  /api/logs/rededr  (ETW/kernel events)     │  │
+    │  │   GET  /api/stats        (event count)           │  │
+    │  │   POST /api/trace/start|reset                    │  │
+    │  └──────────────────────────────────────────────────┘  │
+    └────────────────────────────────────────────────────────┘
 ```
 
 ### 6.2 RedEDR Collector (`telemetry/collectors/rededr.rs`)
