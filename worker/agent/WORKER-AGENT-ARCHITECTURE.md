@@ -484,11 +484,11 @@ The monitor distinguishes true idle (no events + low CPU) from busy-but-silent (
     ┌──────────────────────────────────────────────────────┐
     │                  Artifact Execution                   │
     │                                                      │
-    │  ┌─────────┐  ┌─────────┐  ┌────────┐  ┌──────────┐│
-    │  │ stdout  │  │ stderr  │  │coverage│  │checkpoints││
-    │  │ (piped) │  │ (piped) │  │.bin    │  │.log      ││
-    │  └────┬────┘  └────┬────┘  │+bbs.txt│  │(JSON)    ││
-    │       │            │       └───┬────┘  └────┬─────┘│
+    │  ┌─────────┐  ┌─────────┐  ┌────────┐  ┌──────────────┐│
+    │  │ stdout  │  │ stderr  │  │coverage│  │checkpoints   ││
+    │  │ (piped) │  │ (piped) │  │.bin    │  │.log (JSON)   ││
+    │  └────┬────┘  └────┬────┘  │+bbs.txt│  │+ status evts ││
+    │       │            │       └───┬────┘  └─────┬───────┘│
     └───────┼────────────┼───────────┼────────────┼──────┘
             │            │           │            │
             ▼            ▼           ▼            ▼
@@ -562,7 +562,7 @@ Protocol Auto-Detection (first 4 bytes):
 │   InstRecordHeader (32 bytes, packed):
 │   ├── magic: u32 (0x49535452)
 │   ├── version: u16
-│   ├── event_type: u16 (1=line, 2=checkpoint, 3=success, 4=failure)
+│   ├── event_type: u16 (1=line_trace; 2-4 now use checkpoint pipe, warned if seen here)
 │   ├── thread_id: u32
 │   ├── seq_no: u64
 │   ├── ts_us: u64
@@ -598,7 +598,7 @@ Two-phase approach for trace logs:
                           └── Still too big → first/last 100 lines
 ```
 
-Binary protocol trace.log (`collect_trace_log_binary()`): Parses the ISTR binary format directly from file, extracting line traces, checkpoints, success/failure events.
+Binary protocol trace.log (`collect_trace_log_binary()`): Parses the ISTR binary format directly from file, extracting line traces only. Artifact status events (types 2-4) are now expected in `checkpoints.log` and are warned+ignored if found in trace.log.
 
 ### 6.5 Trace Compression (`telemetry/trace_compressor.rs`)
 

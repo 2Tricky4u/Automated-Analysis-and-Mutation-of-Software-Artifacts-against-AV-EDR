@@ -763,7 +763,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
 // ============================================================================
 // Artifact Status API (user-callable from C code)
 // ============================================================================
-// Event types: 1=line, 2=checkpoint, 3=success, 4=failure
+// Now uses JSON format on checkpoint pipe (not binary ISTR on trace pipe)
 
 /**
  * Signal artifact reached a checkpoint
@@ -771,40 +771,19 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
  */
 void __artifact_checkpoint(const char* checkpoint_name) {
     if (!checkpoint_name) return;
-
-    __trace_init(NULL);  // Ensure pipe is connected
-
-    // Build payload
-    char payload[256];
-    int payload_len = snprintf(payload, sizeof(payload), "%s", checkpoint_name);
-    if (payload_len < 0 || payload_len >= (int)sizeof(payload)) {
-        payload_len = sizeof(payload) - 1;
+    if (!__checkpoint_initialized) __checkpoint_init();
+    if (__checkpoint_pipe != INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER freq, counter;
+        QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&counter);
+        uint64_t ts_us = (counter.QuadPart * 1000000) / freq.QuadPart;
+        char buffer[512];
+        int len = snprintf(buffer, sizeof(buffer),
+            "{\"ts_us\":%llu,\"checkpoint\":\"%s\",\"type\":\"artifact_checkpoint\"}\n",
+            (unsigned long long)ts_us, checkpoint_name);
+        DWORD written;
+        WriteFile(__checkpoint_pipe, buffer, len, &written, NULL);
     }
-
-    // Build header (event_type=2 for CHECKPOINT)
-    InstRecordHeader hdr;
-    hdr.magic = 0x49535452;  // 'ISTR'
-    hdr.version = 1;
-    hdr.event_type = 2;      // CHECKPOINT
-    hdr.thread_id = GetCurrentThreadId();
-    hdr.seq_no = (uint64_t)InterlockedIncrement64(&__binary_seq_counter);
-    hdr.ts_us = __get_timestamp_us();
-    hdr.payload_len = (uint32_t)payload_len;
-
-    // Check buffer space
-    size_t total_size = sizeof(InstRecordHeader) + payload_len;
-    if (__trace_buffer_pos + total_size > sizeof(__trace_buffer)) {
-        __trace_flush();
-    }
-
-    // Write to buffer
-    memcpy(__trace_buffer + __trace_buffer_pos, &hdr, sizeof(hdr));
-    __trace_buffer_pos += sizeof(hdr);
-    memcpy(__trace_buffer + __trace_buffer_pos, payload, payload_len);
-    __trace_buffer_pos += payload_len;
-
-    // Immediate flush for important status events
-    __trace_flush();
 }
 
 /**
@@ -813,37 +792,19 @@ void __artifact_checkpoint(const char* checkpoint_name) {
  */
 void __artifact_success(const char* message) {
     if (!message) message = "success";
-
-    __trace_init(NULL);
-
-    // Build payload
-    char payload[512];
-    int payload_len = snprintf(payload, sizeof(payload), "%s", message);
-    if (payload_len < 0 || payload_len >= (int)sizeof(payload)) {
-        payload_len = sizeof(payload) - 1;
+    if (!__checkpoint_initialized) __checkpoint_init();
+    if (__checkpoint_pipe != INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER freq, counter;
+        QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&counter);
+        uint64_t ts_us = (counter.QuadPart * 1000000) / freq.QuadPart;
+        char buffer[512];
+        int len = snprintf(buffer, sizeof(buffer),
+            "{\"ts_us\":%llu,\"checkpoint\":\"%s\",\"type\":\"success\"}\n",
+            (unsigned long long)ts_us, message);
+        DWORD written;
+        WriteFile(__checkpoint_pipe, buffer, len, &written, NULL);
     }
-
-    // Build header (event_type=3 for SUCCESS)
-    InstRecordHeader hdr;
-    hdr.magic = 0x49535452;
-    hdr.version = 1;
-    hdr.event_type = 3;      // SUCCESS
-    hdr.thread_id = GetCurrentThreadId();
-    hdr.seq_no = (uint64_t)InterlockedIncrement64(&__binary_seq_counter);
-    hdr.ts_us = __get_timestamp_us();
-    hdr.payload_len = (uint32_t)payload_len;
-
-    size_t total_size = sizeof(InstRecordHeader) + payload_len;
-    if (__trace_buffer_pos + total_size > sizeof(__trace_buffer)) {
-        __trace_flush();
-    }
-
-    memcpy(__trace_buffer + __trace_buffer_pos, &hdr, sizeof(hdr));
-    __trace_buffer_pos += sizeof(hdr);
-    memcpy(__trace_buffer + __trace_buffer_pos, payload, payload_len);
-    __trace_buffer_pos += payload_len;
-
-    __trace_flush();
 }
 
 /**
@@ -852,37 +813,19 @@ void __artifact_success(const char* message) {
  */
 void __artifact_failure(const char* message, int error_code) {
     if (!message) message = "failure";
-
-    __trace_init(NULL);
-
-    // Build payload with error code
-    char payload[512];
-    int payload_len = snprintf(payload, sizeof(payload), "%s|%d", message, error_code);
-    if (payload_len < 0 || payload_len >= (int)sizeof(payload)) {
-        payload_len = sizeof(payload) - 1;
+    if (!__checkpoint_initialized) __checkpoint_init();
+    if (__checkpoint_pipe != INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER freq, counter;
+        QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&counter);
+        uint64_t ts_us = (counter.QuadPart * 1000000) / freq.QuadPart;
+        char buffer[512];
+        int len = snprintf(buffer, sizeof(buffer),
+            "{\"ts_us\":%llu,\"checkpoint\":\"%s\",\"type\":\"failure\",\"error_code\":%d}\n",
+            (unsigned long long)ts_us, message, error_code);
+        DWORD written;
+        WriteFile(__checkpoint_pipe, buffer, len, &written, NULL);
     }
-
-    // Build header (event_type=4 for FAILURE)
-    InstRecordHeader hdr;
-    hdr.magic = 0x49535452;
-    hdr.version = 1;
-    hdr.event_type = 4;      // FAILURE
-    hdr.thread_id = GetCurrentThreadId();
-    hdr.seq_no = (uint64_t)InterlockedIncrement64(&__binary_seq_counter);
-    hdr.ts_us = __get_timestamp_us();
-    hdr.payload_len = (uint32_t)payload_len;
-
-    size_t total_size = sizeof(InstRecordHeader) + payload_len;
-    if (__trace_buffer_pos + total_size > sizeof(__trace_buffer)) {
-        __trace_flush();
-    }
-
-    memcpy(__trace_buffer + __trace_buffer_pos, &hdr, sizeof(hdr));
-    __trace_buffer_pos += sizeof(hdr);
-    memcpy(__trace_buffer + __trace_buffer_pos, payload, payload_len);
-    __trace_buffer_pos += payload_len;
-
-    __trace_flush();
 }
 
 #endif

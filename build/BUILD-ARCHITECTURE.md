@@ -634,11 +634,15 @@
 │  ┌─────────────────────────────────────────────────────────────────────────┐   │
 │  │ ARTIFACT STATUS API (user-callable from artifact C code)              │   │
 │  │                                                                        │   │
-│  │ Uses binary protocol (InstRecordHeader) with event_type:              │   │
+│  │ Uses JSON format on checkpoint pipe (\\.\pipe\rededr_checkpoints)     │   │
+│  │ or checkpoints.log file fallback (same as __checkpoint):              │   │
 │  │                                                                        │   │
-│  │   __artifact_checkpoint("name")    event_type=2, payload=name         │   │
-│  │   __artifact_success("message")    event_type=3, payload=message      │   │
-│  │   __artifact_failure("msg", code)  event_type=4, payload="msg|code"   │   │
+│  │   __artifact_checkpoint("name")                                       │   │
+│  │     → {"ts_us":N,"checkpoint":"name","type":"artifact_checkpoint"}    │   │
+│  │   __artifact_success("message")                                       │   │
+│  │     → {"ts_us":N,"checkpoint":"message","type":"success"}             │   │
+│  │   __artifact_failure("msg", code)                                     │   │
+│  │     → {"ts_us":N,"checkpoint":"msg","type":"failure","error_code":N}  │   │
 │  │                                                                        │   │
 │  │ Used via macros from instrumentation.h:                               │   │
 │  │   ARTIFACT_CHECKPOINT(name)                                           │   │
