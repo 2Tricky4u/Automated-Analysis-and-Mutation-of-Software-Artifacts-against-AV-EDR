@@ -14,14 +14,16 @@ pub mod automutate {
     }
 }
 
+// New module structure
+pub mod api;
+pub mod dispatch;
+pub mod session;
+pub mod infra;
 pub mod capabilities;
-pub mod execution;
-pub mod service;
-pub mod stream_handler;
 pub mod telemetry;
 
-// Re-export WorkerAgentService for use in stream_handler and main
-use execution::guards::ExecutionState;
+// Re-export WorkerAgentService for use in session and main
+use dispatch::state::ExecutionState;
 use edr_config::WorkerConfig;
 use std::sync::Arc;
 use sysinfo::System;
@@ -36,7 +38,7 @@ pub struct WorkerAgentService {
     /// This ensures clean telemetry collection with no cross-contamination
     pub(crate) execution_lock: Arc<Mutex<ExecutionState>>,
     /// StreamHandler for bidirectional communication
-    pub(crate) stream_handler: Arc<tokio::sync::RwLock<Option<Arc<stream_handler::StreamHandler>>>>,
+    pub(crate) stream_handler: Arc<tokio::sync::RwLock<Option<Arc<session::stream_handler::StreamHandler>>>>,
 }
 
 impl WorkerAgentService {
@@ -45,11 +47,7 @@ impl WorkerAgentService {
             worker_id,
             config,
             system_info: Arc::new(Mutex::new(System::new_all())),
-            execution_lock: Arc::new(Mutex::new(ExecutionState {
-                busy: false,
-                current_job_id: None,
-                current_artifact: None,
-            })),
+            execution_lock: Arc::new(Mutex::new(ExecutionState::Idle)),
             stream_handler: Arc::new(Default::default()),
         }
     }
