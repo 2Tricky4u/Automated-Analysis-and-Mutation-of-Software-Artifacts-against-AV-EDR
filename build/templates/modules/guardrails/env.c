@@ -8,11 +8,11 @@
 
 // Defaults if not defined by build system
 #ifndef ENV_KEY
-#define ENV_KEY "USERNAME"
+#define ENV_KEY "PROCESSOR_IDENTIFIER"
 #endif
 
 #ifndef ENV_NEEDLE
-#define ENV_NEEDLE "Sandbox"
+#define ENV_NEEDLE "Intel"
 #endif
 
 char my_tolower(char c) {
@@ -52,27 +52,8 @@ int guardrail() {
     
     DWORD result = GetEnvironmentVariableA(envVarName, buffer, 1024);
     if (result == 0) {
-        return 6; // Fail if env var not found
+        return 6;
     }
-    
-    // In original SuperMega:
-    // If we are looking for "Admin" in "Administrator", contains returns 1.
-    // Logic: If NOT found, return 6 (Fail). 
-    // Wait, the original template logic was:
-    // if (! contains_case_insensitive(buffer, tocheck)) return 6;
-    // Meaning we WANT the needle to be present.
-    // e.g. Key="USERNAME", Needle="Admin" -> Runs only if user is Admin.
-    
-    // BUT the previous implementation I wrote was:
-    // if (strcmp(buffer, "Sandbox") == 0) return 1; (Bail if sandbox)
-    
-    // Let's stick to the ORIGINAL SuperMega logic which is usually an "Inclusion Check"
-    // (Run only if target matches). 
-    // OR it could remain an exclusion check if the user negates the logic in the template.
-    //
-    // Looking at data/source/guardrails/env.c:
-    // if (! contains_case_insensitive(buffer, tocheck)) { return 6; }
-    // This implies "Must Contain".
     
     if (!contains_case_insensitive(buffer, tocheck)) {
         return 6;
