@@ -660,4 +660,346 @@ mod tests {
         assert!(!summary.detected);
         assert!(summary.behavior_match);
     }
+
+    // ── ModularBuildSpec / ModuleSelectionSpec tests ─────────────────────────
+
+    #[test]
+    fn test_module_selection_spec_defaults() {
+        let spec = ModuleSelectionSpec::default();
+        assert_eq!(spec.carrier, "alloc_rw_rx");
+        assert_eq!(spec.decoder, "xor");
+        assert_eq!(spec.antiemulation, "none");
+        assert_eq!(spec.guardrail, "none");
+        assert_eq!(spec.virtualprotect, "standard");
+        assert_eq!(spec.decoy, "none");
+    }
+
+    #[test]
+    fn test_modular_build_spec_serde_roundtrip() {
+        let spec = ModularBuildSpec {
+            modules: ModuleSelectionSpec::default(),
+            payload_path: PathBuf::from("/tmp/test_payload.bin"),
+            encoding: "xor".to_string(),
+        };
+
+        let json = serde_json::to_string(&spec).unwrap();
+        let deserialized: ModularBuildSpec = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.modules.carrier, "alloc_rw_rx");
+        assert_eq!(deserialized.modules.decoder, "xor");
+        assert_eq!(deserialized.payload_path, PathBuf::from("/tmp/test_payload.bin"));
+        assert_eq!(deserialized.encoding, "xor");
+    }
+
+    #[test]
+    fn test_module_selection_spec_serde_with_defaults() {
+        // Partial JSON should fill in defaults for optional fields
+        let json = r#"{"carrier":"peb_walk","decoder":"english"}"#;
+        let spec: ModuleSelectionSpec = serde_json::from_str(json).unwrap();
+
+        assert_eq!(spec.carrier, "peb_walk");
+        assert_eq!(spec.decoder, "english");
+        assert_eq!(spec.antiemulation, "none", "antiemulation should default to 'none'");
+        assert_eq!(spec.guardrail, "none", "guardrail should default to 'none'");
+        assert_eq!(spec.virtualprotect, "standard", "virtualprotect should default to 'standard'");
+        assert_eq!(spec.decoy, "none", "decoy should default to 'none'");
+    }
+
+    #[test]
+    fn test_modular_build_spec_encoding_default() {
+        let json = r#"{"modules":{"carrier":"alloc_rw_rx","decoder":"xor"},"payload_path":"test.bin"}"#;
+        let spec: ModularBuildSpec = serde_json::from_str(json).unwrap();
+
+        assert_eq!(spec.encoding, "xor", "encoding should default to 'xor'");
+    }
+
+    // ── JobSession lifecycle edge cases ─────────────────────────────────────
+
+    #[test]
+    fn test_job_session_stop_on_evasion() {
+        let mut job = JobSession::new("job-evasion", 10, test_build_spec());
+        job.stop_on_evasion = true;
+
+        let (_, rid) = job.start_round();
+        // Record a round where detection was NOT triggered (evasion)
+        job.record_round_summary(RoundSummary {
+            round_id: rid,
+            round_number: 1,
+            mutations: vec![],
+            detected: false, // evasion
+            behavior_match: true,
+            evasion_score: 1.0,
+            completed_at: SystemTime::now(),
+        });
+
+        assert!(
+            !job.should_continue(),
+            "Job should stop when stop_on_evasion=true and last round was not detected"
+        );
+    }
+
+    #[test]
+    fn test_job_session_continues_after_detection() {
+        let mut job = JobSession::new("job-det", 10, test_build_spec());
+        job.stop_on_evasion = true;
+
+        let (_, rid) = job.start_round();
+        job.record_round_summary(RoundSummary {
+            round_id: rid,
+            round_number: 1,
+            mutations: vec![],
+            detected: true, // detected
+            behavior_match: true,
+            evasion_score: 0.0,
+            completed_at: SystemTime::now(),
+        });
+
+        assert!(
+            job.should_continue(),
+            "Job should continue when last round was detected (not evasion)"
+        );
+    }
+
+    #[test]
+    fn test_job_session_max_rounds_reached() {
+        let mut job = JobSession::new("job-max", 2, test_build_spec());
+
+        let (_, rid1) = job.start_round();
+        job.record_round_summary(RoundSummary {
+            round_id: rid1,
+            round_number: 1,
+            mutations: vec![],
+            detected: true,
+            behavior_match: true,
+            evasion_score: 0.0,
+            completed_at: SystemTime::now(),
+        });
+
+        let (_, rid2) = job.start_round();
+        job.record_round_summary(RoundSummary {
+            round_id: rid2,
+            round_number: 2,
+            mutations: vec![],
+            detected: true,
+            behavior_match: true,
+            evasion_score: 0.0,
+            completed_at: SystemTime::now(),
+        });
+
+        assert!(
+            !job.should_continue(),
+            "Job should stop when max_rounds reached"
+        );
+    }
+
+    #[test]
+    fn test_job_session_round_id_format() {
+        let mut job = JobSession::new("test-job-42", 5, test_build_spec());
+
+        let (num1, rid1) = job.start_round();
+        assert_eq!(num1, 1);
+        assert_eq!(rid1.0, "test-job-42-round-1");
+
+        let (num2, rid2) = job.start_round();
+        assert_eq!(num2, 2);
+        assert_eq!(rid2.0, "test-job-42-round-2");
+    }
+
+    #[test]
+    fn test_job_session_to_info() {
+        let mut job = JobSession::new("info-job", 5, test_build_spec());
+        job.mark_started();
+        job.start_round();
+
+        let info = job.to_info(JobStatus::Running);
+        assert_eq!(info.id.0, "info-job");
+        assert_eq!(info.status, JobStatus::Running);
+        assert_eq!(info.current_round, 1);
+        assert_eq!(info.max_rounds, 5);
+        assert!(info.started_at.is_some());
+    }
+
+    // ── RoundAgg differential protocol tests ────────────────────────────────
+
+    #[test]
+    fn test_round_agg_detected_baseline_only() {
+        let spec = RoundSpec {
+            id: RoundId("r2".into()),
+            job_id: JobId("j1".into()),
+            round_number: 1,
+            mutations: vec![],
+        };
+        let mut agg = RoundAgg {
+            spec,
+            baseline_run_id: RunId("b".into()),
+            instrumented_run_id: RunId("i".into()),
+            baseline: Some(RunOutcome { detected: true, exit_code: 1, error: None }),
+            instrumented: Some(RunOutcome { detected: false, exit_code: 0, error: None }),
+        };
+
+        let summary = agg.to_summary().unwrap();
+        // Per differential protocol: baseline detected → overall detected
+        assert!(summary.detected, "Should be detected if baseline detected");
+        // Different exit codes → behavior mismatch
+        assert!(!summary.behavior_match, "Different exit codes → behavior mismatch");
+        assert_eq!(summary.evasion_score, 0.0);
+    }
+
+    #[test]
+    fn test_round_agg_detected_instrumented_only() {
+        let spec = RoundSpec {
+            id: RoundId("r3".into()),
+            job_id: JobId("j1".into()),
+            round_number: 1,
+            mutations: vec![],
+        };
+        let agg = RoundAgg {
+            spec,
+            baseline_run_id: RunId("b".into()),
+            instrumented_run_id: RunId("i".into()),
+            baseline: Some(RunOutcome { detected: false, exit_code: 0, error: None }),
+            instrumented: Some(RunOutcome { detected: true, exit_code: 1, error: None }),
+        };
+
+        let summary = agg.to_summary().unwrap();
+        // Instrumented detected but baseline not → instrumentation artifact
+        // But the code still marks detected=true (OR logic)
+        assert!(summary.detected, "detected if instrumented detected");
+    }
+
+    #[test]
+    fn test_round_agg_full_evasion() {
+        let spec = RoundSpec {
+            id: RoundId("r4".into()),
+            job_id: JobId("j1".into()),
+            round_number: 1,
+            mutations: vec![MutationSpec { id: "ast.string_xor".into(), params: None }],
+        };
+        let agg = RoundAgg {
+            spec,
+            baseline_run_id: RunId("b".into()),
+            instrumented_run_id: RunId("i".into()),
+            baseline: Some(RunOutcome { detected: false, exit_code: 0, error: None }),
+            instrumented: Some(RunOutcome { detected: false, exit_code: 0, error: None }),
+        };
+
+        let summary = agg.to_summary().unwrap();
+        assert!(!summary.detected);
+        assert!(summary.behavior_match);
+        assert_eq!(summary.evasion_score, 1.0, "Full evasion → score 1.0");
+        assert_eq!(summary.mutations, vec!["ast.string_xor"]);
+    }
+
+    // ── RunType tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_run_type_trace_modes() {
+        assert_eq!(RunType::Baseline.trace_mode(), "off");
+        assert_eq!(RunType::Instrumented.trace_mode(), "lines");
+        assert_eq!(RunType::Baseline.as_str(), "baseline");
+        assert_eq!(RunType::Instrumented.as_str(), "instrumented");
+    }
+
+    // ── RunEnvelope / ArtifactRef serde ─────────────────────────────────────
+
+    #[test]
+    fn test_run_envelope_serde_roundtrip() {
+        let envelope = RunEnvelope {
+            run_id: RunId("run-1".into()),
+            job_id: JobId("job-1".into()),
+            round_id: RoundId("r-1".into()),
+            round_number: 3,
+            run_type: RunType::Baseline,
+            artifact: ArtifactRef {
+                path: PathBuf::from("/artifacts/abc123.exe"),
+                sha256: Some("deadbeef".into()),
+            },
+            mutations: vec!["ast.string_xor".into()],
+            timeout_seconds: 60,
+            required_os: "windows10".into(),
+            required_capabilities: vec!["defender".into()],
+        };
+
+        let json = serde_json::to_string(&envelope).unwrap();
+        let deserialized: RunEnvelope = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.run_id.0, "run-1");
+        assert_eq!(deserialized.round_number, 3);
+        assert_eq!(deserialized.run_type, RunType::Baseline);
+        assert_eq!(deserialized.artifact.sha256, Some("deadbeef".into()));
+        assert_eq!(deserialized.mutations, vec!["ast.string_xor"]);
+        assert_eq!(deserialized.timeout_seconds, 60);
+    }
+
+    // ── JobOutcome tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_job_outcome_status_mapping() {
+        assert_eq!(
+            JobOutcome::Completed { rounds_completed: 5 }.to_status(),
+            JobStatus::Completed
+        );
+        assert_eq!(
+            JobOutcome::Stopped { reason: "user".into() }.to_status(),
+            JobStatus::Stopped
+        );
+        assert_eq!(
+            JobOutcome::Failed { error: "oops".into() }.to_status(),
+            JobStatus::Failed
+        );
+    }
+
+    // ── Payload I/O with tempfile ───────────────────────────────────────────
+
+    #[test]
+    fn test_payload_path_read_success() {
+        let payload_bytes = vec![0x90u8; 256];
+
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, &payload_bytes).unwrap();
+
+        let spec = ModularBuildSpec {
+            modules: ModuleSelectionSpec::default(),
+            payload_path: tmp.path().to_path_buf(),
+            encoding: "xor".to_string(),
+        };
+
+        // Simulate what job_worker does: read payload from path
+        let read_bytes = std::fs::read(&spec.payload_path).unwrap();
+        assert_eq!(read_bytes, payload_bytes);
+    }
+
+    #[test]
+    fn test_payload_path_file_not_found() {
+        let spec = ModularBuildSpec {
+            modules: ModuleSelectionSpec::default(),
+            payload_path: PathBuf::from("/nonexistent/path/payload.bin"),
+            encoding: "xor".to_string(),
+        };
+
+        let result = std::fs::read(&spec.payload_path);
+        assert!(result.is_err(), "Reading nonexistent payload should fail");
+    }
+
+    #[test]
+    fn test_payload_path_empty_file() {
+        use std::io::Write;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        // Don't write anything — file is empty
+
+        let read_bytes = std::fs::read(tmp.path()).unwrap();
+        assert!(read_bytes.is_empty(), "Empty file should read as empty vec");
+    }
+
+    #[test]
+    fn test_payload_path_large_file() {
+        let payload_bytes = vec![0xCCu8; 1_000_000]; // 1MB
+
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, &payload_bytes).unwrap();
+
+        let read_bytes = std::fs::read(tmp.path()).unwrap();
+        assert_eq!(read_bytes.len(), 1_000_000);
+        assert_eq!(read_bytes[0], 0xCC);
+    }
 }
