@@ -207,8 +207,8 @@ OPTIONS:
     -h, --help                      Show this help
     -p, --payload <FILE>            Raw .bin payload (default: 256-byte test payload)
     -o, --output <FILE>             Write to file (default: stdout)
-    --antiemulation <NAME>          none | sirallocalot | timeraw  (default: none)
-    --deconditioner <NAME>          none | alloc_loop  (default: none)
+    --antiemulation <NAME>          none | sirallocalot | timeraw | cpuburn | heapstress | fsenum | sleepaccel  (default: none)
+    --deconditioner <NAME>          none | alloc_loop | alloc_exec | thread_alloc | mixed_apis | entropy_flood  (default: none)
     --trace <on|off>                AST line tracing (default: on)
     -m, --mutation <ID>             Mutation to apply (repeatable)
 
