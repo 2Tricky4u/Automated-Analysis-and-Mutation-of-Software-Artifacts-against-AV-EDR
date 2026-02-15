@@ -9,14 +9,15 @@
  *   3. Compiler produces final artifact
  *
  * Module Categories:
- *   - payload:        Generated encoded payload data
- *   - definitions:    Type definitions and function prototypes
- *   - decoder:        xor, english
- *   - virtualprotect: standard, undersized
- *   - antiemulation:  none, sirallocalot, timeraw
- *   - guardrail:      none, env
- *   - decoy:          none, winexec
- *   - carrier:        alloc_rw_rx, change_rw_rx, peb_walk
+ *   - payload:          Generated encoded payload data
+ *   - definitions:      Type definitions and function prototypes
+ *   - decoder:          xor, english
+ *   - virtualprotect:   standard, undersized
+ *   - antiemulation:    none, sirallocalot, timeraw
+ *   - deconditioner:    none, alloc_loop
+ *   - guardrail:        none, env
+ *   - decoy:            none, winexec
+ *   - carrier:          alloc_rw_rx, change_rw_rx, peb_walk
  */
 #include <windows.h>
 #include "instrumentation.h"
@@ -47,6 +48,14 @@
 // Options: none, sirallocalot, timeraw
 // ============================================================================
 // @MODULE:antiemulation
+
+// ============================================================================
+// EDR DECONDITIONER MODULE
+// Options: none, alloc_loop
+// Rehearses the carrier's alloc/write/protect/free pattern with benign data
+// to normalize EDR behavioral baselines before real payload execution.
+// ============================================================================
+// @MODULE:deconditioner
 
 // ============================================================================
 // GUARDRAIL MODULE
@@ -81,8 +90,12 @@ int main(void) {
 
     // @MUTATE:timing_jitter
     antiemulation();
-    // TODO can add for example ARTIFACT_CHECKPOINT("anti_emulation_reach");
     // @MUTATE:api_sequence_obfuscation
+
+    // @MUTATE:timing_jitter
+    deconditioner();
+    // @MUTATE:api_sequence_obfuscation
+
     // @MUTATE:timing_jitter
     decoy();
     // @MUTATE:api_sequence_obfuscation

@@ -23,6 +23,8 @@ pub struct ModuleSelectionSpec {
     #[serde(default = "default_none")]
     pub antiemulation: String,
     #[serde(default = "default_none")]
+    pub deconditioner: String,
+    #[serde(default = "default_none")]
     pub guardrail: String,
     #[serde(default = "default_standard")]
     pub virtualprotect: String,
@@ -45,6 +47,7 @@ impl Default for ModuleSelectionSpec {
             carrier: "alloc_rw_rx".to_string(), // alloc_rw_rx, change_rw_rx, peb_walk
             decoder: "xor".to_string(),         // xor, english
             antiemulation: "none".to_string(),  // none, sirallocalot, timeraw
+            deconditioner: "none".to_string(),  // none, alloc_loop
             guardrail: "none".to_string(),      // none, env
             virtualprotect: "standard".to_string(), // standard, undersized
             decoy: "none".to_string(),          // none, calc, winexec
@@ -669,6 +672,7 @@ mod tests {
         assert_eq!(spec.carrier, "alloc_rw_rx");
         assert_eq!(spec.decoder, "xor");
         assert_eq!(spec.antiemulation, "none");
+        assert_eq!(spec.deconditioner, "none");
         assert_eq!(spec.guardrail, "none");
         assert_eq!(spec.virtualprotect, "standard");
         assert_eq!(spec.decoy, "none");

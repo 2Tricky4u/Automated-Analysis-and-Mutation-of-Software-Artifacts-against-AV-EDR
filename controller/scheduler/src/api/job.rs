@@ -70,6 +70,11 @@ pub async fn schedule_job(
             } else {
                 m.antiemulation.clone()
             },
+            deconditioner: if m.deconditioner.is_empty() {
+                default_modules.deconditioner
+            } else {
+                m.deconditioner.clone()
+            },
             guardrail: if m.guardrail.is_empty() {
                 default_modules.guardrail
             } else {

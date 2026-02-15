@@ -1327,11 +1327,12 @@ impl ArtifactBuilder {
             .context("Failed to assemble template")?;
 
         info!(
-            "Assembled template: {} bytes (carrier={}, decoder={}, antiemulation={}, guardrail={})",
+            "Assembled template: {} bytes (carrier={}, decoder={}, antiemulation={}, deconditioner={}, guardrail={})",
             assembled_source.len(),
             modules.carrier,
             modules.decoder,
             modules.antiemulation,
+            modules.deconditioner,
             modules.guardrail
         );
 
