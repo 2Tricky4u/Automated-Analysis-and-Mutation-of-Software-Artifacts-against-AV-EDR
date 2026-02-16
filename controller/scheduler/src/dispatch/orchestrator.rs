@@ -270,11 +270,18 @@ impl Orchestrator {
                 instrumented_outcome,
                 mutation_specs,
                 mutations,
+                baseline_vm_id,
+                instrumented_vm_id,
+                round_started_at,
             } => {
                 info!(
                     "[Orchestrator] Round {} completed for job {}: detected={}, evasion={:.2}",
                     round_id, job_id, summary.detected, summary.evasion_score
                 );
+
+                // Convert round_started_at to RFC3339
+                let started_at_dt: chrono::DateTime<chrono::Utc> = round_started_at.into();
+                let started_at_str = started_at_dt.to_rfc3339();
 
                 // Index round, both runs, and update job progress in ES
                 let storage = self.storage.clone();
@@ -283,6 +290,8 @@ impl Orchestrator {
                 let round_number = summary.round_number;
                 let b_run_id = baseline_run_id.0.clone();
                 let i_run_id = instrumented_run_id.0.clone();
+                let b_vm_id = baseline_vm_id;
+                let i_vm_id = instrumented_vm_id;
                 tokio::spawn(async move {
                     // Update job progress (current_round)
                     if let Err(e) = storage
@@ -293,7 +302,14 @@ impl Orchestrator {
                     }
                     // Index round summary
                     if let Err(e) = storage
-                        .index_round(&jid, &summary, &mutation_specs, &b_run_id, &i_run_id)
+                        .index_round(
+                            &jid,
+                            &summary,
+                            &mutation_specs,
+                            &b_run_id,
+                            &i_run_id,
+                            Some(&started_at_str),
+                        )
                         .await
                     {
                         error!("Failed to index round: {}", e);
@@ -301,7 +317,13 @@ impl Orchestrator {
                     // Index baseline run with exit_code, detected, round_id, run_type
                     if let Err(e) = storage
                         .index_run_result(
-                            &jid, &rid, &b_run_id, "baseline", &baseline_outcome, &mutations, "",
+                            &jid,
+                            &rid,
+                            &b_run_id,
+                            "baseline",
+                            &baseline_outcome,
+                            &mutations,
+                            &b_vm_id,
                         )
                         .await
                     {
@@ -316,7 +338,7 @@ impl Orchestrator {
                             "instrumented",
                             &instrumented_outcome,
                             &mutations,
-                            "",
+                            &i_vm_id,
                         )
                         .await
                     {

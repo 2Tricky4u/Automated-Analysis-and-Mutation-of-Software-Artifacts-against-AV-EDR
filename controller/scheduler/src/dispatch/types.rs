@@ -413,6 +413,9 @@ pub struct RoundAgg {
     pub instrumented_run_id: RunId,
     pub baseline: Option<RunOutcome>,
     pub instrumented: Option<RunOutcome>,
+    pub baseline_vm_id: String,
+    pub instrumented_vm_id: String,
+    pub started_at: SystemTime,
 }
 
 impl RoundAgg {
@@ -640,6 +643,9 @@ mod tests {
             instrumented_run_id: RunId("r1-instrumented".into()),
             baseline: None,
             instrumented: None,
+            baseline_vm_id: String::new(),
+            instrumented_vm_id: String::new(),
+            started_at: SystemTime::now(),
         };
 
         assert!(!agg.is_complete());
@@ -839,6 +845,9 @@ mod tests {
             instrumented_run_id: RunId("i".into()),
             baseline: Some(RunOutcome { detected: true, exit_code: 1, error: None }),
             instrumented: Some(RunOutcome { detected: false, exit_code: 0, error: None }),
+            baseline_vm_id: String::new(),
+            instrumented_vm_id: String::new(),
+            started_at: SystemTime::now(),
         };
 
         let summary = agg.to_summary().unwrap();
@@ -863,6 +872,9 @@ mod tests {
             instrumented_run_id: RunId("i".into()),
             baseline: Some(RunOutcome { detected: false, exit_code: 0, error: None }),
             instrumented: Some(RunOutcome { detected: true, exit_code: 1, error: None }),
+            baseline_vm_id: String::new(),
+            instrumented_vm_id: String::new(),
+            started_at: SystemTime::now(),
         };
 
         let summary = agg.to_summary().unwrap();
@@ -885,6 +897,9 @@ mod tests {
             instrumented_run_id: RunId("i".into()),
             baseline: Some(RunOutcome { detected: false, exit_code: 0, error: None }),
             instrumented: Some(RunOutcome { detected: false, exit_code: 0, error: None }),
+            baseline_vm_id: String::new(),
+            instrumented_vm_id: String::new(),
+            started_at: SystemTime::now(),
         };
 
         let summary = agg.to_summary().unwrap();

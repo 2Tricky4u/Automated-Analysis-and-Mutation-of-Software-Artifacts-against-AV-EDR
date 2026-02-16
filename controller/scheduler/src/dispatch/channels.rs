@@ -10,6 +10,8 @@
 //! - RunPool: Shared queue where all jobs put runs, VMExecutors take from it
 //! - VMExecutor: Thin dispatcher per VM, takes runs, routes results back
 
+use std::time::SystemTime;
+
 use super::types::{JobId, JobOutcome, MutationSpec, RoundId, RoundSummary, RunId, RunOutcome};
 
 // ============================================================================
@@ -66,6 +68,9 @@ pub enum JobWorkerEvent {
         instrumented_outcome: RunOutcome,
         mutation_specs: Vec<MutationSpec>,
         mutations: Vec<String>,
+        baseline_vm_id: String,
+        instrumented_vm_id: String,
+        round_started_at: SystemTime,
     },
     /// Job completed (all rounds done or stopped early)
     JobCompleted { job_id: JobId, outcome: JobOutcome },

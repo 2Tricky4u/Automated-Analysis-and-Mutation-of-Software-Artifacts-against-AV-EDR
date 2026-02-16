@@ -492,6 +492,16 @@ fn string_array_field(v: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Parse a date value that may be RFC3339 string (new format) or unix seconds (old format).
+fn parse_date_to_unix_secs(v: &Value) -> i64 {
+    if let Some(s) = v.as_str() {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+            return dt.timestamp();
+        }
+    }
+    v.as_i64().unwrap_or(0)
+}
+
 fn round_doc_to_proto(source: &Value) -> RoundSummaryProto {
     RoundSummaryProto {
         round_id: str_field(source, "round_id"),
@@ -501,7 +511,7 @@ fn round_doc_to_proto(source: &Value) -> RoundSummaryProto {
         behavior_match: source["behavior_match"].as_bool().unwrap_or(false),
         evasion_score: source["evasion_score"].as_f64().unwrap_or(0.0),
         status: str_field(source, "status"),
-        completed_at: source["completed_at"].as_i64().unwrap_or(0),
+        completed_at: parse_date_to_unix_secs(&source["completed_at"]),
     }
 }
 
