@@ -1,6 +1,7 @@
 //! Job handlers - dispatch-based job management
 //!
-//! Uses JobSession -> Orchestrator -> Worker pattern
+//! Thin gRPC handlers: validate request, call storage, map to proto response.
+//! All ES logic lives in storage/ — handlers never touch SearchParts or json!({}).
 
 use crate::api::SchedulerService;
 use crate::automutate::common::JobId;
@@ -13,8 +14,7 @@ use crate::automutate::controller::{
 use crate::dispatch::{
     JobControlCommand, JobId as DispatchJobId, JobSession, ModularBuildSpec, ModuleSelectionSpec,
 };
-use elasticsearch::SearchParts;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::path::PathBuf;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -168,8 +168,6 @@ pub async fn schedule_job(
 }
 
 /// Get job status
-/// Note: With dispatch architecture, job state is tracked by Worker/Orchestrator.
-/// Query ES for stored job state.
 pub async fn get_job_status(
     service: &SchedulerService,
     request: Request<JobStatusRequest>,
@@ -177,63 +175,32 @@ pub async fn get_job_status(
     let req = request.into_inner();
     debug!("[RPC] GetJobStatus: job_id={}", req.job_id);
 
-    // Query ES for job document across all jobs-* indices
-    let search_result = service
-        .storage.client()
-        .search(SearchParts::Index(&["jobs-*"]))
-        .body(json!({
-            "query": {
-                "term": { "job_id": req.job_id }
-            },
-            "size": 1
-        }))
-        .send()
-        .await;
+    match service.storage.query_job(&req.job_id).await {
+        Some(source) => {
+            let status = str_field(&source, "status");
+            let current_round = u32_field(&source, "current_round");
+            let max_rounds = u32_field(&source, "max_rounds");
+            let progress = if max_rounds > 0 {
+                ((current_round as f64 / max_rounds as f64) * 100.0) as i32
+            } else {
+                0
+            };
 
-    match search_result {
-        Ok(response) => {
-            if let Ok(body) = response.json::<Value>().await {
-                if let Some(hits) = body["hits"]["hits"].as_array() {
-                    if let Some(hit) = hits.first() {
-                        let source = &hit["_source"];
-                        let status = source["status"].as_str().unwrap_or("unknown").to_string();
-                        let current_round = source["current_round"].as_u64().unwrap_or(0) as u32;
-                        let max_rounds = source["max_rounds"].as_u64().unwrap_or(0) as u32;
-                        let progress = if max_rounds > 0 {
-                            ((current_round as f64 / max_rounds as f64) * 100.0) as i32
-                        } else {
-                            0
-                        };
-
-                        return Ok(Response::new(JobStatusResponse {
-                            job_id: req.job_id,
-                            status,
-                            progress_percent: progress,
-                            current_phase: format!("Round {}/{}", current_round, max_rounds),
-                            logs: vec![],
-                        }));
-                    }
-                }
-            }
-            // Job not found in ES
             Ok(Response::new(JobStatusResponse {
                 job_id: req.job_id,
-                status: "not_found".to_string(),
-                progress_percent: 0,
-                current_phase: "Job not found in Elasticsearch".to_string(),
+                status,
+                progress_percent: progress,
+                current_phase: format!("Round {}/{}", current_round, max_rounds),
                 logs: vec![],
             }))
         }
-        Err(e) => {
-            error!("ES query failed: {}", e);
-            Ok(Response::new(JobStatusResponse {
-                job_id: req.job_id,
-                status: "error".to_string(),
-                progress_percent: 0,
-                current_phase: format!("ES query failed: {}", e),
-                logs: vec![],
-            }))
-        }
+        None => Ok(Response::new(JobStatusResponse {
+            job_id: req.job_id,
+            status: "not_found".to_string(),
+            progress_percent: 0,
+            current_phase: "Job not found in Elasticsearch".to_string(),
+            logs: vec![],
+        })),
     }
 }
 
@@ -245,76 +212,22 @@ pub async fn get_job_progress(
     let job_id = &request.get_ref().job_id;
     debug!("[RPC] GetJobProgress: job_id={}", job_id);
 
-    // Query ES for job document
-    let job_result = service
-        .storage.client()
-        .search(SearchParts::Index(&["jobs-*"]))
-        .body(json!({
-            "query": { "term": { "job_id": job_id } },
-            "size": 1
-        }))
-        .send()
-        .await;
+    // Query job + rounds in parallel
+    let (job_doc, round_docs) = tokio::join!(
+        service.storage.query_job(job_id),
+        service.storage.query_rounds(job_id),
+    );
 
-    let (status, current_round, max_rounds) = match job_result {
-        Ok(response) => {
-            if let Ok(body) = response.json::<Value>().await {
-                if let Some(hit) = body["hits"]["hits"].as_array().and_then(|h| h.first()) {
-                    let source = &hit["_source"];
-                    (
-                        source["status"].as_str().unwrap_or("unknown").to_string(),
-                        source["current_round"].as_u64().unwrap_or(0) as u32,
-                        source["max_rounds"].as_u64().unwrap_or(0) as u32,
-                    )
-                } else {
-                    ("not_found".to_string(), 0, 0)
-                }
-            } else {
-                ("error".to_string(), 0, 0)
-            }
-        }
-        Err(_) => ("error".to_string(), 0, 0),
+    let (status, current_round, max_rounds) = match job_doc {
+        Some(source) => (
+            str_field(&source, "status"),
+            u32_field(&source, "current_round"),
+            u32_field(&source, "max_rounds"),
+        ),
+        None => ("not_found".to_string(), 0, 0),
     };
 
-    // Query ES for rounds associated with this job
-    let rounds_result = service
-        .storage.client()
-        .search(SearchParts::Index(&["rounds-*"]))
-        .body(json!({
-            "query": { "term": { "job_id": job_id } },
-            "sort": [{ "round_number": "asc" }],
-            "size": 100
-        }))
-        .send()
-        .await;
-
-    let mut rounds = Vec::new();
-    if let Ok(response) = rounds_result {
-        if let Ok(body) = response.json::<Value>().await {
-            if let Some(hits) = body["hits"]["hits"].as_array() {
-                for hit in hits {
-                    let source = &hit["_source"];
-                    rounds.push(RoundSummaryProto {
-                        round_id: source["round_id"].as_str().unwrap_or("").to_string(),
-                        round_number: source["round_number"].as_u64().unwrap_or(0) as u32,
-                        mutations: source["mutations"]
-                            .as_array()
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(String::from))
-                                    .collect()
-                            })
-                            .unwrap_or_default(),
-                        detected: source["detected"].as_bool().unwrap_or(false),
-                        behavior_match: source["behavior_match"].as_bool().unwrap_or(false),
-                        evasion_score: source["evasion_score"].as_f64().unwrap_or(0.0),
-                        status: source["status"].as_str().unwrap_or("unknown").to_string(),
-                        completed_at: source["completed_at"].as_i64().unwrap_or(0),
-                    });
-                }
-            }
-        }
-    }
+    let rounds: Vec<RoundSummaryProto> = round_docs.iter().map(round_doc_to_proto).collect();
 
     let progress = if max_rounds > 0 {
         ((current_round as f64 / max_rounds as f64) * 100.0) as u32
@@ -340,7 +253,6 @@ pub async fn stop_job(
     let job_id = &request.get_ref().job_id;
     info!("[RPC] StopJob: job_id={}", job_id);
 
-    // Send stop command to Orchestrator
     let cmd = JobControlCommand::Stop {
         job_id: DispatchJobId(job_id.clone()),
     };
@@ -348,15 +260,9 @@ pub async fn stop_job(
     match service.job_control_tx.send(cmd).await {
         Ok(_) => {
             info!("[RPC] StopJob: Stop command sent for job {}", job_id);
-
-            // Update job status in ES
             let _ = service
-                .storage.client()
-                .update(elasticsearch::UpdateParts::IndexId("jobs-*", job_id))
-                .body(json!({
-                    "doc": { "status": "stopping" }
-                }))
-                .send()
+                .storage
+                .update_job_field(job_id, "status", "stopping")
                 .await;
 
             Ok(Response::new(StopJobResponse {
@@ -390,158 +296,64 @@ pub async fn get_round(
         req.job_id, req.round_id
     );
 
-    // Query ES for round document
-    let round_result = service
-        .storage.client()
-        .search(SearchParts::Index(&["rounds-*"]))
-        .body(json!({
-            "query": {
-                "bool": {
-                    "must": [
-                        { "term": { "job_id": req.job_id } },
-                        { "term": { "round_id": req.round_id } }
-                    ]
-                }
-            },
-            "size": 1
-        }))
-        .send()
+    let source = match service.storage.query_round(&req.job_id, &req.round_id).await {
+        Some(s) => s,
+        None => return Ok(Response::new(GetRoundResponse { round: None })),
+    };
+
+    // Parse mutations
+    let mutations = string_array_field(&source, "mutations")
+        .into_iter()
+        .map(|id| crate::automutate::common::Mutation {
+            id,
+            params: Default::default(),
+        })
+        .collect();
+
+    // Query both runs
+    let baseline_run_id = str_field(&source, "baseline_run_id");
+    let instrumented_run_id = str_field(&source, "instrumented_run_id");
+
+    let runs = service
+        .storage
+        .query_runs_by_ids(&[&baseline_run_id, &instrumented_run_id])
         .await;
 
-    match round_result {
-        Ok(response) => {
-            if let Ok(body) = response.json::<Value>().await {
-                if let Some(hit) = body["hits"]["hits"].as_array().and_then(|h| h.first()) {
-                    let source = &hit["_source"];
-
-                    // Parse mutations from round document
-                    let mutations = source["mutations"]
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|v| {
-                                    v.as_str().map(|s| crate::automutate::common::Mutation {
-                                        id: s.to_string(),
-                                        params: Default::default(),
-                                    })
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    // Build run result protos from run IDs stored in round doc
-                    let baseline_run_id =
-                        source["baseline_run_id"].as_str().unwrap_or("").to_string();
-                    let instrumented_run_id =
-                        source["instrumented_run_id"].as_str().unwrap_or("").to_string();
-
-                    // Query both runs from runs-* index
-                    let runs = crate::storage::queries::query_runs_by_ids(
-                        service.storage.client(),
-                        &[&baseline_run_id, &instrumented_run_id],
-                    )
-                    .await;
-
-                    let mut baseline_run = None;
-                    let mut instrumented_run = None;
-                    for run in &runs {
-                        let rid = run["run_id"].as_str().unwrap_or("");
-                        let run_proto = RunResultProto {
-                            run_id: rid.to_string(),
-                            job_id: run["job_id"].as_str().unwrap_or("").to_string(),
-                            round_id: run["round_id"].as_str().unwrap_or("").to_string(),
-                            run_type: match run["run_type"].as_str().unwrap_or("") {
-                                "baseline" => 1,    // RUN_TYPE_BASELINE
-                                "instrumented" => 2, // RUN_TYPE_INSTRUMENTED
-                                _ => 0,
-                            },
-                            artifact_id: String::new(),
-                            mutations: run["mutations"]
-                                .as_array()
-                                .map(|arr| {
-                                    arr.iter()
-                                        .filter_map(|v| v.as_str().map(String::from))
-                                        .collect()
-                                })
-                                .unwrap_or_default(),
-                            outcome: run["detection_outcome"]
-                                .as_str()
-                                .unwrap_or("")
-                                .to_string(),
-                            detected: run["detected"].as_bool().unwrap_or(false),
-                            exit_code: run["exit_code"].as_i64().unwrap_or(0) as i32,
-                            telemetry_events_count: run["telemetry_events_count"]
-                                .as_u64()
-                                .unwrap_or(0),
-                            elapsed_seconds: run["elapsed_seconds"].as_u64().unwrap_or(0),
-                            started_at: 0,
-                            completed_at: 0,
-                        };
-
-                        if rid == baseline_run_id {
-                            baseline_run = Some(run_proto);
-                        } else if rid == instrumented_run_id {
-                            instrumented_run = Some(run_proto);
-                        }
-                    }
-
-                    // Build behavior comparison from round document fields
-                    let behavior_match = if source["behavior_match"].is_boolean() {
-                        let b_detected = baseline_run
-                            .as_ref()
-                            .map(|r| r.detected)
-                            .unwrap_or(false);
-                        let i_detected = instrumented_run
-                            .as_ref()
-                            .map(|r| r.detected)
-                            .unwrap_or(false);
-                        let b_exit = baseline_run
-                            .as_ref()
-                            .map(|r| r.exit_code)
-                            .unwrap_or(0);
-                        let i_exit = instrumented_run
-                            .as_ref()
-                            .map(|r| r.exit_code)
-                            .unwrap_or(0);
-
-                        Some(BehaviorComparisonProto {
-                            outcome_match: source["behavior_match"].as_bool().unwrap_or(false),
-                            baseline_detected: b_detected,
-                            baseline_exit_code: b_exit,
-                            instrumented_detected: i_detected,
-                            instrumented_exit_code: i_exit,
-                            differences: vec![],
-                            confidence: if source["behavior_match"].as_bool().unwrap_or(false) {
-                                1.0
-                            } else {
-                                0.5
-                            },
-                        })
-                    } else {
-                        None
-                    };
-
-                    let round = RoundProto {
-                        round_id: source["round_id"].as_str().unwrap_or("").to_string(),
-                        job_id: source["job_id"].as_str().unwrap_or("").to_string(),
-                        round_number: source["round_number"].as_u64().unwrap_or(0) as u32,
-                        mutations,
-                        baseline_run,
-                        instrumented_run,
-                        status: source["status"].as_str().unwrap_or("unknown").to_string(),
-                        behavior_match,
-                    };
-
-                    return Ok(Response::new(GetRoundResponse { round: Some(round) }));
-                }
-            }
-            Ok(Response::new(GetRoundResponse { round: None }))
-        }
-        Err(e) => {
-            error!("ES query failed for round: {}", e);
-            Ok(Response::new(GetRoundResponse { round: None }))
+    let mut baseline_run = None;
+    let mut instrumented_run = None;
+    for run in &runs {
+        let rid = str_field(run, "run_id");
+        let proto = run_doc_to_proto(run);
+        if rid == baseline_run_id {
+            baseline_run = Some(proto);
+        } else if rid == instrumented_run_id {
+            instrumented_run = Some(proto);
         }
     }
+
+    // Build behavior comparison
+    let behavior_match = if source["behavior_match"].is_boolean() {
+        Some(build_behavior_comparison(
+            &source,
+            &baseline_run,
+            &instrumented_run,
+        ))
+    } else {
+        None
+    };
+
+    let round = RoundProto {
+        round_id: str_field(&source, "round_id"),
+        job_id: str_field(&source, "job_id"),
+        round_number: u32_field(&source, "round_number"),
+        mutations,
+        baseline_run,
+        instrumented_run,
+        status: str_field(&source, "status"),
+        behavior_match,
+    };
+
+    Ok(Response::new(GetRoundResponse { round: Some(round) }))
 }
 
 /// Compare baseline vs instrumented runs
@@ -555,85 +367,62 @@ pub async fn compare_runs(
         req.baseline_run_id, req.instrumented_run_id
     );
 
-    // Query ES for both runs
-    let runs_result = service
-        .storage.client()
-        .search(SearchParts::Index(&["runs-*"]))
-        .body(json!({
-            "query": {
-                "terms": {
-                    "run_id": [req.baseline_run_id, req.instrumented_run_id]
-                }
-            },
-            "size": 2
-        }))
-        .send()
+    let runs = service
+        .storage
+        .query_runs_by_ids(&[&req.baseline_run_id, &req.instrumented_run_id])
         .await;
 
-    match runs_result {
-        Ok(response) => {
-            if let Ok(body) = response.json::<Value>().await {
-                if let Some(hits) = body["hits"]["hits"].as_array() {
-                    let mut baseline_detected = false;
-                    let mut baseline_exit_code = 0i32;
-                    let mut instrumented_detected = false;
-                    let mut instrumented_exit_code = 0i32;
-                    let mut differences = Vec::new();
+    if runs.is_empty() {
+        return Ok(Response::new(CompareRunsResponse { comparison: None }));
+    }
 
-                    for hit in hits {
-                        let source = &hit["_source"];
-                        let run_id = source["run_id"].as_str().unwrap_or("");
-                        let detected = source["detected"].as_bool().unwrap_or(false);
-                        let exit_code = source["exit_code"].as_i64().unwrap_or(0) as i32;
-
-                        if run_id == req.baseline_run_id {
-                            baseline_detected = detected;
-                            baseline_exit_code = exit_code;
-                        } else if run_id == req.instrumented_run_id {
-                            instrumented_detected = detected;
-                            instrumented_exit_code = exit_code;
-                        }
-                    }
-
-                    // Calculate differences
-                    if baseline_detected != instrumented_detected {
-                        differences.push(format!(
-                            "Detection mismatch: baseline={}, instrumented={}",
-                            baseline_detected, instrumented_detected
-                        ));
-                    }
-                    if baseline_exit_code != instrumented_exit_code {
-                        differences.push(format!(
-                            "Exit code mismatch: baseline={}, instrumented={}",
-                            baseline_exit_code, instrumented_exit_code
-                        ));
-                    }
-
-                    let outcome_match = baseline_detected == instrumented_detected
-                        && baseline_exit_code == instrumented_exit_code;
-
-                    let confidence = if outcome_match { 1.0 } else { 0.5 };
-
-                    return Ok(Response::new(CompareRunsResponse {
-                        comparison: Some(BehaviorComparisonProto {
-                            outcome_match,
-                            baseline_detected,
-                            baseline_exit_code,
-                            instrumented_detected,
-                            instrumented_exit_code,
-                            differences,
-                            confidence,
-                        }),
-                    }));
-                }
-            }
-            Ok(Response::new(CompareRunsResponse { comparison: None }))
-        }
-        Err(e) => {
-            error!("ES query failed for run comparison: {}", e);
-            Ok(Response::new(CompareRunsResponse { comparison: None }))
+    // Reuse run_doc_to_proto to extract fields consistently
+    let mut baseline: Option<RunResultProto> = None;
+    let mut instrumented: Option<RunResultProto> = None;
+    for run in &runs {
+        let proto = run_doc_to_proto(run);
+        if proto.run_id == req.baseline_run_id {
+            baseline = Some(proto);
+        } else if proto.run_id == req.instrumented_run_id {
+            instrumented = Some(proto);
         }
     }
+
+    let b = baseline.as_ref();
+    let i = instrumented.as_ref();
+    let b_detected = b.map(|r| r.detected).unwrap_or(false);
+    let i_detected = i.map(|r| r.detected).unwrap_or(false);
+    let b_exit = b.map(|r| r.exit_code).unwrap_or(0);
+    let i_exit = i.map(|r| r.exit_code).unwrap_or(0);
+
+    let mut differences = Vec::new();
+    if b_detected != i_detected {
+        differences.push(format!(
+            "Detection mismatch: baseline={}, instrumented={}",
+            b_detected, i_detected
+        ));
+    }
+    if b_exit != i_exit {
+        differences.push(format!(
+            "Exit code mismatch: baseline={}, instrumented={}",
+            b_exit, i_exit
+        ));
+    }
+
+    let outcome_match = b_detected == i_detected && b_exit == i_exit;
+    let confidence = if outcome_match { 1.0 } else { 0.5 };
+
+    Ok(Response::new(CompareRunsResponse {
+        comparison: Some(BehaviorComparisonProto {
+            outcome_match,
+            baseline_detected: b_detected,
+            baseline_exit_code: b_exit,
+            instrumented_detected: i_detected,
+            instrumented_exit_code: i_exit,
+            differences,
+            confidence,
+        }),
+    }))
 }
 
 /// Handle status reports from workers
@@ -645,7 +434,6 @@ pub async fn report_status(
 
     let report = request.into_inner();
 
-    // Log status
     let status_line = format!(
         "[WORKER: {} ({})] [PID: {}] [JOB: {}] [RUN: {}] [STATUS: {}] [ARTIFACT: {}] {}",
         report.worker_ip,
@@ -659,32 +447,104 @@ pub async fn report_status(
     );
 
     match report.event_type.as_str() {
-        "error" | "timeout" | "stuck" | "crashed" => {
-            warn!("[WARN] {}", status_line);
-        }
-        _ => {
-            info!("[STATUS] {}", status_line);
-        }
+        "error" | "timeout" | "stuck" | "crashed" => warn!("[WARN] {}", status_line),
+        _ => info!("[STATUS] {}", status_line),
     }
 
-    // Update target health
     let _ = service.targets.update_health(&report.worker_id);
 
-    // Store final status to ES
     if matches!(report.event_type.as_str(), "success" | "error" | "timeout") {
-        match tokio::time::timeout(Duration::from_secs(10), service.storage.index_run_status(&report)).await
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            service.storage.index_run_status(&report),
+        )
+        .await
         {
-            Ok(Ok(())) => {
-                debug!("[OK] Run result stored: {}", report.run_id);
-            }
-            Ok(Err(e)) => {
-                error!("[ERROR] Failed to store run result: {}", e);
-            }
-            Err(_) => {
-                error!("[TIMEOUT] ES timeout storing run result");
-            }
+            Ok(Ok(())) => debug!("[OK] Run result stored: {}", report.run_id),
+            Ok(Err(e)) => error!("[ERROR] Failed to store run result: {}", e),
+            Err(_) => error!("[TIMEOUT] ES timeout storing run result"),
         }
     }
 
     Ok(Response::new(StatusAck { received: true }))
+}
+
+// ===========================================================================
+// Value extraction helpers — keep proto mapping clean
+// ===========================================================================
+
+fn str_field(v: &Value, key: &str) -> String {
+    v[key].as_str().unwrap_or("").to_string()
+}
+
+fn u32_field(v: &Value, key: &str) -> u32 {
+    v[key].as_u64().unwrap_or(0) as u32
+}
+
+fn string_array_field(v: &Value, key: &str) -> Vec<String> {
+    v[key]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn round_doc_to_proto(source: &Value) -> RoundSummaryProto {
+    RoundSummaryProto {
+        round_id: str_field(source, "round_id"),
+        round_number: u32_field(source, "round_number"),
+        mutations: string_array_field(source, "mutations"),
+        detected: source["detected"].as_bool().unwrap_or(false),
+        behavior_match: source["behavior_match"].as_bool().unwrap_or(false),
+        evasion_score: source["evasion_score"].as_f64().unwrap_or(0.0),
+        status: str_field(source, "status"),
+        completed_at: source["completed_at"].as_i64().unwrap_or(0),
+    }
+}
+
+fn run_doc_to_proto(source: &Value) -> RunResultProto {
+    RunResultProto {
+        run_id: str_field(source, "run_id"),
+        job_id: str_field(source, "job_id"),
+        round_id: str_field(source, "round_id"),
+        run_type: match source["run_type"].as_str().unwrap_or("") {
+            "baseline" => 1,
+            "instrumented" => 2,
+            _ => 0,
+        },
+        artifact_id: String::new(),
+        mutations: string_array_field(source, "mutations"),
+        outcome: str_field(source, "detection_outcome"),
+        detected: source["detected"].as_bool().unwrap_or(false),
+        exit_code: source["exit_code"].as_i64().unwrap_or(0) as i32,
+        telemetry_events_count: source["telemetry_events_count"].as_u64().unwrap_or(0),
+        elapsed_seconds: source["elapsed_seconds"].as_u64().unwrap_or(0),
+        started_at: 0,
+        completed_at: 0,
+    }
+}
+
+fn build_behavior_comparison(
+    source: &Value,
+    baseline: &Option<RunResultProto>,
+    instrumented: &Option<RunResultProto>,
+) -> BehaviorComparisonProto {
+    let b_detected = baseline.as_ref().map(|r| r.detected).unwrap_or(false);
+    let i_detected = instrumented.as_ref().map(|r| r.detected).unwrap_or(false);
+    let b_exit = baseline.as_ref().map(|r| r.exit_code).unwrap_or(0);
+    let i_exit = instrumented.as_ref().map(|r| r.exit_code).unwrap_or(0);
+    let outcome_match = source["behavior_match"].as_bool().unwrap_or(false);
+
+    BehaviorComparisonProto {
+        outcome_match,
+        baseline_detected: b_detected,
+        baseline_exit_code: b_exit,
+        instrumented_detected: i_detected,
+        instrumented_exit_code: i_exit,
+        differences: vec![],
+        confidence: if outcome_match { 1.0 } else { 0.5 },
+    }
 }
