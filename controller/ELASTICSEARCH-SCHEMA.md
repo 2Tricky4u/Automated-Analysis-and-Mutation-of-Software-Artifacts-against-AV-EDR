@@ -8,7 +8,7 @@
 | `rounds-YYYY.MM` | Round summaries | Permanent | Monthly |
 | `runs-YYYY.MM` | Individual run outcomes | Permanent | Monthly |
 | `telemetry-YYYY.MM.DD` | Raw ETW/trace events | Permanent | Daily |
-| `triage-YYYY.MM` | Hypothesis & feature rankings | Permanent | Monthly |
+| `tokens-YYYY.MM` | Per-run token sets for feedback loop scoring | Permanent | Monthly |
 | `differential-YYYY.MM` | Baseline vs instrumented comparison | Permanent | Monthly |
 
 > **Retention Policy:** All indices are retained until manual deletion. No ILM policies applied.
@@ -22,8 +22,8 @@ All indices use consistent `keyword` fields for cross-index correlation:
 | Field | Present In | Description |
 |-------|------------|-------------|
 | `job_id` | All indices | Top-level job identifier |
-| `round_id` | rounds, runs, telemetry, triage, differential | Round identifier |
-| `run_id` | runs, telemetry, triage | Individual run identifier |
+| `round_id` | rounds, runs, telemetry, tokens, differential | Round identifier |
+| `run_id` | runs, telemetry, tokens | Individual run identifier |
 | `vm_id` | runs, telemetry | Worker VM identifier |
 
 > **Important:** These fields are top-level and canonical. Nested copies (e.g., `metadata.run_id`) may exist but top-level is authoritative.
@@ -68,9 +68,18 @@ Tracks job submission, configuration, progress, and final outcome.
             "carrier":         { "type": "keyword" },
             "decoder":         { "type": "keyword" },
             "antiemulation":   { "type": "keyword" },
+            "deconditioner":   { "type": "keyword" },
             "guardrail":       { "type": "keyword" },
             "virtualprotect":  { "type": "keyword" },
             "decoy":           { "type": "keyword" }
+          }
+        },
+
+        "search_space": {
+          "type": "object",
+          "properties": {
+            "variable_categories": { "type": "keyword" },
+            "explore_string_xor":  { "type": "boolean" }
           }
         },
 
@@ -122,7 +131,8 @@ Tracks job submission, configuration, progress, and final outcome.
 | `stop_on_detection` | Controller | Job request param | Optional |
 | `target_os` | Controller | `JobSession.target_os` | From job request |
 | `required_capabilities` | Controller | `JobSession.required_capabilities` | From job request |
-| `modules.*` | Controller | `ModularBuildSpec.modules: ModuleSelectionSpec` | All 6 module selections |
+| `modules.*` | Controller | `ModularBuildSpec.modules: ModuleSelectionSpec` | All 7 module selections |
+| `search_space.*` | Controller | `JobSession.search_space: SearchSpace` | From JobRequest, controls selector |
 | `outcome.*` | Controller | Computed from `JobSession.rounds` | Aggregated on completion |
 | `created_at` | Controller | `JobSession.created_at` | Set on creation |
 | `started_at` | Controller | `JobSession.started_at` | Set on first round start |
@@ -151,6 +161,19 @@ Each round produces two runs (baseline + instrumented) and aggregates their resu
         "job_id":              { "type": "keyword" },
         "round_number":        { "type": "integer" },
 
+        "modules": {
+          "type": "object",
+          "properties": {
+            "carrier":         { "type": "keyword" },
+            "decoder":         { "type": "keyword" },
+            "antiemulation":   { "type": "keyword" },
+            "deconditioner":   { "type": "keyword" },
+            "guardrail":       { "type": "keyword" },
+            "virtualprotect":  { "type": "keyword" },
+            "decoy":           { "type": "keyword" }
+          }
+        },
+
         "mutations":           { "type": "keyword" },
         "mutation_recipe": {
           "type": "nested",
@@ -169,6 +192,8 @@ Each round produces two runs (baseline + instrumented) and aggregates their resu
         "behavior_match":      { "type": "boolean" },
         "evasion_score":       { "type": "float" },
         "status":              { "type": "keyword" },
+
+        "selector_rationale":  { "type": "text" },
 
         "coverage": {
           "type": "object",
@@ -207,6 +232,7 @@ Each round produces two runs (baseline + instrumented) and aggregates their resu
 | `round_id` | Controller | `RoundSummary.round_id` | From `RoundAgg.spec.id` |
 | `job_id` | Controller | `RoundSpec.job_id` | Passed to `index_round()` |
 | `round_number` | Controller | `RoundSummary.round_number` | Sequential within job |
+| `modules.*` | Controller | `RoundSpec.modules: ModuleSelectionSpec` | Per-round module selection from selector |
 | `mutations` | Controller | `RoundSummary.mutations: Vec<String>` | Mutation IDs applied |
 | `mutation_recipe` | Controller | `RoundSpec.mutations: Vec<MutationSpec>` | Full recipe with params |
 | `seed` | Controller | Build seed | Track for reproducibility |
@@ -216,13 +242,14 @@ Each round produces two runs (baseline + instrumented) and aggregates their resu
 | `behavior_match` | Controller | `RoundSummary.behavior_match` | exit_code comparison |
 | `evasion_score` | Controller | `RoundSummary.evasion_score` | 1.0 if evaded, 0.0 if detected |
 | `status` | Controller | Derived from run outcomes | "completed", "failed", etc. |
+| `selector_rationale` | Controller | `Selection.rationale` | Human-readable selector decision |
 | `coverage.*` | Controller | Computed post-run | Diff between runs |
 | `truncation_line` | Controller | Parse from trace events | Last trace before termination |
 | `last_trace` | Controller | Parse from trace events | File:line of last trace |
 | `started_at` | Controller | Track on round start | `SystemTime::now()` |
 | `completed_at` | Controller | `RoundSummary.completed_at` | Set in `RoundAgg.to_summary()` |
 
-> **Implementation:** All round fields available from `RoundSummary` and `RoundAgg` in `types.rs`. Fix `index_round()` to use `types::RoundSummary` instead of non-existent `crate::round::RoundSummary`. Extend to include `RoundAgg` for run IDs.
+> **Implementation:** All round fields available from `RoundSummary` and `RoundAgg` in `types.rs`. Fix `index_round()` to use `types::RoundSummary` instead of non-existent `crate::round::RoundSummary`. Extend to include `RoundAgg` for run IDs. The `modules` field comes from `RoundSpec.modules` which the selector populates each round.
 
 ---
 
@@ -375,7 +402,7 @@ Each run is a single artifact execution on a worker VM.
 | `worker_ip` | Proto | `StatusReport.worker_ip` | Worker reports this |
 | `pid` | Proto | `StatusReport.pid` | Worker reports this |
 | `status` | Proto | `StatusReport.event_type` | Worker reports this |
-| `detected` | **Controller** | Parse from `StatusReport.event_type` | "detected" → true |
+| `detected` | **Controller** | Parse from `StatusReport.event_type` | "detected" -> true |
 | `exit_code` | **Controller** | Parse from `StatusReport.details` | Extract from JSON |
 | `elapsed_seconds` | Proto | `StatusReport.elapsed_seconds` | Worker reports this |
 | `telemetry_events_count` | Proto | `StatusReport.telemetry_events_count` | Worker reports this |
@@ -521,9 +548,22 @@ High-volume raw telemetry from worker VMs. Daily partitioning for query efficien
 
 - `dynamic: true` allows new `payload_*` fields automatically
 - `dynamic_templates` ensure consistent types:
-  - Numeric payloads → `long` (aggregatable)
-  - String payloads → `keyword` with `ignore_above: 256`
+  - Numeric payloads -> `long` (aggregatable)
+  - String payloads -> `keyword` with `ignore_above: 256`
 - Complex nested payloads (`payload_dlls`, `payload_stack_trace`) preserved as objects
+
+### Token Extraction Field Map
+
+The TokenExtractor (feedback loop) derives triage tokens from these telemetry fields. Two distinct fields carry API-level information depending on event source:
+
+| Token format | Source field | Event type | Description |
+|---|---|---|---|
+| `api:<func>` | `payload_api_name` | `api` | RedEDR API hooking interceptions (NtAllocateVirtualMemory, etc.) |
+| `etw:<provider>/<event_id>` | `payload_provider` + `payload_event_id` | `etw` | ETW provider events |
+| `seq2:<api1>-><api2>` | Consecutive `payload_api_name` by `timestamp` | `api` | Bigram API sequences |
+| `trunc:<file>:<line>` | `payload_file` + `payload_line` | `trace` | Last trace before termination |
+
+> **Important:** `payload_func` is the function name from **instrumented artifact line traces** (event_type=`trace`). `payload_api_name` is the intercepted API name from **RedEDR hooking** (event_type=`api`). The TokenExtractor queries `payload_api_name` for `api:` and `seq2:` tokens. Do not confuse these two fields.
 
 ### Data Source Analysis
 
@@ -542,7 +582,8 @@ High-volume raw telemetry from worker VMs. Daily partitioning for query efficien
 | `payload_seq` | Proto | `TelemetryData.typed_event.trace.seq` | Sequence number |
 | `payload_file` | Proto | `TelemetryData.typed_event.trace.file` | Source file |
 | `payload_line` | Proto | `TelemetryData.typed_event.trace.line` | Line number |
-| `payload_func` | Proto | `TelemetryData.typed_event.trace.func` | Function name |
+| `payload_func` | Proto | `TelemetryData.typed_event.trace.func` | Function name (line traces only) |
+| `payload_api_name` | Proto | `TelemetryData.payload` (JSON) | API name (RedEDR hook events) |
 | `payload_*` (dynamic) | Proto | `TelemetryData.payload` (JSON) | Parsed from payload bytes |
 | `error.*` | **Controller** | Parse errors | Structured error info |
 
@@ -554,61 +595,44 @@ High-volume raw telemetry from worker VMs. Daily partitioning for query efficien
 
 ---
 
-## 5. `triage-*` — Hypothesis & Feature Rankings
+## 5. `tokens-*` — Per-Run Token Sets (Feedback Loop)
 
-Post-analysis results from the triage engine with ranked hypotheses.
+Stores normalized triage tokens extracted from telemetry after each round completes. This is the **computation index** for the feedback loop: the Scorer aggregates over `tokens-*` to compute lift scores, and the Selector uses those scores to pick modules for the next round.
+
+One document per run (baseline and instrumented each get their own document).
 
 ```json
 {
-  "index_patterns": ["triage-*"],
+  "index_patterns": ["tokens-*"],
   "template": {
     "settings": {
       "number_of_shards": 1,
-      "number_of_replicas": 0
+      "number_of_replicas": 0,
+      "refresh_interval": "5s"
     },
     "mappings": {
       "properties": {
-        "triage_id":           { "type": "keyword" },
         "job_id":              { "type": "keyword" },
         "round_id":            { "type": "keyword" },
         "run_id":              { "type": "keyword" },
 
         "detected":            { "type": "boolean" },
-        "av_product":          { "type": "keyword" },
-        "detection_type":      { "type": "keyword" },
 
-        "hypotheses": {
-          "type": "nested",
-          "properties": {
-            "rank":            { "type": "integer" },
-            "description":     { "type": "text" },
-            "evidence_fields": { "type": "keyword" },
-            "confidence":      { "type": "float" },
-            "recommendation":  { "type": "keyword" }
-          }
-        },
-
-        "feature_attributions": {
-          "type": "nested",
-          "properties": {
-            "feature":         { "type": "keyword" },
-            "importance":      { "type": "float" },
-            "direction":       { "type": "keyword" }
-          }
-        },
-
-        "avoid_features":      { "type": "keyword" },
-        "seek_features":       { "type": "keyword" },
-
-        "iocs": {
+        "modules": {
           "type": "object",
           "properties": {
-            "api_sequences":   { "type": "keyword" },
-            "memory_patterns": { "type": "keyword" },
-            "file_artifacts":  { "type": "keyword" }
+            "carrier":         { "type": "keyword" },
+            "decoder":         { "type": "keyword" },
+            "antiemulation":   { "type": "keyword" },
+            "deconditioner":   { "type": "keyword" },
+            "guardrail":       { "type": "keyword" },
+            "virtualprotect":  { "type": "keyword" },
+            "decoy":           { "type": "keyword" }
           }
         },
-
+        "mutations":           { "type": "keyword" },
+        "tokens":              { "type": "keyword" },
+        "token_count":         { "type": "integer" },
         "timestamp":           { "type": "date" }
       }
     }
@@ -616,33 +640,95 @@ Post-analysis results from the triage engine with ranked hypotheses.
 }
 ```
 
-### Hypothesis Report Format
+### Token Format Reference
 
-| Rank | Hypothesis | Evidence | Confidence | Recommendation |
-|------|------------|----------|------------|----------------|
-| 1 | Write→Protect sequence triggers detection | api_sequence, lift=8.5 | 0.95 | avoid |
-| 2 | Short RWX window + anon thread start | mem.write_to_execute_ms<15 | 0.82 | avoid |
-| 3 | RWX protection flag | flProtect=0x40 | 0.78 | avoid |
+| Token format | Example | Source |
+|---|---|---|
+| `api:<func>` | `api:NtAllocateVirtualMemory` | `telemetry-*.payload_api_name` |
+| `etw:<provider>/<event_id>` | `etw:Microsoft-Windows-Kernel-Memory/42` | `telemetry-*.payload_provider` + `payload_event_id` |
+| `seq2:<api1>-><api2>` | `seq2:NtAllocateVirtualMemory->NtProtectVirtualMemory` | Consecutive `payload_api_name` by timestamp |
+| `module:<category>=<name>` | `module:deconditioner=alloc_loop` | From `RoundSpec.modules` |
+| `exit:<code>` | `exit:-2` | From `RunOutcome.exit_code` |
+
+### Scorer Aggregation Query
+
+The Scorer computes lift per token using a single ES aggregation:
+
+```json
+GET tokens-*/_search
+{
+  "query": { "term": { "job_id": "<job_id>" } },
+  "size": 0,
+  "aggs": {
+    "overall_detection_rate": { "avg": { "field": "detected" } },
+    "by_token": {
+      "terms": { "field": "tokens", "size": 500 },
+      "aggs": {
+        "detection_rate": { "avg": { "field": "detected" } },
+        "doc_count": { "value_count": { "field": "detected" } }
+      }
+    }
+  }
+}
+```
+
+> **Note:** `tokens` is mapped as `keyword`, so `terms` aggregation works directly (no `.keyword` sub-field needed). ES computes `avg` on boolean fields by treating `true=1, false=0`.
+
+### Lift Computation
+
+```
+For each token T:
+  lift(T) = detection_rate_given_token(T) / overall_detection_rate
+  confidence(T) = min(1.0, n_total(T) / 5)
+  importance(T) = lift(T) * confidence(T)
+```
+
+### Example Document
+
+```json
+{
+  "job_id": "job-001",
+  "round_id": "job-001-round-3",
+  "run_id": "job-001-round-3-baseline",
+  "detected": true,
+  "modules": {
+    "carrier": "alloc_rw_rx",
+    "decoder": "xor",
+    "antiemulation": "cpuburn",
+    "deconditioner": "alloc_loop",
+    "guardrail": "none",
+    "virtualprotect": "standard",
+    "decoy": "none"
+  },
+  "mutations": ["ast.string_xor"],
+  "tokens": [
+    "api:NtAllocateVirtualMemory",
+    "api:NtProtectVirtualMemory",
+    "seq2:NtAllocateVirtualMemory->NtProtectVirtualMemory",
+    "module:carrier=alloc_rw_rx",
+    "module:deconditioner=alloc_loop",
+    "exit:-2"
+  ],
+  "token_count": 6,
+  "timestamp": "2026-02-15T14:30:00Z"
+}
+```
 
 ### Data Source Analysis
 
-| Field | Source | Controller Type / Proto | Notes |
-|-------|--------|------------------------|-------|
-| `triage_id` | **Controller** | Generated UUID | Unique triage result ID |
-| `job_id` | Proto / Controller | `TriageRequest.job_id` | From triage API request |
-| `round_id` | **Controller** | Lookup from job context | Which round being triaged |
-| `run_id` | **Controller** | Lookup from job context | Specific run if applicable |
-| `detected` | Proto | `TriageRequest.detected` | User-reported detection |
-| `av_product` | Proto | `TriageRequest.av_product` | Which AV product |
-| `detection_type` | Proto | Extend `TriageRequest` | Scan-time vs run-time |
-| `hypotheses` | **Controller** | Triage engine output | Ranked hypothesis list |
-| `feature_attributions` | **Controller** | ML surrogate model | Feature importance |
-| `avoid_features` | **Controller** | Derived from hypotheses | Tokens to avoid |
-| `seek_features` | **Controller** | Derived from hypotheses | Tokens that evade |
-| `iocs.*` | **Controller** | Analysis output | Indicators of compromise |
-| `timestamp` | **Controller** | `chrono::Utc::now()` | Triage time |
+| Field | Source | Controller Type | Notes |
+|-------|--------|-----------------|-------|
+| `job_id` | Controller | `RoundSpec.job_id` | From round context |
+| `round_id` | Controller | `RoundSpec.id` | From round context |
+| `run_id` | Controller | `RoundAgg.baseline_run_id` or `instrumented_run_id` | Per-run document |
+| `detected` | Controller | `RunOutcome.detected` | From RoundAgg |
+| `modules.*` | Controller | `RoundSpec.modules` | Which modules this round used |
+| `mutations` | Controller | `RoundSpec.mutations` | Applied mutation IDs |
+| `tokens` | Controller | TokenExtractor output | Parsed from telemetry-* |
+| `token_count` | Controller | `tokens.len()` | Convenience for queries |
+| `timestamp` | Controller | `chrono::Utc::now()` | Extraction time |
 
-> **Implementation:** Triage is post-analysis. Proto provides user input (`TriageRequest`). All analysis output (hypotheses, features, recommendations) generated by controller's triage engine.
+> **Implementation:** The TokenExtractor is spawned async in `finalize_round()`. It queries `telemetry-*` for this round's run_ids, parses events into normalized tokens, and indexes to `tokens-*`. This is non-blocking: the next round can start before extraction completes. See FEEDBACK-LOOP-PLAN.md Step 1 for details.
 
 ---
 
@@ -768,38 +854,42 @@ Pre-computed differential analysis between paired runs.
 ## Index Relationships
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              jobs-*                                      │
-│  job_id ────────────────────────────────────────────────────────────────┤
-└────────────────────────────────┬────────────────────────────────────────┘
-                                 │ 1:N
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                             rounds-*                                     │
-│  round_id, job_id                                                        │
-│  baseline_run_id ──────┐                                                 │
-│  instrumented_run_id ──┼─────────────────────────────────────────────────┤
-└────────────────────────┼────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                              jobs-*                                       │
+│  job_id ─────────────────────────────────────────────────────────────────┤
+│  modules (default), search_space                                          │
+└───────────────────────────────┬───────────────────────────────────────────┘
+                                │ 1:N
+                                ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                             rounds-*                                      │
+│  round_id, job_id                                                         │
+│  modules (per-round, from selector)                                       │
+│  baseline_run_id ──────┐                                                  │
+│  instrumented_run_id ──┼──────────────────────────────────────────────────┤
+└────────────────────────┼─────────────────────────────────────────────────┘
                          │ 1:2                        │ 1:1
                          ▼                            ▼
 ┌─────────────────────────────────────┐  ┌────────────────────────────────┐
 │              runs-*                  │  │        differential-*          │
 │  run_id, job_id, round_id, vm_id     │  │  baseline_run_id               │
 │  run_type: baseline|instrumented     │  │  instrumented_run_id           │
-└──────────────────┬──────────────────┘  └────────────────────────────────┘
-                   │ 1:N
-                   ▼
-┌─────────────────────────────────────┐
-│           telemetry-*               │
-│  job_id, round_id, run_id, vm_id    │
-│  source: vm_etw | vm_trace | ...    │
-└─────────────────────────────────────┘
-
-┌─────────────────────────────────────┐
-│            triage-*                 │
-│  job_id, round_id, run_id           │
-│  (post-analysis results)            │
-└─────────────────────────────────────┘
+└──────────┬──────────────┬───────────┘  └────────────────────────────────┘
+           │ 1:N          │ 1:1
+           ▼              ▼
+┌────────────────────┐  ┌────────────────────────────────┐
+│   telemetry-*      │  │          tokens-*               │
+│  run_id, vm_id     │  │  run_id, detected, modules      │
+│  payload_api_name  │  │  tokens[] (normalized)           │
+│  payload_provider  │──│  (TokenExtractor reads           │
+│  payload_event_id  │  │   telemetry, writes tokens)      │
+└────────────────────┘  └──────────────┬──────────────────┘
+                                       │ aggregated by
+                                       ▼
+                              Scorer (in-process)
+                              ├── lift per token
+                              ├── confidence
+                              └──► Selector picks next round's modules
 ```
 
 ---
@@ -808,14 +898,19 @@ Pre-computed differential analysis between paired runs.
 
 | Decision | Rationale |
 |----------|-----------|
-| **Monthly partitioning for structured data** | Jobs/rounds/runs are small docs, monthly keeps shard count manageable |
+| **Monthly partitioning for structured data** | Jobs/rounds/runs/tokens are small docs, monthly keeps shard count manageable |
 | **Daily partitioning for telemetry** | High volume, enables efficient time-range queries |
 | **Permanent retention** | Research data needs long-term storage for trend analysis |
-| **`keyword` for IDs and enums** | Exact match queries, aggregations, no analysis needed |
-| **`nested` for hypotheses/candidates** | Preserves array element integrity for complex queries |
+| **`keyword` for IDs, enums, and tokens** | Exact match queries, `terms` aggregations, no analysis needed |
+| **`nested` for mutation_recipe/candidates** | Preserves array element integrity for complex queries |
 | **`flattened` for dynamic params** | Mutation params vary per mutation type |
 | **Consistent correlation keys** | `job_id`, `round_id`, `run_id`, `vm_id` at top-level in all indices |
 | **Separate `differential-*` index** | Pre-computed comparisons avoid expensive joins at query time |
+| **Separate `tokens-*` index** | Decouples token extraction (async) from round lifecycle; scorer aggregates directly |
+| **`tokens` as `keyword` (not `text`)** | Enables `terms` aggregation for lift scoring without `.keyword` sub-field |
+| **`detected` as `boolean` in tokens** | ES `avg` on boolean (true=1, false=0) gives detection rate directly |
+| **Per-round `modules` in rounds-\*** | Selector varies modules each round; must track what was actually used, not just job defaults |
+| **`search_space` in jobs-\*** | Records which categories the selector was allowed to vary for this job |
 | **`detection_outcome` enum** | Matches CLAUDE.md: MUTATION_FAILED/SUCCESS/FULL_EVASION |
 | **`dynamic_templates` for payloads** | Stable types for new ETW fields without mapping conflicts |
 | **`source` field in telemetry** | Future-proofs for multiple telemetry sources (vm_etw, edr_etw) |
@@ -834,7 +929,7 @@ Pre-computed differential analysis between paired runs.
 | `rounds-*` | Exists | **NOT INDEXED** | Not implemented | HIGH |
 | `runs-*` | Implicit | Partial (missing round_id, vm_id, artifact lineage, error, scheduling timestamps) | Not implemented | HIGH |
 | `telemetry-*` | Dynamic | Partial (missing round_id, vm_id, source) | Not implemented | HIGH |
-| `triage-*` | **NOT EXISTS** | **NOT INDEXED** | Not implemented | MEDIUM |
+| `tokens-*` | **NOT EXISTS** | **NOT INDEXED** | Not implemented | HIGH (feedback loop prerequisite) |
 | `differential-*` | **NOT EXISTS** | **NOT INDEXED** | Not implemented | MEDIUM |
 
 ---
@@ -845,12 +940,12 @@ Pre-computed differential analysis between paired runs.
 
 | Category | Proto Provides | Controller Enriches |
 |----------|---------------|---------------------|
-| **Jobs** | — | All fields from `JobSession` |
-| **Rounds** | — | All fields from `RoundSummary`, `RoundAgg` |
+| **Jobs** | -- | All fields from `JobSession` |
+| **Rounds** | -- | All fields from `RoundSummary`, `RoundAgg`, `RoundSpec.modules` |
 | **Runs** | `run_id`, `job_id`, `worker_id`, `worker_ip`, `artifact_name`, `pid`, `status`, `elapsed_seconds`, `telemetry_events_count`, `details` | `round_id`, `run_type`, `vm_id`, `artifact.sha256`, `mutations`, `detected`, `exit_code`, `detection_outcome`, `error.*`, `enqueued_at`, `started_at`, `finished_at` |
 | **Telemetry** | `job_id`, `event_type`, `timestamp`, `metadata`, all `payload_*` fields | `round_id`, `run_id`, `vm_id`, `source`, `indexed_at` |
-| **Triage** | `job_id`, `detected`, `av_product` | All analysis output (hypotheses, features, recommendations) |
-| **Differential** | — | All fields (post-hoc analysis) |
+| **Tokens** | -- | All fields (async extraction from telemetry-*) |
+| **Differential** | -- | All fields (post-hoc analysis) |
 
 ### Controller Enrichment Flow
 
@@ -875,6 +970,14 @@ run_pool.pending.remove(run_id) ──► RunEnvelope (extract before remove)
      │
      ▼
 Enrich StatusReport with RunEnvelope fields
+
+Round completes (both runs finished)
+     │
+     ▼
+TokenExtractor.extract_and_index() (async, non-blocking)
+     ├── Query telemetry-* for this round's run_ids
+     ├── Parse events into normalized tokens
+     └── Index to tokens-*
 ```
 
 ### Required Controller State
@@ -904,10 +1007,10 @@ The controller has all correlation context available at index time via `RunEnvel
 8. **Fix `index_job()`** - Use `JobSession` from `types.rs`, not non-existent `crate::job::Job`
 9. **Fix `index_round()`** - Use `types::RoundSummary` and `RoundAgg`, not non-existent `crate::round::RoundSummary`
 10. **Index rounds on RoundCompleted event** - currently not persisted
-11. **Update job status to ES** - `queued` → `running` → `completed` transitions
+11. **Update job status to ES** - `queued` -> `running` -> `completed` transitions
 12. **Add `detection_outcome` to runs** - MUTATION_FAILED/SUCCESS/FULL_EVASION label
-13. **Create triage-* template and indexing** - hypothesis storage
-14. **Create differential-* template and indexing** - comparison storage
+13. **Create tokens-\* index template** - feedback loop computation index
+14. **Create differential-\* template and indexing** - comparison storage
 15. **Apply dynamic_templates to telemetry** - prevents mapping conflicts on new payload fields
 
 ---
@@ -985,6 +1088,48 @@ GET runs-*/_search
 }
 ```
 
+### Token lift scores for a job (Scorer query)
+```json
+GET tokens-*/_search
+{
+  "query": { "term": { "job_id": "job-001" } },
+  "size": 0,
+  "aggs": {
+    "overall_detection_rate": { "avg": { "field": "detected" } },
+    "by_token": {
+      "terms": { "field": "tokens", "size": 500 },
+      "aggs": {
+        "detection_rate": { "avg": { "field": "detected" } },
+        "doc_count": { "value_count": { "field": "detected" } }
+      }
+    }
+  }
+}
+```
+
+### Detection rate by module combination
+```json
+GET tokens-*/_search
+{
+  "query": { "term": { "job_id": "job-001" } },
+  "size": 0,
+  "aggs": {
+    "by_carrier": {
+      "terms": { "field": "modules.carrier" },
+      "aggs": {
+        "by_deconditioner": {
+          "terms": { "field": "modules.deconditioner" },
+          "aggs": {
+            "detection_rate": { "avg": { "field": "detected" } },
+            "round_count": { "value_count": { "field": "round_id" } }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ### Find differential candidates with high lift
 ```json
 GET differential-*/_search
@@ -1030,5 +1175,21 @@ GET runs-*/_search
     "term": { "artifact.parent_sha256": "abc123..." }
   },
   "sort": [{ "enqueued_at": "asc" }]
+}
+```
+
+### Which rounds used a specific module?
+```json
+GET rounds-*/_search
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "term": { "job_id": "job-001" } },
+        { "term": { "modules.deconditioner": "thread_alloc" } }
+      ]
+    }
+  },
+  "sort": [{ "round_number": "asc" }]
 }
 ```
