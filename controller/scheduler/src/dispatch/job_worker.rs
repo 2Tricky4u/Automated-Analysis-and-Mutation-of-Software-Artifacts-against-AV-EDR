@@ -487,6 +487,14 @@ impl JobWorker {
             None => return,
         };
 
+        // Extract all data from agg BEFORE to_summary() consumes it
+        let baseline_run_id = agg.baseline_run_id.clone();
+        let instrumented_run_id = agg.instrumented_run_id.clone();
+        let baseline_outcome = agg.baseline.clone().unwrap();
+        let instrumented_outcome = agg.instrumented.clone().unwrap();
+        let mutation_specs = agg.spec.mutations.clone();
+        let mutations: Vec<String> = agg.spec.mutations.iter().map(|m| m.id.clone()).collect();
+
         let summary = match agg.to_summary() {
             Some(s) => s,
             None => {
@@ -511,13 +519,19 @@ impl JobWorker {
 
         // TODO: Report to mutation selector for feedback
 
-        // Emit event for ES indexing
+        // Emit enriched event for ES indexing (round + both runs)
         let _ = self
             .event_tx
             .send(JobWorkerEvent::RoundCompleted {
                 job_id: self.job.id.clone(),
                 round_id: round_id.clone(),
                 summary,
+                baseline_run_id,
+                instrumented_run_id,
+                baseline_outcome,
+                instrumented_outcome,
+                mutation_specs,
+                mutations,
             })
             .await;
     }

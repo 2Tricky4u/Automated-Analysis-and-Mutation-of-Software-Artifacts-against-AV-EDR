@@ -7,14 +7,14 @@ use crate::automutate::common::JobId;
 use crate::automutate::controller::{
     BehaviorComparisonProto, CompareRunsRequest, CompareRunsResponse, GetRoundRequest,
     GetRoundResponse, JobProgressRequest, JobProgressResponse, JobRequest, JobResponse,
-    JobStatusRequest, JobStatusResponse, RoundSummaryProto, StatusAck, StatusReport,
-    StopJobRequest, StopJobResponse,
+    JobStatusRequest, JobStatusResponse, RoundSummaryProto, RunResultProto, StatusAck,
+    StatusReport, StopJobRequest, StopJobResponse,
 };
 use crate::dispatch::{
     JobControlCommand, JobId as DispatchJobId, JobSession, ModularBuildSpec, ModuleSelectionSpec,
 };
 use elasticsearch::SearchParts;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -138,7 +138,7 @@ pub async fn schedule_job(
     job.stop_on_evasion = req.stop_on_evasion;
 
     // Index to ES before submission
-    if let Err(e) = service.index_job(&job).await {
+    if let Err(e) = service.storage.index_job(&job).await {
         warn!("Failed to index job to ES: {}", e);
     }
 
@@ -179,7 +179,7 @@ pub async fn get_job_status(
 
     // Query ES for job document across all jobs-* indices
     let search_result = service
-        .es_client
+        .storage.client()
         .search(SearchParts::Index(&["jobs-*"]))
         .body(json!({
             "query": {
@@ -247,7 +247,7 @@ pub async fn get_job_progress(
 
     // Query ES for job document
     let job_result = service
-        .es_client
+        .storage.client()
         .search(SearchParts::Index(&["jobs-*"]))
         .body(json!({
             "query": { "term": { "job_id": job_id } },
@@ -278,7 +278,7 @@ pub async fn get_job_progress(
 
     // Query ES for rounds associated with this job
     let rounds_result = service
-        .es_client
+        .storage.client()
         .search(SearchParts::Index(&["rounds-*"]))
         .body(json!({
             "query": { "term": { "job_id": job_id } },
@@ -351,7 +351,7 @@ pub async fn stop_job(
 
             // Update job status in ES
             let _ = service
-                .es_client
+                .storage.client()
                 .update(elasticsearch::UpdateParts::IndexId("jobs-*", job_id))
                 .body(json!({
                     "doc": { "status": "stopping" }
@@ -392,7 +392,7 @@ pub async fn get_round(
 
     // Query ES for round document
     let round_result = service
-        .es_client
+        .storage.client()
         .search(SearchParts::Index(&["rounds-*"]))
         .body(json!({
             "query": {
@@ -414,16 +414,122 @@ pub async fn get_round(
                 if let Some(hit) = body["hits"]["hits"].as_array().and_then(|h| h.first()) {
                     let source = &hit["_source"];
 
-                    // TODO: GetRound implementation is incomplete - needs additional ES queries
+                    // Parse mutations from round document
+                    let mutations = source["mutations"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| {
+                                    v.as_str().map(|s| crate::automutate::common::Mutation {
+                                        id: s.to_string(),
+                                        params: Default::default(),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    // Build run result protos from run IDs stored in round doc
+                    let baseline_run_id =
+                        source["baseline_run_id"].as_str().unwrap_or("").to_string();
+                    let instrumented_run_id =
+                        source["instrumented_run_id"].as_str().unwrap_or("").to_string();
+
+                    // Query both runs from runs-* index
+                    let runs = crate::storage::queries::query_runs_by_ids(
+                        service.storage.client(),
+                        &[&baseline_run_id, &instrumented_run_id],
+                    )
+                    .await;
+
+                    let mut baseline_run = None;
+                    let mut instrumented_run = None;
+                    for run in &runs {
+                        let rid = run["run_id"].as_str().unwrap_or("");
+                        let run_proto = RunResultProto {
+                            run_id: rid.to_string(),
+                            job_id: run["job_id"].as_str().unwrap_or("").to_string(),
+                            round_id: run["round_id"].as_str().unwrap_or("").to_string(),
+                            run_type: match run["run_type"].as_str().unwrap_or("") {
+                                "baseline" => 1,    // RUN_TYPE_BASELINE
+                                "instrumented" => 2, // RUN_TYPE_INSTRUMENTED
+                                _ => 0,
+                            },
+                            artifact_id: String::new(),
+                            mutations: run["mutations"]
+                                .as_array()
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(String::from))
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            outcome: run["detection_outcome"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string(),
+                            detected: run["detected"].as_bool().unwrap_or(false),
+                            exit_code: run["exit_code"].as_i64().unwrap_or(0) as i32,
+                            telemetry_events_count: run["telemetry_events_count"]
+                                .as_u64()
+                                .unwrap_or(0),
+                            elapsed_seconds: run["elapsed_seconds"].as_u64().unwrap_or(0),
+                            started_at: 0,
+                            completed_at: 0,
+                        };
+
+                        if rid == baseline_run_id {
+                            baseline_run = Some(run_proto);
+                        } else if rid == instrumented_run_id {
+                            instrumented_run = Some(run_proto);
+                        }
+                    }
+
+                    // Build behavior comparison from round document fields
+                    let behavior_match = if source["behavior_match"].is_boolean() {
+                        let b_detected = baseline_run
+                            .as_ref()
+                            .map(|r| r.detected)
+                            .unwrap_or(false);
+                        let i_detected = instrumented_run
+                            .as_ref()
+                            .map(|r| r.detected)
+                            .unwrap_or(false);
+                        let b_exit = baseline_run
+                            .as_ref()
+                            .map(|r| r.exit_code)
+                            .unwrap_or(0);
+                        let i_exit = instrumented_run
+                            .as_ref()
+                            .map(|r| r.exit_code)
+                            .unwrap_or(0);
+
+                        Some(BehaviorComparisonProto {
+                            outcome_match: source["behavior_match"].as_bool().unwrap_or(false),
+                            baseline_detected: b_detected,
+                            baseline_exit_code: b_exit,
+                            instrumented_detected: i_detected,
+                            instrumented_exit_code: i_exit,
+                            differences: vec![],
+                            confidence: if source["behavior_match"].as_bool().unwrap_or(false) {
+                                1.0
+                            } else {
+                                0.5
+                            },
+                        })
+                    } else {
+                        None
+                    };
+
                     let round = RoundProto {
                         round_id: source["round_id"].as_str().unwrap_or("").to_string(),
                         job_id: source["job_id"].as_str().unwrap_or("").to_string(),
                         round_number: source["round_number"].as_u64().unwrap_or(0) as u32,
-                        mutations: vec![],      // TODO: Parse mutations from ES
-                        baseline_run: None,     // TODO: Query run details from runs-* index
-                        instrumented_run: None, // TODO: Query run details from runs-* index
+                        mutations,
+                        baseline_run,
+                        instrumented_run,
                         status: source["status"].as_str().unwrap_or("unknown").to_string(),
-                        behavior_match: None, // TODO: Parse comparison from round document
+                        behavior_match,
                     };
 
                     return Ok(Response::new(GetRoundResponse { round: Some(round) }));
@@ -451,7 +557,7 @@ pub async fn compare_runs(
 
     // Query ES for both runs
     let runs_result = service
-        .es_client
+        .storage.client()
         .search(SearchParts::Index(&["runs-*"]))
         .body(json!({
             "query": {
@@ -566,7 +672,7 @@ pub async fn report_status(
 
     // Store final status to ES
     if matches!(report.event_type.as_str(), "success" | "error" | "timeout") {
-        match tokio::time::timeout(Duration::from_secs(10), service.store_run_result(&report)).await
+        match tokio::time::timeout(Duration::from_secs(10), service.storage.index_run_status(&report)).await
         {
             Ok(Ok(())) => {
                 debug!("[OK] Run result stored: {}", report.run_id);

@@ -123,7 +123,7 @@ pub async fn stream_telemetry(
     if !batch.is_empty() {
         match timeout(
             Duration::from_secs(10),
-            service.index_telemetry_batch(&batch),
+            service.storage.index_telemetry_batch(&batch, &crate::storage::TelemetryContext::default()),
         )
         .await
         {

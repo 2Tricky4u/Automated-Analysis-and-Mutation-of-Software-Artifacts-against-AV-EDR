@@ -7,6 +7,7 @@
 
 pub mod api;
 pub mod dispatch;
+pub mod storage;
 pub mod vm;
 
 // Protobuf definitions

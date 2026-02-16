@@ -2,7 +2,7 @@
 //!
 //! Flow:
 //! 1. Load config, init logging, create ES client
-//! 2. Create TargetManager + Orchestrator
+//! 2. Create EsStorage + TargetManager + Orchestrator
 //! 3. Establish streams with targets (spawns VMExecutors)
 //! 4. gRPC server accepts job submissions -> Orchestrator
 //! 5. Orchestrator spawns JobWorkers and handles all events
@@ -21,10 +21,12 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
 mod dispatch;
+mod storage;
 mod vm;
 
 use api::SchedulerService;
 use dispatch::{JobControlCommand, JobSession, Orchestrator, RunPool};
+use storage::EsStorage;
 use vm::{TargetEvent, TargetManager};
 
 pub mod automutate {
@@ -87,10 +89,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Scheduler starting");
     info!("Config: {}", ControllerConfig::find_config_path());
 
-    // Create Elasticsearch client
+    // Create Elasticsearch client and storage
     let es_transport = Transport::single_node(&config.elasticsearch.url)?;
     let es_client = Elasticsearch::new(es_transport);
+    let storage = Arc::new(EsStorage::new(es_client));
     info!("Elasticsearch: {}", config.elasticsearch.url);
+
+    // Bootstrap index templates (log warnings on failure, don't crash)
+    if let Err(e) = storage.ensure_templates().await {
+        warn!("Failed to ensure ES index templates: {}", e);
+    }
 
     // Create channels
     let (events_tx, events_rx) = mpsc::channel::<TargetEvent>(4096);
@@ -115,7 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         job_control_rx,
         Arc::clone(&run_pool),
         Arc::clone(&targets),
-        es_client.clone(),
+        Arc::clone(&storage),
     );
     tokio::spawn(orchestrator.run());
 
@@ -155,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create gRPC service
     let service = SchedulerService::new(
-        es_client,
+        storage,
         job_tx,
         job_control_tx,
         Arc::clone(&targets),
