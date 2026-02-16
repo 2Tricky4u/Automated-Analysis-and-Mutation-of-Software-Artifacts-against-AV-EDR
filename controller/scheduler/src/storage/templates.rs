@@ -43,7 +43,7 @@ async fn create_jobs_template(es: &Elasticsearch) -> anyhow::Result<()> {
                 "number_of_replicas": 0
             },
             "mappings": {
-                "_meta": { "version": 2 },
+                "_meta": { "version": 3 },
                 "properties": {
                     "job_id": { "type": "keyword" },
                     "status": { "type": "keyword" },
@@ -105,7 +105,7 @@ async fn create_rounds_template(es: &Elasticsearch) -> anyhow::Result<()> {
                 "number_of_replicas": 0
             },
             "mappings": {
-                "_meta": { "version": 2 },
+                "_meta": { "version": 3 },
                 "properties": {
                     "round_id": { "type": "keyword" },
                     "job_id": { "type": "keyword" },
@@ -123,6 +123,7 @@ async fn create_rounds_template(es: &Elasticsearch) -> anyhow::Result<()> {
                     "behavior_match": { "type": "boolean" },
                     "evasion_score": { "type": "float" },
                     "status": { "type": "keyword" },
+                    "started_at": { "type": "date" },
                     "completed_at": { "type": "date" }
                 }
             }
@@ -148,7 +149,7 @@ async fn create_runs_template(es: &Elasticsearch) -> anyhow::Result<()> {
                 "number_of_replicas": 0
             },
             "mappings": {
-                "_meta": { "version": 2 },
+                "_meta": { "version": 3 },
                 "properties": {
                     "run_id": { "type": "keyword" },
                     "job_id": { "type": "keyword" },
@@ -201,7 +202,7 @@ async fn create_telemetry_template(es: &Elasticsearch) -> anyhow::Result<()> {
                 "number_of_replicas": 0
             },
             "mappings": {
-                "_meta": { "version": 2 },
+                "_meta": { "version": 3 },
                 "dynamic_templates": [
                     {
                         "payload_strings": {

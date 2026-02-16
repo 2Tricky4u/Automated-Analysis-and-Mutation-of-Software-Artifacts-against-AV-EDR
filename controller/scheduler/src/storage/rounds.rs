@@ -16,6 +16,7 @@ pub async fn index_round(
     mutation_specs: &[MutationSpec],
     baseline_run_id: &str,
     instrumented_run_id: &str,
+    started_at: Option<&str>,
 ) -> anyhow::Result<()> {
     let index_name = format!("rounds-{}", chrono::Utc::now().format("%Y.%m"));
 
@@ -30,11 +31,7 @@ pub async fn index_round(
         })
         .collect();
 
-    let completed_at_secs = summary
-        .completed_at
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let completed_at: chrono::DateTime<chrono::Utc> = summary.completed_at.into();
 
     let doc = json!({
         "round_id": summary.round_id.0,
@@ -48,7 +45,8 @@ pub async fn index_round(
         "behavior_match": summary.behavior_match,
         "evasion_score": summary.evasion_score,
         "status": "completed",
-        "completed_at": completed_at_secs,
+        "completed_at": completed_at.to_rfc3339(),
+        "started_at": started_at,
     });
 
     let doc_id = format!("{}/{}", job_id, summary.round_id.0);

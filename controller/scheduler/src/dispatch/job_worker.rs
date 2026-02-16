@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -348,6 +348,9 @@ impl JobWorker {
             instrumented_run_id: instrumented_run.run_id.clone(),
             baseline: None,
             instrumented: None,
+            baseline_vm_id: String::new(),
+            instrumented_vm_id: String::new(),
+            started_at: SystemTime::now(),
         };
         self.round_aggs.insert(round_id.clone(), agg);
 
@@ -461,12 +464,14 @@ impl JobWorker {
         for (round_id, agg) in &mut self.round_aggs {
             if agg.baseline_run_id == result.run_id {
                 agg.baseline = Some(result.outcome.clone());
+                agg.baseline_vm_id = result.vm_id.clone();
                 if agg.is_complete() {
                     round_to_finalize = Some(round_id.clone());
                 }
                 break;
             } else if agg.instrumented_run_id == result.run_id {
                 agg.instrumented = Some(result.outcome.clone());
+                agg.instrumented_vm_id = result.vm_id.clone();
                 if agg.is_complete() {
                     round_to_finalize = Some(round_id.clone());
                 }
@@ -494,6 +499,9 @@ impl JobWorker {
         let instrumented_outcome = agg.instrumented.clone().unwrap();
         let mutation_specs = agg.spec.mutations.clone();
         let mutations: Vec<String> = agg.spec.mutations.iter().map(|m| m.id.clone()).collect();
+        let baseline_vm_id = agg.baseline_vm_id.clone();
+        let instrumented_vm_id = agg.instrumented_vm_id.clone();
+        let round_started_at = agg.started_at;
 
         let summary = match agg.to_summary() {
             Some(s) => s,
@@ -532,6 +540,9 @@ impl JobWorker {
                 instrumented_outcome,
                 mutation_specs,
                 mutations,
+                baseline_vm_id,
+                instrumented_vm_id,
+                round_started_at,
             })
             .await;
     }

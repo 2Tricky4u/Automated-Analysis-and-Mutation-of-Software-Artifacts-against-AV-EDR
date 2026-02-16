@@ -13,11 +13,7 @@ use tracing::{info, warn};
 pub async fn index_job(es: &Elasticsearch, job: &JobSession) -> anyhow::Result<()> {
     let index_name = format!("jobs-{}", chrono::Utc::now().format("%Y.%m"));
 
-    let created_at_secs = job
-        .created_at
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let created_at: chrono::DateTime<chrono::Utc> = job.created_at.into();
 
     let doc = json!({
         "job_id": job.id.0,
@@ -42,7 +38,7 @@ pub async fn index_job(es: &Elasticsearch, job: &JobSession) -> anyhow::Result<(
             "virtualprotect": job.build_spec.modules.virtualprotect,
             "decoy": job.build_spec.modules.decoy,
         },
-        "created_at": created_at_secs,
+        "created_at": created_at.to_rfc3339(),
         "updated_at": chrono::Utc::now().to_rfc3339(),
     });
 

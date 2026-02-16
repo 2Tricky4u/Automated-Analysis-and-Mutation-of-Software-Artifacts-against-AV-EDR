@@ -96,6 +96,7 @@ impl EsStorage {
         mutation_specs: &[MutationSpec],
         baseline_run_id: &str,
         instrumented_run_id: &str,
+        started_at: Option<&str>,
     ) -> anyhow::Result<()> {
         rounds::index_round(
             &self.client,
@@ -104,6 +105,7 @@ impl EsStorage {
             mutation_specs,
             baseline_run_id,
             instrumented_run_id,
+            started_at,
         )
         .await
     }
