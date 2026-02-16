@@ -3,9 +3,10 @@
 //! Index pattern: jobs-YYYY.MM
 //! Document ID: job_id
 
+use super::queries;
 use crate::dispatch::types::{JobOutcome, JobSession};
-use elasticsearch::{Elasticsearch, IndexParts, SearchParts, UpdateParts};
-use serde_json::{json, Value};
+use elasticsearch::{Elasticsearch, IndexParts, UpdateParts};
+use serde_json::json;
 use tracing::{info, warn};
 
 /// Index a new job document when a job is submitted.
@@ -73,7 +74,7 @@ pub async fn update_job_started(es: &Elasticsearch, job_id: &str) -> anyhow::Res
     });
 
     // Find the job document first to get the actual index
-    let index_name = find_job_index(es, job_id).await;
+    let index_name = queries::find_index(es, "jobs-*", "job_id", job_id).await;
 
     if let Some(ref idx) = index_name {
         let response = es
@@ -140,7 +141,7 @@ pub async fn update_job_status(
 
     let body = json!({ "doc": update_doc });
 
-    let index_name = find_job_index(es, job_id).await;
+    let index_name = queries::find_index(es, "jobs-*", "job_id", job_id).await;
 
     if let Some(ref idx) = index_name {
         let response = es
@@ -163,26 +164,4 @@ pub async fn update_job_status(
     }
 
     Ok(())
-}
-
-/// Find the actual index name containing a job document.
-/// ES update API requires the concrete index, not a pattern.
-async fn find_job_index(es: &Elasticsearch, job_id: &str) -> Option<String> {
-    let search = es
-        .search(SearchParts::Index(&["jobs-*"]))
-        .body(json!({
-            "query": { "term": { "job_id": job_id } },
-            "size": 1,
-            "_source": false
-        }))
-        .send()
-        .await
-        .ok()?;
-
-    let body = search.json::<Value>().await.ok()?;
-    body["hits"]["hits"]
-        .as_array()
-        .and_then(|h| h.first())
-        .and_then(|hit| hit["_index"].as_str())
-        .map(String::from)
 }

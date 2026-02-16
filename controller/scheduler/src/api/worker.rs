@@ -13,48 +13,48 @@ use crate::vm::{RegistrationType, TargetStatus};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
+/// Convert internal Target to proto WorkerInfo.
+fn target_to_worker_info(w: &crate::vm::Target) -> WorkerInfo {
+    let last_ping_secs = w
+        .last_seen
+        .elapsed()
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    WorkerInfo {
+        worker_id: w.id.to_string(),
+        address: w.address.clone(),
+        status: w.status.to_string(),
+        current_job_id: w
+            .current_job
+            .as_ref()
+            .map(|j| j.0.clone())
+            .unwrap_or_default(),
+        last_ping_seconds_ago: last_ping_secs,
+        enabled: w.enabled,
+        os_version: w.os_version.clone(),
+        capabilities: w.capabilities.clone(),
+        metadata: w.metadata.clone(),
+        tools: Some(ToolVersions {
+            rededr_version: w.tools.get("rededr").cloned().unwrap_or_default(),
+            defender_version: w.tools.get("defender").cloned().unwrap_or_default(),
+            etw_version: w.tools.get("etw").cloned().unwrap_or_default(),
+            llvm_version: w.tools.get("llvm").cloned().unwrap_or_default(),
+        }),
+        registration_type: match w.registration_type {
+            RegistrationType::Dynamic => "dynamic".to_string(),
+            RegistrationType::Static => "static".to_string(),
+        },
+    }
+}
+
 /// List all registered workers
 pub async fn list_workers(
     service: &SchedulerService,
     _request: Request<ListWorkersRequest>,
 ) -> Result<Response<ListWorkersResponse>, Status> {
     let workers = service.targets.list_all();
-    let worker_infos: Vec<WorkerInfo> = workers
-        .iter()
-        .map(|w| {
-            let last_ping_secs = w
-                .last_seen
-                .elapsed()
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-
-            WorkerInfo {
-                worker_id: w.id.to_string(),
-                address: w.address.clone(),
-                status: w.status.to_string(),
-                current_job_id: w
-                    .current_job
-                    .as_ref()
-                    .map(|j| j.0.clone())
-                    .unwrap_or_default(),
-                last_ping_seconds_ago: last_ping_secs,
-                enabled: w.enabled,
-                os_version: w.os_version.clone(),
-                capabilities: w.capabilities.clone(),
-                metadata: w.metadata.clone(),
-                tools: Some(ToolVersions {
-                    rededr_version: w.tools.get("rededr").cloned().unwrap_or_default(),
-                    defender_version: w.tools.get("defender").cloned().unwrap_or_default(),
-                    etw_version: w.tools.get("etw").cloned().unwrap_or_default(),
-                    llvm_version: w.tools.get("llvm").cloned().unwrap_or_default(),
-                }),
-                registration_type: match w.registration_type {
-                    RegistrationType::Dynamic => "dynamic".to_string(),
-                    RegistrationType::Static => "static".to_string(),
-                },
-            }
-        })
-        .collect();
+    let worker_infos: Vec<WorkerInfo> = workers.iter().map(target_to_worker_info).collect();
 
     Ok(Response::new(ListWorkersResponse {
         workers: worker_infos,
@@ -156,44 +156,10 @@ pub async fn get_worker(
     debug!("[RPC] GetWorker: worker_id={}", worker_id);
 
     match service.targets.get(worker_id) {
-        Some(w) => {
-            let last_ping_secs = w
-                .last_seen
-                .elapsed()
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-
-            let worker_info = WorkerInfo {
-                worker_id: w.id.to_string(),
-                address: w.address.clone(),
-                status: w.status.to_string(),
-                current_job_id: w
-                    .current_job
-                    .as_ref()
-                    .map(|j| j.0.clone())
-                    .unwrap_or_default(),
-                last_ping_seconds_ago: last_ping_secs,
-                enabled: w.enabled,
-                os_version: w.os_version.clone(),
-                capabilities: w.capabilities.clone(),
-                metadata: w.metadata.clone(),
-                tools: Some(ToolVersions {
-                    rededr_version: w.tools.get("rededr").cloned().unwrap_or_default(),
-                    defender_version: w.tools.get("defender").cloned().unwrap_or_default(),
-                    etw_version: w.tools.get("etw").cloned().unwrap_or_default(),
-                    llvm_version: w.tools.get("llvm").cloned().unwrap_or_default(),
-                }),
-                registration_type: match w.registration_type {
-                    RegistrationType::Dynamic => "dynamic".to_string(),
-                    RegistrationType::Static => "static".to_string(),
-                },
-            };
-
-            Ok(Response::new(GetWorkerResponse {
-                worker: Some(worker_info),
-                found: true,
-            }))
-        }
+        Some(w) => Ok(Response::new(GetWorkerResponse {
+            worker: Some(target_to_worker_info(&w)),
+            found: true,
+        })),
         None => Ok(Response::new(GetWorkerResponse {
             worker: None,
             found: false,
@@ -218,17 +184,12 @@ pub async fn get_available_workers(
     let available: Vec<WorkerInfo> = all_workers
         .iter()
         .filter(|w| {
-            // Must be available
             if w.status != TargetStatus::Available {
                 return false;
             }
-
-            // Filter by OS if specified
             if !req.target_os.is_empty() && !w.os_version.contains(&req.target_os) {
                 return false;
             }
-
-            // Filter by capabilities if specified
             if !req.required_capabilities.is_empty() {
                 for cap in &req.required_capabilities {
                     if !w.capabilities.contains(cap) {
@@ -236,42 +197,9 @@ pub async fn get_available_workers(
                     }
                 }
             }
-
             true
         })
-        .map(|w| {
-            let last_ping_secs = w
-                .last_seen
-                .elapsed()
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-
-            WorkerInfo {
-                worker_id: w.id.to_string(),
-                address: w.address.clone(),
-                status: w.status.to_string(),
-                current_job_id: w
-                    .current_job
-                    .as_ref()
-                    .map(|j| j.0.clone())
-                    .unwrap_or_default(),
-                last_ping_seconds_ago: last_ping_secs,
-                enabled: w.enabled,
-                os_version: w.os_version.clone(),
-                capabilities: w.capabilities.clone(),
-                metadata: w.metadata.clone(),
-                tools: Some(ToolVersions {
-                    rededr_version: w.tools.get("rededr").cloned().unwrap_or_default(),
-                    defender_version: w.tools.get("defender").cloned().unwrap_or_default(),
-                    etw_version: w.tools.get("etw").cloned().unwrap_or_default(),
-                    llvm_version: w.tools.get("llvm").cloned().unwrap_or_default(),
-                }),
-                registration_type: match w.registration_type {
-                    RegistrationType::Dynamic => "dynamic".to_string(),
-                    RegistrationType::Static => "static".to_string(),
-                },
-            }
-        })
+        .map(target_to_worker_info)
         .collect();
 
     let total = available.len() as i32;

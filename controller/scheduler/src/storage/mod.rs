@@ -129,6 +129,37 @@ impl EsStorage {
         runs::index_run_status(&self.client, report).await
     }
 
+    // -- Queries (read-side) -----------------------------------------------
+
+    pub async fn query_job(&self, job_id: &str) -> Option<serde_json::Value> {
+        queries::query_job(&self.client, job_id).await
+    }
+
+    pub async fn query_rounds(&self, job_id: &str) -> Vec<serde_json::Value> {
+        queries::query_rounds(&self.client, job_id).await
+    }
+
+    pub async fn query_round(
+        &self,
+        job_id: &str,
+        round_id: &str,
+    ) -> Option<serde_json::Value> {
+        queries::query_round(&self.client, job_id, round_id).await
+    }
+
+    pub async fn query_runs_by_ids(&self, run_ids: &[&str]) -> Vec<serde_json::Value> {
+        queries::query_runs_by_ids(&self.client, run_ids).await
+    }
+
+    pub async fn update_job_field(
+        &self,
+        job_id: &str,
+        field: &str,
+        value: &str,
+    ) -> anyhow::Result<()> {
+        queries::update_job_field(&self.client, job_id, field, value).await
+    }
+
     // -- Bootstrap ---------------------------------------------------------
 
     pub async fn ensure_templates(&self) -> anyhow::Result<()> {
