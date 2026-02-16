@@ -223,7 +223,10 @@ fn test_assembled_source_has_definitions() {
 
 #[test]
 fn test_string_xor_on_assembled_source() {
-    let modules = ModuleSelection::new();
+    let modules = ModuleSelection {
+        decoy: "winexec".to_string(),
+        ..ModuleSelection::new()
+    };
     let payload = common::payload_small();
     let mutations = vec![MutationSpec {
         id: "ast.string_xor".to_string(),
