@@ -70,6 +70,14 @@ impl EsStorage {
         jobs::update_job_started(&self.client, job_id).await
     }
 
+    pub async fn update_job_progress(
+        &self,
+        job_id: &str,
+        current_round: u32,
+    ) -> anyhow::Result<()> {
+        jobs::update_job_progress(&self.client, job_id, current_round).await
+    }
+
     pub async fn update_job_status(
         &self,
         job_id: &str,
