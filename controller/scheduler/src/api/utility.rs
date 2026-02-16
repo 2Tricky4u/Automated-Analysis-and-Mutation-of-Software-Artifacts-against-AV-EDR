@@ -76,7 +76,7 @@ pub async fn query_results(
     let _req = request.into_inner();
 
     // TODO: Implement ES query based on request filters
-    // let search_result = service.es_client
+    // let search_result = service.storage.client()
     //     .search(SearchParts::Index(&["runs-*", "jobs-*", "rounds-*"]))
     //     .body(json!({
     //         "query": { ... build from req filters ... },

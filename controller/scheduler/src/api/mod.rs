@@ -21,8 +21,8 @@ use crate::automutate::controller::{
     TriageResponse, controller_server::Controller,
 };
 use crate::dispatch::{JobControlCommand, JobSession, RunPool};
+use crate::storage::EsStorage;
 use crate::vm::TargetManager;
-use elasticsearch::Elasticsearch;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tonic::{Request, Response, Status};
@@ -34,7 +34,7 @@ use tonic::{Request, Response, Status};
 /// Main service struct holding shared state for gRPC handlers
 #[derive(Clone)]
 pub struct SchedulerService {
-    pub es_client: Elasticsearch,
+    pub storage: Arc<EsStorage>,
     pub job_tx: mpsc::Sender<JobSession>,
     pub job_control_tx: mpsc::Sender<JobControlCommand>,
     pub targets: Arc<TargetManager>,
@@ -43,125 +43,19 @@ pub struct SchedulerService {
 
 impl SchedulerService {
     pub fn new(
-        es_client: Elasticsearch,
+        storage: Arc<EsStorage>,
         job_tx: mpsc::Sender<JobSession>,
         job_control_tx: mpsc::Sender<JobControlCommand>,
         targets: Arc<TargetManager>,
         run_pool: Arc<RunPool>,
     ) -> Self {
         Self {
-            es_client,
+            storage,
             job_tx,
             job_control_tx,
             targets,
             run_pool,
         }
-    }
-
-    /// Index telemetry events to Elasticsearch
-    pub async fn index_telemetry_batch(&self, events: &[TelemetryData]) -> anyhow::Result<()> {
-        use elasticsearch::IndexParts;
-        use serde_json::json;
-
-        if events.is_empty() {
-            return Ok(());
-        }
-
-        let index_name = format!("telemetry-{}", chrono::Utc::now().format("%Y.%m"));
-
-        // Index each event individually (simpler than bulk for now)
-        for event in events {
-            let doc = json!({
-                "event_type": event.event_type,
-                "timestamp": event.timestamp,
-                "job_id": event.job_id,
-                "metadata": event.metadata,
-            });
-
-            let response = self
-                .es_client
-                .index(IndexParts::Index(&index_name))
-                .body(doc)
-                .send()
-                .await?;
-
-            if !response.status_code().is_success() {
-                return Err(anyhow::anyhow!("Index failed: {}", response.status_code()));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Index job metadata to Elasticsearch
-    pub async fn index_job(&self, job: &JobSession) -> anyhow::Result<()> {
-        use elasticsearch::IndexParts;
-        use serde_json::json;
-
-        let index_name = format!("jobs-{}", chrono::Utc::now().format("%Y.%m"));
-
-        let doc = json!({
-            "job_id": job.id.0,
-            "target_os": job.target_os,
-            "required_capabilities": job.required_capabilities,
-            "max_rounds": job.max_rounds,
-            "current_round": job.current_round,
-            "created_at": job.created_at.duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default().as_secs(),
-            "status": "queued",
-            "build_spec": {
-                "payload_path": job.build_spec.payload_path.display().to_string(),
-                "encoding": job.build_spec.encoding,
-                "carrier": job.build_spec.modules.carrier,
-                "decoder": job.build_spec.modules.decoder,
-            },
-        });
-
-        let response = self
-            .es_client
-            .index(IndexParts::IndexId(&index_name, &job.id.0))
-            .body(doc)
-            .send()
-            .await?;
-
-        if !response.status_code().is_success() {
-            return Err(anyhow::anyhow!("Index failed: {}", response.status_code()));
-        }
-
-        Ok(())
-    }
-
-    /// Store run result to Elasticsearch
-    pub async fn store_run_result(&self, report: &StatusReport) -> anyhow::Result<()> {
-        use elasticsearch::IndexParts;
-        use serde_json::json;
-
-        let index_name = format!("runs-{}", chrono::Utc::now().format("%Y.%m"));
-
-        let doc = json!({
-            "run_id": report.run_id,
-            "job_id": report.job_id,
-            "worker_id": report.worker_id,
-            "worker_ip": report.worker_ip,
-            "artifact_name": report.artifact_name,
-            "event_type": report.event_type,
-            "details": report.details,
-            "pid": report.pid,
-            "timestamp": chrono::Utc::now().to_rfc3339(),
-        });
-
-        let response = self
-            .es_client
-            .index(IndexParts::Index(&index_name))
-            .body(doc)
-            .send()
-            .await?;
-
-        if !response.status_code().is_success() {
-            return Err(anyhow::anyhow!("Index failed: {}", response.status_code()));
-        }
-
-        Ok(())
     }
 }
 

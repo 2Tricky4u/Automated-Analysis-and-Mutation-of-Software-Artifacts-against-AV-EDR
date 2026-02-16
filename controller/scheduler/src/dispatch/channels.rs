@@ -10,7 +10,7 @@
 //! - RunPool: Shared queue where all jobs put runs, VMExecutors take from it
 //! - VMExecutor: Thin dispatcher per VM, takes runs, routes results back
 
-use super::types::{JobId, JobOutcome, RoundId, RoundSummary, RunId, RunOutcome};
+use super::types::{JobId, JobOutcome, MutationSpec, RoundId, RoundSummary, RunId, RunOutcome};
 
 // ============================================================================
 // Service -> Orchestrator (Job Control Commands)
@@ -54,11 +54,18 @@ impl From<RemoteRunResult> for RunOutcome {
 /// Events emitted by JobWorker to Orchestrator for tracking and ES indexing.
 #[derive(Debug, Clone)]
 pub enum JobWorkerEvent {
-    /// A round completed (both baseline and instrumented runs done)
+    /// A round completed (both baseline and instrumented runs done).
+    /// Carries all data needed for round AND run indexing.
     RoundCompleted {
         job_id: JobId,
         round_id: RoundId,
         summary: RoundSummary,
+        baseline_run_id: RunId,
+        instrumented_run_id: RunId,
+        baseline_outcome: RunOutcome,
+        instrumented_outcome: RunOutcome,
+        mutation_specs: Vec<MutationSpec>,
+        mutations: Vec<String>,
     },
     /// Job completed (all rounds done or stopped early)
     JobCompleted { job_id: JobId, outcome: JobOutcome },

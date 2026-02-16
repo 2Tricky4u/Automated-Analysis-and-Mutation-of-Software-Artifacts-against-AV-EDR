@@ -10,8 +10,8 @@ use super::channels::{JobControlCommand, JobWorkerEvent};
 use super::job_worker::JobWorker;
 use super::run_pool::RunPool;
 use super::types::{JobId, JobOutcome, JobSession, WorkerId, WorkerInfo};
+use crate::storage::{EsStorage, TelemetryContext};
 use crate::vm::{TargetEvent, TargetManager};
-use elasticsearch::Elasticsearch;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -25,8 +25,8 @@ pub struct Orchestrator {
     /// Target manager for VM state
     targets: Arc<TargetManager>,
 
-    /// ES client for telemetry indexing
-    es_client: Elasticsearch,
+    /// Consolidated ES storage
+    storage: Arc<EsStorage>,
 
     /// Active job workers: JobId -> CancellationToken
     job_workers: HashMap<JobId, CancellationToken>,
@@ -57,13 +57,13 @@ impl Orchestrator {
         job_control_rx: mpsc::Receiver<JobControlCommand>,
         run_pool: Arc<RunPool>,
         targets: Arc<TargetManager>,
-        es_client: Elasticsearch,
+        storage: Arc<EsStorage>,
     ) -> Self {
         let (job_event_tx, job_event_rx) = mpsc::channel(256);
         Self {
             run_pool,
             targets,
-            es_client,
+            storage,
             job_workers: HashMap::new(),
             job_event_tx,
             job_event_rx,
@@ -167,7 +167,16 @@ impl Orchestrator {
 
         let shutdown_token = worker.cancellation_token();
         tokio::spawn(worker.run());
-        self.job_workers.insert(job_id, shutdown_token);
+        self.job_workers.insert(job_id.clone(), shutdown_token);
+
+        // Update job status to "running" in ES
+        let storage = self.storage.clone();
+        let jid = job_id.0.clone();
+        tokio::spawn(async move {
+            if let Err(e) = storage.update_job_started(&jid).await {
+                warn!("Failed to update job started status: {}", e);
+            }
+        });
     }
 
     // ========================================================================
@@ -255,12 +264,57 @@ impl Orchestrator {
                 job_id,
                 round_id,
                 summary,
+                baseline_run_id,
+                instrumented_run_id,
+                baseline_outcome,
+                instrumented_outcome,
+                mutation_specs,
+                mutations,
             } => {
                 info!(
                     "[Orchestrator] Round {} completed for job {}: detected={}, evasion={:.2}",
                     round_id, job_id, summary.detected, summary.evasion_score
                 );
-                // TODO: Index round to ES
+
+                // Index round and both runs to ES
+                let storage = self.storage.clone();
+                let jid = job_id.0.clone();
+                let rid = round_id.0.clone();
+                let b_run_id = baseline_run_id.0.clone();
+                let i_run_id = instrumented_run_id.0.clone();
+                tokio::spawn(async move {
+                    // Index round summary
+                    if let Err(e) = storage
+                        .index_round(&jid, &summary, &mutation_specs, &b_run_id, &i_run_id)
+                        .await
+                    {
+                        error!("Failed to index round: {}", e);
+                    }
+                    // Index baseline run with exit_code, detected, round_id, run_type
+                    if let Err(e) = storage
+                        .index_run_result(
+                            &jid, &rid, &b_run_id, "baseline", &baseline_outcome, &mutations, "",
+                        )
+                        .await
+                    {
+                        error!("Failed to index baseline run: {}", e);
+                    }
+                    // Index instrumented run
+                    if let Err(e) = storage
+                        .index_run_result(
+                            &jid,
+                            &rid,
+                            &i_run_id,
+                            "instrumented",
+                            &instrumented_outcome,
+                            &mutations,
+                            "",
+                        )
+                        .await
+                    {
+                        error!("Failed to index instrumented run: {}", e);
+                    }
+                });
             }
             JobWorkerEvent::JobCompleted { job_id, outcome } => {
                 match &outcome {
@@ -278,7 +332,16 @@ impl Orchestrator {
                     }
                 }
                 self.job_workers.remove(&job_id);
-                // TODO: Update job status in ES
+
+                // Update job status in ES
+                let status = outcome.to_status().to_string();
+                let storage = self.storage.clone();
+                let jid = job_id.0.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = storage.update_job_status(&jid, &status, Some(&outcome)).await {
+                        error!("Failed to update job status: {}", e);
+                    }
+                });
             }
         }
     }
@@ -381,10 +444,19 @@ impl Orchestrator {
                 );
 
                 if !batch.events.is_empty() {
-                    let es = self.es_client.clone();
+                    let storage = self.storage.clone();
                     let events = batch.events;
+                    let context = TelemetryContext {
+                        run_id: if batch.run_id.is_empty() {
+                            None
+                        } else {
+                            Some(batch.run_id.clone())
+                        },
+                        round_id: None, // Not available on TelemetryBatch
+                        vm_id: target_id.to_string(),
+                    };
                     tokio::spawn(async move {
-                        if let Err(e) = index_telemetry(&es, &events).await {
+                        if let Err(e) = storage.index_telemetry_batch(&events, &context).await {
                             error!("Failed to index telemetry: {}", e);
                         }
                     });
@@ -444,48 +516,10 @@ impl Orchestrator {
     }
 }
 
-// ============================================================================
-// Telemetry Indexing
-// ============================================================================
-
-async fn index_telemetry(
-    es: &Elasticsearch,
-    events: &[crate::automutate::common::TelemetryData],
-) -> anyhow::Result<()> {
-    use elasticsearch::IndexParts;
-    use serde_json::json;
-
-    if events.is_empty() {
-        return Ok(());
-    }
-
-    let index_name = format!("telemetry-{}", chrono::Utc::now().format("%Y.%m"));
-
-    for event in events {
-        let doc = json!({
-            "event_type": event.event_type,
-            "timestamp": event.timestamp,
-            "job_id": event.job_id,
-            "metadata": event.metadata,
-        });
-
-        let response = es
-            .index(IndexParts::Index(&index_name))
-            .body(doc)
-            .send()
-            .await?;
-
-        if !response.status_code().is_success() {
-            return Err(anyhow::anyhow!("Index failed: {}", response.status_code()));
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use elasticsearch::Elasticsearch;
     use elasticsearch::http::transport::Transport;
 
     #[tokio::test]
@@ -503,9 +537,10 @@ mod tests {
             Arc::clone(&run_pool),
         ));
 
-        // Create ES client (won't actually connect in test)
+        // Create EsStorage (won't actually connect in test)
         let transport = Transport::single_node("http://localhost:9200").unwrap();
         let es_client = Elasticsearch::new(transport);
+        let storage = Arc::new(EsStorage::new(es_client));
 
         let orchestrator = Orchestrator::new(
             events_rx,
@@ -513,7 +548,7 @@ mod tests {
             job_control_rx,
             run_pool,
             targets,
-            es_client,
+            storage,
         );
 
         assert_eq!(orchestrator.active_job_count(), 0);
