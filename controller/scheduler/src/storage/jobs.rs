@@ -49,6 +49,7 @@ pub async fn index_job(es: &Elasticsearch, job: &JobSession) -> anyhow::Result<(
     let response = es
         .index(IndexParts::IndexId(&index_name, &job.id.0))
         .body(doc)
+        .refresh(elasticsearch::params::Refresh::WaitFor)
         .send()
         .await?;
 
@@ -90,6 +91,41 @@ pub async fn update_job_started(es: &Elasticsearch, job_id: &str) -> anyhow::Res
         }
     } else {
         warn!("Job {} not found in ES for started update", job_id);
+    }
+
+    Ok(())
+}
+
+/// Update job progress (current_round) after a round completes.
+pub async fn update_job_progress(
+    es: &Elasticsearch,
+    job_id: &str,
+    current_round: u32,
+) -> anyhow::Result<()> {
+    let doc = json!({
+        "doc": {
+            "current_round": current_round,
+            "updated_at": chrono::Utc::now().to_rfc3339(),
+        }
+    });
+
+    let index_name = queries::find_index(es, "jobs-*", "job_id", job_id).await;
+
+    if let Some(ref idx) = index_name {
+        let response = es
+            .update(UpdateParts::IndexId(idx, job_id))
+            .body(doc)
+            .send()
+            .await?;
+
+        if !response.status_code().is_success() {
+            warn!(
+                "Failed to update job {} progress to round {}: {}",
+                job_id, current_round, response.status_code()
+            );
+        }
+    } else {
+        warn!("Job {} not found in ES for progress update", job_id);
     }
 
     Ok(())

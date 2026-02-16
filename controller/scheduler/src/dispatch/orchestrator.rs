@@ -276,13 +276,21 @@ impl Orchestrator {
                     round_id, job_id, summary.detected, summary.evasion_score
                 );
 
-                // Index round and both runs to ES
+                // Index round, both runs, and update job progress in ES
                 let storage = self.storage.clone();
                 let jid = job_id.0.clone();
                 let rid = round_id.0.clone();
+                let round_number = summary.round_number;
                 let b_run_id = baseline_run_id.0.clone();
                 let i_run_id = instrumented_run_id.0.clone();
                 tokio::spawn(async move {
+                    // Update job progress (current_round)
+                    if let Err(e) = storage
+                        .update_job_progress(&jid, round_number)
+                        .await
+                    {
+                        error!("Failed to update job progress: {}", e);
+                    }
                     // Index round summary
                     if let Err(e) = storage
                         .index_round(&jid, &summary, &mutation_specs, &b_run_id, &i_run_id)
