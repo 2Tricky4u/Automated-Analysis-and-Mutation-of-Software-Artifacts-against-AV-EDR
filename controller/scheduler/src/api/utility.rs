@@ -10,10 +10,7 @@ pub async fn ping(
     request: Request<PingRequest>,
 ) -> Result<Response<PingResponse>, Status> {
     let req = request.into_inner();
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let timestamp = crate::storage::helpers::now_unix_secs();
 
     info!("Ping received: {}", req.message);
 
@@ -34,13 +31,7 @@ pub async fn submit_triage(
     request: Request<TriageRequest>,
 ) -> Result<Response<TriageResponse>, Status> {
     let req = request.into_inner();
-    let triage_id = format!(
-        "triage-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
+    let triage_id = format!("triage-{}", crate::storage::helpers::now_unix_secs());
 
     info!(
         "Triage submitted for job {}: detected={}",

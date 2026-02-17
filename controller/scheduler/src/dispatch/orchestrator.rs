@@ -280,8 +280,7 @@ impl Orchestrator {
                 );
 
                 // Convert round_started_at to RFC3339
-                let started_at_dt: chrono::DateTime<chrono::Utc> = round_started_at.into();
-                let started_at_str = started_at_dt.to_rfc3339();
+                let started_at_str = crate::storage::helpers::system_time_to_rfc3339(round_started_at);
 
                 // Index round, both runs, and update job progress in ES
                 let storage = self.storage.clone();

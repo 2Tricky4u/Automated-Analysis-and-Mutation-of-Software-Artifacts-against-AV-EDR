@@ -86,7 +86,6 @@ pub async fn deploy_artifact(
     service: &SchedulerService,
     request: Request<DeployRequest>,
 ) -> Result<Response<DeployResponse>, Status> {
-    use crate::automutate::common::ArtifactChunk;
     use crate::automutate::worker::worker_agent_client::WorkerAgentClient;
     use futures::stream;
     use sha2::{Digest, Sha256};
@@ -162,20 +161,7 @@ pub async fn deploy_artifact(
     debug!("Successfully connected to worker");
 
     // 4. Split into chunks (4MB per chunk)
-    let chunk_size = 4 * 1024 * 1024; // 4MB
-    let total_chunks = (artifact_data.len() + chunk_size - 1) / chunk_size;
-
-    let chunks: Vec<ArtifactChunk> = artifact_data
-        .chunks(chunk_size)
-        .enumerate()
-        .map(|(i, chunk)| ArtifactChunk {
-            artifact_id: req.artifact_id.clone(),
-            data: chunk.to_vec(),
-            chunk_index: i as u32,
-            total_chunks: total_chunks as u32,
-            sha256: req.artifact_id.clone(),
-        })
-        .collect();
+    let chunks = crate::dispatch::types::chunk_artifact(&req.artifact_id, &artifact_data);
 
     info!(
         "Streaming {} chunks ({} bytes total) to worker",

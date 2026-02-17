@@ -389,15 +389,7 @@ impl JobWorker {
             })?;
 
         // Convert module selection
-        let modules = ModuleSelection {
-            carrier: build_spec.modules.carrier.clone(),
-            decoder: build_spec.modules.decoder.clone(),
-            antiemulation: build_spec.modules.antiemulation.clone(),
-            deconditioner: build_spec.modules.deconditioner.clone(),
-            guardrail: build_spec.modules.guardrail.clone(),
-            virtualprotect: build_spec.modules.virtualprotect.clone(),
-            decoy: build_spec.modules.decoy.clone(),
-        };
+        let modules: ModuleSelection = build_spec.modules.clone().into();
 
         // Parse encoding type
         let encoding = EncodingType::from_str(&build_spec.encoding).unwrap_or(EncodingType::Xor);

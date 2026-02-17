@@ -78,6 +78,20 @@ impl Default for ModuleSelectionSpec {
     }
 }
 
+impl From<ModuleSelectionSpec> for build::ModuleSelection {
+    fn from(spec: ModuleSelectionSpec) -> Self {
+        Self {
+            carrier: spec.carrier,
+            decoder: spec.decoder,
+            antiemulation: spec.antiemulation,
+            deconditioner: spec.deconditioner,
+            guardrail: spec.guardrail,
+            virtualprotect: spec.virtualprotect,
+            decoy: spec.decoy,
+        }
+    }
+}
+
 /// Modular build specification for the @MODULE marker system
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModularBuildSpec {
@@ -615,6 +629,28 @@ pub struct JobInfo {
     pub max_rounds: u32,
     pub target_os: Option<String>,
     pub started_at: Option<SystemTime>,
+}
+
+// ============================================================================
+// Artifact Chunking
+// ============================================================================
+
+/// Split binary data into 4MB `ArtifactChunk` messages for gRPC streaming.
+pub fn chunk_artifact(artifact_id: &str, data: &[u8]) -> Vec<crate::automutate::common::ArtifactChunk> {
+    use crate::automutate::common::ArtifactChunk;
+
+    const CHUNK_SIZE: usize = 4 * 1024 * 1024;
+    let total_chunks = (data.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    data.chunks(CHUNK_SIZE)
+        .enumerate()
+        .map(|(i, chunk)| ArtifactChunk {
+            artifact_id: artifact_id.to_string(),
+            data: chunk.to_vec(),
+            chunk_index: i as u32,
+            total_chunks: total_chunks as u32,
+            sha256: artifact_id.to_string(),
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -14,14 +14,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
 use tonic::Request;
 use tonic::transport::{Channel, Endpoint};
 use tracing::{debug, error, info, warn};
 
 use crate::automutate::common::{
-    ArtifactChunk, ControllerMessage, DisconnectNotice, Heartbeat, WorkerMessage,
+    ControllerMessage, DisconnectNotice, Heartbeat, WorkerMessage,
     controller_message, worker_message,
 };
 use crate::automutate::worker::{
@@ -597,10 +597,7 @@ impl TargetManager {
 
                 let heartbeat = ControllerMessage {
                     payload: Some(controller_message::Payload::Heartbeat(Heartbeat {
-                        timestamp: SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs() as i64,
+                        timestamp: crate::storage::helpers::now_unix_secs(),
                     })),
                 };
 
@@ -709,24 +706,11 @@ impl TargetManager {
         let channel = self.get_channel(id).await?;
         let mut client = WorkerAgentClient::new(channel);
 
-        let chunk_size = 4 * 1024 * 1024;
-        let total_chunks = ((data.len() + chunk_size - 1) / chunk_size) as u32;
-
-        let chunks: Vec<ArtifactChunk> = data
-            .chunks(chunk_size)
-            .enumerate()
-            .map(|(i, chunk)| ArtifactChunk {
-                artifact_id: artifact_id.to_string(),
-                data: chunk.to_vec(),
-                chunk_index: i as u32,
-                total_chunks,
-                sha256: artifact_id.to_string(),
-            })
-            .collect();
+        let chunks = crate::dispatch::types::chunk_artifact(artifact_id, &data);
 
         debug!(
             "[{}] Sending {} chunks to target {}",
-            artifact_id, total_chunks, id
+            artifact_id, chunks.len(), id
         );
         client.send_artifact(stream::iter(chunks)).await?;
         debug!("[{}] Artifact deployed to target {}", artifact_id, id);
