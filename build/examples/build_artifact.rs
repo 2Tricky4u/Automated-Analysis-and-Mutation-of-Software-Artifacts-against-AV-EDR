@@ -174,6 +174,9 @@ struct Args {
     xwin: PathBuf,
     output_dir: PathBuf,
     templates_dir: PathBuf,
+    // Track which flags the user explicitly set (for auto-sync)
+    decoder_set: bool,
+    encoding_set: bool,
 }
 
 impl Args {
@@ -195,6 +198,8 @@ impl Args {
             xwin: PathBuf::from("/root/.xwin"),
             output_dir: PathBuf::from("./artifacts"),
             templates_dir: PathBuf::from("corpus/templates"),
+            decoder_set: false,
+            encoding_set: false,
         };
         let argv: Vec<String> = env::args().skip(1).collect();
         let mut i = 0;
@@ -216,6 +221,7 @@ impl Args {
                 "--decoder" => {
                     i += 1;
                     a.decoder = argv[i].clone();
+                    a.decoder_set = true;
                 }
                 "--antiemulation" => {
                     i += 1;
@@ -240,6 +246,7 @@ impl Args {
                 "--encoding" => {
                     i += 1;
                     a.encoding = argv[i].clone();
+                    a.encoding_set = true;
                 }
                 "--trace" => {
                     i += 1;
@@ -268,6 +275,26 @@ impl Args {
             }
             i += 1;
         }
+
+        // Auto-sync encoding ↔ decoder:
+        // - If user set only --decoder, sync encoding to match
+        // - If user set only --encoding, sync decoder to match
+        // - If both set, encoding wins (builder enforces this too)
+        // - If neither set, both default to "xor"
+        if a.decoder_set && !a.encoding_set {
+            a.encoding = a.decoder.clone();
+            eprintln!(
+                "[build_artifact] Auto-synced encoding to '{}' (from --decoder)",
+                a.encoding
+            );
+        } else if a.encoding_set && !a.decoder_set {
+            a.decoder = a.encoding.clone();
+            eprintln!(
+                "[build_artifact] Auto-synced decoder to '{}' (from --encoding)",
+                a.decoder
+            );
+        }
+
         a
     }
 }

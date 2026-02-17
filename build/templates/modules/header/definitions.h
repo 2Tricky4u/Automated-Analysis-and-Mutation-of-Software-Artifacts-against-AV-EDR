@@ -44,6 +44,11 @@ BOOL MyVirtualProtect(LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect, PDWOR
 
 // Global Payload Access (Provided by payload.h)
 extern unsigned char supermega_payload[];
-extern int PAYLOAD_LEN_VAL; // If dynamic, or macro PAYLOAD_LEN
+
+#ifdef ENGLISH_ENCODING
+// English decoder needs these (defined in payload.h when encoding=english)
+extern const char* DICTIONARY[];
+extern char supermega_payload_str[];
+#endif
 
 #endif
