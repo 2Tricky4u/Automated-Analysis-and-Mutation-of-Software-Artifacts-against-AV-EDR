@@ -3,6 +3,10 @@
 //! Thin gRPC handlers: validate request, call storage, map to proto response.
 //! All ES logic lives in storage/ — handlers never touch SearchParts or json!({}).
 
+use super::extract::{
+    bool_field, f64_field, i32_field, parse_date_to_unix_secs, str_field, string_array_field,
+    u32_field, u64_field,
+};
 use crate::api::SchedulerService;
 use crate::automutate::common::JobId;
 use crate::automutate::controller::{
@@ -52,47 +56,9 @@ pub async fn schedule_job(
     );
 
     // Build module selection from proto (use defaults if empty)
-    let default_modules = ModuleSelectionSpec::default();
-    let modules = if let Some(m) = &req.modules {
-        ModuleSelectionSpec {
-            carrier: if m.carrier.is_empty() {
-                default_modules.carrier
-            } else {
-                m.carrier.clone()
-            },
-            decoder: if m.decoder.is_empty() {
-                default_modules.decoder
-            } else {
-                m.decoder.clone()
-            },
-            antiemulation: if m.antiemulation.is_empty() {
-                default_modules.antiemulation
-            } else {
-                m.antiemulation.clone()
-            },
-            deconditioner: if m.deconditioner.is_empty() {
-                default_modules.deconditioner
-            } else {
-                m.deconditioner.clone()
-            },
-            guardrail: if m.guardrail.is_empty() {
-                default_modules.guardrail
-            } else {
-                m.guardrail.clone()
-            },
-            virtualprotect: if m.virtualprotect.is_empty() {
-                default_modules.virtualprotect
-            } else {
-                m.virtualprotect.clone()
-            },
-            decoy: if m.decoy.is_empty() {
-                default_modules.decoy
-            } else {
-                m.decoy.clone()
-            },
-        }
-    } else {
-        default_modules
+    let modules = match &req.modules {
+        Some(m) => ModuleSelectionSpec::from_proto_or_default(m),
+        None => ModuleSelectionSpec::default(),
     };
 
     // Get encoding (default to xor)
@@ -470,46 +436,17 @@ pub async fn report_status(
 }
 
 // ===========================================================================
-// Value extraction helpers — keep proto mapping clean
+// Proto mapping helpers
 // ===========================================================================
-
-fn str_field(v: &Value, key: &str) -> String {
-    v[key].as_str().unwrap_or("").to_string()
-}
-
-fn u32_field(v: &Value, key: &str) -> u32 {
-    v[key].as_u64().unwrap_or(0) as u32
-}
-
-fn string_array_field(v: &Value, key: &str) -> Vec<String> {
-    v[key]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Parse a date value that may be RFC3339 string (new format) or unix seconds (old format).
-fn parse_date_to_unix_secs(v: &Value) -> i64 {
-    if let Some(s) = v.as_str() {
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-            return dt.timestamp();
-        }
-    }
-    v.as_i64().unwrap_or(0)
-}
 
 fn round_doc_to_proto(source: &Value) -> RoundSummaryProto {
     RoundSummaryProto {
         round_id: str_field(source, "round_id"),
         round_number: u32_field(source, "round_number"),
         mutations: string_array_field(source, "mutations"),
-        detected: source["detected"].as_bool().unwrap_or(false),
-        behavior_match: source["behavior_match"].as_bool().unwrap_or(false),
-        evasion_score: source["evasion_score"].as_f64().unwrap_or(0.0),
+        detected: bool_field(source, "detected"),
+        behavior_match: bool_field(source, "behavior_match"),
+        evasion_score: f64_field(source, "evasion_score"),
         status: str_field(source, "status"),
         completed_at: parse_date_to_unix_secs(&source["completed_at"]),
     }
@@ -528,10 +465,10 @@ fn run_doc_to_proto(source: &Value) -> RunResultProto {
         artifact_id: String::new(),
         mutations: string_array_field(source, "mutations"),
         outcome: str_field(source, "detection_outcome"),
-        detected: source["detected"].as_bool().unwrap_or(false),
-        exit_code: source["exit_code"].as_i64().unwrap_or(0) as i32,
-        telemetry_events_count: source["telemetry_events_count"].as_u64().unwrap_or(0),
-        elapsed_seconds: source["elapsed_seconds"].as_u64().unwrap_or(0),
+        detected: bool_field(source, "detected"),
+        exit_code: i32_field(source, "exit_code"),
+        telemetry_events_count: u64_field(source, "telemetry_events_count"),
+        elapsed_seconds: u64_field(source, "elapsed_seconds"),
         started_at: 0,
         completed_at: 0,
     }
@@ -546,7 +483,7 @@ fn build_behavior_comparison(
     let i_detected = instrumented.as_ref().map(|r| r.detected).unwrap_or(false);
     let b_exit = baseline.as_ref().map(|r| r.exit_code).unwrap_or(0);
     let i_exit = instrumented.as_ref().map(|r| r.exit_code).unwrap_or(0);
-    let outcome_match = source["behavior_match"].as_bool().unwrap_or(false);
+    let outcome_match = bool_field(source, "behavior_match");
 
     BehaviorComparisonProto {
         outcome_match,

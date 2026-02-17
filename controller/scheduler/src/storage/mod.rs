@@ -8,6 +8,7 @@
 //! - queries: reusable ES query helpers for API handlers
 //! - templates: index template bootstrap
 
+pub mod helpers;
 pub mod jobs;
 pub mod queries;
 pub mod rounds;

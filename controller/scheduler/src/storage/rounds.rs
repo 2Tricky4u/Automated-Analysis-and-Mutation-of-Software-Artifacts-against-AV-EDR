@@ -3,10 +3,11 @@
 //! Index pattern: rounds-YYYY.MM
 //! Document ID: {job_id}/{round_id}
 
+use super::helpers;
 use crate::dispatch::types::{MutationSpec, RoundSummary};
 use elasticsearch::{Elasticsearch, IndexParts};
 use serde_json::json;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Index a completed round summary with mutation recipe and run IDs.
 pub async fn index_round(
@@ -18,7 +19,7 @@ pub async fn index_round(
     instrumented_run_id: &str,
     started_at: Option<&str>,
 ) -> anyhow::Result<()> {
-    let index_name = format!("rounds-{}", chrono::Utc::now().format("%Y.%m"));
+    let index_name = helpers::es_index_name("rounds");
 
     // Serialize mutation recipe (full specs with params)
     let mutation_recipe: Vec<serde_json::Value> = mutation_specs
@@ -30,8 +31,6 @@ pub async fn index_round(
             })
         })
         .collect();
-
-    let completed_at: chrono::DateTime<chrono::Utc> = summary.completed_at.into();
 
     let doc = json!({
         "round_id": summary.round_id.0,
@@ -45,7 +44,7 @@ pub async fn index_round(
         "behavior_match": summary.behavior_match,
         "evasion_score": summary.evasion_score,
         "status": "completed",
-        "completed_at": completed_at.to_rfc3339(),
+        "completed_at": helpers::system_time_to_rfc3339(summary.completed_at),
         "started_at": started_at,
     });
 
@@ -56,11 +55,7 @@ pub async fn index_round(
         .send()
         .await?;
 
-    if !response.status_code().is_success() {
-        let body = response.text().await.unwrap_or_default();
-        warn!("Failed to index round {}: {}", doc_id, body);
-        return Err(anyhow::anyhow!("Failed to index round: {}", doc_id));
-    }
+    helpers::check_index_response(response, "round", &doc_id).await?;
 
     info!("Indexed round {} to {}", doc_id, index_name);
     Ok(())

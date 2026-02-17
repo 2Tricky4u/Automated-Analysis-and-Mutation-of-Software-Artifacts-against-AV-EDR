@@ -3,17 +3,15 @@
 //! Index pattern: jobs-YYYY.MM
 //! Document ID: job_id
 
-use super::queries;
+use super::helpers;
 use crate::dispatch::types::{JobOutcome, JobSession};
-use elasticsearch::{Elasticsearch, IndexParts, UpdateParts};
+use elasticsearch::{Elasticsearch, IndexParts};
 use serde_json::json;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Index a new job document when a job is submitted.
 pub async fn index_job(es: &Elasticsearch, job: &JobSession) -> anyhow::Result<()> {
-    let index_name = format!("jobs-{}", chrono::Utc::now().format("%Y.%m"));
-
-    let created_at: chrono::DateTime<chrono::Utc> = job.created_at.into();
+    let index_name = helpers::es_index_name("jobs");
 
     let doc = json!({
         "job_id": job.id.0,
@@ -38,8 +36,8 @@ pub async fn index_job(es: &Elasticsearch, job: &JobSession) -> anyhow::Result<(
             "virtualprotect": job.build_spec.modules.virtualprotect,
             "decoy": job.build_spec.modules.decoy,
         },
-        "created_at": created_at.to_rfc3339(),
-        "updated_at": chrono::Utc::now().to_rfc3339(),
+        "created_at": helpers::system_time_to_rfc3339(job.created_at),
+        "updated_at": helpers::now_rfc3339(),
     });
 
     let response = es
@@ -49,12 +47,7 @@ pub async fn index_job(es: &Elasticsearch, job: &JobSession) -> anyhow::Result<(
         .send()
         .await?;
 
-    if !response.status_code().is_success() {
-        return Err(anyhow::anyhow!(
-            "Failed to index job: {}",
-            response.status_code()
-        ));
-    }
+    helpers::check_index_response(response, "job", &job.id.0).await?;
 
     info!("Indexed job {} to {}", job.id.0, index_name);
     Ok(())
@@ -65,30 +58,12 @@ pub async fn update_job_started(es: &Elasticsearch, job_id: &str) -> anyhow::Res
     let doc = json!({
         "doc": {
             "status": "running",
-            "started_at": chrono::Utc::now().to_rfc3339(),
-            "updated_at": chrono::Utc::now().to_rfc3339(),
+            "started_at": helpers::now_rfc3339(),
+            "updated_at": helpers::now_rfc3339(),
         }
     });
 
-    // Find the job document first to get the actual index
-    let index_name = queries::find_index(es, "jobs-*", "job_id", job_id).await;
-
-    if let Some(ref idx) = index_name {
-        let response = es
-            .update(UpdateParts::IndexId(idx, job_id))
-            .body(doc)
-            .send()
-            .await?;
-
-        if !response.status_code().is_success() {
-            warn!("Failed to update job started status: {}", response.status_code());
-        } else {
-            info!("Updated job {} status to running", job_id);
-        }
-    } else {
-        warn!("Job {} not found in ES for started update", job_id);
-    }
-
+    helpers::update_doc_by_id(es, "jobs-*", "job_id", job_id, doc, "job").await?;
     Ok(())
 }
 
@@ -101,29 +76,11 @@ pub async fn update_job_progress(
     let doc = json!({
         "doc": {
             "current_round": current_round,
-            "updated_at": chrono::Utc::now().to_rfc3339(),
+            "updated_at": helpers::now_rfc3339(),
         }
     });
 
-    let index_name = queries::find_index(es, "jobs-*", "job_id", job_id).await;
-
-    if let Some(ref idx) = index_name {
-        let response = es
-            .update(UpdateParts::IndexId(idx, job_id))
-            .body(doc)
-            .send()
-            .await?;
-
-        if !response.status_code().is_success() {
-            warn!(
-                "Failed to update job {} progress to round {}: {}",
-                job_id, current_round, response.status_code()
-            );
-        }
-    } else {
-        warn!("Job {} not found in ES for progress update", job_id);
-    }
-
+    helpers::update_doc_by_id(es, "jobs-*", "job_id", job_id, doc, "job").await?;
     Ok(())
 }
 
@@ -136,8 +93,8 @@ pub async fn update_job_status(
 ) -> anyhow::Result<()> {
     let mut update_doc = json!({
         "status": status,
-        "updated_at": chrono::Utc::now().to_rfc3339(),
-        "completed_at": chrono::Utc::now().to_rfc3339(),
+        "updated_at": helpers::now_rfc3339(),
+        "completed_at": helpers::now_rfc3339(),
     });
 
     // Add outcome details
@@ -173,27 +130,6 @@ pub async fn update_job_status(
 
     let body = json!({ "doc": update_doc });
 
-    let index_name = queries::find_index(es, "jobs-*", "job_id", job_id).await;
-
-    if let Some(ref idx) = index_name {
-        let response = es
-            .update(UpdateParts::IndexId(idx, job_id))
-            .body(body)
-            .send()
-            .await?;
-
-        if !response.status_code().is_success() {
-            let err_body = response.text().await.unwrap_or_default();
-            warn!(
-                "Failed to update job {} status to {}: {}",
-                job_id, status, err_body
-            );
-        } else {
-            info!("Updated job {} status to {}", job_id, status);
-        }
-    } else {
-        warn!("Job {} not found in ES for status update", job_id);
-    }
-
+    helpers::update_doc_by_id(es, "jobs-*", "job_id", job_id, body, "job").await?;
     Ok(())
 }

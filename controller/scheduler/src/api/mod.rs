@@ -4,6 +4,7 @@
 //! Uses JobWorker architecture (JobSession -> Orchestrator -> JobWorker -> RunPool -> VMExecutor)
 
 pub mod artifact;
+pub mod extract;
 pub mod job;
 pub mod utility;
 pub mod worker;
