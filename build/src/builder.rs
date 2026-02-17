@@ -242,42 +242,26 @@ impl ArtifactBuilder {
         self.invoke_clang_internal(template_name, &source_path, &temp_output, link_runtime)
             .await?;
 
-        // 3. Read the built artifact
-        let artifact_data = tokio::fs::read(&temp_output)
-            .await
-            .context("Failed to read built artifact")?;
-
-        // 4. Compute SHA256 artifact_id
-        let artifact_id = self.compute_sha256(&artifact_data);
-
-        // 5. Move to artifacts directory with SHA256 name
-        let final_output = self.config.output_dir.join(format!("{}.exe", artifact_id));
-        tokio::fs::rename(&temp_output, &final_output)
-            .await
-            .context("Failed to move artifact to output directory")?;
+        // 3. Finalize: read, hash, rename, return metadata
+        let (artifact_id, final_output, size_bytes) =
+            self.finalize_artifact(&temp_output).await?;
 
         info!(
             "Artifact built: {} ({} bytes) -> {:?}",
-            artifact_id,
-            artifact_data.len(),
-            final_output
+            artifact_id, size_bytes, final_output
         );
 
-        // 6. Get compiler version
         let compiler_version = self.get_clang_version()?;
 
-        // 7. Return metadata
-        Ok(BuiltArtifact {
-            artifact_id: artifact_id.clone(),
+        Ok(build_artifact_metadata(
+            artifact_id,
             source_path,
-            output_path: final_output,
-            size_bytes: artifact_data.len() as u64,
-            sha256: artifact_id,
-            build_timestamp: chrono::Utc::now(),
+            final_output,
+            size_bytes,
             compiler_version,
-            compiler_flags: self.get_compiler_flags(template_name),
-            mutations_applied: vec![],
-        })
+            self.get_compiler_flags(template_name),
+            vec![],
+        ))
     }
 
     /// Build template with mutations and optional runtime linking
@@ -405,37 +389,26 @@ impl ArtifactBuilder {
             // Clean up IR file
             let _ = tokio::fs::remove_file(&ir_path).await;
 
-            // Continue to step 5 (artifact finalization)
-            let artifact_data = tokio::fs::read(&temp_output)
-                .await
-                .context("Failed to read built artifact")?;
-
-            let artifact_id = self.compute_sha256(&artifact_data);
-            let final_output = self.config.output_dir.join(format!("{}.exe", artifact_id));
-            tokio::fs::rename(&temp_output, &final_output)
-                .await
-                .context("Failed to move artifact to output directory")?;
+            // Finalize artifact
+            let (artifact_id, final_output, size_bytes) =
+                self.finalize_artifact(&temp_output).await?;
 
             debug!(
                 "Mutated artifact built (IR path): {} ({} bytes) -> {:?}",
-                artifact_id,
-                artifact_data.len(),
-                final_output
+                artifact_id, size_bytes, final_output
             );
 
             let compiler_version = self.get_clang_version()?;
 
-            return Ok(BuiltArtifact {
-                artifact_id: artifact_id.clone(),
+            return Ok(build_artifact_metadata(
+                artifact_id,
                 source_path,
-                output_path: final_output,
-                size_bytes: artifact_data.len() as u64,
-                sha256: artifact_id,
-                build_timestamp: chrono::Utc::now(),
+                final_output,
+                size_bytes,
                 compiler_version,
-                compiler_flags: self.get_compiler_flags(template_name),
-                mutations_applied: all_mutations_applied,
-            });
+                self.get_compiler_flags(template_name),
+                all_mutations_applied,
+            ));
         }
 
         // 5. AST-only mutations: write mutated source and compile directly
@@ -471,40 +444,26 @@ impl ArtifactBuilder {
         // 6. Clean up mutated source file
         let _ = tokio::fs::remove_file(&mutated_path).await;
 
-        // 7. Read artifact and compute hash
-        let artifact_data = tokio::fs::read(&temp_output)
-            .await
-            .context("Failed to read built artifact")?;
-
-        let artifact_id = self.compute_sha256(&artifact_data);
-
-        // 8. Move to artifacts directory
-        let final_output = self.config.output_dir.join(format!("{}.exe", artifact_id));
-        tokio::fs::rename(&temp_output, &final_output)
-            .await
-            .context("Failed to move artifact to output directory")?;
+        // 7. Finalize artifact
+        let (artifact_id, final_output, size_bytes) =
+            self.finalize_artifact(&temp_output).await?;
 
         debug!(
             "Mutated artifact built (AST path): {} ({} bytes) -> {:?}",
-            artifact_id,
-            artifact_data.len(),
-            final_output
+            artifact_id, size_bytes, final_output
         );
 
-        // 9. Return metadata with mutations applied
         let compiler_version = self.get_clang_version()?;
 
-        Ok(BuiltArtifact {
-            artifact_id: artifact_id.clone(),
+        Ok(build_artifact_metadata(
+            artifact_id,
             source_path,
-            output_path: final_output,
-            size_bytes: artifact_data.len() as u64,
-            sha256: artifact_id,
-            build_timestamp: chrono::Utc::now(),
+            final_output,
+            size_bytes,
             compiler_version,
-            compiler_flags: self.get_compiler_flags(template_name),
-            mutations_applied: all_mutations_applied,
-        })
+            self.get_compiler_flags(template_name),
+            all_mutations_applied,
+        ))
     }
 
     /// Invoke Clang with xwin SDK to cross-compile C to Windows PE with optional runtime linking
@@ -515,17 +474,7 @@ impl ArtifactBuilder {
         output: &Path,
         link_runtime: bool,
     ) -> Result<()> {
-        let xwin = &self.config.xwin_dir;
-
-        // Pre-format paths to avoid lifetime issues
-        let crt_include = format!("{}/crt/include", xwin.display());
-        let sdk_ucrt_include = format!("{}/sdk/include/ucrt", xwin.display());
-        let sdk_shared_include = format!("{}/sdk/include/shared", xwin.display());
-        let sdk_um_include = format!("{}/sdk/include/um", xwin.display());
-        let sdk_winrt_include = format!("{}/sdk/include/winrt", xwin.display());
-        let crt_lib = format!("{}/crt/lib/x86_64", xwin.display());
-        let sdk_ucrt_lib = format!("{}/sdk/lib/ucrt/x86_64", xwin.display());
-        let sdk_um_lib = format!("{}/sdk/lib/um/x86_64", xwin.display());
+        let xwin = XwinPaths::new(&self.config.xwin_dir);
 
         let output_str = output.to_str().context("Invalid output path")?;
         let source_str = source.to_str().context("Invalid source path")?;
@@ -544,22 +493,10 @@ impl ArtifactBuilder {
         let mut args = vec![
             "-target",
             "x86_64-pc-windows-msvc",
-            "-isystem",
-            crt_include.as_str(),
-            "-isystem",
-            sdk_ucrt_include.as_str(),
-            "-isystem",
-            sdk_shared_include.as_str(),
-            "-isystem",
-            sdk_um_include.as_str(),
-            "-isystem",
-            sdk_winrt_include.as_str(),
-            "-L",
-            crt_lib.as_str(),
-            "-L",
-            sdk_ucrt_lib.as_str(),
-            "-L",
-            sdk_um_lib.as_str(),
+        ];
+        args.extend(xwin.include_args());
+        args.extend(xwin.lib_args());
+        args.extend_from_slice(&[
             // TODO could use MSVC linker (link.exe , WINE?), not lld-link
             //"-fuse-ld=link",
             "-fuse-ld=lld",
@@ -580,7 +517,7 @@ impl ArtifactBuilder {
             "-Wl,-defaultlib:libcmt",
             // Keep the system libs you truly need
             "-Wl,-defaultlib:kernel32",
-        ];
+        ]);
 
         // Always add instrumentation header path (needed for instrumentation.h)
         args.push("-I");
@@ -675,14 +612,27 @@ impl ArtifactBuilder {
         format!("{:x}", hasher.finalize())
     }
 
+    /// Read a temp artifact, compute its SHA256, and rename it to `<sha256>.exe` in output_dir.
+    ///
+    /// Returns `(artifact_id, final_path, size_bytes)`.
+    async fn finalize_artifact(&self, temp_path: &Path) -> Result<(String, PathBuf, u64)> {
+        let data = tokio::fs::read(temp_path)
+            .await
+            .context("Failed to read built artifact")?;
+
+        let artifact_id = self.compute_sha256(&data);
+        let final_output = self.config.output_dir.join(format!("{}.exe", artifact_id));
+
+        tokio::fs::rename(temp_path, &final_output)
+            .await
+            .context("Failed to move artifact to output directory")?;
+
+        Ok((artifact_id, final_output, data.len() as u64))
+    }
+
     /// Compile C source to LLVM IR
     async fn compile_source_to_ir(&self, source_path: &Path, ir_path: &Path) -> Result<()> {
-        let xwin_root = PathBuf::from("/root/.xwin");
-        let crt_include = xwin_root.join("crt/include");
-        let sdk_ucrt_include = xwin_root.join("sdk/include/ucrt");
-        let sdk_shared_include = xwin_root.join("sdk/include/shared");
-        let sdk_um_include = xwin_root.join("sdk/include/um");
-        let sdk_winrt_include = xwin_root.join("sdk/include/winrt");
+        let xwin = XwinPaths::new(&self.config.xwin_dir);
 
         // Get runtime include path for instrumentation.h
         let runtime_include = self
@@ -693,19 +643,12 @@ impl ArtifactBuilder {
             .to_str()
             .context("Runtime include path is not valid UTF-8")?;
 
-        let args = vec![
+        let mut args = vec![
             "-target",
             "x86_64-pc-windows-msvc",
-            "-isystem",
-            crt_include.to_str().unwrap(),
-            "-isystem",
-            sdk_ucrt_include.to_str().unwrap(),
-            "-isystem",
-            sdk_shared_include.to_str().unwrap(),
-            "-isystem",
-            sdk_um_include.to_str().unwrap(),
-            "-isystem",
-            sdk_winrt_include.to_str().unwrap(),
+        ];
+        args.extend(xwin.include_args());
+        args.extend_from_slice(&[
             "-I",
             runtime_include,            // Add instrumentation header path
             "-DENABLE_INSTRUMENTATION", // Always define when compiling to IR (instrumentation will be applied)
@@ -715,7 +658,7 @@ impl ArtifactBuilder {
             "-o",
             ir_path.to_str().unwrap(),
             source_path.to_str().unwrap(),
-        ];
+        ]);
 
         debug!("Compiling source -> IR: clang {}", args.join(" "));
 
@@ -740,26 +683,20 @@ impl ArtifactBuilder {
         exe_path: &Path,
         template_name: &str,
     ) -> Result<()> {
-        let xwin_root = PathBuf::from("/root/.xwin");
-        let crt_lib = xwin_root.join("crt/lib/x86_64");
-        let sdk_ucrt_lib = xwin_root.join("sdk/lib/ucrt/x86_64");
-        let sdk_um_lib = xwin_root.join("sdk/lib/um/x86_64");
+        let xwin = XwinPaths::new(&self.config.xwin_dir);
 
         let mut args = vec![
             "-target",
             "x86_64-pc-windows-msvc",
-            "-L",
-            crt_lib.to_str().unwrap(),
-            "-L",
-            sdk_ucrt_lib.to_str().unwrap(),
-            "-L",
-            sdk_um_lib.to_str().unwrap(),
+        ];
+        args.extend(xwin.lib_args());
+        args.extend_from_slice(&[
             "-fuse-ld=lld",
             "-Wl,/subsystem:console",
             "-O0", // Keep -O0 to preserve mutated NOPs (don't optimize them out)
             "-Wl,-defaultlib:libcmt",
             "-Wl,-defaultlib:kernel32",
-        ];
+        ]);
 
         // Add template-specific libraries (format for clang wrapper: -Wl,-defaultlib:name)
         let extra_libs = get_template_libs(template_name);
@@ -1069,6 +1006,8 @@ impl ArtifactBuilder {
             );
         }
 
+        // Finalize: hash, rename, metadata
+        // (can't use finalize_artifact because data is already read for size check)
         let instrumented_id = self.compute_sha256(&instrumented_data);
         let final_output = self
             .config
@@ -1087,18 +1026,15 @@ impl ArtifactBuilder {
             final_output
         );
 
-        // Return new BuiltArtifact with updated paths and ID
-        Ok(BuiltArtifact {
-            artifact_id: instrumented_id.clone(),
-            source_path: built.source_path,
-            output_path: final_output,
-            size_bytes: instrumented_data.len() as u64,
-            sha256: instrumented_id,
-            build_timestamp: chrono::Utc::now(),
-            compiler_version: built.compiler_version,
-            compiler_flags: built.compiler_flags,
-            mutations_applied: built.mutations_applied,
-        })
+        Ok(build_artifact_metadata(
+            instrumented_id,
+            built.source_path,
+            final_output,
+            instrumented_data.len() as u64,
+            built.compiler_version,
+            built.compiler_flags,
+            built.mutations_applied,
+        ))
     }
 
     /// Compile instrumentation runtime C file to object file
@@ -1405,43 +1341,27 @@ impl ArtifactBuilder {
         // Clean up temp source
         let _ = tokio::fs::remove_file(&temp_source).await;
 
-        // Read artifact and compute hash
-        let artifact_data = tokio::fs::read(&temp_output)
-            .await
-            .context("Failed to read built artifact")?;
-
-        let artifact_id = self.compute_sha256(&artifact_data);
-
-        // Move to artifacts directory
-        let final_output = self.config.output_dir.join(format!("{}.exe", artifact_id));
-        tokio::fs::rename(&temp_output, &final_output)
-            .await
-            .context("Failed to move artifact to output directory")?;
+        // Finalize artifact
+        let (artifact_id, final_output, size_bytes) =
+            self.finalize_artifact(&temp_output).await?;
 
         info!(
             "Modular artifact built: {} ({} bytes) -> {:?}",
-            artifact_id,
-            artifact_data.len(),
-            final_output
+            artifact_id, size_bytes, final_output
         );
 
-        // Collect mutation info for metadata
         let mutations_applied: Vec<String> = mutations.iter().map(|m| m.id.clone()).collect();
-
         let compiler_version = self.get_clang_version()?;
 
-        // Create initial artifact metadata
-        let built = BuiltArtifact {
-            artifact_id: artifact_id.clone(),
-            source_path: temp_source.clone(), // We'll use this for instrumentation
-            output_path: final_output,
-            size_bytes: artifact_data.len() as u64,
-            sha256: artifact_id,
-            build_timestamp: chrono::Utc::now(),
+        let built = build_artifact_metadata(
+            artifact_id,
+            temp_source.clone(), // We'll use this for instrumentation
+            final_output,
+            size_bytes,
             compiler_version,
-            compiler_flags: self.get_compiler_flags("modular"),
+            self.get_compiler_flags("modular"),
             mutations_applied,
-        };
+        );
 
         // Apply instrumentation if needed
         if needs_runtime {
@@ -1525,6 +1445,81 @@ impl ArtifactBuilder {
     }
 }
 
+/// Resolved xwin SDK paths for cross-compilation
+#[derive(Debug, Clone)]
+pub struct XwinPaths {
+    pub crt_include: String,
+    pub sdk_ucrt_include: String,
+    pub sdk_shared_include: String,
+    pub sdk_um_include: String,
+    pub sdk_winrt_include: String,
+    pub crt_lib: String,
+    pub sdk_ucrt_lib: String,
+    pub sdk_um_lib: String,
+}
+
+impl XwinPaths {
+    /// Build all xwin SDK paths from the root directory
+    pub fn new(xwin_dir: &Path) -> Self {
+        let xwin = xwin_dir.display();
+        Self {
+            crt_include: format!("{}/crt/include", xwin),
+            sdk_ucrt_include: format!("{}/sdk/include/ucrt", xwin),
+            sdk_shared_include: format!("{}/sdk/include/shared", xwin),
+            sdk_um_include: format!("{}/sdk/include/um", xwin),
+            sdk_winrt_include: format!("{}/sdk/include/winrt", xwin),
+            crt_lib: format!("{}/crt/lib/x86_64", xwin),
+            sdk_ucrt_lib: format!("{}/sdk/lib/ucrt/x86_64", xwin),
+            sdk_um_lib: format!("{}/sdk/lib/um/x86_64", xwin),
+        }
+    }
+
+    /// Return the include `-isystem` args in order
+    pub fn include_args(&self) -> Vec<&str> {
+        vec![
+            "-isystem", &self.crt_include,
+            "-isystem", &self.sdk_ucrt_include,
+            "-isystem", &self.sdk_shared_include,
+            "-isystem", &self.sdk_um_include,
+            "-isystem", &self.sdk_winrt_include,
+        ]
+    }
+
+    /// Return the library `-L` args in order
+    pub fn lib_args(&self) -> Vec<&str> {
+        vec![
+            "-L", &self.crt_lib,
+            "-L", &self.sdk_ucrt_lib,
+            "-L", &self.sdk_um_lib,
+        ]
+    }
+}
+
+/// Build `BuiltArtifact` metadata from raw artifact data and context.
+///
+/// This is the common pattern extracted from 5 finalization sites.
+fn build_artifact_metadata(
+    artifact_id: String,
+    source_path: PathBuf,
+    output_path: PathBuf,
+    size_bytes: u64,
+    compiler_version: String,
+    compiler_flags: Vec<String>,
+    mutations_applied: Vec<String>,
+) -> BuiltArtifact {
+    BuiltArtifact {
+        artifact_id: artifact_id.clone(),
+        source_path,
+        output_path,
+        size_bytes,
+        sha256: artifact_id,
+        build_timestamp: chrono::Utc::now(),
+        compiler_version,
+        compiler_flags,
+        mutations_applied,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1545,5 +1540,104 @@ mod tests {
             hash,
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         );
+    }
+
+    // ── XwinPaths tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_xwin_paths_default() {
+        let paths = XwinPaths::new(Path::new("/root/.xwin"));
+        assert_eq!(paths.crt_include, "/root/.xwin/crt/include");
+        assert_eq!(paths.sdk_ucrt_include, "/root/.xwin/sdk/include/ucrt");
+        assert_eq!(paths.sdk_shared_include, "/root/.xwin/sdk/include/shared");
+        assert_eq!(paths.sdk_um_include, "/root/.xwin/sdk/include/um");
+        assert_eq!(paths.sdk_winrt_include, "/root/.xwin/sdk/include/winrt");
+        assert_eq!(paths.crt_lib, "/root/.xwin/crt/lib/x86_64");
+        assert_eq!(paths.sdk_ucrt_lib, "/root/.xwin/sdk/lib/ucrt/x86_64");
+        assert_eq!(paths.sdk_um_lib, "/root/.xwin/sdk/lib/um/x86_64");
+    }
+
+    #[test]
+    fn test_xwin_paths_custom_dir() {
+        let paths = XwinPaths::new(Path::new("/opt/xwin-sdk"));
+        assert_eq!(paths.crt_include, "/opt/xwin-sdk/crt/include");
+        assert_eq!(paths.sdk_um_lib, "/opt/xwin-sdk/sdk/lib/um/x86_64");
+    }
+
+    #[test]
+    fn test_xwin_paths_include_args() {
+        let paths = XwinPaths::new(Path::new("/root/.xwin"));
+        let args = paths.include_args();
+        assert_eq!(args.len(), 10); // 5 pairs of (-isystem, path)
+        assert_eq!(args[0], "-isystem");
+        assert_eq!(args[1], "/root/.xwin/crt/include");
+        assert_eq!(args[8], "-isystem");
+        assert_eq!(args[9], "/root/.xwin/sdk/include/winrt");
+    }
+
+    #[test]
+    fn test_xwin_paths_lib_args() {
+        let paths = XwinPaths::new(Path::new("/root/.xwin"));
+        let args = paths.lib_args();
+        assert_eq!(args.len(), 6); // 3 pairs of (-L, path)
+        assert_eq!(args[0], "-L");
+        assert_eq!(args[1], "/root/.xwin/crt/lib/x86_64");
+        assert_eq!(args[4], "-L");
+        assert_eq!(args[5], "/root/.xwin/sdk/lib/um/x86_64");
+    }
+
+    // ── build_artifact_metadata tests ────────────────────────────────────
+
+    #[test]
+    fn test_build_artifact_metadata_basic() {
+        let artifact = build_artifact_metadata(
+            "abc123".to_string(),
+            PathBuf::from("/tmp/source.c"),
+            PathBuf::from("/tmp/output.exe"),
+            1024,
+            "clang 17.0.6".to_string(),
+            vec!["-O2".to_string()],
+            vec!["ast.string_xor".to_string()],
+        );
+
+        assert_eq!(artifact.artifact_id, "abc123");
+        assert_eq!(artifact.sha256, "abc123");
+        assert_eq!(artifact.source_path, PathBuf::from("/tmp/source.c"));
+        assert_eq!(artifact.output_path, PathBuf::from("/tmp/output.exe"));
+        assert_eq!(artifact.size_bytes, 1024);
+        assert_eq!(artifact.compiler_version, "clang 17.0.6");
+        assert_eq!(artifact.compiler_flags, vec!["-O2"]);
+        assert_eq!(artifact.mutations_applied, vec!["ast.string_xor"]);
+    }
+
+    #[test]
+    fn test_build_artifact_metadata_empty_mutations() {
+        let artifact = build_artifact_metadata(
+            "def456".to_string(),
+            PathBuf::from("src.c"),
+            PathBuf::from("out.exe"),
+            512,
+            "unknown".to_string(),
+            vec![],
+            vec![],
+        );
+
+        assert!(artifact.mutations_applied.is_empty());
+        assert!(artifact.compiler_flags.is_empty());
+    }
+
+    #[test]
+    fn test_build_artifact_metadata_sha256_matches_id() {
+        let artifact = build_artifact_metadata(
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9".to_string(),
+            PathBuf::from("s.c"),
+            PathBuf::from("o.exe"),
+            0,
+            "".to_string(),
+            vec![],
+            vec![],
+        );
+
+        assert_eq!(artifact.artifact_id, artifact.sha256);
     }
 }
