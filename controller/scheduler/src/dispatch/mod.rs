@@ -28,5 +28,5 @@ pub use vm_executor::{ArtifactSender, VMExecutor};
 // Types
 pub use types::{
     JobId, JobInfo, JobSession, JobStatus, ModularBuildSpec, ModuleSelectionSpec, RunId, TargetId,
-    VMInfo, WorkerId, WorkerInfo,
+    VMInfo, WorkerId, WorkerInfo, chunk_artifact,
 };
