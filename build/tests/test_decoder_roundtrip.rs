@@ -38,45 +38,6 @@ fn simulate_c_english_decode(payload_str: &str, dictionary: &[&str]) -> Vec<u8> 
         .collect()
 }
 
-/// The encoder's built-in 256-word dictionary (must match PayloadEncoder::generate_dictionary)
-fn encoder_dictionary() -> Vec<String> {
-    let common_words = [
-        "the", "be", "to", "of", "and", "a", "in", "that", "have", "i", "it", "for", "not",
-        "on", "with", "he", "as", "you", "do", "at", "this", "but", "his", "by", "from",
-        "they", "we", "say", "her", "she", "or", "an", "will", "my", "one", "all", "would",
-        "there", "their", "what", "so", "up", "out", "if", "about", "who", "get", "which",
-        "go", "me", "when", "make", "can", "like", "time", "no", "just", "him", "know", "take",
-    ];
-    let mut dictionary: Vec<String> = common_words.iter().map(|s| s.to_string()).collect();
-    while dictionary.len() < 256 {
-        dictionary.push(format!("w{}", dictionary.len()));
-    }
-    dictionary
-}
-
-/// Parse PAYLOAD_LEN from a generated C header: `#define PAYLOAD_LEN <N>`
-fn parse_payload_len(header: &str) -> usize {
-    for line in header.lines() {
-        if let Some(rest) = line.strip_prefix("#define PAYLOAD_LEN ") {
-            return rest.trim().parse().expect("PAYLOAD_LEN must be a number");
-        }
-    }
-    panic!("PAYLOAD_LEN not found in header");
-}
-
-/// Count hex byte literals (0xNN) in the supermega_payload array
-fn count_hex_bytes_in_array(header: &str) -> usize {
-    // Find the supermega_payload array between { and };
-    let start = header
-        .find("supermega_payload[PAYLOAD_LEN] = {")
-        .or_else(|| header.find("supermega_payload[1] = {"))
-        .expect("supermega_payload array not found");
-    let after_brace = header[start..].find('{').unwrap() + start + 1;
-    let end_brace = header[after_brace..].find("};").unwrap() + after_brace;
-    let array_body = &header[after_brace..end_brace];
-    array_body.matches("0x").count()
-}
-
 // ============================================================================
 // XOR decode simulation tests
 // ============================================================================
@@ -184,7 +145,7 @@ fn test_english_decode_simulation_typical() {
     let encoder = PayloadEncoder::new();
     let encoded = encoder.encode(&payload, EncodingType::English);
 
-    let dict = encoder_dictionary();
+    let dict = PayloadEncoder::generate_dictionary();
     let dict_refs: Vec<&str> = dict.iter().map(|s| s.as_str()).collect();
     let payload_str = String::from_utf8(encoded.data).unwrap();
 
@@ -201,7 +162,7 @@ fn test_english_decode_simulation_all_byte_values() {
     let encoder = PayloadEncoder::new();
     let encoded = encoder.encode(&payload, EncodingType::English);
 
-    let dict = encoder_dictionary();
+    let dict = PayloadEncoder::generate_dictionary();
     let dict_refs: Vec<&str> = dict.iter().map(|s| s.as_str()).collect();
     let payload_str = String::from_utf8(encoded.data).unwrap();
 
@@ -211,7 +172,7 @@ fn test_english_decode_simulation_all_byte_values() {
 
 #[test]
 fn test_english_dictionary_has_256_unique_entries() {
-    let dict = encoder_dictionary();
+    let dict = PayloadEncoder::generate_dictionary();
     assert_eq!(dict.len(), 256, "Dictionary must have exactly 256 entries");
 
     // All entries should be unique (required for unambiguous decoding)
@@ -244,7 +205,7 @@ fn test_payload_len_matches_xor_array_count() {
         let encoded = encoder.encode(payload, EncodingType::Xor);
         let header = encoder.generate_c_header(&encoded);
 
-        let defined_len = parse_payload_len(&header);
+        let defined_len = common::parse_payload_len(&header);
         assert_eq!(
             defined_len,
             payload.len(),
@@ -256,7 +217,7 @@ fn test_payload_len_matches_xor_array_count() {
 
         // Also verify the hex array has the right number of bytes
         if !payload.is_empty() {
-            let hex_count = count_hex_bytes_in_array(&header);
+            let hex_count = common::count_hex_bytes_in_array(&header);
             assert_eq!(
                 hex_count,
                 payload.len(),
@@ -282,7 +243,7 @@ fn test_payload_len_matches_english_word_count() {
         let encoded = encoder.encode(payload, EncodingType::English);
         let header = encoder.generate_c_header(&encoded);
 
-        let defined_len = parse_payload_len(&header);
+        let defined_len = common::parse_payload_len(&header);
         assert_eq!(
             defined_len,
             payload.len(),
