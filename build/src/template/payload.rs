@@ -185,6 +185,7 @@ unsigned char supermega_payload[PAYLOAD_LEN] = {{
             r#"/* Auto-generated payload header - English encoding */
 #ifndef PAYLOAD_H
 #define PAYLOAD_H
+#define ENGLISH_ENCODING
 
 #define PAYLOAD_LEN {len}
 

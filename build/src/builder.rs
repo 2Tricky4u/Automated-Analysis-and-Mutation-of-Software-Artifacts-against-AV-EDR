@@ -1288,12 +1288,22 @@ impl ArtifactBuilder {
     /// Metadata about the built artifact
     async fn build_modular_template(
         &self,
-        modules: ModuleSelection,
+        mut modules: ModuleSelection,
         payload: &[u8],
         encoding: EncodingType,
         mutations: &[mutator::MutationSpec],
         trace_mode: &str,
     ) -> Result<BuiltArtifact> {
+        // Step 0: Sync decoder module to match encoding type
+        let expected_decoder = encoding.decoder_module();
+        if modules.decoder != expected_decoder {
+            info!(
+                "Auto-syncing decoder '{}' → '{}' to match encoding",
+                modules.decoder, expected_decoder
+            );
+            modules.decoder = expected_decoder.to_string();
+        }
+
         // Step 1: Encode the payload
         let encoder = PayloadEncoder::new();
         let encoded = encoder.encode(payload, encoding);
