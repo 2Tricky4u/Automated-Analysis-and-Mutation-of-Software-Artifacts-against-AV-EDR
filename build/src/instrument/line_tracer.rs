@@ -50,12 +50,26 @@ pub fn inject_line_traces_with_path(
     inject_line_traces_with_opts(source, language, file_path, TraceFormat::default())
 }
 
+/// Default number of iterations for the instrumentation delay loop
+pub const DEFAULT_DELAY_ITERATIONS: u32 = 10000;
+
 /// Inject line tracing statements with all options
 pub fn inject_line_traces_with_opts(
     source: &str,
     language: SourceLanguage,
     file_path: &str,
     format: TraceFormat,
+) -> Result<String> {
+    inject_line_traces_with_delay(source, language, file_path, format, DEFAULT_DELAY_ITERATIONS)
+}
+
+/// Inject line tracing statements with configurable delay loop iterations
+pub fn inject_line_traces_with_delay(
+    source: &str,
+    language: SourceLanguage,
+    file_path: &str,
+    format: TraceFormat,
+    delay_iterations: u32,
 ) -> Result<String> {
     let mut parser = Parser::new();
 
@@ -72,7 +86,7 @@ pub fn inject_line_traces_with_opts(
     let root = tree.root_node();
 
     // Collect all statement locations where we want to inject traces
-    let mut injections = collect_injection_points(&root, source, language, file_path, format)?;
+    let mut injections = collect_injection_points(&root, source, language, file_path, format, delay_iterations)?;
 
     // Sort by offset (descending) so we can inject without shifting offsets
     injections.sort_by_key(|(offset, _)| std::cmp::Reverse(*offset));
@@ -107,11 +121,12 @@ fn collect_injection_points(
     language: SourceLanguage,
     file_path: &str,
     format: TraceFormat,
+    delay_iterations: u32,
 ) -> Result<Vec<(usize, String)>> {
     let mut injections = Vec::new();
 
     // Recursively walk the AST looking for statements in compound blocks
-    visit_node(root, source, language, file_path, format, &mut injections);
+    visit_node(root, source, language, file_path, format, delay_iterations, &mut injections);
 
     Ok(injections)
 }
@@ -123,6 +138,7 @@ fn visit_node(
     language: SourceLanguage,
     file_path: &str,
     format: TraceFormat,
+    delay_iterations: u32,
     injections: &mut Vec<(usize, String)>,
 ) {
     // Check if this is a compound statement (block)
@@ -138,7 +154,7 @@ fn visit_node(
 
                 // Generate trace statement with file path and line number
                 let trace_stmt =
-                    generate_trace_statement(start_line, &indent, language, file_path, format);
+                    generate_trace_statement(start_line, &indent, language, file_path, format, delay_iterations);
 
                 injections.push((start_offset, trace_stmt));
             }
@@ -147,7 +163,7 @@ fn visit_node(
 
     // Recursively visit children
     for child in node.children(&mut node.walk()) {
-        visit_node(&child, source, language, file_path, format, injections);
+        visit_node(&child, source, language, file_path, format, delay_iterations, injections);
     }
 }
 
@@ -191,10 +207,11 @@ fn generate_trace_statement(
     _language: SourceLanguage,
     file_path: &str,
     format: TraceFormat,
+    delay_iterations: u32,
 ) -> String {
     let delay = format!(
-        "{}volatile long __inst_wait{} = 1; for (; __inst_wait{} < 10000; __inst_wait{} += 2) {{}}\n",
-        indent, line, line, line
+        "{}volatile long __inst_wait{} = 1; for (; __inst_wait{} < {}; __inst_wait{} += 2) {{}}\n",
+        indent, line, line, delay_iterations, line
     );
 
     match format {
