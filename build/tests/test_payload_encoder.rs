@@ -203,18 +203,7 @@ fn test_xor_header_array_count_matches_payload_len() {
         let encoded = encoder.encode(&payload, EncodingType::Xor);
         let header = encoder.generate_c_header(&encoded);
 
-        // Parse PAYLOAD_LEN
-        let len_line = header
-            .lines()
-            .find(|l| l.starts_with("#define PAYLOAD_LEN"))
-            .expect("Missing PAYLOAD_LEN");
-        let defined_len: usize = len_line
-            .strip_prefix("#define PAYLOAD_LEN ")
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-
+        let defined_len = common::parse_payload_len(&header);
         assert_eq!(
             defined_len,
             sz as usize,
@@ -222,12 +211,7 @@ fn test_xor_header_array_count_matches_payload_len() {
             sz
         );
 
-        // Count 0x.. hex values in the array body
-        let start = header.find("supermega_payload[PAYLOAD_LEN] = {").unwrap();
-        let brace = header[start..].find('{').unwrap() + start + 1;
-        let end = header[brace..].find("};").unwrap() + brace;
-        let hex_count = header[brace..end].matches("0x").count();
-
+        let hex_count = common::count_hex_bytes_in_array(&header);
         assert_eq!(
             hex_count,
             sz as usize,
@@ -247,17 +231,7 @@ fn test_english_header_word_count_matches_payload_len() {
         let encoded = encoder.encode(&payload, EncodingType::English);
         let header = encoder.generate_c_header(&encoded);
 
-        let len_line = header
-            .lines()
-            .find(|l| l.starts_with("#define PAYLOAD_LEN"))
-            .expect("Missing PAYLOAD_LEN");
-        let defined_len: usize = len_line
-            .strip_prefix("#define PAYLOAD_LEN ")
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-
+        let defined_len = common::parse_payload_len(&header);
         assert_eq!(
             defined_len,
             sz as usize,

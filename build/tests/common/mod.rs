@@ -219,6 +219,30 @@ int main() {
 "#
 }
 
+// ── Payload header parsing helpers ────────────────────────────────────────
+
+/// Parse PAYLOAD_LEN from a generated C header: `#define PAYLOAD_LEN <N>`
+pub fn parse_payload_len(header: &str) -> usize {
+    for line in header.lines() {
+        if let Some(rest) = line.strip_prefix("#define PAYLOAD_LEN ") {
+            return rest.trim().parse().expect("PAYLOAD_LEN must be a number");
+        }
+    }
+    panic!("PAYLOAD_LEN not found in header");
+}
+
+/// Count hex byte literals (0xNN) in the supermega_payload array
+pub fn count_hex_bytes_in_array(header: &str) -> usize {
+    let start = header
+        .find("supermega_payload[PAYLOAD_LEN] = {")
+        .or_else(|| header.find("supermega_payload[1] = {"))
+        .expect("supermega_payload array not found");
+    let after_brace = header[start..].find('{').unwrap() + start + 1;
+    let end_brace = header[after_brace..].find("};").unwrap() + after_brace;
+    let array_body = &header[after_brace..end_brace];
+    array_body.matches("0x").count()
+}
+
 // ── LLVM IR fixtures ────────────────────────────────────────────────────────
 
 pub fn ir_simple_function() -> &'static str {
