@@ -5,6 +5,7 @@
 //! - Smart numeric conversion (pointers→hex, large u64→hex)
 //! - Daily index pattern: telemetry-YYYY.MM.DD
 
+use super::helpers;
 use super::TelemetryContext;
 use crate::automutate::common::TelemetryData;
 use elasticsearch::{Elasticsearch, IndexParts};
@@ -20,7 +21,7 @@ pub async fn index_telemetry_batch(
         return Ok(());
     }
 
-    let index_name = format!("telemetry-{}", chrono::Utc::now().format("%Y.%m.%d"));
+    let index_name = helpers::es_index_name_daily("telemetry");
     let mut indexed = 0;
 
     for event in batch {
@@ -68,17 +69,13 @@ pub async fn index_telemetry_batch(
             "source": "worker",
             "timestamp": event.timestamp,
             "metadata": event.metadata,
-            "indexed_at": chrono::Utc::now().to_rfc3339(),
+            "indexed_at": helpers::now_rfc3339(),
             "vm_id": context.vm_id,
         });
 
         // Add optional correlation keys
-        if let Some(ref run_id) = context.run_id {
-            doc.as_object_mut().unwrap().insert("run_id".to_string(), json!(run_id));
-        }
-        if let Some(ref round_id) = context.round_id {
-            doc.as_object_mut().unwrap().insert("round_id".to_string(), json!(round_id));
-        }
+        helpers::insert_optional_field(&mut doc, "run_id", context.run_id.as_deref());
+        helpers::insert_optional_field(&mut doc, "round_id", context.round_id.as_deref());
 
         // Merge payload fields into top level with payload_ prefix
         if let Some(obj) = doc.as_object_mut() {

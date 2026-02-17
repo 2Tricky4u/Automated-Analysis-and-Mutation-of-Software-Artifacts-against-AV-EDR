@@ -13,6 +13,16 @@ use crate::vm::{RegistrationType, TargetStatus};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
+/// Build `ToolVersions` from a worker's tools map.
+fn tool_versions_from_map(tools: &std::collections::HashMap<String, String>) -> ToolVersions {
+    ToolVersions {
+        rededr_version: tools.get("rededr").cloned().unwrap_or_default(),
+        defender_version: tools.get("defender").cloned().unwrap_or_default(),
+        etw_version: tools.get("etw").cloned().unwrap_or_default(),
+        llvm_version: tools.get("llvm").cloned().unwrap_or_default(),
+    }
+}
+
 /// Convert internal Target to proto WorkerInfo.
 fn target_to_worker_info(w: &crate::vm::Target) -> WorkerInfo {
     let last_ping_secs = w
@@ -35,12 +45,7 @@ fn target_to_worker_info(w: &crate::vm::Target) -> WorkerInfo {
         os_version: w.os_version.clone(),
         capabilities: w.capabilities.clone(),
         metadata: w.metadata.clone(),
-        tools: Some(ToolVersions {
-            rededr_version: w.tools.get("rededr").cloned().unwrap_or_default(),
-            defender_version: w.tools.get("defender").cloned().unwrap_or_default(),
-            etw_version: w.tools.get("etw").cloned().unwrap_or_default(),
-            llvm_version: w.tools.get("llvm").cloned().unwrap_or_default(),
-        }),
+        tools: Some(tool_versions_from_map(&w.tools)),
         registration_type: match w.registration_type {
             RegistrationType::Dynamic => "dynamic".to_string(),
             RegistrationType::Static => "static".to_string(),
@@ -259,12 +264,7 @@ pub async fn get_worker_metadata(
                 os_version: w.os_version.clone(),
                 capabilities: w.capabilities.clone(),
                 metadata: w.metadata.clone(),
-                tools: Some(ToolVersions {
-                    rededr_version: w.tools.get("rededr").cloned().unwrap_or_default(),
-                    defender_version: w.tools.get("defender").cloned().unwrap_or_default(),
-                    etw_version: w.tools.get("etw").cloned().unwrap_or_default(),
-                    llvm_version: w.tools.get("llvm").cloned().unwrap_or_default(),
-                }),
+                tools: Some(tool_versions_from_map(&w.tools)),
                 last_seen_seconds_ago: last_seen_secs as i64,
                 healthy,
                 current_job_id: w

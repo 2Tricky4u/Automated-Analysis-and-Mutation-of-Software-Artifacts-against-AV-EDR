@@ -7,11 +7,12 @@
 //! Index pattern: runs-YYYY.MM
 //! Document ID: run_id (for index_run_result), auto-generated (for index_run_status)
 
+use super::helpers;
 use crate::automutate::controller::StatusReport;
 use crate::dispatch::types::RunOutcome;
 use elasticsearch::{Elasticsearch, IndexParts};
 use serde_json::json;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Derive detection outcome from exit code.
 ///
@@ -51,12 +52,13 @@ pub async fn index_run_result(
     mutations: &[String],
     vm_id: &str,
 ) -> anyhow::Result<()> {
-    let index_name = format!("runs-{}", chrono::Utc::now().format("%Y.%m"));
+    let index_name = helpers::es_index_name("runs");
 
     let (detection_outcome, derived_detected) = derive_detection_outcome(outcome.exit_code);
     // Use the RunOutcome.detected if available, otherwise use derived
     let detected = outcome.detected || derived_detected;
 
+    let now = helpers::now_rfc3339();
     let mut doc = json!({
         "run_id": run_id,
         "job_id": job_id,
@@ -71,8 +73,8 @@ pub async fn index_run_result(
         "exit_code": outcome.exit_code,
         "detection_outcome": detection_outcome,
         "trace_mode": trace_mode_from_run_type(run_type),
-        "finished_at": chrono::Utc::now().to_rfc3339(),
-        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "finished_at": now,
+        "timestamp": now,
     });
 
     // Add error details if present
@@ -92,11 +94,7 @@ pub async fn index_run_result(
         .send()
         .await?;
 
-    if !response.status_code().is_success() {
-        let body = response.text().await.unwrap_or_default();
-        warn!("Failed to index run result {}: {}", run_id, body);
-        return Err(anyhow::anyhow!("Failed to index run result: {}", run_id));
-    }
+    helpers::check_index_response(response, "run", run_id).await?;
 
     info!(
         "Indexed run result {} (detected={}, outcome={})",
@@ -111,7 +109,7 @@ pub async fn index_run_status(
     es: &Elasticsearch,
     report: &StatusReport,
 ) -> anyhow::Result<()> {
-    let index_name = format!("runs-{}", chrono::Utc::now().format("%Y.%m"));
+    let index_name = helpers::es_index_name("runs");
 
     let doc = json!({
         "run_id": report.run_id,
@@ -124,7 +122,7 @@ pub async fn index_run_status(
         "elapsed_seconds": report.elapsed_seconds,
         "telemetry_events_count": report.telemetry_events_count,
         "details": report.details,
-        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "timestamp": helpers::now_rfc3339(),
     });
 
     let response = es

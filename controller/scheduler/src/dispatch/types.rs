@@ -40,6 +40,29 @@ fn default_standard() -> String {
     "standard".to_string()
 }
 
+impl ModuleSelectionSpec {
+    /// Build from a proto `ModuleSelection`, falling back to defaults for empty fields.
+    pub fn from_proto_or_default(proto: &crate::automutate::controller::ModuleSelection) -> Self {
+        let d = Self::default();
+        fn pick(proto_val: &str, default: String) -> String {
+            if proto_val.is_empty() {
+                default
+            } else {
+                proto_val.to_string()
+            }
+        }
+        Self {
+            carrier: pick(&proto.carrier, d.carrier),
+            decoder: pick(&proto.decoder, d.decoder),
+            antiemulation: pick(&proto.antiemulation, d.antiemulation),
+            deconditioner: pick(&proto.deconditioner, d.deconditioner),
+            guardrail: pick(&proto.guardrail, d.guardrail),
+            virtualprotect: pick(&proto.virtualprotect, d.virtualprotect),
+            decoy: pick(&proto.decoy, d.decoy),
+        }
+    }
+}
+
 impl Default for ModuleSelectionSpec {
     fn default() -> Self {
         // Must match actual module files in build/templates/modules/

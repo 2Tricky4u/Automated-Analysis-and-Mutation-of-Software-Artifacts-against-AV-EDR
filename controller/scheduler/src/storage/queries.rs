@@ -3,9 +3,8 @@
 //! All read-side ES operations live here. Returns raw `serde_json::Value`
 //! to keep this layer proto-agnostic — the API handlers do the mapping.
 
-use elasticsearch::{Elasticsearch, SearchParts, UpdateParts};
+use elasticsearch::{Elasticsearch, SearchParts};
 use serde_json::{json, Value};
-use tracing::warn;
 
 /// Look up a single job document by job_id.
 pub async fn query_job(es: &Elasticsearch, job_id: &str) -> Option<Value> {
@@ -92,33 +91,14 @@ pub async fn query_runs_by_ids(es: &Elasticsearch, run_ids: &[&str]) -> Vec<Valu
 }
 
 /// Best-effort update of a single field on a job document.
-/// Uses wildcard index — may fail if ES rejects the pattern,
-/// but this mirrors the existing stop_job behavior.
 pub async fn update_job_field(
     es: &Elasticsearch,
     job_id: &str,
     field: &str,
     value: &str,
 ) -> anyhow::Result<()> {
-    // Find concrete index first
-    let index = find_index(es, "jobs-*", "job_id", job_id).await;
-
-    if let Some(ref idx) = index {
-        let response = es
-            .update(UpdateParts::IndexId(idx, job_id))
-            .body(json!({
-                "doc": { field: value }
-            }))
-            .send()
-            .await?;
-
-        if !response.status_code().is_success() {
-            warn!("Failed to update job {} field {}: {}", job_id, field, response.status_code());
-        }
-    } else {
-        warn!("Job {} not found for field update", job_id);
-    }
-
+    let body = json!({ "doc": { field: value } });
+    super::helpers::update_doc_by_id(es, "jobs-*", "job_id", job_id, body, "job").await?;
     Ok(())
 }
 
