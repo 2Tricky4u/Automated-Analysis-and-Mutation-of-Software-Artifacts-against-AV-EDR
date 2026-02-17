@@ -55,7 +55,8 @@ pub use transform::{AstMutator, IrMutator};
 
 // Instrument module
 pub use instrument::{
-    Instrumenter, SourceLanguage, TraceFormat, inject_line_traces, inject_line_traces_with_opts,
+    DEFAULT_DELAY_ITERATIONS, Instrumenter, SourceLanguage, TraceFormat, inject_line_traces,
+    inject_line_traces_with_delay, inject_line_traces_with_opts,
 };
 
 // Template module
