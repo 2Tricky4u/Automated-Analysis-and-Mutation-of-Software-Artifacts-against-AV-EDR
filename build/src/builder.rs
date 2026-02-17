@@ -87,6 +87,21 @@ fn get_template_libs(template_name: &str) -> &'static [&'static str] {
     }
 }
 
+/// Format template-specific library names as clang `-Wl,-defaultlib:name` args
+fn format_template_lib_args(template_name: &str) -> Vec<String> {
+    get_template_libs(template_name)
+        .iter()
+        .map(|lib| format!("-Wl,-defaultlib:{}", lib))
+        .collect()
+}
+
+/// Generate a unique temporary `.exe` path for concurrent builds.
+fn temp_exe_path(base_dir: &Path, source_file: &str) -> PathBuf {
+    let unique_id = Uuid::new_v4();
+    let output_name = source_file.replace(".c", &format!(".{}.exe", unique_id));
+    base_dir.join(&output_name)
+}
+
 /// Input format for artifact building
 #[derive(Debug, Clone)]
 pub enum BuildInput {
@@ -118,6 +133,7 @@ pub enum BuildInput {
 /// Artifact builder
 pub struct ArtifactBuilder {
     config: BuilderConfig,
+    xwin: XwinPaths,
 }
 
 impl ArtifactBuilder {
@@ -133,7 +149,8 @@ impl ArtifactBuilder {
         // Create output directory if it doesn't exist
         std::fs::create_dir_all(&config.output_dir).context("Failed to create output directory")?;
 
-        Ok(Self { config })
+        let xwin = XwinPaths::new(&config.xwin_dir);
+        Ok(Self { config, xwin })
     }
 
     /// Build artifact from various input formats (unified API)
@@ -231,13 +248,8 @@ impl ArtifactBuilder {
 
         // 2. Invoke clang to build
         // Use UUID to ensure unique temp filenames for concurrent builds (parallel baseline + instrumented)
-        let unique_id = Uuid::new_v4();
-        let output_name = source_file.replace(".c", &format!(".{}.exe", unique_id));
-        let temp_output = self
-            .config
-            .templates_dir
-            .join(template_name)
-            .join(&output_name);
+        let template_dir = self.config.templates_dir.join(template_name);
+        let temp_output = temp_exe_path(&template_dir, source_file);
 
         self.invoke_clang_internal(template_name, &source_path, &temp_output, link_runtime)
             .await?;
@@ -375,13 +387,8 @@ impl ArtifactBuilder {
 
             // 4e. Compile IR -> binary
             // Use UUID to ensure unique temp filenames for concurrent builds
-            let unique_id = Uuid::new_v4();
-            let output_name = source_file.replace(".c", &format!(".{}.exe", unique_id));
-            let temp_output = self
-                .config
-                .templates_dir
-                .join(template_name)
-                .join(&output_name);
+            let template_dir = self.config.templates_dir.join(template_name);
+            let temp_output = temp_exe_path(&template_dir, source_file);
 
             self.compile_ir_to_exe(&ir_path, &temp_output, template_name)
                 .await?;
@@ -430,13 +437,8 @@ impl ArtifactBuilder {
             .context("Failed to write mutated source")?;
 
         // Use UUID to ensure unique temp filenames for concurrent builds
-        let unique_id = Uuid::new_v4();
-        let output_name = source_file.replace(".c", &format!(".{}.exe", unique_id));
-        let temp_output = self
-            .config
-            .templates_dir
-            .join(template_name)
-            .join(&output_name);
+        let template_dir = self.config.templates_dir.join(template_name);
+        let temp_output = temp_exe_path(&template_dir, source_file);
 
         self.invoke_clang_internal(template_name, &mutated_path, &temp_output, link_runtime)
             .await?;
@@ -466,6 +468,18 @@ impl ArtifactBuilder {
         ))
     }
 
+    /// Compile minimal_runtime.o if it doesn't already exist. Returns the object path.
+    async fn ensure_minimal_runtime(&self) -> Result<PathBuf> {
+        let obj = self.config.output_dir.join("minimal_runtime.o");
+        if !obj.exists() {
+            debug!("Compiling minimal runtime (for __runtime_exit)...");
+            self.compile_runtime(&self.config.minimal_runtime_src, &obj)
+                .await
+                .context("Failed to compile minimal runtime")?;
+        }
+        Ok(obj)
+    }
+
     /// Invoke Clang with xwin SDK to cross-compile C to Windows PE with optional runtime linking
     async fn invoke_clang_internal(
         &self,
@@ -474,7 +488,7 @@ impl ArtifactBuilder {
         output: &Path,
         link_runtime: bool,
     ) -> Result<()> {
-        let xwin = XwinPaths::new(&self.config.xwin_dir);
+        let xwin = &self.xwin;
 
         let output_str = output.to_str().context("Invalid output path")?;
         let source_str = source.to_str().context("Invalid source path")?;
@@ -529,23 +543,13 @@ impl ArtifactBuilder {
         }
 
         // Add template-specific libraries (format for clang wrapper: -Wl,-defaultlib:name)
-        let extra_libs = get_template_libs(template_name); //TODO normaly not needed anymore
-        let mut formatted_lib_args: Vec<String> = Vec::new();
-        for lib in extra_libs {
-            formatted_lib_args.push(format!("-Wl,-defaultlib:{}", lib));
-        }
+        let formatted_lib_args = format_template_lib_args(template_name);
         for lib_arg in &formatted_lib_args {
             args.push(lib_arg.as_str());
         }
 
         // ALWAYS compile and link minimal_runtime.o (provides __runtime_exit)
-        let minimal_runtime_obj = self.config.output_dir.join("minimal_runtime.o");
-        if !minimal_runtime_obj.exists() {
-            debug!("Compiling minimal runtime (for __runtime_exit)...");
-            self.compile_runtime(&self.config.minimal_runtime_src, &minimal_runtime_obj)
-                .await
-                .context("Failed to compile minimal runtime")?;
-        }
+        let minimal_runtime_obj = self.ensure_minimal_runtime().await?;
         let minimal_runtime_str = minimal_runtime_obj.to_string_lossy().into_owned();
 
         // If linking with instrumentation, compile instrumentation_runtime too
@@ -632,7 +636,7 @@ impl ArtifactBuilder {
 
     /// Compile C source to LLVM IR
     async fn compile_source_to_ir(&self, source_path: &Path, ir_path: &Path) -> Result<()> {
-        let xwin = XwinPaths::new(&self.config.xwin_dir);
+        let xwin = &self.xwin;
 
         // Get runtime include path for instrumentation.h
         let runtime_include = self
@@ -683,7 +687,7 @@ impl ArtifactBuilder {
         exe_path: &Path,
         template_name: &str,
     ) -> Result<()> {
-        let xwin = XwinPaths::new(&self.config.xwin_dir);
+        let xwin = &self.xwin;
 
         let mut args = vec![
             "-target",
@@ -699,11 +703,7 @@ impl ArtifactBuilder {
         ]);
 
         // Add template-specific libraries (format for clang wrapper: -Wl,-defaultlib:name)
-        let extra_libs = get_template_libs(template_name);
-        let mut formatted_lib_args: Vec<String> = Vec::new();
-        for lib in extra_libs {
-            formatted_lib_args.push(format!("-Wl,-defaultlib:{}", lib));
-        }
+        let formatted_lib_args = format_template_lib_args(template_name);
         for lib_arg in &formatted_lib_args {
             args.push(lib_arg.as_str());
         }
@@ -1114,13 +1114,7 @@ impl ArtifactBuilder {
         };
 
         // ALWAYS compile minimal_runtime.o (provides __runtime_exit)
-        let minimal_runtime_obj = self.config.output_dir.join("minimal_runtime.o");
-        if !minimal_runtime_obj.exists() {
-            debug!("Compiling minimal runtime (for __runtime_exit)...");
-            self.compile_runtime(&self.config.minimal_runtime_src, &minimal_runtime_obj)
-                .await
-                .context("Failed to compile minimal runtime")?;
-        }
+        let minimal_runtime_obj = self.ensure_minimal_runtime().await?;
 
         let mut cmd = tokio::process::Command::new(lld_link_path);
         cmd.arg(obj_path)
@@ -1128,20 +1122,11 @@ impl ArtifactBuilder {
             .arg(&minimal_runtime_obj) // ALWAYS link minimal runtime
             .arg("/out:".to_owned() + output_exe.to_str().unwrap())
             .arg("/subsystem:console")
-            .arg("/machine:x64")
-            // Add xwin library paths (CRT and Windows SDK)
-            .arg(format!(
-                "/libpath:{}/crt/lib/x86_64",
-                self.config.xwin_dir.display()
-            ))
-            .arg(format!(
-                "/libpath:{}/sdk/lib/um/x86_64",
-                self.config.xwin_dir.display()
-            ))
-            .arg(format!(
-                "/libpath:{}/sdk/lib/ucrt/x86_64",
-                self.config.xwin_dir.display()
-            ));
+            .arg("/machine:x64");
+        // Add xwin library paths (CRT and Windows SDK)
+        for arg in self.xwin.lld_lib_args() {
+            cmd.arg(arg);
+        }
 
         // Add template-specific libraries
         for lib in template_libs {
@@ -1493,6 +1478,15 @@ impl XwinPaths {
             "-L", &self.sdk_um_lib,
         ]
     }
+
+    /// Return `/libpath:` args for lld-link
+    pub fn lld_lib_args(&self) -> Vec<String> {
+        vec![
+            format!("/libpath:{}", self.crt_lib),
+            format!("/libpath:{}", self.sdk_ucrt_lib),
+            format!("/libpath:{}", self.sdk_um_lib),
+        ]
+    }
 }
 
 /// Build `BuiltArtifact` metadata from raw artifact data and context.
@@ -1534,7 +1528,8 @@ mod tests {
     #[test]
     fn test_compute_sha256() {
         let config = BuilderConfig::default();
-        let builder = ArtifactBuilder { config };
+        let xwin = XwinPaths::new(&config.xwin_dir);
+        let builder = ArtifactBuilder { config, xwin };
         let hash = builder.compute_sha256(b"hello world");
         assert_eq!(
             hash,

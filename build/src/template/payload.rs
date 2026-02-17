@@ -65,7 +65,7 @@ impl PayloadEncoder {
     }
 
     /// Generate the 256-word dictionary for English encoding
-    fn generate_dictionary() -> Vec<String> {
+    pub fn generate_dictionary() -> Vec<String> {
         let common_words = [
             "the", "be", "to", "of", "and", "a", "in", "that", "have", "i", "it", "for", "not",
             "on", "with", "he", "as", "you", "do", "at", "this", "but", "his", "by", "from",
