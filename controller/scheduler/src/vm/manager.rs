@@ -258,6 +258,7 @@ impl TargetManager {
         self.targets.len()
     }
 
+    #[allow(dead_code)]
     pub fn get_available(&self) -> Vec<TargetId> {
         self.targets
             .iter()
@@ -660,6 +661,7 @@ impl TargetManager {
         success
     }
 
+    #[allow(dead_code)]
     pub async fn disconnect_all(&self, reason: &str, reconnect_allowed: bool) {
         info!("Disconnecting all targets: {}", reason);
 

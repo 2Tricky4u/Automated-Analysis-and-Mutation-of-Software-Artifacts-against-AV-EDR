@@ -40,7 +40,7 @@ const MAX_IN_FLIGHT_ROUNDS: usize = 5;
 
 /// Maximum pending runs in pool for this job (backpressure)
 /// Each round = 2 runs (baseline + instrumented), so 10 = 5 rounds worth
-const MAX_PENDING_RUNS: usize = 10;
+const MAX_PENDING_RUNS: usize = 6;
 
 /// Default timeout for run execution
 const DEFAULT_TIMEOUT_SECONDS: u32 = 120;
