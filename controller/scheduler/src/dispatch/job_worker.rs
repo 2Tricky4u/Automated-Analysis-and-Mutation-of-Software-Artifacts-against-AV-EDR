@@ -354,6 +354,7 @@ impl JobWorker {
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
+            timeout_ms: DEFAULT_TIMEOUT_SECONDS as u64 * 1000,
         };
         self.round_aggs.insert(round_id.clone(), agg);
 

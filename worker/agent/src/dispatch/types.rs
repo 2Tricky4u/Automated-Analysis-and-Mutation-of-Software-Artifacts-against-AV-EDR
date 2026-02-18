@@ -90,6 +90,7 @@ pub fn sample_response_error(
         run_id: run_id.to_string(),
         detected: false,
         error: error.to_string(),
+        elapsed_ms: 0.0,
     }
 }
 
@@ -100,6 +101,13 @@ pub fn sample_response_ok(
     outcome: &RunOutcome,
     output: String,
 ) -> SampleResponse {
+    // Derive detected from exit_code (matches storage/runs.rs derive_detection_outcome)
+    let detected = match outcome.exit_code {
+        -2 => true,      // Killed by AV/EDR
+        0 | -1 => false, // Clean exit or timeout
+        _ => true,       // Abnormal exit → likely detection
+    };
+
     SampleResponse {
         job_id: job_id.to_string(),
         success: !outcome.timed_out && outcome.exit_code == 0,
@@ -107,8 +115,9 @@ pub fn sample_response_ok(
         output,
         telemetry_ids: vec![run_id.to_string()],
         run_id: run_id.to_string(),
-        detected: false,
+        detected,
         error: String::new(),
+        elapsed_ms: outcome.elapsed.as_secs_f64() * 1000.0,
     }
 }
 

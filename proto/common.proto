@@ -164,6 +164,7 @@ message SampleResponse {
   string run_id = 6;       // Unique run identifier for response matching (matches RunSampleCommand.request_id)
   bool detected = 7;       // True if EDR/AV detected the sample
   string error = 8;        // Error message if execution failed
+  double elapsed_ms = 9;  // Wall-clock execution time in milliseconds
 }
 
 // ===== Bidirectional Stream Messages (Phase 2) =====
