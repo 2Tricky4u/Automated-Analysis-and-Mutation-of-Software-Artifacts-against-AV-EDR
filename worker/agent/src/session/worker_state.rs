@@ -3,7 +3,6 @@
 /// Extracted from capabilities.rs to separate runtime state
 /// from capability detection logic.
 use std::collections::HashMap;
-use sysinfo::CpuRefreshKind;
 
 use crate::automutate::common::ToolVersions;
 use crate::capabilities::WorkerCapabilities;
@@ -37,28 +36,7 @@ pub struct HealthMetrics {
 impl WorkerState {
     /// Create new worker state from config and detected capabilities
     pub fn new(worker_id: String, capabilities: WorkerCapabilities) -> Self {
-        let tools = Some(ToolVersions {
-            rededr_version: capabilities
-                .tools
-                .get("rededr_version")
-                .cloned()
-                .unwrap_or_default(),
-            defender_version: capabilities
-                .tools
-                .get("defender_version")
-                .cloned()
-                .unwrap_or_default(),
-            etw_version: capabilities
-                .tools
-                .get("etw_version")
-                .cloned()
-                .unwrap_or_default(),
-            llvm_version: capabilities
-                .tools
-                .get("llvm_version")
-                .cloned()
-                .unwrap_or_default(),
-        });
+        let tools = Some(capabilities.to_tool_versions());
 
         WorkerState {
             worker_id,
@@ -77,20 +55,14 @@ impl WorkerState {
 
     /// Update health metrics
     pub fn update_health(&mut self) {
-        use sysinfo::System;
+        use sysinfo::{CpuRefreshKind, System};
         let mut sys = System::new_all();
         sys.refresh_all();
         sys.refresh_cpu_specifics(CpuRefreshKind::everything());
 
-        let cpu_percent = if !sys.cpus().is_empty() {
-            sys.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32
-        } else {
-            0.0
-        };
-
-        self.health.cpu_percent = cpu_percent as i32;
-        self.health.memory_percent =
-            ((sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0) as i32;
+        let (cpu_percent, memory_percent) = crate::infra::system::collect_system_metrics(&sys);
+        self.health.cpu_percent = cpu_percent;
+        self.health.memory_percent = memory_percent;
         self.health.active_jobs = if self.current_job_id.is_some() { 1 } else { 0 };
     }
 }

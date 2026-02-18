@@ -1,5 +1,5 @@
 use crate::automutate::common::{ControllerMessage, WorkerMessage};
-use crate::{WorkerAgentService, capabilities, session};
+use crate::{WorkerAgentService, session};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
@@ -17,13 +17,11 @@ pub async fn establish_stream(
 
     info!("EstablishStream RPC called - establishing bidirectional stream with controller");
 
-    // Detect current capabilities
-    let capabilities_data = capabilities::detect_capabilities()
-        .await
-        .map_err(|e| Status::internal(format!("Failed to detect capabilities: {}", e)))?;
-
-    // Create worker state
-    let worker_state = WorkerState::new(service.worker_id.clone(), capabilities_data);
+    // Create worker state from cached capabilities
+    let worker_state = WorkerState::new(
+        service.worker_id.clone(),
+        (*service.capabilities).clone(),
+    );
     let worker_state = Arc::new(RwLock::new(worker_state));
 
     // Create stream handler with individual fields (no Arc<WorkerAgentService> → breaks cycle)

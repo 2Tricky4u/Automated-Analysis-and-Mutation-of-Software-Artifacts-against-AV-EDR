@@ -49,7 +49,6 @@ impl ControllerGrpcClient {
     }
 
     /// Create with default config (localhost:50051)
-    #[allow(dead_code)]
     pub fn default_local() -> Self {
         Self::new(ControllerConfig::default())
     }
@@ -88,7 +87,6 @@ impl ControllerGrpcClient {
     }
 
     /// Clear cached connection (for reconnect)
-    #[allow(dead_code)]
     pub async fn disconnect(&self) {
         let mut guard = self.client.write().await;
         *guard = None;
@@ -376,7 +374,6 @@ impl ControllerGrpcClient {
     // ========================================================================
 
     /// Stream telemetry (returns the raw client for streaming)
-    #[allow(dead_code)]
     pub async fn get_streaming_client(&self) -> Result<ControllerClient<Channel>> {
         self.get_client().await
     }

@@ -22,16 +22,32 @@ pub struct WindowsVersionInfo {
     pub is_windows_11: Option<bool>,
 }
 
+impl WorkerCapabilities {
+    /// Convert the tools HashMap into the proto ToolVersions struct.
+    pub fn to_tool_versions(&self) -> crate::automutate::common::ToolVersions {
+        crate::automutate::common::ToolVersions {
+            rededr_version: self.tools.get("rededr_version").cloned().unwrap_or_default(),
+            defender_version: self.tools.get("defender_version").cloned().unwrap_or_default(),
+            etw_version: self.tools.get("etw_version").cloned().unwrap_or_default(),
+            llvm_version: self.tools.get("llvm_version").cloned().unwrap_or_default(),
+        }
+    }
+}
+
 /// Detect worker capabilities by checking for installed tools
 pub async fn detect_capabilities() -> Result<WorkerCapabilities> {
     let mut capabilities = Vec::new();
     let mut tools = HashMap::new();
     let mut metadata = HashMap::new();
 
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()?;
+
     // Check for RedEDR
-    if check_rededr_available().await {
+    if check_rededr_available(&client).await {
         capabilities.push("rededr".to_string());
-        if let Some(version) = get_rededr_version().await {
+        if let Some(version) = get_rededr_version(&client).await {
             tools.insert("rededr_version".to_string(), version);
         }
     }
@@ -78,13 +94,7 @@ pub async fn detect_capabilities() -> Result<WorkerCapabilities> {
     })
 }
 
-async fn check_rededr_available() -> bool {
-    // Try to connect to RedEDR API
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .unwrap();
-
+async fn check_rededr_available(client: &reqwest::Client) -> bool {
     match client.get("http://localhost:8081/api/stats").send().await {
         Ok(response) if response.status().is_success() => {
             debug!("RedEDR detected at localhost:8081");
@@ -97,13 +107,8 @@ async fn check_rededr_available() -> bool {
     }
 }
 
-async fn get_rededr_version() -> Option<String> {
+async fn get_rededr_version(client: &reqwest::Client) -> Option<String> {
     let re = Regex::new(r"RedEdr\s+([0-9]+(?:\.[0-9]+)*)").ok()?;
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .ok()?;
 
     let resp = client
         .get("http://localhost:8081/api/logs/agent")

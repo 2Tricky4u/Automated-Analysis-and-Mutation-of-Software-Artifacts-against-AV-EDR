@@ -50,10 +50,6 @@ pub async fn run_sample(
     };
 
     // Build typed request and context
-    let artifacts_base = std::path::Path::new(&service.config.storage.artifacts_path);
-    let artifact_path = artifacts_base.join(format!("{}.exe", req.artifact_id));
-    let telemetry_dir = artifacts_base.join(format!("telemetry_{}", req.artifact_id));
-
     let run_request = RunRequest {
         job_id: job_id.clone(),
         artifact_id: req.artifact_id.clone(),
@@ -61,13 +57,7 @@ pub async fn run_sample(
         run_id: run_id.clone(),
     };
 
-    let run_context = RunContext {
-        worker_id: service.worker_id.clone(),
-        config: service.config.clone(),
-        telemetry_dir,
-        artifact_path,
-        artifact_name: artifact_name.clone(),
-    };
+    let run_context = RunContext::new(&req.artifact_id, service.worker_id.clone(), service.config.clone());
 
     // Build sink from stream handler's tx channel (no Arc cycle)
     let sink = {

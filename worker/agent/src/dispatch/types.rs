@@ -23,6 +23,21 @@ pub struct RunContext {
     pub artifact_name: String,
 }
 
+impl RunContext {
+    /// Build a RunContext from an artifact ID, deriving all paths from config.
+    pub fn new(artifact_id: &str, worker_id: String, config: WorkerConfig) -> Self {
+        let artifact_name = format!("{}.exe", artifact_id);
+        let artifacts_base = std::path::Path::new(&config.storage.artifacts_path);
+        Self {
+            artifact_path: artifacts_base.join(&artifact_name),
+            telemetry_dir: artifacts_base.join(format!("telemetry_{}", artifact_id)),
+            artifact_name,
+            worker_id,
+            config,
+        }
+    }
+}
+
 /// Outcome of a completed run
 pub struct RunOutcome {
     pub exit_code: i32,

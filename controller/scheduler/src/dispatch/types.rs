@@ -365,14 +365,12 @@ impl JobSession {
         }
     }
 
-    #[allow(dead_code)]
     pub fn with_constraints(mut self, os: Option<String>, caps: Vec<String>) -> Self {
         self.target_os = os;
         self.required_capabilities = caps;
         self
     }
 
-    #[allow(dead_code)]
     pub fn mark_started(&mut self) {
         if self.started_at.is_none() {
             self.started_at = Some(SystemTime::now());
@@ -544,7 +542,6 @@ pub struct RunEnvelope {
 // ============================================================================
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // id field kept for logging/debugging
 pub struct WorkerInfo {
     pub id: WorkerId,
     pub os: String,

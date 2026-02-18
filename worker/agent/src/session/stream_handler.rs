@@ -187,11 +187,6 @@ impl StreamHandler {
             };
 
             // Build typed request and context
-            let artifacts_base = std::path::Path::new(&config.storage.artifacts_path);
-            let artifact_path = artifacts_base.join(format!("{}.exe", sample_request.artifact_id));
-            let telemetry_dir =
-                artifacts_base.join(format!("telemetry_{}", sample_request.artifact_id));
-
             let run_request = RunRequest {
                 job_id: job_id.clone(),
                 artifact_id: sample_request.artifact_id.clone(),
@@ -199,13 +194,7 @@ impl StreamHandler {
                 run_id: run_id.clone(),
             };
 
-            let run_context = RunContext {
-                worker_id,
-                config,
-                telemetry_dir,
-                artifact_path,
-                artifact_name: artifact_name.clone(),
-            };
+            let run_context = RunContext::new(&sample_request.artifact_id, worker_id, config);
 
             // Build sink from tx channel (no Arc<StreamHandler> needed)
             let sink = crate::dispatch::sink::build_sink(Some(&tx));
@@ -357,54 +346,6 @@ impl StreamHandler {
             }))
             .await
             .map_err(|e| anyhow!("Failed to send status update: {}", e))?;
-
-        Ok(())
-    }
-
-    /// Send detailed execution status from ExecutionMonitor
-    /// This sends comprehensive execution metrics including job details, process state, and telemetry counts
-    pub async fn send_execution_status(
-        &self,
-        job_id: String,
-        run_id: String,
-        artifact_name: String,
-        pid: i32,
-        elapsed_seconds: i32,
-        process_alive: bool,
-        telemetry_events_count: i32,
-        event_type: String,
-        cpu_percent: i32,
-        memory_mb: i32,
-        details: String,
-    ) -> Result<()> {
-        let state = self.worker_state.read().await;
-
-        let execution_status = crate::automutate::common::ExecutionStatusReport {
-            worker_id: state.worker_id.clone(),
-            worker_ip: state
-                .metadata
-                .get("ip_address")
-                .cloned()
-                .unwrap_or_default(),
-            job_id,
-            run_id,
-            artifact_name,
-            pid,
-            elapsed_seconds,
-            process_alive,
-            telemetry_events_count,
-            event_type,
-            cpu_percent,
-            memory_mb,
-            details,
-        };
-
-        self.tx
-            .send(Ok(WorkerMessage {
-                payload: Some(worker_message::Payload::ExecutionStatus(execution_status)),
-            }))
-            .await
-            .map_err(|e| anyhow!("Failed to send execution status: {}", e))?;
 
         Ok(())
     }
