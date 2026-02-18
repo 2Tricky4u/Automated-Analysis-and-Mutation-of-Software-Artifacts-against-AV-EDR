@@ -11,5 +11,5 @@ pub mod manager;
 
 // Re-exports
 pub use manager::{
-    RegistrationType, Target, TargetConfig, TargetEvent, TargetManager, TargetStatus,
+    RegistrationType, Target, TargetEvent, TargetManager, TargetStatus,
 };
