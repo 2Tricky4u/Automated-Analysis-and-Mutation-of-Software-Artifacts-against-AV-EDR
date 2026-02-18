@@ -144,6 +144,7 @@ impl RunPool {
     }
 
     /// List only running jobs.
+    #[allow(dead_code)]
     pub fn list_running_jobs(&self) -> Vec<JobInfo> {
         self.job_registry
             .iter()
@@ -153,6 +154,7 @@ impl RunPool {
     }
 
     /// Get info for a specific job.
+    #[allow(dead_code)]
     pub fn get_job_info(&self, job_id: &JobId) -> Option<JobInfo> {
         self.job_registry.get(job_id).map(|r| r.value().clone())
     }
@@ -326,11 +328,13 @@ impl RunPool {
     }
 
     /// Check if shutdown has been requested.
+    #[allow(dead_code)]
     pub fn is_shutdown(&self) -> bool {
         self.shutdown_token.is_cancelled()
     }
 
     /// Signal graceful shutdown to all VMExecutors.
+    #[allow(dead_code)]
     pub fn shutdown(&self) {
         warn!("[RunPool] Shutdown requested");
         self.shutdown_token.cancel();

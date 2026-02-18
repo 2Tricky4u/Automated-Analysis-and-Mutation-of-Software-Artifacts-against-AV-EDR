@@ -530,6 +530,7 @@ impl Orchestrator {
         }
     }
 
+    #[allow(dead_code)]
     pub fn shutdown_all_jobs(&self) {
         warn!("[Orchestrator] Shutting down all jobs");
         for token in self.job_workers.values() {
