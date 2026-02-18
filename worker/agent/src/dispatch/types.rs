@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::automutate::common::TelemetryData;
+use crate::automutate::common::{SampleResponse, TelemetryData};
 use edr_config::WorkerConfig;
 
 /// Typed request for executing an artifact run
@@ -41,6 +42,50 @@ pub struct RunPhaseTimings {
     pub process_wait_ms: u64,
     pub telemetry_collect_ms: u64,
     pub rededr_reset_ms: u64,
+}
+
+impl RunPhaseTimings {
+    /// Convert to metadata HashMap for telemetry event inclusion.
+    pub fn to_metadata(&self) -> HashMap<String, String> {
+        [
+            ("rededr_setup_ms", self.rededr_setup_ms),
+            ("process_spawn_ms", self.process_spawn_ms),
+            ("process_wait_ms", self.process_wait_ms),
+            ("telemetry_collect_ms", self.telemetry_collect_ms),
+            ("rededr_reset_ms", self.rededr_reset_ms),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+    }
+}
+
+/// Build a SampleResponse for a failed execution.
+pub fn sample_response_error(job_id: &str, run_id: &str, error: &dyn std::fmt::Display) -> SampleResponse {
+    SampleResponse {
+        job_id: job_id.to_string(),
+        success: false,
+        exit_code: -1,
+        output: format!("Execution error: {}", error),
+        telemetry_ids: vec![],
+        run_id: run_id.to_string(),
+        detected: false,
+        error: error.to_string(),
+    }
+}
+
+/// Build a SampleResponse from a completed RunOutcome.
+pub fn sample_response_ok(job_id: &str, run_id: &str, outcome: &RunOutcome, output: String) -> SampleResponse {
+    SampleResponse {
+        job_id: job_id.to_string(),
+        success: !outcome.timed_out && outcome.exit_code == 0,
+        exit_code: outcome.exit_code,
+        output,
+        telemetry_ids: vec![run_id.to_string()],
+        run_id: run_id.to_string(),
+        detected: false,
+        error: String::new(),
+    }
 }
 
 /// Resolve run_id from optional controller-provided value

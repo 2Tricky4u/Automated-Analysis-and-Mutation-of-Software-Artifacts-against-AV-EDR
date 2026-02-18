@@ -215,7 +215,7 @@ impl ExecutionMonitor {
         &self,
     ) -> Result<ExecutionStatus, Box<dyn std::error::Error + Send + Sync>> {
         // 1. Check if process still alive
-        let process_alive = self.is_process_alive(self.pid);
+        let process_alive = crate::infra::process::is_process_alive(self.pid);
 
         // 2. Get CPU/memory usage
         let (cpu_percent, memory_mb) = if process_alive {
@@ -321,32 +321,6 @@ impl ExecutionMonitor {
                 );
                 warn!("   Stream may be blocked - monitoring will continue");
             }
-        }
-    }
-
-    fn is_process_alive(&self, pid: u32) -> bool {
-        #[cfg(target_os = "windows")]
-        {
-            use windows::Win32::Foundation::CloseHandle;
-            use windows::Win32::System::Threading::{
-                OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-            };
-
-            unsafe {
-                let handle_result = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
-                match handle_result {
-                    Ok(handle) if !handle.is_invalid() => {
-                        let _ = CloseHandle(handle);
-                        true
-                    }
-                    _ => false,
-                }
-            }
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            // Fallback for non-Windows (use sysinfo or similar)
-            true
         }
     }
 

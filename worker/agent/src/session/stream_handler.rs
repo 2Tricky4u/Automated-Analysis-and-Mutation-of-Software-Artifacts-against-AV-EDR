@@ -18,7 +18,7 @@ use tracing::{debug, error, info, warn};
 // Import generated protobuf types
 use crate::automutate::common::{
     Ack, ControllerMessage, DisconnectNotice, HealthCheckRequest, Heartbeat, RunSampleCommand,
-    SampleResponse, StatusReport, TelemetryBatch, WorkerMessage, WorkerRegistration,
+    StatusReport, TelemetryBatch, WorkerMessage, WorkerRegistration,
     controller_message, worker_message,
 };
 
@@ -129,7 +129,7 @@ impl StreamHandler {
     async fn handle_run_sample(&self, cmd: RunSampleCommand) -> Result<()> {
         use crate::dispatch::engine;
         use crate::dispatch::state::ExecutionLockGuard;
-        use crate::dispatch::types::{RunContext, RunRequest};
+        use crate::dispatch::types::{RunContext, RunRequest, sample_response_error, sample_response_ok};
 
         let request_id = cmd.request_id.clone();
         let sample_request = cmd
@@ -173,16 +173,7 @@ impl StreamHandler {
                     let _ = tx
                         .send(Ok(WorkerMessage {
                             payload: Some(worker_message::Payload::SampleResponse(
-                                SampleResponse {
-                                    job_id: job_id.clone(),
-                                    success: false,
-                                    exit_code: -1,
-                                    output: format!("Execution rejected: {}", e),
-                                    telemetry_ids: vec![],
-                                    run_id: run_id.clone(),
-                                    detected: false,
-                                    error: e.to_string(),
-                                },
+                                sample_response_error(&job_id, &run_id, &e),
                             )),
                         }))
                         .await;
@@ -222,36 +213,15 @@ impl StreamHandler {
             // Execute via engine
             let result = match engine::execute_run(&run_request, &run_context, sink).await {
                 Ok(outcome) => {
-                    // Reuse format_output from api::run for consistent output
-                    // (includes NTSTATUS interpretation, stderr/stdout)
                     let output = crate::api::run::format_output(
                         &outcome,
                         sample_request.timeout_seconds as u32,
                     );
-
-                    SampleResponse {
-                        job_id: job_id.clone(),
-                        success: !outcome.timed_out && outcome.exit_code == 0,
-                        exit_code: outcome.exit_code,
-                        output,
-                        telemetry_ids: vec![run_id.clone()],
-                        run_id: run_id.clone(),
-                        detected: false,
-                        error: String::new(),
-                    }
+                    sample_response_ok(&job_id, &run_id, &outcome, output)
                 }
                 Err(e) => {
                     error!("Sample execution failed: {}", e);
-                    SampleResponse {
-                        job_id: job_id.clone(),
-                        success: false,
-                        exit_code: -1,
-                        output: format!("Execution error: {}", e),
-                        telemetry_ids: vec![],
-                        run_id: run_id.clone(),
-                        detected: false,
-                        error: e.to_string(),
-                    }
+                    sample_response_error(&job_id, &run_id, &e)
                 }
             };
 
@@ -281,30 +251,7 @@ impl StreamHandler {
     /// Handle health check request
     async fn handle_health_check(&self, req: HealthCheckRequest) -> Result<()> {
         debug!("Received health check request: {}", req.request_id);
-
-        let state = self.worker_state.read().await;
-
-        let status_report = StatusReport {
-            worker_id: state.worker_id.clone(),
-            worker_ip: state
-                .metadata
-                .get("ip_address")
-                .cloned()
-                .unwrap_or_default(),
-            cpu_percent: state.health.cpu_percent,
-            memory_mb: state.health.memory_percent, // Note: API mismatch, should be MB
-            active_jobs: if state.current_job_id.is_some() { 1 } else { 0 },
-            event_type: "health_check".to_string(),
-            current_job_id: state.current_job_id.clone().unwrap_or_default(),
-        };
-
-        self.tx
-            .send(Ok(WorkerMessage {
-                payload: Some(worker_message::Payload::Status(status_report)),
-            }))
-            .await
-            .map_err(|e| anyhow!("Failed to send status report: {}", e))?;
-
+        self.send_status_update("health_check").await?;
         debug!("Sent health check response");
         Ok(())
     }
