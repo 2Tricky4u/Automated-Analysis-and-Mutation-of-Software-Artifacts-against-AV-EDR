@@ -28,6 +28,6 @@ pub use vm_executor::{ArtifactSender, VMExecutor};
 // Types (used by internal modules, not all consumed by binary target)
 #[allow(unused_imports)]
 pub use types::{
-    JobId, JobSession, ModularBuildSpec, ModuleSelectionSpec, RunId, TargetId,
-    VMInfo, WorkerId, WorkerInfo,
+    JobId, JobSession, ModularBuildSpec, ModuleSelectionSpec, RunId, TargetId, VMInfo, WorkerId,
+    WorkerInfo,
 };

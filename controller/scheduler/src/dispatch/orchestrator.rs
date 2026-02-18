@@ -211,9 +211,10 @@ impl Orchestrator {
 
             // Check OS match if requested
             if let Some(os) = requested_os
-                && !t.os_version.eq_ignore_ascii_case(os) {
-                    continue;
-                }
+                && !t.os_version.eq_ignore_ascii_case(os)
+            {
+                continue;
+            }
 
             // Check capabilities match if requested
             if !requested_caps.is_empty() {
@@ -529,12 +530,16 @@ impl Orchestrator {
         }
     }
 
-    #[allow(dead_code)]
     pub fn shutdown_all_jobs(&self) {
         warn!("[Orchestrator] Shutting down all jobs");
         for token in self.job_workers.values() {
             token.cancel();
         }
+        self.run_pool.shutdown();
+        let targets = Arc::clone(&self.targets);
+        tokio::spawn(async move {
+            targets.disconnect_all("Orchestrator shutdown", true).await;
+        });
     }
 
     #[allow(dead_code)]

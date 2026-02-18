@@ -135,11 +135,7 @@ impl RunPool {
     // Job Registry Queries (for API)
     // ========================================================================
 
-    // TODO: wire list_jobs/get_job_info into admin gRPC handlers
-    // TODO: wire shutdown/is_shutdown into Orchestrator::shutdown_all_jobs()
-
     /// List all jobs (running and completed).
-    #[allow(dead_code)]
     pub fn list_jobs(&self) -> Vec<JobInfo> {
         self.job_registry
             .iter()
@@ -157,7 +153,6 @@ impl RunPool {
     }
 
     /// Get info for a specific job.
-    #[allow(dead_code)]
     pub fn get_job_info(&self, job_id: &JobId) -> Option<JobInfo> {
         self.job_registry.get(job_id).map(|r| r.value().clone())
     }
@@ -331,13 +326,11 @@ impl RunPool {
     }
 
     /// Check if shutdown has been requested.
-    #[allow(dead_code)]
     pub fn is_shutdown(&self) -> bool {
         self.shutdown_token.is_cancelled()
     }
 
     /// Signal graceful shutdown to all VMExecutors.
-    #[allow(dead_code)]
     pub fn shutdown(&self) {
         warn!("[RunPool] Shutdown requested");
         self.shutdown_token.cancel();
@@ -354,7 +347,6 @@ impl RunPool {
     }
 
     /// Get pending runs per OS.
-    #[allow(dead_code)]
     pub async fn pool_size_by_os(&self) -> HashMap<String, usize> {
         let mut sizes = HashMap::new();
         for entry in self.by_os.iter() {
@@ -523,6 +515,7 @@ mod tests {
                 detected: false,
                 exit_code: 0,
                 error: None,
+                success: true,
             },
             vm_id: "vm-1".to_string(),
         };

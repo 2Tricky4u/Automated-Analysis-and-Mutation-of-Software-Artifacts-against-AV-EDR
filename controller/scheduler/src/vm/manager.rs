@@ -258,7 +258,6 @@ impl TargetManager {
         self.targets.len()
     }
 
-    #[allow(dead_code)]
     pub fn get_available(&self) -> Vec<TargetId> {
         self.targets
             .iter()
@@ -267,7 +266,6 @@ impl TargetManager {
             .collect()
     }
 
-    #[allow(dead_code)]
     pub fn get_available_by_os_and_capabilities(
         &self,
         required_capabilities: &[String],
@@ -384,9 +382,10 @@ impl TargetManager {
     async fn get_channel(&self, id: impl AsRef<str>) -> Result<Channel> {
         let id = id.as_ref();
         if let Some(target) = self.targets.get(id)
-            && let Some(ref channel) = target.channel {
-                return Ok(channel.clone());
-            }
+            && let Some(ref channel) = target.channel
+        {
+            return Ok(channel.clone());
+        }
 
         let address = self
             .targets
@@ -510,19 +509,19 @@ impl TargetManager {
                         if !registration_received
                             && let Some(worker_message::Payload::Registration(ref reg)) =
                                 msg.payload
-                            {
-                                t.capabilities = reg.capabilities.clone();
-                                t.os_version = reg.os_version.clone();
-                                registration_received = true;
+                        {
+                            t.capabilities = reg.capabilities.clone();
+                            t.os_version = reg.os_version.clone();
+                            registration_received = true;
 
-                                let _ = events_tx
-                                    .send(TargetEvent::Connected {
-                                        target_id: id.clone(),
-                                        os_version: reg.os_version.clone(),
-                                        capabilities: reg.capabilities.clone(),
-                                    })
-                                    .await;
-                            }
+                            let _ = events_tx
+                                .send(TargetEvent::Connected {
+                                    target_id: id.clone(),
+                                    os_version: reg.os_version.clone(),
+                                    capabilities: reg.capabilities.clone(),
+                                })
+                                .await;
+                        }
                     }
 
                     // Handle SampleResponse -> forward to VMExecutor
@@ -661,9 +660,7 @@ impl TargetManager {
         success
     }
 
-    #[allow(dead_code)]
     pub async fn disconnect_all(&self, reason: &str, reconnect_allowed: bool) {
-        // TODO use it
         info!("Disconnecting all targets: {}", reason);
 
         // Signal graceful shutdown to all VMExecutors via run pool

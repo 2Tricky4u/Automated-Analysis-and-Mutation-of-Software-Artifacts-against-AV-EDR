@@ -185,29 +185,29 @@ pub async fn get_available_workers(
         req.target_os, req.required_capabilities
     );
 
-    let all_workers = service.targets.list_all();
+    // Use TargetManager's built-in capability-aware filtering
+    let by_os = service
+        .targets
+        .get_available_by_os_and_capabilities(&req.required_capabilities);
 
-    // Filter available workers
-    let available: Vec<WorkerInfo> = all_workers
-        .iter()
-        .filter(|w| {
-            if w.status != TargetStatus::Available {
-                return false;
-            }
-            if !req.target_os.is_empty() && !w.os_version.contains(&req.target_os) {
-                return false;
-            }
-            if !req.required_capabilities.is_empty() {
-                for cap in &req.required_capabilities {
-                    if !w.capabilities.contains(cap) {
-                        return false;
-                    }
-                }
-            }
-            true
-        })
-        .map(target_to_worker_info)
-        .collect();
+    let available: Vec<WorkerInfo> = if req.target_os.is_empty() {
+        // All OS types
+        by_os
+            .values()
+            .flat_map(|ids| ids.iter())
+            .filter_map(|id| service.targets.get(id).map(|w| target_to_worker_info(&w)))
+            .collect()
+    } else {
+        // Specific OS
+        by_os
+            .get(&req.target_os)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| service.targets.get(id).map(|w| target_to_worker_info(&w)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
 
     let total = available.len() as i32;
 
@@ -299,6 +299,8 @@ pub async fn get_pool_metrics(
     let metrics = service.run_pool.get_metrics().await;
     let queue_size = service.run_pool.pool_size().await;
     let job_count = service.run_pool.job_count().await;
+    let by_os = service.run_pool.pool_size_by_os().await;
+    debug!("[RPC] Pool queue by OS: {:?}", by_os);
 
     // Get VM count from targets
     let all_workers = service.targets.list_all();
@@ -350,9 +352,9 @@ pub async fn get_orchestrator_status(
     let pool_ids = vec!["shared-run-pool".to_string()];
     let active_pools = 1;
 
-    // Get active jobs from RunPool registry
-    let running_jobs = service.run_pool.list_running_jobs();
-    let active_jobs: Vec<ActiveJobEntry> = running_jobs
+    // Get all jobs from RunPool registry (running + completed)
+    let all_jobs = service.run_pool.list_jobs();
+    let active_jobs: Vec<ActiveJobEntry> = all_jobs
         .iter()
         .map(|job| ActiveJobEntry {
             job_id: job.id.0.clone(),

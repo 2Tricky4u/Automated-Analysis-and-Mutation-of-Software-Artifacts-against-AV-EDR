@@ -391,9 +391,11 @@ impl JobSession {
             return false;
         }
         if let Some(last) = &self.last_round
-            && self.stop_on_evasion && !last.detected {
-                return false;
-            }
+            && self.stop_on_evasion
+            && !last.detected
+        {
+            return false;
+        }
         true
     }
 
@@ -446,6 +448,8 @@ pub struct RunOutcome {
     pub detected: bool,
     pub exit_code: i32,
     pub error: Option<String>,
+    /// Payload executed to completion (evasion signal from worker)
+    pub success: bool,
 }
 
 /// Ephemeral join state for a round until both runs finish
@@ -477,8 +481,19 @@ impl RoundAgg {
         // Behavior match if exit codes are the same (simplified)
         let behavior_match = baseline.exit_code == instrumented.exit_code;
 
-        // Evasion score: 1.0 if not detected, 0.0 if detected
-        let evasion_score = if detected { 0.0 } else { 1.0 };
+        // Evasion score using success signal from worker:
+        //   Both not detected + both success → 1.0 (full evasion)
+        //   Both not detected + baseline success only → 0.5 (partial evasion)
+        //   Any detected → 0.0
+        let evasion_score = if detected {
+            0.0
+        } else if baseline.success && instrumented.success {
+            1.0
+        } else if baseline.success || instrumented.success {
+            0.5
+        } else {
+            1.0 // Not detected, no success info — assume evasion
+        };
 
         Some(RoundSummary {
             round_id: self.spec.id.clone(),
@@ -723,6 +738,7 @@ mod tests {
             detected: false,
             exit_code: 0,
             error: None,
+            success: true,
         });
         assert!(!agg.is_complete());
 
@@ -730,6 +746,7 @@ mod tests {
             detected: false,
             exit_code: 0,
             error: None,
+            success: true,
         });
         assert!(agg.is_complete());
 
@@ -925,11 +942,13 @@ mod tests {
                 detected: true,
                 exit_code: 1,
                 error: None,
+                success: false,
             }),
             instrumented: Some(RunOutcome {
                 detected: false,
                 exit_code: 0,
                 error: None,
+                success: true,
             }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
@@ -963,11 +982,13 @@ mod tests {
                 detected: false,
                 exit_code: 0,
                 error: None,
+                success: true,
             }),
             instrumented: Some(RunOutcome {
                 detected: true,
                 exit_code: 1,
                 error: None,
+                success: false,
             }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
@@ -999,11 +1020,13 @@ mod tests {
                 detected: false,
                 exit_code: 0,
                 error: None,
+                success: true,
             }),
             instrumented: Some(RunOutcome {
                 detected: false,
                 exit_code: 0,
                 error: None,
+                success: true,
             }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
@@ -1119,7 +1142,6 @@ mod tests {
 
     #[test]
     fn test_payload_path_empty_file() {
-        
         let tmp = tempfile::NamedTempFile::new().unwrap();
         // Don't write anything — file is empty
 

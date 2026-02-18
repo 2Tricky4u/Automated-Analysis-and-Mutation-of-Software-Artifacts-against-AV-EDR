@@ -11,6 +11,4 @@ pub mod manager;
 
 // Re-exports (used by internal modules, not all consumed by binary target)
 #[allow(unused_imports)]
-pub use manager::{
-    RegistrationType, Target, TargetEvent, TargetManager, TargetStatus,
-};
+pub use manager::{RegistrationType, Target, TargetEvent, TargetManager, TargetStatus};
