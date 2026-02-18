@@ -156,9 +156,10 @@ async fn handle_socket_filtered(
         while let Ok(event) = rx.recv().await {
             // Apply filter if specified
             if let Some(ref filter_id) = filter
-                && event.job_id != *filter_id {
-                    continue;
-                }
+                && event.job_id != *filter_id
+            {
+                continue;
+            }
 
             match serde_json::to_string(&event) {
                 Ok(json) => {

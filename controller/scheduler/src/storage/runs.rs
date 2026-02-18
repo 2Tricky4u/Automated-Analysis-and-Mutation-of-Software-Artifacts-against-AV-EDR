@@ -71,6 +71,7 @@ pub async fn index_run_result(
         "status": if outcome.error.is_some() { "error" } else { "completed" },
         "detected": detected,
         "exit_code": outcome.exit_code,
+        "success": outcome.success,
         "detection_outcome": detection_outcome,
         "trace_mode": trace_mode_from_run_type(run_type),
         "finished_at": now,

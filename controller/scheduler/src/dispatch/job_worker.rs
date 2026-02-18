@@ -445,34 +445,42 @@ impl JobWorker {
     /// Handle a result received from VMExecutor (via RunPool routing).
     async fn on_result(&mut self, result: JobRunResult) {
         debug!(
-            "[JobWorker:{}] Run {} completed: detected={}, exit={}",
-            self.job.id, result.run_id, result.outcome.detected, result.outcome.exit_code
+            "[JobWorker:{}] Run {} completed: detected={}, exit={}, success={}",
+            self.job.id,
+            result.run_id,
+            result.outcome.detected,
+            result.outcome.exit_code,
+            result.outcome.success
         );
 
-        //TODO should use result.round_id?
-
-        // Find which round this belongs to and update
-        let mut round_to_finalize = None;
-
-        for (round_id, agg) in &mut self.round_aggs {
+        // Direct O(1) lookup by round_id instead of linear scan
+        let round_to_finalize = if let Some(agg) = self.round_aggs.get_mut(&result.round_id) {
             if agg.baseline_run_id == result.run_id {
                 agg.baseline = Some(result.outcome.clone());
                 agg.baseline_vm_id = result.vm_id.clone();
-                if agg.is_complete() {
-                    round_to_finalize = Some(round_id.clone());
-                }
-                break;
             } else if agg.instrumented_run_id == result.run_id {
                 agg.instrumented = Some(result.outcome.clone());
                 agg.instrumented_vm_id = result.vm_id.clone();
-                if agg.is_complete() {
-                    round_to_finalize = Some(round_id.clone());
-                }
-                break;
+            } else {
+                warn!(
+                    "[JobWorker:{}] Run {} doesn't match round {} runs",
+                    self.job.id, result.run_id, result.round_id
+                );
+                return;
             }
-        }
+            if agg.is_complete() {
+                Some(result.round_id.clone())
+            } else {
+                None
+            }
+        } else {
+            warn!(
+                "[JobWorker:{}] Result for unknown round: {}",
+                self.job.id, result.round_id
+            );
+            return;
+        };
 
-        // Finalize round if complete
         if let Some(round_id) = round_to_finalize {
             self.finalize_round(&round_id).await;
         }
@@ -539,7 +547,6 @@ impl JobWorker {
             })
             .await;
     }
-
 }
 
 impl std::fmt::Debug for JobWorker {

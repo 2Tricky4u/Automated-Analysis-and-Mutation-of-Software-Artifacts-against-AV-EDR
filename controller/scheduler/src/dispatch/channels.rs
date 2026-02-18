@@ -35,9 +35,6 @@ pub struct RemoteRunResult {
     pub run_id: RunId,
     pub detected: bool,
     pub exit_code: i32,
-    // TODO: propagate success into RunOutcome → JobRunResult so the job worker
-    //       can record detection outcomes and close the triage feedback loop
-    #[allow(dead_code)]
     pub success: bool,
     pub error: Option<String>,
 }
@@ -48,6 +45,7 @@ impl From<RemoteRunResult> for RunOutcome {
             detected: r.detected,
             exit_code: r.exit_code,
             error: r.error,
+            success: r.success,
         }
     }
 }
@@ -89,9 +87,6 @@ pub enum JobWorkerEvent {
 pub struct JobRunResult {
     pub run_id: RunId,
     pub job_id: JobId,
-    // TODO: use round_id in JobWorker::on_result() for round-level aggregation
-    //       (group Run A + Run B for the two-run differential protocol)
-    #[allow(dead_code)]
     pub round_id: RoundId,
     pub outcome: RunOutcome,
     pub vm_id: String,

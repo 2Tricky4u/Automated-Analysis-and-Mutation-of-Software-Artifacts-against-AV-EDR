@@ -249,8 +249,6 @@ impl VMExecutor {
                 return;
             }
         };
-        // TODO use result.success (evaded?)
-
         let envelope = in_flight.envelope;
 
         // Verify run_id matches
@@ -262,8 +260,8 @@ impl VMExecutor {
         }
 
         debug!(
-            "[VM:{}] Run {} completed: detected={}, exit={}",
-            self.id, result.run_id, result.detected, result.exit_code
+            "[VM:{}] Run {} completed: detected={}, exit={}, success={}",
+            self.id, result.run_id, result.detected, result.exit_code, result.success
         );
 
         // Release VM after run completes
@@ -280,6 +278,7 @@ impl VMExecutor {
                 detected: result.detected,
                 exit_code: result.exit_code,
                 error: result.error,
+                success: result.success,
             },
             vm_id: self.id.clone(),
         };
@@ -303,6 +302,7 @@ impl VMExecutor {
                 detected: false,
                 exit_code: -1,
                 error: Some(error),
+                success: false,
             },
             vm_id: self.id.clone(),
         };

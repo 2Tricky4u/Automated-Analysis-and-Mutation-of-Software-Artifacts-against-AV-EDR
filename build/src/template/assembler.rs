@@ -240,9 +240,10 @@ impl Assembler {
             let entry = entry?;
             let path = entry.path();
             if path.extension().is_some_and(|ext| ext == "c")
-                && let Some(stem) = path.file_stem() {
-                    modules.push(stem.to_string_lossy().to_string());
-                }
+                && let Some(stem) = path.file_stem()
+            {
+                modules.push(stem.to_string_lossy().to_string());
+            }
         }
 
         modules.sort();
