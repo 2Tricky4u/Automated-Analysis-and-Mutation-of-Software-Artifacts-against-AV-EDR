@@ -1,7 +1,6 @@
 use crate::automutate::common::TelemetryData;
 use crate::automutate::worker::{HealthRequest, HealthResponse, PingRequest, PingResponse};
 use crate::{WorkerAgentService, capabilities, telemetry};
-use std::time::SystemTime;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tonic::{Request, Response, Status};
 use tracing::{error, info, warn};
@@ -11,10 +10,7 @@ pub async fn ping(
     request: Request<PingRequest>,
 ) -> Result<Response<PingResponse>, Status> {
     let req = request.into_inner();
-    let timestamp = SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let timestamp = crate::infra::time::now_unix_secs();
 
     info!("Ping received: {}", req.message);
 
@@ -125,10 +121,7 @@ pub async fn get_worker_info(
     let active_jobs = if current_job_id.is_empty() { 0 } else { 1 };
 
     // Calculate uptime (time since worker started)
-    let uptime_seconds = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let uptime_seconds = crate::infra::time::now_unix_secs();
 
     let response = crate::automutate::worker::WorkerInfoResponse {
         worker_id: service.worker_id.clone(),

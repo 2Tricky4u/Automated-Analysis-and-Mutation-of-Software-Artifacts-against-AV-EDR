@@ -2,7 +2,7 @@ use crate::WorkerAgentService;
 use crate::automutate::common::{SampleRequest, SampleResponse};
 use crate::dispatch::engine;
 use crate::dispatch::state::ExecutionLockGuard;
-use crate::dispatch::types::{RunContext, RunRequest, resolve_run_id};
+use crate::dispatch::types::{RunContext, RunRequest, resolve_run_id, sample_response_ok};
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
@@ -100,16 +100,7 @@ pub async fn run_sample(
         run_id
     );
 
-    Ok(Response::new(SampleResponse {
-        job_id,
-        success: !outcome.timed_out && outcome.exit_code == 0,
-        exit_code: outcome.exit_code,
-        output,
-        telemetry_ids: vec![run_id.clone()],
-        run_id: String::new(),
-        detected: false,
-        error: String::new(),
-    }))
+    Ok(Response::new(sample_response_ok(&job_id, "", &outcome, output)))
 }
 
 /// Format human-readable output string from RunOutcome.

@@ -605,34 +605,14 @@ pub async fn execute_run(
     phase_timings.telemetry_collect_ms = telemetry_start.elapsed().as_millis() as u64;
 
     // Add phase timings as a telemetry event for observability
-    {
-        let mut timing_metadata = std::collections::HashMap::new();
-        timing_metadata.insert(
-            "rededr_setup_ms".to_string(),
-            phase_timings.rededr_setup_ms.to_string(),
-        );
-        timing_metadata.insert(
-            "process_spawn_ms".to_string(),
-            phase_timings.process_spawn_ms.to_string(),
-        );
-        timing_metadata.insert(
-            "process_wait_ms".to_string(),
-            phase_timings.process_wait_ms.to_string(),
-        );
-        timing_metadata.insert(
-            "telemetry_collect_ms".to_string(),
-            phase_timings.telemetry_collect_ms.to_string(),
-        );
-
-        telemetry_events.push(crate::automutate::common::TelemetryData {
-            job_id: request.job_id.clone(),
-            event_type: "phase_timings".to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            payload: vec![],
-            metadata: timing_metadata,
-            typed_event: None,
-        });
-    }
+    telemetry_events.push(crate::automutate::common::TelemetryData {
+        job_id: request.job_id.clone(),
+        event_type: "phase_timings".to_string(),
+        timestamp: chrono::Utc::now().timestamp(),
+        payload: vec![],
+        metadata: phase_timings.to_metadata(),
+        typed_event: None,
+    });
 
     let telemetry_count = telemetry_events.len() as i32;
 
