@@ -5,4 +5,7 @@
 /// - External telemetry export (Cortex, MDE, custom HTTP)
 pub mod collectors;
 pub mod pipeline;
+// TODO: finish trace_compressor pipeline — connect to telemetry collector output
+//       and wire compressed traces into triage token extraction
+#[allow(dead_code, unused_variables)]
 pub mod trace_compressor;

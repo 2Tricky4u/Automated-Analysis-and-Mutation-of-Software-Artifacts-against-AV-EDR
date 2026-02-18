@@ -25,7 +25,8 @@ pub use orchestrator::Orchestrator;
 pub use run_pool::RunPool;
 pub use vm_executor::{ArtifactSender, VMExecutor};
 
-// Types
+// Types (used by internal modules, not all consumed by binary target)
+#[allow(unused_imports)]
 pub use types::{
     JobId, JobSession, ModularBuildSpec, ModuleSelectionSpec, RunId, TargetId,
     VMInfo, WorkerId, WorkerInfo,

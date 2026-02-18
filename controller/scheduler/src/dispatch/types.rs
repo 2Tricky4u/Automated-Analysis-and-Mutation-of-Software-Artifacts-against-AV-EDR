@@ -133,6 +133,8 @@ pub struct WorkerId(pub String);
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TargetId(pub String);
 
+// TODO: migrate callers from TargetId("...".into()) to TargetId::new("...")
+#[allow(dead_code)]
 impl TargetId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
@@ -177,6 +179,8 @@ impl AsRef<str> for TargetId {
 // JobId implementations
 // ============================================================================
 
+// TODO: migrate callers from JobId("...".into()) to JobId::new("...")
+#[allow(dead_code)]
 impl JobId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
@@ -221,6 +225,7 @@ impl From<&str> for JobId {
 // RoundId implementations
 // ============================================================================
 
+#[allow(dead_code)]
 impl RoundId {
     pub fn as_str(&self) -> &str {
         &self.0
@@ -243,6 +248,7 @@ impl AsRef<str> for RoundId {
 // RunId implementations
 // ============================================================================
 
+#[allow(dead_code)]
 impl RunId {
     pub fn as_str(&self) -> &str {
         &self.0
@@ -265,6 +271,7 @@ impl AsRef<str> for RunId {
 // WorkerId implementations
 // ============================================================================
 
+#[allow(dead_code)]
 impl WorkerId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
@@ -365,6 +372,8 @@ impl JobSession {
         }
     }
 
+    // TODO: wire into job submission gRPC handler for OS/capability constraints
+    #[allow(dead_code)]
     pub fn with_constraints(mut self, os: Option<String>, caps: Vec<String>) -> Self {
         self.target_os = os;
         self.required_capabilities = caps;
@@ -555,6 +564,7 @@ pub struct WorkerInfo {
 /// Information about a connected VM for VMExecutor.
 /// Simplified version of WorkerInfo focused on execution capabilities.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct VMInfo {
     pub id: String,
     pub os: String,
