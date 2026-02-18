@@ -181,7 +181,6 @@ impl TargetManager {
     }
 
     /// Get the run pool.
-    #[allow(dead_code)]
     pub fn run_pool(&self) -> Arc<RunPool> {
         Arc::clone(&self.run_pool)
     }
@@ -239,7 +238,6 @@ impl TargetManager {
     // Queries (public API for management/monitoring)
     // ========================================================================
 
-    #[allow(dead_code)]
     pub fn get(&self, id: impl AsRef<str>) -> Option<Target> {
         self.targets.get(id.as_ref()).map(|t| t.clone())
     }
@@ -256,7 +254,6 @@ impl TargetManager {
         self.targets.len()
     }
 
-    #[allow(dead_code)]
     pub fn get_available(&self) -> Vec<TargetId> {
         self.targets
             .iter()
@@ -265,7 +262,6 @@ impl TargetManager {
             .collect()
     }
 
-    #[allow(dead_code)]
     pub fn get_available_by_os_and_capabilities(
         &self,
         required_capabilities: &[String],

@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Create worker agent service
-    let worker_service = WorkerAgentService::new(worker_id.clone(), config.clone());
+    let worker_service = WorkerAgentService::new(worker_id.clone(), config.clone(), capabilities);
 
     info!("Starting worker agent gRPC server...");
 

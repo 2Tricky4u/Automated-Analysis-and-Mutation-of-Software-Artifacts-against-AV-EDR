@@ -1,6 +1,6 @@
 use crate::automutate::common::TelemetryData;
 use crate::automutate::worker::{HealthRequest, HealthResponse, PingRequest, PingResponse};
-use crate::{WorkerAgentService, capabilities, telemetry};
+use crate::{WorkerAgentService, telemetry};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tonic::{Request, Response, Status};
 use tracing::{error, info, warn};
@@ -35,17 +35,7 @@ pub async fn health_check(
             .with_memory(MemoryRefreshKind::everything()),
     );
 
-    // Calculate average CPU usage across all cores
-    let cpu_percent = sys.global_cpu_usage() as i32;
-
-    // Calculate memory usage percentage
-    let total_memory = sys.total_memory();
-    let used_memory = sys.used_memory();
-    let memory_percent = if total_memory > 0 {
-        ((used_memory as f64 / total_memory as f64) * 100.0) as i32
-    } else {
-        0
-    };
+    let (cpu_percent, memory_percent) = crate::infra::system::collect_system_metrics(&sys);
 
     // Get execution state (busy/idle)
     let exec_state = service.get_execution_state().await;
@@ -86,15 +76,11 @@ pub async fn get_worker_info(
     service: &WorkerAgentService,
     _request: Request<crate::automutate::worker::WorkerInfoRequest>,
 ) -> Result<Response<crate::automutate::worker::WorkerInfoResponse>, Status> {
-    use crate::automutate::common::ToolVersions;
     use crate::automutate::worker::HealthMetrics;
 
     info!("GetWorkerInfo RPC called by controller");
 
-    // Detect current capabilities
-    let capabilities_data = capabilities::detect_capabilities()
-        .await
-        .map_err(|e| Status::internal(format!("Failed to detect capabilities: {}", e)))?;
+    let capabilities_data = &service.capabilities;
 
     // Get system health metrics
     let mut sys = System::new_with_specifics(
@@ -103,12 +89,8 @@ pub async fn get_worker_info(
             .with_memory(MemoryRefreshKind::everything()),
     );
 
-    // Refresh CPU info and get usage
     sys.refresh_cpu_usage();
-    let cpu_percent =
-        sys.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / sys.cpus().len() as f32;
-    let cpu_percent = cpu_percent as i32;
-    let memory_percent = ((sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0) as i32;
+    let (cpu_percent, memory_percent) = crate::infra::system::collect_system_metrics(&sys);
     let disk_percent = 0; // TODO: Implement disk usage
 
     // Check if currently executing a job
@@ -127,30 +109,9 @@ pub async fn get_worker_info(
         worker_id: service.worker_id.clone(),
         ip_address: service.config.worker.ip_address.clone(),
         os_version: service.config.worker.os_version.clone(),
-        capabilities: capabilities_data.capabilities,
-        metadata: capabilities_data.metadata,
-        tools: Some(ToolVersions {
-            rededr_version: capabilities_data
-                .tools
-                .get("rededr_version")
-                .cloned()
-                .unwrap_or_default(),
-            defender_version: capabilities_data
-                .tools
-                .get("defender_version")
-                .cloned()
-                .unwrap_or_default(),
-            etw_version: capabilities_data
-                .tools
-                .get("etw_version")
-                .cloned()
-                .unwrap_or_default(),
-            llvm_version: capabilities_data
-                .tools
-                .get("llvm_version")
-                .cloned()
-                .unwrap_or_default(),
-        }),
+        capabilities: capabilities_data.capabilities.clone(),
+        metadata: capabilities_data.metadata.clone(),
+        tools: Some(capabilities_data.to_tool_versions()),
         health: Some(HealthMetrics {
             cpu_percent,
             memory_percent,

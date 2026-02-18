@@ -23,6 +23,7 @@ pub mod session;
 pub mod telemetry;
 
 // Re-export WorkerAgentService for use in session and main
+use capabilities::WorkerCapabilities;
 use dispatch::state::ExecutionState;
 use edr_config::WorkerConfig;
 use std::sync::Arc;
@@ -40,16 +41,19 @@ pub struct WorkerAgentService {
     /// StreamHandler for bidirectional communication
     pub(crate) stream_handler:
         Arc<tokio::sync::RwLock<Option<Arc<session::stream_handler::StreamHandler>>>>,
+    /// Cached capabilities detected at startup (expensive I/O, doesn't change at runtime)
+    pub(crate) capabilities: Arc<WorkerCapabilities>,
 }
 
 impl WorkerAgentService {
-    pub fn new(worker_id: String, config: WorkerConfig) -> Self {
+    pub fn new(worker_id: String, config: WorkerConfig, capabilities: WorkerCapabilities) -> Self {
         Self {
             worker_id,
             config,
             system_info: Arc::new(Mutex::new(System::new_all())),
             execution_lock: Arc::new(Mutex::new(ExecutionState::Idle)),
             stream_handler: Arc::new(Default::default()),
+            capabilities: Arc::new(capabilities),
         }
     }
 
