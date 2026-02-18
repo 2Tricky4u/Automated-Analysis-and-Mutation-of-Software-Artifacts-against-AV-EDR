@@ -24,7 +24,8 @@ fn test_xor_roundtrip_multiple_payloads() {
             .map(|(i, &b)| b ^ [0xAA, 0x55][i % 2])
             .collect();
         assert_eq!(
-            payload, &decoded,
+            payload,
+            &decoded,
             "FAILED roundtrip for '{}' (len={})",
             name,
             payload.len()
@@ -205,16 +206,14 @@ fn test_xor_header_array_count_matches_payload_len() {
 
         let defined_len = common::parse_payload_len(&header);
         assert_eq!(
-            defined_len,
-            sz as usize,
+            defined_len, sz as usize,
             "PAYLOAD_LEN mismatch for size {}",
             sz
         );
 
         let hex_count = common::count_hex_bytes_in_array(&header);
         assert_eq!(
-            hex_count,
-            sz as usize,
+            hex_count, sz as usize,
             "Hex byte count in array doesn't match PAYLOAD_LEN for size {}",
             sz
         );
@@ -233,8 +232,7 @@ fn test_english_header_word_count_matches_payload_len() {
 
         let defined_len = common::parse_payload_len(&header);
         assert_eq!(
-            defined_len,
-            sz as usize,
+            defined_len, sz as usize,
             "English PAYLOAD_LEN mismatch for size {}",
             sz
         );
@@ -329,5 +327,8 @@ fn test_c_header_deterministic() {
     let encoded2 = encoder.encode(&payload, EncodingType::Xor);
     let header2 = encoder.generate_c_header(&encoded2);
 
-    assert_eq!(header1, header2, "Same payload should produce identical headers");
+    assert_eq!(
+        header1, header2,
+        "Same payload should produce identical headers"
+    );
 }

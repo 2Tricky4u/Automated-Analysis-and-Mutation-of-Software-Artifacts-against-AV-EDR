@@ -26,8 +26,16 @@ impl WorkerCapabilities {
     /// Convert the tools HashMap into the proto ToolVersions struct.
     pub fn to_tool_versions(&self) -> crate::automutate::common::ToolVersions {
         crate::automutate::common::ToolVersions {
-            rededr_version: self.tools.get("rededr_version").cloned().unwrap_or_default(),
-            defender_version: self.tools.get("defender_version").cloned().unwrap_or_default(),
+            rededr_version: self
+                .tools
+                .get("rededr_version")
+                .cloned()
+                .unwrap_or_default(),
+            defender_version: self
+                .tools
+                .get("defender_version")
+                .cloned()
+                .unwrap_or_default(),
             etw_version: self.tools.get("etw_version").cloned().unwrap_or_default(),
             llvm_version: self.tools.get("llvm_version").cloned().unwrap_or_default(),
         }

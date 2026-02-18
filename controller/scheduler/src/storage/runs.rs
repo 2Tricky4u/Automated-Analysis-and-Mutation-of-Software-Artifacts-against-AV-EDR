@@ -105,10 +105,7 @@ pub async fn index_run_result(
 
 /// Index a run status from StatusReport (legacy path).
 /// This path has worker metadata but no exit_code/detected.
-pub async fn index_run_status(
-    es: &Elasticsearch,
-    report: &StatusReport,
-) -> anyhow::Result<()> {
+pub async fn index_run_status(es: &Elasticsearch, report: &StatusReport) -> anyhow::Result<()> {
     let index_name = helpers::es_index_name("runs");
 
     let doc = json!({

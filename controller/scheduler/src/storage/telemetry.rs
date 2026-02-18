@@ -5,8 +5,8 @@
 //! - Smart numeric conversion (pointers→hex, large u64→hex)
 //! - Daily index pattern: telemetry-YYYY.MM.DD
 
-use super::helpers;
 use super::TelemetryContext;
+use super::helpers;
 use crate::automutate::common::TelemetryData;
 use elasticsearch::{Elasticsearch, IndexParts};
 use serde_json::json;
@@ -26,13 +26,12 @@ pub async fn index_telemetry_batch(
 
     for event in batch {
         // Parse payload to extract searchable fields
-        let mut payload_fields = if let Ok(payload_json) =
-            serde_json::from_slice::<serde_json::Value>(&event.payload)
-        {
-            payload_json.as_object().cloned().unwrap_or_default()
-        } else {
-            Default::default()
-        };
+        let mut payload_fields =
+            if let Ok(payload_json) = serde_json::from_slice::<serde_json::Value>(&event.payload) {
+                payload_json.as_object().cloned().unwrap_or_default()
+            } else {
+                Default::default()
+            };
 
         // Handle typed_event variants (structured proto instead of JSON payload)
         if let Some(ref typed_event) = event.typed_event {
@@ -51,7 +50,7 @@ pub async fn index_telemetry_batch(
                     payload_fields.insert("hit_counts".to_string(), json!(&cov.hit_counts));
                     payload_fields.insert("bitmap_size".to_string(), json!(cov.bitmap.len()));
 
-                    use base64::{engine::general_purpose, Engine as _};
+                    use base64::{Engine as _, engine::general_purpose};
                     let bitmap_b64 = general_purpose::STANDARD.encode(&cov.bitmap);
                     payload_fields.insert("bitmap_b64".to_string(), json!(bitmap_b64));
                 }
@@ -120,9 +119,7 @@ pub async fn index_telemetry_batch(
                         }
                     }
                     serde_json::Value::String(s) => {
-                        if should_be_numeric
-                            && (s == "unsupported" || s.parse::<i64>().is_err())
-                        {
+                        if should_be_numeric && (s == "unsupported" || s.parse::<i64>().is_err()) {
                             json!(null)
                         } else {
                             json!(s)
@@ -150,7 +147,10 @@ pub async fn index_telemetry_batch(
             Ok(resp) => {
                 let status = resp.status_code();
                 let body = resp.text().await.unwrap_or_default();
-                warn!("Failed to index telemetry event: status {} - {}", status, body);
+                warn!(
+                    "Failed to index telemetry event: status {} - {}",
+                    status, body
+                );
                 if indexed == 0 {
                     warn!("Problematic document: {}", doc_str);
                 }

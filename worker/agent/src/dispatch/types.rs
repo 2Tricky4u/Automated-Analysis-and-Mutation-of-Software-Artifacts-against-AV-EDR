@@ -76,7 +76,11 @@ impl RunPhaseTimings {
 }
 
 /// Build a SampleResponse for a failed execution.
-pub fn sample_response_error(job_id: &str, run_id: &str, error: &dyn std::fmt::Display) -> SampleResponse {
+pub fn sample_response_error(
+    job_id: &str,
+    run_id: &str,
+    error: &dyn std::fmt::Display,
+) -> SampleResponse {
     SampleResponse {
         job_id: job_id.to_string(),
         success: false,
@@ -90,7 +94,12 @@ pub fn sample_response_error(job_id: &str, run_id: &str, error: &dyn std::fmt::D
 }
 
 /// Build a SampleResponse from a completed RunOutcome.
-pub fn sample_response_ok(job_id: &str, run_id: &str, outcome: &RunOutcome, output: String) -> SampleResponse {
+pub fn sample_response_ok(
+    job_id: &str,
+    run_id: &str,
+    outcome: &RunOutcome,
+    output: String,
+) -> SampleResponse {
     SampleResponse {
         job_id: job_id.to_string(),
         success: !outcome.timed_out && outcome.exit_code == 0,

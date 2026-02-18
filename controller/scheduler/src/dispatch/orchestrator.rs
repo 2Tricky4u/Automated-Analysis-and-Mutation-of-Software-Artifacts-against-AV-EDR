@@ -280,7 +280,8 @@ impl Orchestrator {
                 );
 
                 // Convert round_started_at to RFC3339
-                let started_at_str = crate::storage::helpers::system_time_to_rfc3339(round_started_at);
+                let started_at_str =
+                    crate::storage::helpers::system_time_to_rfc3339(round_started_at);
 
                 // Index round, both runs, and update job progress in ES
                 let storage = self.storage.clone();
@@ -293,10 +294,7 @@ impl Orchestrator {
                 let i_vm_id = instrumented_vm_id;
                 tokio::spawn(async move {
                     // Update job progress (current_round)
-                    if let Err(e) = storage
-                        .update_job_progress(&jid, round_number)
-                        .await
-                    {
+                    if let Err(e) = storage.update_job_progress(&jid, round_number).await {
                         error!("Failed to update job progress: {}", e);
                     }
                     // Index round summary
@@ -367,7 +365,10 @@ impl Orchestrator {
                 let storage = self.storage.clone();
                 let jid = job_id.0.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = storage.update_job_status(&jid, &status, Some(&outcome)).await {
+                    if let Err(e) = storage
+                        .update_job_status(&jid, &status, Some(&outcome))
+                        .await
+                    {
                         error!("Failed to update job status: {}", e);
                     }
                 });

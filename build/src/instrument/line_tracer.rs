@@ -60,7 +60,13 @@ pub fn inject_line_traces_with_opts(
     file_path: &str,
     format: TraceFormat,
 ) -> Result<String> {
-    inject_line_traces_with_delay(source, language, file_path, format, DEFAULT_DELAY_ITERATIONS)
+    inject_line_traces_with_delay(
+        source,
+        language,
+        file_path,
+        format,
+        DEFAULT_DELAY_ITERATIONS,
+    )
 }
 
 /// Inject line tracing statements with configurable delay loop iterations
@@ -86,7 +92,8 @@ pub fn inject_line_traces_with_delay(
     let root = tree.root_node();
 
     // Collect all statement locations where we want to inject traces
-    let mut injections = collect_injection_points(&root, source, language, file_path, format, delay_iterations)?;
+    let mut injections =
+        collect_injection_points(&root, source, language, file_path, format, delay_iterations)?;
 
     // Sort by offset (descending) so we can inject without shifting offsets
     injections.sort_by_key(|(offset, _)| std::cmp::Reverse(*offset));
@@ -126,7 +133,15 @@ fn collect_injection_points(
     let mut injections = Vec::new();
 
     // Recursively walk the AST looking for statements in compound blocks
-    visit_node(root, source, language, file_path, format, delay_iterations, &mut injections);
+    visit_node(
+        root,
+        source,
+        language,
+        file_path,
+        format,
+        delay_iterations,
+        &mut injections,
+    );
 
     Ok(injections)
 }
@@ -153,8 +168,14 @@ fn visit_node(
                 let indent = calculate_indentation(source, start_offset);
 
                 // Generate trace statement with file path and line number
-                let trace_stmt =
-                    generate_trace_statement(start_line, &indent, language, file_path, format, delay_iterations);
+                let trace_stmt = generate_trace_statement(
+                    start_line,
+                    &indent,
+                    language,
+                    file_path,
+                    format,
+                    delay_iterations,
+                );
 
                 injections.push((start_offset, trace_stmt));
             }
@@ -163,7 +184,15 @@ fn visit_node(
 
     // Recursively visit children
     for child in node.children(&mut node.walk()) {
-        visit_node(&child, source, language, file_path, format, delay_iterations, injections);
+        visit_node(
+            &child,
+            source,
+            language,
+            file_path,
+            format,
+            delay_iterations,
+            injections,
+        );
     }
 }
 

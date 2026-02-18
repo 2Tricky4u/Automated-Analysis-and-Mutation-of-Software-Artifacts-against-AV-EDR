@@ -64,10 +64,12 @@ fn main() {
         decoy: "winexec".into(),
     };
 
-    let assembled = assembler.assemble(&modules, &payload_header).unwrap_or_else(|e| {
-        eprintln!("Assembly error: {}", e);
-        process::exit(1);
-    });
+    let assembled = assembler
+        .assemble(&modules, &payload_header)
+        .unwrap_or_else(|e| {
+            eprintln!("Assembly error: {}", e);
+            process::exit(1);
+        });
 
     eprintln!(
         "[emit_c] Assembled: {} bytes (carrier=change_rw_rx, decoder=xor, antiemulation={}, guardrail=env, decoy=winexec)",
@@ -85,8 +87,8 @@ fn main() {
                 params: HashMap::new(),
             })
             .collect();
-        let (mutated, applied) =
-            build::mutator::Mutator::apply(assembled.as_bytes(), &specs).unwrap_or_else(|e| {
+        let (mutated, applied) = build::mutator::Mutator::apply(assembled.as_bytes(), &specs)
+            .unwrap_or_else(|e| {
                 eprintln!("Mutation error: {}", e);
                 process::exit(1);
             });
@@ -170,10 +172,22 @@ impl Args {
         while i < argv.len() {
             match argv[i].as_str() {
                 "--help" | "-h" => a.help = true,
-                "--payload" | "-p" => { i += 1; a.payload = Some(PathBuf::from(&argv[i])); }
-                "--output" | "-o" => { i += 1; a.output = Some(PathBuf::from(&argv[i])); }
-                "--antiemulation" => { i += 1; a.antiemulation = argv[i].clone(); }
-                "--deconditioner" => { i += 1; a.deconditioner = argv[i].clone(); }
+                "--payload" | "-p" => {
+                    i += 1;
+                    a.payload = Some(PathBuf::from(&argv[i]));
+                }
+                "--output" | "-o" => {
+                    i += 1;
+                    a.output = Some(PathBuf::from(&argv[i]));
+                }
+                "--antiemulation" => {
+                    i += 1;
+                    a.antiemulation = argv[i].clone();
+                }
+                "--deconditioner" => {
+                    i += 1;
+                    a.deconditioner = argv[i].clone();
+                }
                 "--trace" => {
                     i += 1;
                     a.trace = match argv[i].as_str() {
@@ -181,8 +195,14 @@ impl Args {
                         _ => true,
                     };
                 }
-                "--mutation" | "-m" => { i += 1; a.mutations.push(argv[i].clone()); }
-                other => { eprintln!("Unknown argument: {}", other); process::exit(1); }
+                "--mutation" | "-m" => {
+                    i += 1;
+                    a.mutations.push(argv[i].clone());
+                }
+                other => {
+                    eprintln!("Unknown argument: {}", other);
+                    process::exit(1);
+                }
             }
             i += 1;
         }

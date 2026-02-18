@@ -130,7 +130,10 @@ fn main() {
     // Print metadata
     eprintln!("[build_artifact] ─── Build succeeded ───");
     eprintln!("[build_artifact] artifact_id:  {}", artifact.artifact_id);
-    eprintln!("[build_artifact] size:         {} bytes", artifact.size_bytes);
+    eprintln!(
+        "[build_artifact] size:         {} bytes",
+        artifact.size_bytes
+    );
     eprintln!(
         "[build_artifact] output:       {}",
         artifact.output_path.display()
@@ -139,16 +142,15 @@ fn main() {
         "[build_artifact] mutations:    {:?}",
         artifact.mutations_applied
     );
-    eprintln!("[build_artifact] compiler:     {}", artifact.compiler_version);
+    eprintln!(
+        "[build_artifact] compiler:     {}",
+        artifact.compiler_version
+    );
 
     // Copy to user-specified path if -o given
     if let Some(dest) = &args.output {
         fs::copy(&artifact.output_path, dest).unwrap_or_else(|e| {
-            eprintln!(
-                "Error copying artifact to '{}': {}",
-                dest.display(),
-                e
-            );
+            eprintln!("Error copying artifact to '{}': {}", dest.display(), e);
             process::exit(1);
         });
         eprintln!("[build_artifact] Copied -> {}", dest.display());

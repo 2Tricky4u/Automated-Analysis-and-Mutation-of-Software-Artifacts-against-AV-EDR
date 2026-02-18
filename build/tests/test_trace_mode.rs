@@ -33,10 +33,7 @@ fn test_serde_specific_json_values() {
         serde_json::to_string(&TraceMode::Lines).unwrap(),
         r#""lines""#
     );
-    assert_eq!(
-        serde_json::to_string(&TraceMode::All).unwrap(),
-        r#""all""#
-    );
+    assert_eq!(serde_json::to_string(&TraceMode::All).unwrap(), r#""all""#);
 }
 
 #[test]
