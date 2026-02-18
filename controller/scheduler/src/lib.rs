@@ -26,4 +26,4 @@ pub mod automutate {
 // Re-exports
 pub use api::SchedulerService;
 pub use dispatch::{JobSession, Orchestrator, RunPool, VMExecutor, VMInfo, WorkerId, WorkerInfo};
-pub use vm::{Target, TargetConfig, TargetEvent, TargetManager, TargetStatus};
+pub use vm::{Target, TargetEvent, TargetManager, TargetStatus};
