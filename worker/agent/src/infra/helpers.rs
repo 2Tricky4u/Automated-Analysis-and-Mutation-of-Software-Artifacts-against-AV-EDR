@@ -117,9 +117,7 @@ pub async fn collect_api_checkpoints(
                         );
                         ("artifact_failure".to_string(), meta)
                     }
-                    "artifact_checkpoint" | "checkpoint" | _ => {
-                        ("checkpoint".to_string(), std::collections::HashMap::new())
-                    }
+                    _ => ("checkpoint".to_string(), std::collections::HashMap::new()),
                 };
 
                 // Preserve the original type field in metadata for traceability

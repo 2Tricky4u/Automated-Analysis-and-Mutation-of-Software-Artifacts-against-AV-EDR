@@ -20,7 +20,8 @@ use elasticsearch::Elasticsearch;
 
 use crate::automutate::common::TelemetryData;
 use crate::automutate::controller::StatusReport;
-use crate::dispatch::types::{JobOutcome, JobSession, MutationSpec, RoundSummary, RunOutcome};
+use crate::dispatch::types::{JobOutcome, JobSession, MutationSpec, RoundSummary};
+pub use runs::RunIndexParams;
 
 /// Correlation context for enriching telemetry documents.
 #[derive(Debug, Clone, Default)]
@@ -106,27 +107,8 @@ impl EsStorage {
 
     // -- Runs --------------------------------------------------------------
 
-    pub async fn index_run_result(
-        &self,
-        job_id: &str,
-        round_id: &str,
-        run_id: &str,
-        run_type: &str,
-        outcome: &RunOutcome,
-        mutations: &[String],
-        vm_id: &str,
-    ) -> anyhow::Result<()> {
-        runs::index_run_result(
-            &self.client,
-            job_id,
-            round_id,
-            run_id,
-            run_type,
-            outcome,
-            mutations,
-            vm_id,
-        )
-        .await
+    pub async fn index_run_result(&self, params: &RunIndexParams<'_>) -> anyhow::Result<()> {
+        runs::index_run_result(&self.client, params).await
     }
 
     pub async fn index_run_status(&self, report: &StatusReport) -> anyhow::Result<()> {

@@ -18,16 +18,19 @@ pub enum EncodingType {
     English,
 }
 
-impl EncodingType {
-    /// Parse encoding type from string
-    pub fn from_str(s: &str) -> Result<Self> {
+impl std::str::FromStr for EncodingType {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "xor" => Ok(Self::Xor),
             "english" => Ok(Self::English),
             other => bail!("Unknown encoding type: '{}'. Valid: xor, english", other),
         }
     }
+}
 
+impl EncodingType {
     /// Get the decoder module name for this encoding
     pub fn decoder_module(&self) -> &'static str {
         match self {
@@ -248,6 +251,7 @@ pub fn generate_test_payload(size: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_xor_encoding_roundtrip() {

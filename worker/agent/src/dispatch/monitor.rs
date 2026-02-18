@@ -16,6 +16,18 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, info, warn};
 
+/// Configuration for creating an ExecutionMonitor (groups identity/config fields).
+pub struct MonitorConfig {
+    pub run_id: String,
+    pub job_id: String,
+    pub worker_id: String,
+    pub worker_ip: String,
+    pub artifact_name: String,
+    pub pid: u32,
+    pub rededr_base_url: String,
+    pub timeout_seconds: i32,
+}
+
 pub struct ExecutionMonitor {
     pub run_id: String,
     pub job_id: String,
@@ -32,30 +44,20 @@ pub struct ExecutionMonitor {
 }
 
 impl ExecutionMonitor {
-    pub fn new(
-        run_id: String,
-        job_id: String,
-        worker_id: String,
-        worker_ip: String,
-        artifact_name: String,
-        pid: u32,
-        rededr_base_url: String,
-        sink: Arc<dyn ControlPlaneSink>,
-        timeout_seconds: i32,
-    ) -> Self {
+    pub fn new(config: MonitorConfig, sink: Arc<dyn ControlPlaneSink>) -> Self {
         use sysinfo::System;
 
         Self {
-            run_id,
-            job_id,
-            worker_id,
-            worker_ip,
-            artifact_name,
-            pid,
-            rededr_base_url,
+            run_id: config.run_id,
+            job_id: config.job_id,
+            worker_id: config.worker_id,
+            worker_ip: config.worker_ip,
+            artifact_name: config.artifact_name,
+            pid: config.pid,
+            rededr_base_url: config.rededr_base_url,
             sink,
             start_time: Instant::now(),
-            timeout_seconds,
+            timeout_seconds: config.timeout_seconds,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(3))
                 .build()
@@ -365,15 +367,17 @@ mod tests {
     #[test]
     fn test_monitor_creation() {
         let monitor = ExecutionMonitor::new(
-            "run-test-001".to_string(),
-            "job-test-001".to_string(),
-            "worker-01".to_string(),
-            "10.200.200.11".to_string(),
-            "test-artifact.exe".to_string(),
-            1234,
-            "http://localhost:8081".to_string(),
+            MonitorConfig {
+                run_id: "run-test-001".to_string(),
+                job_id: "job-test-001".to_string(),
+                worker_id: "worker-01".to_string(),
+                worker_ip: "10.200.200.11".to_string(),
+                artifact_name: "test-artifact.exe".to_string(),
+                pid: 1234,
+                rededr_base_url: "http://localhost:8081".to_string(),
+                timeout_seconds: 30,
+            },
             Arc::new(NullSink),
-            30, // timeout_seconds
         );
 
         assert_eq!(monitor.run_id, "run-test-001");
