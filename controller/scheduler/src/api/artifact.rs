@@ -4,7 +4,7 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
 
 pub async fn build_artifact(
-    service: &SchedulerService,
+    _service: &SchedulerService,
     request: Request<BuildRequest>,
 ) -> Result<Response<BuildResponse>, Status> {
     let req = request.into_inner();
@@ -83,7 +83,7 @@ pub async fn build_artifact(
 }
 
 pub async fn deploy_artifact(
-    service: &SchedulerService,
+    _service: &SchedulerService,
     request: Request<DeployRequest>,
 ) -> Result<Response<DeployResponse>, Status> {
     use crate::automutate::worker::worker_agent_client::WorkerAgentClient;

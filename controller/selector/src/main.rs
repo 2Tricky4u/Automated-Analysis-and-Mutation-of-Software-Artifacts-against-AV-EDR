@@ -41,6 +41,9 @@ struct MutationPool {
 #[derive(Debug, Clone)]
 struct MutationInfo {
     id: String,
+    // TODO: use category for stratified mutation selection
+    //       (ensure each round covers multiple mutation layers: ast, binary, behavioral)
+    #[allow(dead_code)]
     category: String,
     params: HashMap<String, String>,
     success_rate: f64, // Tracks historical success (0.0 - 1.0)
@@ -163,6 +166,11 @@ pub struct SelectorService {
     outcome_history: Arc<Mutex<HashMap<String, Vec<OutcomeRecord>>>>,
 }
 
+// TODO: wire outcome_history into MutationPool to close the feedback loop:
+//       1. After report_outcome(), update MutationPool.mutations[].success_rate
+//       2. Use mutation_id to match outcomes back to specific mutations
+//       3. Use detected + evasion_score for Bayesian success_rate update
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct OutcomeRecord {
     mutation_id: String,

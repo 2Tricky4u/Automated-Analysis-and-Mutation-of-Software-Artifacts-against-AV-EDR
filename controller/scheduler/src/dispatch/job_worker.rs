@@ -99,6 +99,7 @@ impl JobWorker {
     }
 
     /// Get the job ID.
+    #[allow(dead_code)]
     pub fn job_id(&self) -> &JobId {
         &self.job.id
     }
@@ -136,6 +137,7 @@ impl JobWorker {
             Cancelled,
             PoolShutdown,
         }
+        #[allow(unused_assignments)]
         let mut exit_reason = ExitReason::Completed;
 
         loop {
@@ -539,10 +541,6 @@ impl JobWorker {
             .await;
     }
 
-    /// Request shutdown of this job worker.
-    pub fn shutdown(&self) {
-        self.shutdown_token.cancel();
-    }
 }
 
 impl std::fmt::Debug for JobWorker {

@@ -180,7 +180,11 @@ impl TargetManager {
         }
     }
 
+    // TODO: wire into Orchestrator for pool access
+    // TODO: wire get_available* into round scheduling
+    // TODO: wire send_command/broadcast into admin gRPC handlers
     /// Get the run pool.
+    #[allow(dead_code)]
     pub fn run_pool(&self) -> Arc<RunPool> {
         Arc::clone(&self.run_pool)
     }
@@ -254,6 +258,7 @@ impl TargetManager {
         self.targets.len()
     }
 
+    #[allow(dead_code)]
     pub fn get_available(&self) -> Vec<TargetId> {
         self.targets
             .iter()
@@ -262,6 +267,7 @@ impl TargetManager {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub fn get_available_by_os_and_capabilities(
         &self,
         required_capabilities: &[String],
@@ -616,6 +622,7 @@ impl TargetManager {
         results
     }
 
+    #[allow(dead_code)]
     pub async fn send_command(&self, id: impl AsRef<str>, msg: ControllerMessage) -> Result<()> {
         let id = id.as_ref();
         let tx = self
@@ -644,6 +651,7 @@ impl TargetManager {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn broadcast(&self, msg: ControllerMessage) -> usize {
         let ids = self.list_ids();
         let mut success = 0;
@@ -655,6 +663,7 @@ impl TargetManager {
         success
     }
 
+    #[allow(dead_code)]
     pub async fn disconnect_all(&self, reason: &str, reconnect_allowed: bool) {
         // TODO use it
         info!("Disconnecting all targets: {}", reason);

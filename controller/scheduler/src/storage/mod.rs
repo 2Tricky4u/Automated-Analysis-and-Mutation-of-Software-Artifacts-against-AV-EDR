@@ -44,11 +44,6 @@ impl EsStorage {
         Self { client }
     }
 
-    /// Access the raw ES client for ad-hoc queries (used by api/job.rs handlers).
-    pub fn client(&self) -> &Elasticsearch {
-        &self.client
-    }
-
     // -- Telemetry ---------------------------------------------------------
 
     pub async fn index_telemetry_batch(

@@ -314,16 +314,19 @@ impl VMExecutor {
     // ========================================================================
 
     /// Get VM ID.
+    #[allow(dead_code)]
     pub fn id(&self) -> &str {
         &self.id
     }
 
     /// Get VM info.
+    #[allow(dead_code)]
     pub fn info(&self) -> &VMInfo {
         &self.info
     }
 
     /// Check if executor is idle (no in-flight run).
+    #[allow(dead_code)]
     pub fn is_idle(&self) -> bool {
         self.in_flight.is_none()
     }

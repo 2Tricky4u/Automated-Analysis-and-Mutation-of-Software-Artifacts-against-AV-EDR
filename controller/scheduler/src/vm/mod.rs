@@ -9,7 +9,8 @@
 
 pub mod manager;
 
-// Re-exports
+// Re-exports (used by internal modules, not all consumed by binary target)
+#[allow(unused_imports)]
 pub use manager::{
     RegistrationType, Target, TargetEvent, TargetManager, TargetStatus,
 };

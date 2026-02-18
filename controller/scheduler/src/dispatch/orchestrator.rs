@@ -530,6 +530,7 @@ impl Orchestrator {
         }
     }
 
+    #[allow(dead_code)]
     pub fn shutdown_all_jobs(&self) {
         warn!("[Orchestrator] Shutting down all jobs");
         for token in self.job_workers.values() {
@@ -537,10 +538,12 @@ impl Orchestrator {
         }
     }
 
+    #[allow(dead_code)]
     pub fn active_job_count(&self) -> usize {
         self.job_workers.len()
     }
 
+    #[allow(dead_code)]
     pub fn vm_count(&self) -> usize {
         self.vms.len()
     }
