@@ -362,7 +362,7 @@ fn test_string_xor_applied_twice() {
         params: HashMap::new(),
     };
 
-    let (first_output, _) = Mutator::apply(source.as_bytes(), &[mutation.clone()]).unwrap();
+    let (first_output, _) = Mutator::apply(source.as_bytes(), std::slice::from_ref(&mutation)).unwrap();
     let (second_output, _) = Mutator::apply(&first_output, &[mutation]).unwrap();
 
     let first_str = String::from_utf8(first_output.clone()).unwrap();
