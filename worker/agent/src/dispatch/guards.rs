@@ -141,8 +141,8 @@ impl ProcessGuard {
 
 impl Drop for ProcessGuard {
     fn drop(&mut self) {
-        if self.should_kill {
-            if let Some(ref mut child) = self.child {
+        if self.should_kill
+            && let Some(ref mut child) = self.child {
                 // start_kill() is synchronous — sends kill signal without awaiting
                 if let Err(e) = child.start_kill() {
                     eprintln!("Failed to kill process in Drop: {}", e);
@@ -150,6 +150,5 @@ impl Drop for ProcessGuard {
                     eprintln!("Process kill signal sent in Drop (error path)");
                 }
             }
-        }
     }
 }

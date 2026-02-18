@@ -390,11 +390,10 @@ impl JobSession {
         if self.current_round >= self.max_rounds {
             return false;
         }
-        if let Some(last) = &self.last_round {
-            if self.stop_on_evasion && !last.detected {
+        if let Some(last) = &self.last_round
+            && self.stop_on_evasion && !last.detected {
                 return false;
             }
-        }
         true
     }
 
@@ -650,7 +649,7 @@ pub fn chunk_artifact(
     use crate::automutate::common::ArtifactChunk;
 
     const CHUNK_SIZE: usize = 4 * 1024 * 1024;
-    let total_chunks = (data.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    let total_chunks = data.len().div_ceil(CHUNK_SIZE);
     data.chunks(CHUNK_SIZE)
         .enumerate()
         .map(|(i, chunk)| ArtifactChunk {
@@ -918,7 +917,7 @@ mod tests {
             round_number: 1,
             mutations: vec![],
         };
-        let mut agg = RoundAgg {
+        let agg = RoundAgg {
             spec,
             baseline_run_id: RunId("b".into()),
             instrumented_run_id: RunId("i".into()),
@@ -1120,7 +1119,7 @@ mod tests {
 
     #[test]
     fn test_payload_path_empty_file() {
-        use std::io::Write;
+        
         let tmp = tempfile::NamedTempFile::new().unwrap();
         // Don't write anything — file is empty
 

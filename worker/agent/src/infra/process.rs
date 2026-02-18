@@ -47,12 +47,11 @@ pub fn is_process_alive(pid: u32) -> bool {
             windows::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
             false,
             pid,
-        ) {
-            if !handle.is_invalid() {
+        )
+            && !handle.is_invalid() {
                 let _ = CloseHandle(handle);
                 return true;
             }
-        }
     }
     false
 }

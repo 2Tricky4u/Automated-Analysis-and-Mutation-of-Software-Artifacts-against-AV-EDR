@@ -148,7 +148,7 @@ impl Mutator {
         // Simple regex-like approach for demonstration
         // This is NOT production-ready (doesn't handle escape sequences, multiline strings, etc.)
         let mut output = String::new();
-        let mut chars = source_text.chars().peekable();
+        let chars = source_text.chars().peekable();
         let mut in_string = false;
         let mut string_buf = String::new();
         let mut counter = 0;
@@ -156,7 +156,7 @@ impl Mutator {
         // Track last 100 chars to detect #pragma context
         let mut recent_chars = String::new();
 
-        while let Some(ch) = chars.next() {
+        for ch in chars {
             if ch == '"' && !in_string {
                 // Start of string literal
                 in_string = true;

@@ -444,11 +444,10 @@ pub async fn execute_run(
 
                     crate::infra::process::kill_process_tree(process_guard.child_mut(), pid).await;
 
-                    if let Some(pid) = pid {
-                        if crate::infra::process::is_process_alive(pid) {
+                    if let Some(pid) = pid
+                        && crate::infra::process::is_process_alive(pid) {
                             warn!("Process {} still alive after kill attempt!", pid);
                         }
-                    }
 
                     if let Some(guard) = monitor_guard.take() {
                         guard.stop().await;

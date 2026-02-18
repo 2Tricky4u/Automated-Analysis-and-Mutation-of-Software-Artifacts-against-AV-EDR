@@ -239,11 +239,10 @@ impl Assembler {
         for entry in std::fs::read_dir(&modules_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "c") {
-                if let Some(stem) = path.file_stem() {
+            if path.extension().is_some_and(|ext| ext == "c")
+                && let Some(stem) = path.file_stem() {
                     modules.push(stem.to_string_lossy().to_string());
                 }
-            }
         }
 
         modules.sort();
