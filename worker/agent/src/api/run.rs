@@ -57,7 +57,11 @@ pub async fn run_sample(
         run_id: run_id.clone(),
     };
 
-    let run_context = RunContext::new(&req.artifact_id, service.worker_id.clone(), service.config.clone());
+    let run_context = RunContext::new(
+        &req.artifact_id,
+        service.worker_id.clone(),
+        service.config.clone(),
+    );
 
     // Build sink from stream handler's tx channel (no Arc cycle)
     let sink = {
@@ -90,7 +94,9 @@ pub async fn run_sample(
         run_id
     );
 
-    Ok(Response::new(sample_response_ok(&job_id, "", &outcome, output)))
+    Ok(Response::new(sample_response_ok(
+        &job_id, "", &outcome, output,
+    )))
 }
 
 /// Format human-readable output string from RunOutcome.

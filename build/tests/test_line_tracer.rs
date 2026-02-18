@@ -51,13 +51,9 @@ fn test_binary_format_default() {
 #[test]
 fn test_base64_format_explicit() {
     let source = common::c_source_minimal();
-    let result = inject_line_traces_with_opts(
-        source,
-        SourceLanguage::C,
-        "test.c",
-        TraceFormat::Base64,
-    )
-    .unwrap();
+    let result =
+        inject_line_traces_with_opts(source, SourceLanguage::C, "test.c", TraceFormat::Base64)
+            .unwrap();
 
     assert!(
         result.contains("__trace_line_b64("),
@@ -73,13 +69,9 @@ fn test_base64_format_explicit() {
 fn test_file_path_embedded() {
     let source = common::c_source_minimal();
     let custom_path = "my/custom/file.c";
-    let result = inject_line_traces_with_opts(
-        source,
-        SourceLanguage::C,
-        custom_path,
-        TraceFormat::Binary,
-    )
-    .unwrap();
+    let result =
+        inject_line_traces_with_opts(source, SourceLanguage::C, custom_path, TraceFormat::Binary)
+            .unwrap();
 
     assert!(
         result.contains(custom_path),
@@ -92,16 +84,16 @@ fn test_runtime_declarations_present() {
     let source = common::c_source_minimal();
 
     // Binary format
-    let bin = inject_line_traces_with_opts(source, SourceLanguage::C, "s", TraceFormat::Binary)
-        .unwrap();
+    let bin =
+        inject_line_traces_with_opts(source, SourceLanguage::C, "s", TraceFormat::Binary).unwrap();
     assert!(
         bin.contains("void __trace_line_binary("),
         "Missing binary runtime declaration"
     );
 
     // Base64 format
-    let b64 = inject_line_traces_with_opts(source, SourceLanguage::C, "s", TraceFormat::Base64)
-        .unwrap();
+    let b64 =
+        inject_line_traces_with_opts(source, SourceLanguage::C, "s", TraceFormat::Base64).unwrap();
     assert!(
         b64.contains("void __trace_line_b64("),
         "Missing base64 runtime declaration"

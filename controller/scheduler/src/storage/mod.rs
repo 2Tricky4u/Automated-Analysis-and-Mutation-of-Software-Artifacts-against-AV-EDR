@@ -20,9 +20,7 @@ use elasticsearch::Elasticsearch;
 
 use crate::automutate::common::TelemetryData;
 use crate::automutate::controller::StatusReport;
-use crate::dispatch::types::{
-    JobOutcome, JobSession, MutationSpec, RoundSummary, RunOutcome,
-};
+use crate::dispatch::types::{JobOutcome, JobSession, MutationSpec, RoundSummary, RunOutcome};
 
 /// Correlation context for enriching telemetry documents.
 #[derive(Debug, Clone, Default)]
@@ -150,11 +148,7 @@ impl EsStorage {
         queries::query_rounds(&self.client, job_id).await
     }
 
-    pub async fn query_round(
-        &self,
-        job_id: &str,
-        round_id: &str,
-    ) -> Option<serde_json::Value> {
+    pub async fn query_round(&self, job_id: &str, round_id: &str) -> Option<serde_json::Value> {
         queries::query_round(&self.client, job_id, round_id).await
     }
 

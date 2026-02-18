@@ -21,8 +21,8 @@ use tonic::transport::{Channel, Endpoint};
 use tracing::{debug, error, info, warn};
 
 use crate::automutate::common::{
-    ControllerMessage, DisconnectNotice, Heartbeat, WorkerMessage,
-    controller_message, worker_message,
+    ControllerMessage, DisconnectNotice, Heartbeat, WorkerMessage, controller_message,
+    worker_message,
 };
 use crate::automutate::worker::{
     WorkerInfoRequest, WorkerInfoResponse, worker_agent_client::WorkerAgentClient,
@@ -706,7 +706,9 @@ impl TargetManager {
 
         debug!(
             "[{}] Sending {} chunks to target {}",
-            artifact_id, chunks.len(), id
+            artifact_id,
+            chunks.len(),
+            id
         );
         client.send_artifact(stream::iter(chunks)).await?;
         debug!("[{}] Artifact deployed to target {}", artifact_id, id);

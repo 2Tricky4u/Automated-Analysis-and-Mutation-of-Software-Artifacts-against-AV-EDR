@@ -18,8 +18,8 @@ use tracing::{debug, error, info, warn};
 // Import generated protobuf types
 use crate::automutate::common::{
     Ack, ControllerMessage, DisconnectNotice, HealthCheckRequest, Heartbeat, RunSampleCommand,
-    StatusReport, TelemetryBatch, WorkerMessage, WorkerRegistration,
-    controller_message, worker_message,
+    StatusReport, TelemetryBatch, WorkerMessage, WorkerRegistration, controller_message,
+    worker_message,
 };
 
 use crate::dispatch::state::ExecutionState;
@@ -129,7 +129,9 @@ impl StreamHandler {
     async fn handle_run_sample(&self, cmd: RunSampleCommand) -> Result<()> {
         use crate::dispatch::engine;
         use crate::dispatch::state::ExecutionLockGuard;
-        use crate::dispatch::types::{RunContext, RunRequest, sample_response_error, sample_response_ok};
+        use crate::dispatch::types::{
+            RunContext, RunRequest, sample_response_error, sample_response_ok,
+        };
 
         let request_id = cmd.request_id.clone();
         let sample_request = cmd

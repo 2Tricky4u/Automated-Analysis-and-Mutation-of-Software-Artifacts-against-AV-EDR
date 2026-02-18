@@ -18,10 +18,7 @@ pub async fn establish_stream(
     info!("EstablishStream RPC called - establishing bidirectional stream with controller");
 
     // Create worker state from cached capabilities
-    let worker_state = WorkerState::new(
-        service.worker_id.clone(),
-        (*service.capabilities).clone(),
-    );
+    let worker_state = WorkerState::new(service.worker_id.clone(), (*service.capabilities).clone());
     let worker_state = Arc::new(RwLock::new(worker_state));
 
     // Create stream handler with individual fields (no Arc<WorkerAgentService> → breaks cycle)

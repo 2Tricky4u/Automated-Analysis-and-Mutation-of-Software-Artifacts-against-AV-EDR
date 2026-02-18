@@ -236,7 +236,8 @@ fn test_string_xor_on_assembled_source() {
     let out = common::run_pipeline(modules, &payload, EncodingType::Xor, &mutations).unwrap();
 
     assert!(
-        out.applied_mutations.contains(&"ast.string_xor".to_string()),
+        out.applied_mutations
+            .contains(&"ast.string_xor".to_string()),
         "ast.string_xor should be in applied list"
     );
 
@@ -611,21 +612,11 @@ fn test_pipeline_all_invalid_modules() {
 fn test_pipeline_deterministic() {
     let payload = common::payload_typical();
 
-    let out1 = common::run_pipeline(
-        ModuleSelection::new(),
-        &payload,
-        EncodingType::Xor,
-        &[],
-    )
-    .unwrap();
+    let out1 =
+        common::run_pipeline(ModuleSelection::new(), &payload, EncodingType::Xor, &[]).unwrap();
 
-    let out2 = common::run_pipeline(
-        ModuleSelection::new(),
-        &payload,
-        EncodingType::Xor,
-        &[],
-    )
-    .unwrap();
+    let out2 =
+        common::run_pipeline(ModuleSelection::new(), &payload, EncodingType::Xor, &[]).unwrap();
 
     assert_eq!(
         out1.final_source, out2.final_source,
@@ -661,7 +652,9 @@ fn test_mutation_and_tracing_combined() {
 
     // Mutation should have been applied
     assert!(
-        out.pipeline.applied_mutations.contains(&"ast.string_xor".to_string()),
+        out.pipeline
+            .applied_mutations
+            .contains(&"ast.string_xor".to_string()),
         "ast.string_xor should be applied in combined pipeline"
     );
 

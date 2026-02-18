@@ -123,8 +123,14 @@ fn test_string_xor_basic() {
     assert!(applied.contains(&"ast.string_xor".to_string()));
     assert!(output_str.contains("xor_str_0"), "Missing variable name");
     assert!(output_str.contains("^=0xAA"), "Missing XOR decode op");
-    assert!(output_str.contains("({"), "Missing statement expression open");
-    assert!(output_str.contains("})"), "Missing statement expression close");
+    assert!(
+        output_str.contains("({"),
+        "Missing statement expression open"
+    );
+    assert!(
+        output_str.contains("})"),
+        "Missing statement expression close"
+    );
 }
 
 #[test]
@@ -391,7 +397,8 @@ fn test_mutation_order_matters_when_cross_producing_content() {
     };
 
     // xor-first: only "hello" is XOR'd, then NOP is inserted cleanly
-    let (out_xf, applied_xf) = Mutator::apply(source.as_bytes(), &[xor.clone(), nop.clone()]).unwrap();
+    let (out_xf, applied_xf) =
+        Mutator::apply(source.as_bytes(), &[xor.clone(), nop.clone()]).unwrap();
     // nop-first: NOP is inserted (with "nop" and "" strings), then XOR transforms all strings
     let (out_nf, applied_nf) = Mutator::apply(source.as_bytes(), &[nop, xor]).unwrap();
 
@@ -403,8 +410,14 @@ fn test_mutation_order_matters_when_cross_producing_content() {
     let nf_str = String::from_utf8(out_nf).unwrap();
 
     // xor-first: "hello" is XOR'd, NOP asm string is clean
-    assert!(xf_str.contains("xor_str_0"), "xor-first should XOR the hello string");
-    assert!(xf_str.contains(r#"sideeffect "nop""#), "xor-first: NOP string should be clean");
+    assert!(
+        xf_str.contains("xor_str_0"),
+        "xor-first should XOR the hello string"
+    );
+    assert!(
+        xf_str.contains(r#"sideeffect "nop""#),
+        "xor-first: NOP string should be clean"
+    );
 
     // nop-first: NOP's "nop" and "" strings are ALSO XOR'd by the second pass
     assert!(nf_str.contains("xor_str_"), "nop-first should XOR strings");

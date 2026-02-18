@@ -4,7 +4,7 @@
 //! to keep this layer proto-agnostic — the API handlers do the mapping.
 
 use elasticsearch::{Elasticsearch, SearchParts};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Look up a single job document by job_id.
 pub async fn query_job(es: &Elasticsearch, job_id: &str) -> Option<Value> {
@@ -41,11 +41,7 @@ pub async fn query_rounds(es: &Elasticsearch, job_id: &str) -> Vec<Value> {
 }
 
 /// Query a single round by job_id + round_id.
-pub async fn query_round(
-    es: &Elasticsearch,
-    job_id: &str,
-    round_id: &str,
-) -> Option<Value> {
+pub async fn query_round(es: &Elasticsearch, job_id: &str, round_id: &str) -> Option<Value> {
     let response = es
         .search(SearchParts::Index(&["rounds-*"]))
         .body(json!({

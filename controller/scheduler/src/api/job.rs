@@ -262,7 +262,11 @@ pub async fn get_round(
         req.job_id, req.round_id
     );
 
-    let source = match service.storage.query_round(&req.job_id, &req.round_id).await {
+    let source = match service
+        .storage
+        .query_round(&req.job_id, &req.round_id)
+        .await
+    {
         Some(s) => s,
         None => return Ok(Response::new(GetRoundResponse { round: None })),
     };

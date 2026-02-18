@@ -255,8 +255,7 @@ impl ArtifactBuilder {
             .await?;
 
         // 3. Finalize: read, hash, rename, return metadata
-        let (artifact_id, final_output, size_bytes) =
-            self.finalize_artifact(&temp_output).await?;
+        let (artifact_id, final_output, size_bytes) = self.finalize_artifact(&temp_output).await?;
 
         info!(
             "Artifact built: {} ({} bytes) -> {:?}",
@@ -447,8 +446,7 @@ impl ArtifactBuilder {
         let _ = tokio::fs::remove_file(&mutated_path).await;
 
         // 7. Finalize artifact
-        let (artifact_id, final_output, size_bytes) =
-            self.finalize_artifact(&temp_output).await?;
+        let (artifact_id, final_output, size_bytes) = self.finalize_artifact(&temp_output).await?;
 
         debug!(
             "Mutated artifact built (AST path): {} ({} bytes) -> {:?}",
@@ -504,10 +502,7 @@ impl ArtifactBuilder {
         );
 
         // Base flags
-        let mut args = vec![
-            "-target",
-            "x86_64-pc-windows-msvc",
-        ];
+        let mut args = vec!["-target", "x86_64-pc-windows-msvc"];
         args.extend(xwin.include_args());
         args.extend(xwin.lib_args());
         args.extend_from_slice(&[
@@ -647,10 +642,7 @@ impl ArtifactBuilder {
             .to_str()
             .context("Runtime include path is not valid UTF-8")?;
 
-        let mut args = vec![
-            "-target",
-            "x86_64-pc-windows-msvc",
-        ];
+        let mut args = vec!["-target", "x86_64-pc-windows-msvc"];
         args.extend(xwin.include_args());
         args.extend_from_slice(&[
             "-I",
@@ -689,10 +681,7 @@ impl ArtifactBuilder {
     ) -> Result<()> {
         let xwin = &self.xwin;
 
-        let mut args = vec![
-            "-target",
-            "x86_64-pc-windows-msvc",
-        ];
+        let mut args = vec!["-target", "x86_64-pc-windows-msvc"];
         args.extend(xwin.lib_args());
         args.extend_from_slice(&[
             "-fuse-ld=lld",
@@ -1327,8 +1316,7 @@ impl ArtifactBuilder {
         let _ = tokio::fs::remove_file(&temp_source).await;
 
         // Finalize artifact
-        let (artifact_id, final_output, size_bytes) =
-            self.finalize_artifact(&temp_output).await?;
+        let (artifact_id, final_output, size_bytes) = self.finalize_artifact(&temp_output).await?;
 
         info!(
             "Modular artifact built: {} ({} bytes) -> {:?}",
@@ -1462,20 +1450,28 @@ impl XwinPaths {
     /// Return the include `-isystem` args in order
     pub fn include_args(&self) -> Vec<&str> {
         vec![
-            "-isystem", &self.crt_include,
-            "-isystem", &self.sdk_ucrt_include,
-            "-isystem", &self.sdk_shared_include,
-            "-isystem", &self.sdk_um_include,
-            "-isystem", &self.sdk_winrt_include,
+            "-isystem",
+            &self.crt_include,
+            "-isystem",
+            &self.sdk_ucrt_include,
+            "-isystem",
+            &self.sdk_shared_include,
+            "-isystem",
+            &self.sdk_um_include,
+            "-isystem",
+            &self.sdk_winrt_include,
         ]
     }
 
     /// Return the library `-L` args in order
     pub fn lib_args(&self) -> Vec<&str> {
         vec![
-            "-L", &self.crt_lib,
-            "-L", &self.sdk_ucrt_lib,
-            "-L", &self.sdk_um_lib,
+            "-L",
+            &self.crt_lib,
+            "-L",
+            &self.sdk_ucrt_lib,
+            "-L",
+            &self.sdk_um_lib,
         ]
     }
 

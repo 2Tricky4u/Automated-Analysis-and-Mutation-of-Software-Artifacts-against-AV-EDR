@@ -104,7 +104,10 @@ fn test_assembler_definitions_stripped() {
     // and the content itself is injected inline
     assert!(
         include_count == 0
-            || output.matches(r#"#include "../header/definitions.h""#).count() == 0,
+            || output
+                .matches(r#"#include "../header/definitions.h""#)
+                .count()
+                == 0,
         "definitions.h includes from modules should be stripped"
     );
 
@@ -260,10 +263,7 @@ fn test_strip_markers_preserves_code() {
         stripped.contains("do_something();"),
         "Code should be preserved"
     );
-    assert!(
-        stripped.contains("return 0;"),
-        "Code should be preserved"
-    );
+    assert!(stripped.contains("return 0;"), "Code should be preserved");
     assert!(
         stripped.contains("int main()"),
         "Function signature preserved"
@@ -320,10 +320,7 @@ fn test_assembled_output_contains_loader_structure() {
     let output = asm.assemble(&modules, "// payload placeholder").unwrap();
 
     // The loader_template.c structure should be preserved
-    assert!(
-        output.contains("int main(void)"),
-        "Missing main function"
-    );
+    assert!(output.contains("int main(void)"), "Missing main function");
     assert!(
         output.contains("guardrail()"),
         "Missing guardrail() call in main"

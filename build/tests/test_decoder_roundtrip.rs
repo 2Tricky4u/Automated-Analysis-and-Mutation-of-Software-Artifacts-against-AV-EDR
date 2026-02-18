@@ -32,8 +32,7 @@ fn simulate_c_english_decode(payload_str: &str, dictionary: &[&str]) -> Vec<u8> 
             dictionary
                 .iter()
                 .position(|&d| d == word)
-                .expect(&format!("Word '{}' not found in dictionary", word))
-                as u8
+                .expect(&format!("Word '{}' not found in dictionary", word)) as u8
         })
         .collect()
 }
@@ -167,7 +166,10 @@ fn test_english_decode_simulation_all_byte_values() {
     let payload_str = String::from_utf8(encoded.data).unwrap();
 
     let decoded = simulate_c_english_decode(&payload_str, &dict_refs);
-    assert_eq!(payload, decoded, "All 256 byte values must round-trip via English");
+    assert_eq!(
+        payload, decoded,
+        "All 256 byte values must round-trip via English"
+    );
 }
 
 #[test]

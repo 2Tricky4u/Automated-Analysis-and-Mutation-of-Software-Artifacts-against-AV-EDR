@@ -633,7 +633,10 @@ pub struct JobInfo {
 // ============================================================================
 
 /// Split binary data into 4MB `ArtifactChunk` messages for gRPC streaming.
-pub fn chunk_artifact(artifact_id: &str, data: &[u8]) -> Vec<crate::automutate::common::ArtifactChunk> {
+pub fn chunk_artifact(
+    artifact_id: &str,
+    data: &[u8],
+) -> Vec<crate::automutate::common::ArtifactChunk> {
     use crate::automutate::common::ArtifactChunk;
 
     const CHUNK_SIZE: usize = 4 * 1024 * 1024;
@@ -753,7 +756,10 @@ mod tests {
 
         assert_eq!(deserialized.modules.carrier, "alloc_rw_rx");
         assert_eq!(deserialized.modules.decoder, "xor");
-        assert_eq!(deserialized.payload_path, PathBuf::from("/tmp/test_payload.bin"));
+        assert_eq!(
+            deserialized.payload_path,
+            PathBuf::from("/tmp/test_payload.bin")
+        );
         assert_eq!(deserialized.encoding, "xor");
     }
 
@@ -765,15 +771,22 @@ mod tests {
 
         assert_eq!(spec.carrier, "peb_walk");
         assert_eq!(spec.decoder, "english");
-        assert_eq!(spec.antiemulation, "none", "antiemulation should default to 'none'");
+        assert_eq!(
+            spec.antiemulation, "none",
+            "antiemulation should default to 'none'"
+        );
         assert_eq!(spec.guardrail, "none", "guardrail should default to 'none'");
-        assert_eq!(spec.virtualprotect, "standard", "virtualprotect should default to 'standard'");
+        assert_eq!(
+            spec.virtualprotect, "standard",
+            "virtualprotect should default to 'standard'"
+        );
         assert_eq!(spec.decoy, "none", "decoy should default to 'none'");
     }
 
     #[test]
     fn test_modular_build_spec_encoding_default() {
-        let json = r#"{"modules":{"carrier":"alloc_rw_rx","decoder":"xor"},"payload_path":"test.bin"}"#;
+        let json =
+            r#"{"modules":{"carrier":"alloc_rw_rx","decoder":"xor"},"payload_path":"test.bin"}"#;
         let spec: ModularBuildSpec = serde_json::from_str(json).unwrap();
 
         assert_eq!(spec.encoding, "xor", "encoding should default to 'xor'");
@@ -899,8 +912,16 @@ mod tests {
             spec,
             baseline_run_id: RunId("b".into()),
             instrumented_run_id: RunId("i".into()),
-            baseline: Some(RunOutcome { detected: true, exit_code: 1, error: None }),
-            instrumented: Some(RunOutcome { detected: false, exit_code: 0, error: None }),
+            baseline: Some(RunOutcome {
+                detected: true,
+                exit_code: 1,
+                error: None,
+            }),
+            instrumented: Some(RunOutcome {
+                detected: false,
+                exit_code: 0,
+                error: None,
+            }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
@@ -910,7 +931,10 @@ mod tests {
         // Per differential protocol: baseline detected → overall detected
         assert!(summary.detected, "Should be detected if baseline detected");
         // Different exit codes → behavior mismatch
-        assert!(!summary.behavior_match, "Different exit codes → behavior mismatch");
+        assert!(
+            !summary.behavior_match,
+            "Different exit codes → behavior mismatch"
+        );
         assert_eq!(summary.evasion_score, 0.0);
     }
 
@@ -926,8 +950,16 @@ mod tests {
             spec,
             baseline_run_id: RunId("b".into()),
             instrumented_run_id: RunId("i".into()),
-            baseline: Some(RunOutcome { detected: false, exit_code: 0, error: None }),
-            instrumented: Some(RunOutcome { detected: true, exit_code: 1, error: None }),
+            baseline: Some(RunOutcome {
+                detected: false,
+                exit_code: 0,
+                error: None,
+            }),
+            instrumented: Some(RunOutcome {
+                detected: true,
+                exit_code: 1,
+                error: None,
+            }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
@@ -945,14 +977,25 @@ mod tests {
             id: RoundId("r4".into()),
             job_id: JobId("j1".into()),
             round_number: 1,
-            mutations: vec![MutationSpec { id: "ast.string_xor".into(), params: None }],
+            mutations: vec![MutationSpec {
+                id: "ast.string_xor".into(),
+                params: None,
+            }],
         };
         let agg = RoundAgg {
             spec,
             baseline_run_id: RunId("b".into()),
             instrumented_run_id: RunId("i".into()),
-            baseline: Some(RunOutcome { detected: false, exit_code: 0, error: None }),
-            instrumented: Some(RunOutcome { detected: false, exit_code: 0, error: None }),
+            baseline: Some(RunOutcome {
+                detected: false,
+                exit_code: 0,
+                error: None,
+            }),
+            instrumented: Some(RunOutcome {
+                detected: false,
+                exit_code: 0,
+                error: None,
+            }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
@@ -1011,15 +1054,24 @@ mod tests {
     #[test]
     fn test_job_outcome_status_mapping() {
         assert_eq!(
-            JobOutcome::Completed { rounds_completed: 5 }.to_status(),
+            JobOutcome::Completed {
+                rounds_completed: 5
+            }
+            .to_status(),
             JobStatus::Completed
         );
         assert_eq!(
-            JobOutcome::Stopped { reason: "user".into() }.to_status(),
+            JobOutcome::Stopped {
+                reason: "user".into()
+            }
+            .to_status(),
             JobStatus::Stopped
         );
         assert_eq!(
-            JobOutcome::Failed { error: "oops".into() }.to_status(),
+            JobOutcome::Failed {
+                error: "oops".into()
+            }
+            .to_status(),
             JobStatus::Failed
         );
     }
