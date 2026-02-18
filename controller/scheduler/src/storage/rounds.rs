@@ -43,6 +43,7 @@ pub async fn index_round(
         "detected": summary.detected,
         "behavior_match": summary.behavior_match,
         "evasion_score": summary.evasion_score,
+        "differential_category": summary.differential_category.as_str(),
         "status": "completed",
         "completed_at": helpers::system_time_to_rfc3339(summary.completed_at),
         "started_at": started_at,

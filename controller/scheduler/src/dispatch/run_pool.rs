@@ -520,6 +520,7 @@ mod tests {
                 exit_code: 0,
                 error: None,
                 success: true,
+                elapsed_ms: 0.0,
             },
             vm_id: "vm-1".to_string(),
         };

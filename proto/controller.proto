@@ -378,6 +378,7 @@ message RoundSummaryProto {
   double evasion_score = 6;
   string status = 7;
   int64 completed_at = 8;  // Unix timestamp
+  string differential_category = 9;  // "real_detection"|"instrumentation_artifact"|"flaky"|"evasion"
 }
 
 // Stop job
@@ -435,6 +436,7 @@ message BehaviorComparisonProto {
   int32 instrumented_exit_code = 5;
   repeated string differences = 6;
   double confidence = 7;
+  string differential_category = 8;
 }
 
 // Compare runs

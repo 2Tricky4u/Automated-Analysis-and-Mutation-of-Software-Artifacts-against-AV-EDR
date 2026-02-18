@@ -37,6 +37,7 @@ pub struct RemoteRunResult {
     pub exit_code: i32,
     pub success: bool,
     pub error: Option<String>,
+    pub elapsed_ms: f64,
 }
 
 impl From<RemoteRunResult> for RunOutcome {
@@ -46,6 +47,7 @@ impl From<RemoteRunResult> for RunOutcome {
             exit_code: r.exit_code,
             error: r.error,
             success: r.success,
+            elapsed_ms: r.elapsed_ms,
         }
     }
 }

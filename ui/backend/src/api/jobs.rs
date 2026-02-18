@@ -91,6 +91,7 @@ pub struct RoundSummaryInfo {
     pub round_number: u32,
     pub detected: bool,
     pub evasion_score: f64,
+    pub differential_category: String,
     pub status: String,
 }
 
@@ -236,6 +237,7 @@ pub async fn get_job_progress(
                     round_number: r.round_number,
                     detected: r.detected,
                     evasion_score: r.evasion_score,
+                    differential_category: r.differential_category,
                     status: r.status,
                 })
                 .collect();

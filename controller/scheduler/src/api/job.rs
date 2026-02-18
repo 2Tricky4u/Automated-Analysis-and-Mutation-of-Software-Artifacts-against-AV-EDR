@@ -382,6 +382,9 @@ pub async fn compare_runs(
     let outcome_match = b_detected == i_detected && b_exit == i_exit;
     let confidence = if outcome_match { 1.0 } else { 0.5 };
 
+    let differential_category =
+        crate::dispatch::types::DifferentialCategory::from_runs(b_detected, i_detected);
+
     Ok(Response::new(CompareRunsResponse {
         comparison: Some(BehaviorComparisonProto {
             outcome_match,
@@ -391,6 +394,7 @@ pub async fn compare_runs(
             instrumented_exit_code: i_exit,
             differences,
             confidence,
+            differential_category: differential_category.as_str().to_string(),
         }),
     }))
 }
@@ -453,6 +457,7 @@ fn round_doc_to_proto(source: &Value) -> RoundSummaryProto {
         evasion_score: f64_field(source, "evasion_score"),
         status: str_field(source, "status"),
         completed_at: parse_date_to_unix_secs(&source["completed_at"]),
+        differential_category: str_field(source, "differential_category"),
     }
 }
 
@@ -489,6 +494,10 @@ fn build_behavior_comparison(
     let i_exit = instrumented.as_ref().map(|r| r.exit_code).unwrap_or(0);
     let outcome_match = bool_field(source, "behavior_match");
 
+    // Derive category from per-run detected booleans
+    let differential_category =
+        crate::dispatch::types::DifferentialCategory::from_runs(b_detected, i_detected);
+
     BehaviorComparisonProto {
         outcome_match,
         baseline_detected: b_detected,
@@ -497,5 +506,6 @@ fn build_behavior_comparison(
         instrumented_exit_code: i_exit,
         differences: vec![],
         confidence: if outcome_match { 1.0 } else { 0.5 },
+        differential_category: differential_category.as_str().to_string(),
     }
 }

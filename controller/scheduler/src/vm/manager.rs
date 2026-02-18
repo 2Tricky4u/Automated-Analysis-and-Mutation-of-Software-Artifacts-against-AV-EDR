@@ -538,6 +538,7 @@ impl TargetManager {
                             } else {
                                 Some(response.error.clone())
                             },
+                            elapsed_ms: response.elapsed_ms,
                         };
                         let _ = result_tx.send(result).await;
                     }

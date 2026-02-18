@@ -279,6 +279,7 @@ impl VMExecutor {
                 exit_code: result.exit_code,
                 error: result.error,
                 success: result.success,
+                elapsed_ms: result.elapsed_ms,
             },
             vm_id: self.id.clone(),
         };
@@ -303,6 +304,7 @@ impl VMExecutor {
                 exit_code: -1,
                 error: Some(error),
                 success: false,
+                elapsed_ms: 0.0,
             },
             vm_id: self.id.clone(),
         };

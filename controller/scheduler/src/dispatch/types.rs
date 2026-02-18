@@ -316,6 +316,64 @@ impl From<&str> for WorkerId {
 // Job Session (ephemeral runtime state)
 // ============================================================================
 
+// ============================================================================
+// Differential Category (CLAUDE.md Section 5)
+// ============================================================================
+
+/// Classifies a round based on the two-run differential protocol.
+///
+/// | Baseline | Instrumented | Category                |
+/// |----------|-------------|-------------------------|
+/// | Detected | Detected    | RealDetection           |
+/// | Not det. | Detected    | InstrumentationArtifact |
+/// | Detected | Not det.    | Flaky                   |
+/// | Not det. | Not det.    | Evasion                 |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DifferentialCategory {
+    RealDetection,
+    InstrumentationArtifact,
+    Flaky,
+    Evasion,
+}
+
+impl DifferentialCategory {
+    pub fn from_runs(baseline_detected: bool, instrumented_detected: bool) -> Self {
+        match (baseline_detected, instrumented_detected) {
+            (true, true) => Self::RealDetection,
+            (false, true) => Self::InstrumentationArtifact,
+            (true, false) => Self::Flaky,
+            (false, false) => Self::Evasion,
+        }
+    }
+
+    /// True only for RealDetection — the only trustworthy "detected" signal.
+    pub fn is_detected(self) -> bool {
+        matches!(self, Self::RealDetection)
+    }
+
+    /// True for categories where the result is trustworthy for the feedback loop.
+    /// Used by future token scorer / mutation selector (FEEDBACK-LOOP-PLAN.md).
+    #[allow(dead_code)]
+    pub fn is_trustworthy(self) -> bool {
+        matches!(self, Self::RealDetection | Self::Evasion)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RealDetection => "real_detection",
+            Self::InstrumentationArtifact => "instrumentation_artifact",
+            Self::Flaky => "flaky",
+            Self::Evasion => "evasion",
+        }
+    }
+}
+
+impl std::fmt::Display for DifferentialCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// Summary of a completed round
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoundSummary {
@@ -325,6 +383,7 @@ pub struct RoundSummary {
     pub detected: bool,
     pub behavior_match: bool,
     pub evasion_score: f64,
+    pub differential_category: DifferentialCategory,
     pub completed_at: SystemTime,
 }
 
@@ -390,9 +449,10 @@ impl JobSession {
         if self.current_round >= self.max_rounds {
             return false;
         }
+        // Only stop on real evasion, not InstrumentationArtifact
         if let Some(last) = &self.last_round
             && self.stop_on_evasion
-            && !last.detected
+            && last.differential_category == DifferentialCategory::Evasion
         {
             return false;
         }
@@ -450,6 +510,8 @@ pub struct RunOutcome {
     pub error: Option<String>,
     /// Payload executed to completion (evasion signal from worker)
     pub success: bool,
+    /// Wall-clock execution time in milliseconds
+    pub elapsed_ms: f64,
 }
 
 /// Ephemeral join state for a round until both runs finish
@@ -463,6 +525,8 @@ pub struct RoundAgg {
     pub baseline_vm_id: String,
     pub instrumented_vm_id: String,
     pub started_at: SystemTime,
+    /// Timeout for the run in milliseconds, used for survival_ratio in evasion score
+    pub timeout_ms: u64,
 }
 
 impl RoundAgg {
@@ -470,30 +534,20 @@ impl RoundAgg {
         self.baseline.is_some() && self.instrumented.is_some()
     }
 
-    /// Compute round summary from completed runs
+    /// Compute round summary from completed runs using the differential protocol.
     pub fn to_summary(&self) -> Option<RoundSummary> {
         let baseline = self.baseline.as_ref()?;
         let instrumented = self.instrumented.as_ref()?;
 
-        // Detected if either run was detected
-        let detected = baseline.detected || instrumented.detected;
+        // Differential category from CLAUDE.md Section 5
+        let category = DifferentialCategory::from_runs(baseline.detected, instrumented.detected);
+        let detected = category.is_detected();
 
-        // Behavior match if exit codes are the same (simplified)
-        let behavior_match = baseline.exit_code == instrumented.exit_code;
+        // Behavior match: exit codes agree AND detected status agrees
+        let behavior_match = baseline.exit_code == instrumented.exit_code
+            && baseline.detected == instrumented.detected;
 
-        // Evasion score using success signal from worker:
-        //   Both not detected + both success → 1.0 (full evasion)
-        //   Both not detected + baseline success only → 0.5 (partial evasion)
-        //   Any detected → 0.0
-        let evasion_score = if detected {
-            0.0
-        } else if baseline.success && instrumented.success {
-            1.0
-        } else if baseline.success || instrumented.success {
-            0.5
-        } else {
-            1.0 // Not detected, no success info — assume evasion
-        };
+        let evasion_score = self.compute_evasion_score(baseline, instrumented, category);
 
         Some(RoundSummary {
             round_id: self.spec.id.clone(),
@@ -502,8 +556,42 @@ impl RoundAgg {
             detected,
             behavior_match,
             evasion_score,
+            differential_category: category,
             completed_at: SystemTime::now(),
         })
+    }
+
+    /// Composite evasion score with per-category ranges.
+    ///
+    /// | Category               | Range     |
+    /// |------------------------|-----------|
+    /// | RealDetection          | 0.0–0.4   |
+    /// | Flaky                  | 0.0–0.3   |
+    /// | InstrumentationArtifact| 0.5–0.7   |
+    /// | Evasion                | 0.6–1.0   |
+    fn compute_evasion_score(
+        &self,
+        baseline: &RunOutcome,
+        instrumented: &RunOutcome,
+        category: DifferentialCategory,
+    ) -> f64 {
+        let timeout = self.timeout_ms.max(1) as f64;
+        let survival_ratio = (baseline.elapsed_ms / timeout).clamp(0.0, 1.0);
+        let payload_reached = if baseline.exit_code == 0 { 1.0 } else { 0.0 };
+        let exits_match = baseline.exit_code == instrumented.exit_code;
+        let detected_match = baseline.detected == instrumented.detected;
+        let behavior_match_val = if exits_match && detected_match {
+            1.0
+        } else {
+            0.0
+        };
+
+        match category {
+            DifferentialCategory::RealDetection => 0.4 * survival_ratio,
+            DifferentialCategory::InstrumentationArtifact => 0.5 + 0.2 * survival_ratio,
+            DifferentialCategory::Flaky => 0.3 * survival_ratio,
+            DifferentialCategory::Evasion => 0.6 + 0.2 * payload_reached + 0.2 * behavior_match_val,
+        }
     }
 }
 
@@ -705,6 +793,7 @@ mod tests {
             detected: false,
             behavior_match: true,
             evasion_score: 1.0,
+            differential_category: DifferentialCategory::Evasion,
             completed_at: SystemTime::now(),
         });
 
@@ -729,6 +818,7 @@ mod tests {
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
+            timeout_ms: 120_000,
         };
 
         assert!(!agg.is_complete());
@@ -739,6 +829,7 @@ mod tests {
             exit_code: 0,
             error: None,
             success: true,
+            elapsed_ms: 60_000.0,
         });
         assert!(!agg.is_complete());
 
@@ -747,12 +838,14 @@ mod tests {
             exit_code: 0,
             error: None,
             success: true,
+            elapsed_ms: 62_000.0,
         });
         assert!(agg.is_complete());
 
         let summary = agg.to_summary().unwrap();
         assert!(!summary.detected);
         assert!(summary.behavior_match);
+        assert_eq!(summary.differential_category, DifferentialCategory::Evasion);
     }
 
     // ── ModularBuildSpec / ModuleSelectionSpec tests ─────────────────────────
@@ -834,12 +927,13 @@ mod tests {
             detected: false, // evasion
             behavior_match: true,
             evasion_score: 1.0,
+            differential_category: DifferentialCategory::Evasion,
             completed_at: SystemTime::now(),
         });
 
         assert!(
             !job.should_continue(),
-            "Job should stop when stop_on_evasion=true and last round was not detected"
+            "Job should stop when stop_on_evasion=true and last round was evasion"
         );
     }
 
@@ -856,6 +950,7 @@ mod tests {
             detected: true, // detected
             behavior_match: true,
             evasion_score: 0.0,
+            differential_category: DifferentialCategory::RealDetection,
             completed_at: SystemTime::now(),
         });
 
@@ -877,6 +972,7 @@ mod tests {
             detected: true,
             behavior_match: true,
             evasion_score: 0.0,
+            differential_category: DifferentialCategory::RealDetection,
             completed_at: SystemTime::now(),
         });
 
@@ -888,6 +984,7 @@ mod tests {
             detected: true,
             behavior_match: true,
             evasion_score: 0.0,
+            differential_category: DifferentialCategory::RealDetection,
             completed_at: SystemTime::now(),
         });
 
@@ -943,27 +1040,32 @@ mod tests {
                 exit_code: 1,
                 error: None,
                 success: false,
+                elapsed_ms: 5_000.0,
             }),
             instrumented: Some(RunOutcome {
                 detected: false,
                 exit_code: 0,
                 error: None,
                 success: true,
+                elapsed_ms: 60_000.0,
             }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
+            timeout_ms: 120_000,
         };
 
         let summary = agg.to_summary().unwrap();
-        // Per differential protocol: baseline detected → overall detected
-        assert!(summary.detected, "Should be detected if baseline detected");
-        // Different exit codes → behavior mismatch
+        // Per differential protocol: baseline only detected → Flaky (not trustworthy)
+        assert_eq!(summary.differential_category, DifferentialCategory::Flaky);
+        assert!(!summary.detected, "Flaky should not count as detected");
+        // Different exit codes + different detected → behavior mismatch
         assert!(
             !summary.behavior_match,
             "Different exit codes → behavior mismatch"
         );
-        assert_eq!(summary.evasion_score, 0.0);
+        // Flaky score = 0.3 * survival_ratio (5000/120000 ≈ 0.042)
+        assert!(summary.evasion_score < 0.3, "Flaky score should be < 0.3");
     }
 
     #[test]
@@ -983,22 +1085,38 @@ mod tests {
                 exit_code: 0,
                 error: None,
                 success: true,
+                elapsed_ms: 100_000.0,
             }),
             instrumented: Some(RunOutcome {
                 detected: true,
                 exit_code: 1,
                 error: None,
                 success: false,
+                elapsed_ms: 15_000.0,
             }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
+            timeout_ms: 120_000,
         };
 
         let summary = agg.to_summary().unwrap();
-        // Instrumented detected but baseline not → instrumentation artifact
-        // But the code still marks detected=true (OR logic)
-        assert!(summary.detected, "detected if instrumented detected");
+        // Instrumented detected but baseline not → InstrumentationArtifact
+        // FIX: This should NOT count as detected (was the bug)
+        assert_eq!(
+            summary.differential_category,
+            DifferentialCategory::InstrumentationArtifact
+        );
+        assert!(
+            !summary.detected,
+            "InstrumentationArtifact should NOT be marked as detected"
+        );
+        // InstrumentationArtifact score = 0.5 + 0.2*survival_ratio, in [0.5, 0.7]
+        assert!(
+            summary.evasion_score >= 0.5 && summary.evasion_score <= 0.7,
+            "InstrumentationArtifact score should be in [0.5, 0.7], got {}",
+            summary.evasion_score
+        );
     }
 
     #[test]
@@ -1021,21 +1139,26 @@ mod tests {
                 exit_code: 0,
                 error: None,
                 success: true,
+                elapsed_ms: 120_000.0,
             }),
             instrumented: Some(RunOutcome {
                 detected: false,
                 exit_code: 0,
                 error: None,
                 success: true,
+                elapsed_ms: 118_000.0,
             }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
+            timeout_ms: 120_000,
         };
 
         let summary = agg.to_summary().unwrap();
         assert!(!summary.detected);
         assert!(summary.behavior_match);
+        assert_eq!(summary.differential_category, DifferentialCategory::Evasion);
+        // Evasion: 0.6 + 0.2 (payload_reached: exit_code==0) + 0.2 (behavior_match) = 1.0
         assert_eq!(summary.evasion_score, 1.0, "Full evasion → score 1.0");
         assert_eq!(summary.mutations, vec!["ast.string_xor"]);
     }
@@ -1159,5 +1282,177 @@ mod tests {
         let read_bytes = std::fs::read(tmp.path()).unwrap();
         assert_eq!(read_bytes.len(), 1_000_000);
         assert_eq!(read_bytes[0], 0xCC);
+    }
+
+    // ── DifferentialCategory tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_differential_category_from_runs() {
+        assert_eq!(
+            DifferentialCategory::from_runs(true, true),
+            DifferentialCategory::RealDetection
+        );
+        assert_eq!(
+            DifferentialCategory::from_runs(false, true),
+            DifferentialCategory::InstrumentationArtifact
+        );
+        assert_eq!(
+            DifferentialCategory::from_runs(true, false),
+            DifferentialCategory::Flaky
+        );
+        assert_eq!(
+            DifferentialCategory::from_runs(false, false),
+            DifferentialCategory::Evasion
+        );
+    }
+
+    #[test]
+    fn test_differential_category_is_detected() {
+        assert!(DifferentialCategory::RealDetection.is_detected());
+        assert!(!DifferentialCategory::InstrumentationArtifact.is_detected());
+        assert!(!DifferentialCategory::Flaky.is_detected());
+        assert!(!DifferentialCategory::Evasion.is_detected());
+    }
+
+    #[test]
+    fn test_differential_category_is_trustworthy() {
+        assert!(DifferentialCategory::RealDetection.is_trustworthy());
+        assert!(!DifferentialCategory::InstrumentationArtifact.is_trustworthy());
+        assert!(!DifferentialCategory::Flaky.is_trustworthy());
+        assert!(DifferentialCategory::Evasion.is_trustworthy());
+    }
+
+    #[test]
+    fn test_differential_category_as_str() {
+        assert_eq!(
+            DifferentialCategory::RealDetection.as_str(),
+            "real_detection"
+        );
+        assert_eq!(
+            DifferentialCategory::InstrumentationArtifact.as_str(),
+            "instrumentation_artifact"
+        );
+        assert_eq!(DifferentialCategory::Flaky.as_str(), "flaky");
+        assert_eq!(DifferentialCategory::Evasion.as_str(), "evasion");
+    }
+
+    #[test]
+    fn test_differential_category_real_detection_score() {
+        let spec = RoundSpec {
+            id: RoundId("r-rd".into()),
+            job_id: JobId("j1".into()),
+            round_number: 1,
+            mutations: vec![],
+        };
+        let agg = RoundAgg {
+            spec,
+            baseline_run_id: RunId("b".into()),
+            instrumented_run_id: RunId("i".into()),
+            baseline: Some(RunOutcome {
+                detected: true,
+                exit_code: -2,
+                error: None,
+                success: false,
+                elapsed_ms: 50_000.0,
+            }),
+            instrumented: Some(RunOutcome {
+                detected: true,
+                exit_code: -2,
+                error: None,
+                success: false,
+                elapsed_ms: 48_000.0,
+            }),
+            baseline_vm_id: String::new(),
+            instrumented_vm_id: String::new(),
+            started_at: SystemTime::now(),
+            timeout_ms: 120_000,
+        };
+
+        let summary = agg.to_summary().unwrap();
+        assert_eq!(
+            summary.differential_category,
+            DifferentialCategory::RealDetection
+        );
+        assert!(summary.detected);
+        // Score = 0.4 * (50/120) ≈ 0.167
+        assert!(
+            summary.evasion_score >= 0.0 && summary.evasion_score <= 0.4,
+            "RealDetection score should be in [0.0, 0.4], got {}",
+            summary.evasion_score
+        );
+    }
+
+    #[test]
+    fn test_evasion_score_gradient_on_detection() {
+        // Quick kill (2s) vs slow kill (100s) should give different scores
+        let make_agg = |elapsed: f64| -> RoundAgg {
+            RoundAgg {
+                spec: RoundSpec {
+                    id: RoundId("r".into()),
+                    job_id: JobId("j".into()),
+                    round_number: 1,
+                    mutations: vec![],
+                },
+                baseline_run_id: RunId("b".into()),
+                instrumented_run_id: RunId("i".into()),
+                baseline: Some(RunOutcome {
+                    detected: true,
+                    exit_code: -2,
+                    error: None,
+                    success: false,
+                    elapsed_ms: elapsed,
+                }),
+                instrumented: Some(RunOutcome {
+                    detected: true,
+                    exit_code: -2,
+                    error: None,
+                    success: false,
+                    elapsed_ms: elapsed,
+                }),
+                baseline_vm_id: String::new(),
+                instrumented_vm_id: String::new(),
+                started_at: SystemTime::now(),
+                timeout_ms: 120_000,
+            }
+        };
+
+        let quick_kill = make_agg(2_000.0).to_summary().unwrap();
+        let slow_kill = make_agg(100_000.0).to_summary().unwrap();
+
+        assert!(
+            slow_kill.evasion_score > quick_kill.evasion_score,
+            "Slow kill ({:.3}) should score higher than quick kill ({:.3})",
+            slow_kill.evasion_score,
+            quick_kill.evasion_score
+        );
+
+        // Quick kill: 0.4 * (2000/120000) ≈ 0.007
+        assert!(quick_kill.evasion_score < 0.05);
+        // Slow kill: 0.4 * (100000/120000) ≈ 0.333
+        assert!(slow_kill.evasion_score > 0.3);
+    }
+
+    #[test]
+    fn test_stop_on_evasion_does_not_stop_on_instrumentation_artifact() {
+        let mut job = JobSession::new("job-instr-artifact", 10, test_build_spec());
+        job.stop_on_evasion = true;
+
+        let (_, rid) = job.start_round();
+        // InstrumentationArtifact: baseline clean, instrumented detected
+        job.record_round_summary(RoundSummary {
+            round_id: rid,
+            round_number: 1,
+            mutations: vec![],
+            detected: false,
+            behavior_match: false,
+            evasion_score: 0.6,
+            differential_category: DifferentialCategory::InstrumentationArtifact,
+            completed_at: SystemTime::now(),
+        });
+
+        assert!(
+            job.should_continue(),
+            "Job should NOT stop on InstrumentationArtifact even with stop_on_evasion=true"
+        );
     }
 }
