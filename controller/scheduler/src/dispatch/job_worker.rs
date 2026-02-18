@@ -20,11 +20,13 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use std::str::FromStr;
+
 use build::{
     ArtifactBuilder, BuildInput, BuilderConfig, BuiltArtifact, EncodingType, ModuleSelection,
 };
 
-use super::channels::{JobRunResult, JobWorkerEvent};
+use super::channels::{JobRunResult, JobWorkerEvent, RoundCompletedData};
 use super::run_pool::RunPool;
 use super::types::{
     ArtifactRef, JobId, JobOutcome, JobSession, ModularBuildSpec, RoundAgg, RoundId, RoundSpec,
@@ -531,20 +533,22 @@ impl JobWorker {
         // Emit enriched event for ES indexing (round + both runs)
         let _ = self
             .event_tx
-            .send(JobWorkerEvent::RoundCompleted {
-                job_id: self.job.id.clone(),
-                round_id: round_id.clone(),
-                summary,
-                baseline_run_id,
-                instrumented_run_id,
-                baseline_outcome,
-                instrumented_outcome,
-                mutation_specs,
-                mutations,
-                baseline_vm_id,
-                instrumented_vm_id,
-                round_started_at,
-            })
+            .send(JobWorkerEvent::RoundCompleted(Box::new(
+                RoundCompletedData {
+                    job_id: self.job.id.clone(),
+                    round_id: round_id.clone(),
+                    summary,
+                    baseline_run_id,
+                    instrumented_run_id,
+                    baseline_outcome,
+                    instrumented_outcome,
+                    mutation_specs,
+                    mutations,
+                    baseline_vm_id,
+                    instrumented_vm_id,
+                    round_started_at,
+                },
+            )))
             .await;
     }
 }

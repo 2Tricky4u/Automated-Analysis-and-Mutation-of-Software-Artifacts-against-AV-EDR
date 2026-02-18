@@ -350,15 +350,17 @@ pub async fn execute_run(
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
 
     let monitor = crate::dispatch::monitor::ExecutionMonitor::new(
-        request.run_id.clone(),
-        request.job_id.clone(),
-        context.worker_id.clone(),
-        context.config.worker.ip_address.clone(),
-        context.artifact_name.clone(),
-        pid,
-        context.config.telemetry.rededr.base_url.clone(),
+        crate::dispatch::monitor::MonitorConfig {
+            run_id: request.run_id.clone(),
+            job_id: request.job_id.clone(),
+            worker_id: context.worker_id.clone(),
+            worker_ip: context.config.worker.ip_address.clone(),
+            artifact_name: context.artifact_name.clone(),
+            pid,
+            rededr_base_url: context.config.telemetry.rededr.base_url.clone(),
+            timeout_seconds: request.timeout_seconds as i32,
+        },
         sink.clone(),
-        request.timeout_seconds as i32,
     );
 
     let monitor_handle = tokio::spawn(async move {

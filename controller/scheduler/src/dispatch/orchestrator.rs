@@ -6,11 +6,11 @@
 //! - Routes telemetry to ES indexing
 //! - Manages shared RunPool
 
-use super::channels::{JobControlCommand, JobWorkerEvent};
+use super::channels::{JobControlCommand, JobWorkerEvent, RoundCompletedData};
 use super::job_worker::JobWorker;
 use super::run_pool::RunPool;
 use super::types::{JobId, JobOutcome, JobSession, WorkerId, WorkerInfo};
-use crate::storage::{EsStorage, TelemetryContext};
+use crate::storage::{EsStorage, RunIndexParams, TelemetryContext};
 use crate::vm::{TargetEvent, TargetManager};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -260,20 +260,21 @@ impl Orchestrator {
 
     async fn on_job_worker_event(&mut self, event: JobWorkerEvent) {
         match event {
-            JobWorkerEvent::RoundCompleted {
-                job_id,
-                round_id,
-                summary,
-                baseline_run_id,
-                instrumented_run_id,
-                baseline_outcome,
-                instrumented_outcome,
-                mutation_specs,
-                mutations,
-                baseline_vm_id,
-                instrumented_vm_id,
-                round_started_at,
-            } => {
+            JobWorkerEvent::RoundCompleted(data) => {
+                let RoundCompletedData {
+                    job_id,
+                    round_id,
+                    summary,
+                    baseline_run_id,
+                    instrumented_run_id,
+                    baseline_outcome,
+                    instrumented_outcome,
+                    mutation_specs,
+                    mutations,
+                    baseline_vm_id,
+                    instrumented_vm_id,
+                    round_started_at,
+                } = *data;
                 info!(
                     "[Orchestrator] Round {} completed for job {}: detected={}, evasion={:.2}",
                     round_id, job_id, summary.detected, summary.evasion_score
@@ -313,30 +314,30 @@ impl Orchestrator {
                     }
                     // Index baseline run with exit_code, detected, round_id, run_type
                     if let Err(e) = storage
-                        .index_run_result(
-                            &jid,
-                            &rid,
-                            &b_run_id,
-                            "baseline",
-                            &baseline_outcome,
-                            &mutations,
-                            &b_vm_id,
-                        )
+                        .index_run_result(&RunIndexParams {
+                            job_id: &jid,
+                            round_id: &rid,
+                            run_id: &b_run_id,
+                            run_type: "baseline",
+                            outcome: &baseline_outcome,
+                            mutations: &mutations,
+                            vm_id: &b_vm_id,
+                        })
                         .await
                     {
                         error!("Failed to index baseline run: {}", e);
                     }
                     // Index instrumented run
                     if let Err(e) = storage
-                        .index_run_result(
-                            &jid,
-                            &rid,
-                            &i_run_id,
-                            "instrumented",
-                            &instrumented_outcome,
-                            &mutations,
-                            &i_vm_id,
-                        )
+                        .index_run_result(&RunIndexParams {
+                            job_id: &jid,
+                            round_id: &rid,
+                            run_id: &i_run_id,
+                            run_type: "instrumented",
+                            outcome: &instrumented_outcome,
+                            mutations: &mutations,
+                            vm_id: &i_vm_id,
+                        })
                         .await
                     {
                         error!("Failed to index instrumented run: {}", e);

@@ -14,6 +14,17 @@ use elasticsearch::{Elasticsearch, IndexParts};
 use serde_json::json;
 use tracing::info;
 
+/// Context for indexing a run result (groups run identity fields).
+pub struct RunIndexParams<'a> {
+    pub job_id: &'a str,
+    pub round_id: &'a str,
+    pub run_id: &'a str,
+    pub run_type: &'a str,
+    pub outcome: &'a RunOutcome,
+    pub mutations: &'a [String],
+    pub vm_id: &'a str,
+}
+
 /// Derive detection outcome from exit code.
 ///
 /// ```text
@@ -44,42 +55,36 @@ fn trace_mode_from_run_type(run_type: &str) -> &str {
 /// This is the PRIMARY path with exit_code, detected, round context.
 pub async fn index_run_result(
     es: &Elasticsearch,
-    job_id: &str,
-    round_id: &str,
-    run_id: &str,
-    run_type: &str,
-    outcome: &RunOutcome,
-    mutations: &[String],
-    vm_id: &str,
+    params: &RunIndexParams<'_>,
 ) -> anyhow::Result<()> {
     let index_name = helpers::es_index_name("runs");
 
-    let (detection_outcome, derived_detected) = derive_detection_outcome(outcome.exit_code);
+    let (detection_outcome, derived_detected) = derive_detection_outcome(params.outcome.exit_code);
     // Use the RunOutcome.detected if available, otherwise use derived
-    let detected = outcome.detected || derived_detected;
+    let detected = params.outcome.detected || derived_detected;
 
     let now = helpers::now_rfc3339();
     let mut doc = json!({
-        "run_id": run_id,
-        "job_id": job_id,
-        "round_id": round_id,
-        "run_type": run_type,
-        "mutation_chain": mutations,
-        "mutations": mutations,
-        "vm_id": vm_id,
-        "worker_id": vm_id,
-        "status": if outcome.error.is_some() { "error" } else { "completed" },
+        "run_id": params.run_id,
+        "job_id": params.job_id,
+        "round_id": params.round_id,
+        "run_type": params.run_type,
+        "mutation_chain": params.mutations,
+        "mutations": params.mutations,
+        "vm_id": params.vm_id,
+        "worker_id": params.vm_id,
+        "status": if params.outcome.error.is_some() { "error" } else { "completed" },
         "detected": detected,
-        "exit_code": outcome.exit_code,
-        "success": outcome.success,
+        "exit_code": params.outcome.exit_code,
+        "success": params.outcome.success,
         "detection_outcome": detection_outcome,
-        "trace_mode": trace_mode_from_run_type(run_type),
+        "trace_mode": trace_mode_from_run_type(params.run_type),
         "finished_at": now,
         "timestamp": now,
     });
 
     // Add error details if present
-    if let Some(ref error_msg) = outcome.error {
+    if let Some(ref error_msg) = params.outcome.error {
         doc.as_object_mut().unwrap().insert(
             "error".to_string(),
             json!({
@@ -90,16 +95,16 @@ pub async fn index_run_result(
     }
 
     let response = es
-        .index(IndexParts::IndexId(&index_name, run_id))
+        .index(IndexParts::IndexId(&index_name, params.run_id))
         .body(doc)
         .send()
         .await?;
 
-    helpers::check_index_response(response, "run", run_id).await?;
+    helpers::check_index_response(response, "run", params.run_id).await?;
 
     info!(
         "Indexed run result {} (detected={}, outcome={})",
-        run_id, detected, detection_outcome
+        params.run_id, detected, detection_outcome
     );
     Ok(())
 }

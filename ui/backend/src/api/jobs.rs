@@ -4,7 +4,7 @@
 
 use super::{ApiError, ApiResponse};
 use crate::generated::controller::ModuleSelection;
-use crate::grpc_client::ControllerGrpcClient;
+use crate::grpc_client::{ControllerGrpcClient, ScheduleJobParams};
 use axum::{
     Json,
     extract::{Path, State},
@@ -163,15 +163,15 @@ pub async fn submit_job(
     });
 
     match client
-        .schedule_job(
-            payload.source,
-            payload.max_rounds,
-            payload.target_os,
-            payload.required_capabilities,
+        .schedule_job(ScheduleJobParams {
+            source: payload.source,
+            max_rounds: payload.max_rounds,
+            target_os: payload.target_os,
+            required_capabilities: payload.required_capabilities,
             modules,
-            payload.encoding,
-            payload.stop_on_evasion,
-        )
+            encoding: payload.encoding,
+            stop_on_evasion: payload.stop_on_evasion,
+        })
         .await
     {
         Ok(resp) => {

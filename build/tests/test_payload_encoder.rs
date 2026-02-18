@@ -1,6 +1,7 @@
 mod common;
 
 use build::{EncodingType, PayloadEncoder, generate_test_payload};
+use std::str::FromStr;
 
 #[test]
 fn test_xor_roundtrip_multiple_payloads() {

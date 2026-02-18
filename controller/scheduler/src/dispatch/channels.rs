@@ -54,25 +54,29 @@ impl From<RemoteRunResult> for RunOutcome {
 // JobWorker -> Orchestrator (Job Lifecycle Events)
 // ============================================================================
 
+/// All data from a completed round, boxed to keep enum size small.
+#[derive(Debug, Clone)]
+pub struct RoundCompletedData {
+    pub job_id: JobId,
+    pub round_id: RoundId,
+    pub summary: RoundSummary,
+    pub baseline_run_id: RunId,
+    pub instrumented_run_id: RunId,
+    pub baseline_outcome: RunOutcome,
+    pub instrumented_outcome: RunOutcome,
+    pub mutation_specs: Vec<MutationSpec>,
+    pub mutations: Vec<String>,
+    pub baseline_vm_id: String,
+    pub instrumented_vm_id: String,
+    pub round_started_at: SystemTime,
+}
+
 /// Events emitted by JobWorker to Orchestrator for tracking and ES indexing.
 #[derive(Debug, Clone)]
 pub enum JobWorkerEvent {
     /// A round completed (both baseline and instrumented runs done).
     /// Carries all data needed for round AND run indexing.
-    RoundCompleted {
-        job_id: JobId,
-        round_id: RoundId,
-        summary: RoundSummary,
-        baseline_run_id: RunId,
-        instrumented_run_id: RunId,
-        baseline_outcome: RunOutcome,
-        instrumented_outcome: RunOutcome,
-        mutation_specs: Vec<MutationSpec>,
-        mutations: Vec<String>,
-        baseline_vm_id: String,
-        instrumented_vm_id: String,
-        round_started_at: SystemTime,
-    },
+    RoundCompleted(Box<RoundCompletedData>),
     /// Job completed (all rounds done or stopped early)
     JobCompleted { job_id: JobId, outcome: JobOutcome },
 }

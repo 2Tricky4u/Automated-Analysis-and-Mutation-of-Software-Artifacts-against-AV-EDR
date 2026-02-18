@@ -15,6 +15,7 @@ use build::mutator::MutationSpec;
 use build::{ArtifactBuilder, BuildInput, BuilderConfig, EncodingType, ModuleSelection};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::{env, fs, process};
 
 fn main() {

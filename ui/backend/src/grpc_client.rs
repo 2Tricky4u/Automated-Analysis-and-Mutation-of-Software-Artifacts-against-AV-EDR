@@ -32,6 +32,17 @@ impl Default for ControllerConfig {
     }
 }
 
+/// Parameters for scheduling a new job.
+pub struct ScheduleJobParams {
+    pub source: String,
+    pub max_rounds: u32,
+    pub target_os: Option<String>,
+    pub required_capabilities: Vec<String>,
+    pub modules: Option<ModuleSelection>,
+    pub encoding: Option<String>,
+    pub stop_on_evasion: bool,
+}
+
 /// gRPC client wrapper with connection management
 #[derive(Clone)]
 pub struct ControllerGrpcClient {
@@ -119,26 +130,17 @@ impl ControllerGrpcClient {
     // ========================================================================
 
     /// Schedule a new job
-    pub async fn schedule_job(
-        &self,
-        source: String,
-        max_rounds: u32,
-        target_os: Option<String>,
-        required_capabilities: Vec<String>,
-        modules: Option<ModuleSelection>,
-        encoding: Option<String>,
-        stop_on_evasion: bool,
-    ) -> Result<JobResponse> {
+    pub async fn schedule_job(&self, params: ScheduleJobParams) -> Result<JobResponse> {
         let mut client = self.get_client().await?;
 
         let request = JobRequest {
-            source,
-            max_rounds,
-            target_os: target_os.unwrap_or_default(),
-            required_capabilities,
-            modules,
-            encoding: encoding.unwrap_or_else(|| "xor".to_string()),
-            stop_on_evasion,
+            source: params.source,
+            max_rounds: params.max_rounds,
+            target_os: params.target_os.unwrap_or_default(),
+            required_capabilities: params.required_capabilities,
+            modules: params.modules,
+            encoding: params.encoding.unwrap_or_else(|| "xor".to_string()),
+            stop_on_evasion: params.stop_on_evasion,
             ..Default::default()
         };
 
