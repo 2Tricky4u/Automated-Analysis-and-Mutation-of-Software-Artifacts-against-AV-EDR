@@ -756,7 +756,7 @@ impl ArtifactBuilder {
     /// Compile LLVM IR to object file
     async fn compile_ir_to_object(&self, ir_path: &Path, obj_path: &Path) -> Result<()> {
         let output = tokio::process::Command::new("clang")
-            .args(&[
+            .args([
                 "-target",
                 "x86_64-pc-windows-msvc",
                 "-c", // Compile only, don't link
@@ -934,12 +934,11 @@ impl ArtifactBuilder {
         }
 
         // Step 5.5: Verify runtime has required symbols for line tracing (non-fatal)
-        if trace_mode == crate::TraceMode::Lines || trace_mode == crate::TraceMode::All {
-            if let Err(e) = self.verify_runtime_symbols(&runtime_obj, trace_mode).await {
+        if (trace_mode == crate::TraceMode::Lines || trace_mode == crate::TraceMode::All)
+            && let Err(e) = self.verify_runtime_symbols(&runtime_obj, trace_mode).await {
                 warn!("Runtime symbol verification failed (non-fatal): {}", e);
                 warn!("Build will continue, but linking may fail if symbols are missing");
             }
-        }
 
         // Step 6: Link instrumented object + runtime -> final executable
         let instrumented_exe_path = built.source_path.with_extension("instrumented.exe");
@@ -1240,7 +1239,7 @@ impl ArtifactBuilder {
         }
 
         // Step 3: Assemble the template with selected modules
-        let mut assembler = Assembler::new(&template_dir).context("Failed to create assembler")?;
+        let mut assembler = Assembler::new(template_dir).context("Failed to create assembler")?;
 
         let assembled_source = assembler
             .assemble(&modules, &payload_header)

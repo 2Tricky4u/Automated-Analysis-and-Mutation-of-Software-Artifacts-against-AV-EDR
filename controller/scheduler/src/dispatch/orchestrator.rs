@@ -210,11 +210,10 @@ impl Orchestrator {
             }
 
             // Check OS match if requested
-            if let Some(os) = requested_os {
-                if !t.os_version.eq_ignore_ascii_case(os) {
+            if let Some(os) = requested_os
+                && !t.os_version.eq_ignore_ascii_case(os) {
                     continue;
                 }
-            }
 
             // Check capabilities match if requested
             if !requested_caps.is_empty() {

@@ -383,11 +383,10 @@ impl TargetManager {
 
     async fn get_channel(&self, id: impl AsRef<str>) -> Result<Channel> {
         let id = id.as_ref();
-        if let Some(target) = self.targets.get(id) {
-            if let Some(ref channel) = target.channel {
+        if let Some(target) = self.targets.get(id)
+            && let Some(ref channel) = target.channel {
                 return Ok(channel.clone());
             }
-        }
 
         let address = self
             .targets
@@ -508,8 +507,8 @@ impl TargetManager {
                         t.touch();
 
                         // Handle registration message -> send Connected event
-                        if !registration_received {
-                            if let Some(worker_message::Payload::Registration(ref reg)) =
+                        if !registration_received
+                            && let Some(worker_message::Payload::Registration(ref reg)) =
                                 msg.payload
                             {
                                 t.capabilities = reg.capabilities.clone();
@@ -524,7 +523,6 @@ impl TargetManager {
                                     })
                                     .await;
                             }
-                        }
                     }
 
                     // Handle SampleResponse -> forward to VMExecutor

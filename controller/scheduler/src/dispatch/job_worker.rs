@@ -166,11 +166,10 @@ impl JobWorker {
                 // Periodic check to produce more rounds
                 _ = check_interval.tick() => {
                     // Produce more rounds if possible
-                    if self.can_produce_round() {
-                        if let Err(e) = self.produce_round().await {
+                    if self.can_produce_round()
+                        && let Err(e) = self.produce_round().await {
                             error!("[JobWorker:{}] Failed to produce round: {}", self.job.id, e);
                         }
-                    }
 
                     // Check if job is done
                     if self.is_job_complete() {

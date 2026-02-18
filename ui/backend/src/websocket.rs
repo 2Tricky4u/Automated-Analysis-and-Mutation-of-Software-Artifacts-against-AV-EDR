@@ -155,11 +155,10 @@ async fn handle_socket_filtered(
     let send_task = tokio::spawn(async move {
         while let Ok(event) = rx.recv().await {
             // Apply filter if specified
-            if let Some(ref filter_id) = filter {
-                if event.job_id != *filter_id {
+            if let Some(ref filter_id) = filter
+                && event.job_id != *filter_id {
                     continue;
                 }
-            }
 
             match serde_json::to_string(&event) {
                 Ok(json) => {

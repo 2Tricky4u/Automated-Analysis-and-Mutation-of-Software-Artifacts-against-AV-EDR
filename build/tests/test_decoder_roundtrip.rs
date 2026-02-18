@@ -32,7 +32,7 @@ fn simulate_c_english_decode(payload_str: &str, dictionary: &[&str]) -> Vec<u8> 
             dictionary
                 .iter()
                 .position(|&d| d == word)
-                .expect(&format!("Word '{}' not found in dictionary", word)) as u8
+                .unwrap_or_else(|| panic!("Word '{}' not found in dictionary", word)) as u8
         })
         .collect()
 }
