@@ -190,10 +190,7 @@ impl Args {
                 }
                 "--trace" => {
                     i += 1;
-                    a.trace = match argv[i].as_str() {
-                        "off" | "false" | "0" => false,
-                        _ => true,
-                    };
+                    a.trace = !matches!(argv[i].as_str(), "off" | "false" | "0");
                 }
                 "--mutation" | "-m" => {
                     i += 1;

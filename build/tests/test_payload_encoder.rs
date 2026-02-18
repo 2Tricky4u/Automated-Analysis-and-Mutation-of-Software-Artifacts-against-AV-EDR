@@ -178,8 +178,8 @@ fn test_generate_test_payload_sizes() {
     // Size 10 — 8 NOPs + 2 INT3
     let p10 = generate_test_payload(10);
     assert_eq!(p10.len(), 10);
-    for i in 0..8 {
-        assert_eq!(p10[i], 0x90, "Expected NOP at index {}", i);
+    for (i, &byte) in p10[..8].iter().enumerate() {
+        assert_eq!(byte, 0x90, "Expected NOP at index {}", i);
     }
     assert_eq!(p10[8], 0xCC);
     assert_eq!(p10[9], 0xCC);
