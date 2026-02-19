@@ -1,13 +1,20 @@
-/// Minimal mutation engine for AST and LLVM IR transformations
+/// Mutation engine for AST and LLVM IR transformations
 ///
-/// Implements CLAUDE.md Section 3: Fuzzer & Mutation Engine (minimal viable subset)
+/// Implements CLAUDE.md Section 3: Fuzzer & Mutation Engine
 ///
 /// Supported mutations:
-/// - llvm.nop_insert: Insert NOP instructions in LLVM IR (control-flow jitter)
-/// - ast.string_xor: XOR-encode string literals in C source (constant encoding)
+/// - ast.decon_rounds:          Iteration count (tree-sitter)
+/// - ast.fill_pattern:          Benign data content (tree-sitter)
+/// - ast.exec_decoy:            Execute from allocated memory (tree-sitter)
+/// - ast.timing_pattern:        Inter-operation delays (tree-sitter)
+/// - ast.protection_transition: Memory protection pattern (tree-sitter)
+/// - ast.string_xor:            XOR-encode string literals (legacy)
+/// - llvm.nop_insert:           Insert NOP instructions in LLVM IR (legacy)
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use tracing::{info, warn};
+
+use crate::transform::AstMutator;
 
 /// Mutation specification from proto (edr.common.Mutation)
 #[derive(Debug, Clone)]
@@ -41,6 +48,11 @@ impl Mutator {
     ///
     /// # Returns
     /// Transformed code and list of successfully applied mutation IDs
+    ///
+    /// Mutation routing:
+    /// - `ast.*` (except `string_xor`) → tree-sitter `AstMutator`
+    /// - `ast.string_xor`              → legacy inline transformer
+    /// - `llvm.nop_insert`             → legacy IR transformer
     pub fn apply(input: &[u8], mutations: &[MutationSpec]) -> Result<(Vec<u8>, Vec<String>)> {
         if mutations.is_empty() {
             return Ok((input.to_vec(), vec![]));
@@ -49,7 +61,25 @@ impl Mutator {
         let mut code = input.to_vec();
         let mut applied = Vec::new();
 
-        for mutation in mutations {
+        // Partition: tree-sitter AST mutations vs legacy
+        let (ts_mutations, legacy): (Vec<_>, Vec<_>) = mutations.iter().partition(|m| {
+            let (cat, name) = m.parse();
+            cat == "ast" && name != "string_xor"
+        });
+
+        // Phase 1: tree-sitter AST mutations (decon_rounds, fill_pattern, etc.)
+        if !ts_mutations.is_empty() {
+            let source =
+                String::from_utf8(code.clone()).context("C source must be valid UTF-8")?;
+            let mut ast = AstMutator::new().context("Failed to init tree-sitter")?;
+            let refs: Vec<&MutationSpec> = ts_mutations.iter().copied().collect();
+            let (mutated, ast_applied) = ast.apply(&source, &refs)?;
+            code = mutated.into_bytes();
+            applied.extend(ast_applied);
+        }
+
+        // Phase 2: legacy mutations (string_xor, llvm.nop_insert)
+        for mutation in &legacy {
             let (category, name) = mutation.parse();
 
             match (category, name) {
@@ -65,7 +95,6 @@ impl Mutator {
                 }
                 _ => {
                     warn!("Unknown mutation: {}", mutation.id);
-                    // Don't fail, just skip unknown mutations
                 }
             }
         }
@@ -302,5 +331,70 @@ entry:
         // Should pass through unchanged
         assert_eq!(output, source.as_bytes());
         assert!(applied.is_empty());
+    }
+
+    #[test]
+    fn test_ast_decon_rounds_via_mutator() {
+        let source = r#"void deconditioner() {
+    // @MUTATE:decon_rounds
+    for (int i = 0; i < DECON_ROUNDS; i++) {
+        do_stuff();
+    }
+}"#;
+
+        let mutation = MutationSpec {
+            id: "ast.decon_rounds".to_string(),
+            params: [
+                ("count".to_string(), "50".to_string()),
+                ("method".to_string(), "fixed".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        };
+
+        let (output, applied) = Mutator::apply(source.as_bytes(), &[mutation]).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        assert!(applied.contains(&"ast.decon_rounds".to_string()));
+        assert!(output_str.contains("i < 50"));
+    }
+
+    #[test]
+    fn test_mixed_ast_and_legacy_mutations() {
+        // Source with both @MUTATE marker and string literal
+        let source = r#"void deconditioner() {
+    char *msg = "Hello";
+    // @MUTATE:decon_rounds
+    for (int i = 0; i < DECON_ROUNDS; i++) {
+        do_stuff();
+    }
+}"#;
+
+        let mutations = vec![
+            MutationSpec {
+                id: "ast.decon_rounds".to_string(),
+                params: [
+                    ("count".to_string(), "30".to_string()),
+                    ("method".to_string(), "fixed".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            },
+            MutationSpec {
+                id: "ast.string_xor".to_string(),
+                params: [("xor_key".to_string(), "0x42".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+        ];
+
+        let (output, applied) = Mutator::apply(source.as_bytes(), &mutations).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+
+        // Both mutations should be applied
+        assert!(applied.contains(&"ast.decon_rounds".to_string()));
+        assert!(applied.contains(&"ast.string_xor".to_string()));
+        assert!(output_str.contains("i < 30"));
+        assert!(output_str.contains("xor_str_0"));
     }
 }

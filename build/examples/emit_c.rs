@@ -7,6 +7,7 @@
 //!   cargo run -p build --example emit_c
 //!   cargo run -p build --example emit_c -- --antiemulation sirallocalot -o out.c
 //!   cargo run -p build --example emit_c -- --payload sc.bin -m ast.string_xor --trace off
+//!   cargo run -p build --example emit_c -- --deconditioner basic -m ast.decon_rounds:count=50 --trace off -o mutated.c
 
 use build::mutator::MutationSpec;
 use build::{
@@ -79,19 +80,15 @@ fn main() {
 
     // ── Step 3: Mutate + strip markers (matches builder.rs:1339-1351) ───────
     let final_source = if !args.mutations.is_empty() {
-        let specs: Vec<MutationSpec> = args
-            .mutations
-            .iter()
-            .map(|id| MutationSpec {
-                id: id.clone(),
-                params: HashMap::new(),
-            })
-            .collect();
-        let (mutated, applied) = build::mutator::Mutator::apply(assembled.as_bytes(), &specs)
-            .unwrap_or_else(|e| {
-                eprintln!("Mutation error: {}", e);
-                process::exit(1);
-            });
+        for spec in &args.mutations {
+            eprintln!("[emit_c] Mutation: {} {:?}", spec.id, spec.params);
+        }
+        let (mutated, applied) =
+            build::mutator::Mutator::apply(assembled.as_bytes(), &args.mutations)
+                .unwrap_or_else(|e| {
+                    eprintln!("Mutation error: {}", e);
+                    process::exit(1);
+                });
         if !applied.is_empty() {
             eprintln!("[emit_c] Applied mutations: {:?}", applied);
         }
@@ -153,7 +150,7 @@ struct Args {
     antiemulation: String,
     deconditioner: String,
     trace: bool,
-    mutations: Vec<String>,
+    mutations: Vec<MutationSpec>,
 }
 
 impl Args {
@@ -194,7 +191,7 @@ impl Args {
                 }
                 "--mutation" | "-m" => {
                     i += 1;
-                    a.mutations.push(argv[i].clone());
+                    a.mutations.push(parse_mutation_spec(&argv[i]));
                 }
                 other => {
                     eprintln!("Unknown argument: {}", other);
@@ -204,6 +201,31 @@ impl Args {
             i += 1;
         }
         a
+    }
+}
+
+/// Parse "id:key=val,key=val" into a MutationSpec.
+/// Examples:
+///   "ast.string_xor"                        → id="ast.string_xor", params={}
+///   "ast.decon_rounds:count=50,method=fixed" → id="ast.decon_rounds", params={count:50, method:fixed}
+fn parse_mutation_spec(s: &str) -> MutationSpec {
+    if let Some((id, params_str)) = s.split_once(':') {
+        let params: HashMap<String, String> = params_str
+            .split(',')
+            .filter_map(|kv| {
+                let (k, v) = kv.split_once('=')?;
+                Some((k.to_string(), v.to_string()))
+            })
+            .collect();
+        MutationSpec {
+            id: id.to_string(),
+            params,
+        }
+    } else {
+        MutationSpec {
+            id: s.to_string(),
+            params: HashMap::new(),
+        }
     }
 }
 
@@ -225,9 +247,23 @@ OPTIONS:
     -p, --payload <FILE>            Raw .bin payload (default: 256-byte test payload)
     -o, --output <FILE>             Write to file (default: stdout)
     --antiemulation <NAME>          none | sirallocalot | timeraw | cpuburn | heapstress | fsenum | sleepaccel  (default: none)
-    --deconditioner <NAME>          none | alloc_loop | alloc_exec | thread_alloc | mixed_apis | entropy_flood  (default: none)
+    --deconditioner <NAME>          none | alloc_loop | alloc_exec | basic | thread_alloc | mixed_apis | entropy_flood  (default: none)
     --trace <on|off>                AST line tracing (default: on)
-    -m, --mutation <ID>             Mutation to apply (repeatable)
+    -m, --mutation <ID[:params]>    Mutation to apply (repeatable). Params: key=val,key=val
+
+MUTATION SYNTAX:
+    -m <id>                         No params (uses defaults)
+    -m <id>:key=val                 Single param
+    -m <id>:k1=v1,k2=v2            Multiple params
+
+AVAILABLE MUTATIONS:
+    ast.string_xor                  XOR-encode string literals (param: xor_key=0xAA)
+    ast.decon_rounds                Loop count (params: count=20, method=fixed|runtime)
+    ast.fill_pattern                Fill data (params: pattern=xor|nop_sled|random|zero)
+    ast.exec_decoy                  Execute from alloc'd mem (params: method=none|direct|thread)
+    ast.timing_pattern              Inter-op delays (params: min_ms=10, max_ms=100)
+    ast.protection_transition       Mem protection (params: pattern=rw_rx|rw_rwx|rw_r_rx)
+    llvm.nop_insert                 LLVM IR NOP insertion (param: density=0.3)
 
 EXAMPLES:
     cargo run -p build --example emit_c
@@ -235,6 +271,11 @@ EXAMPLES:
     cargo run -p build --example emit_c -- --antiemulation sirallocalot -o out.c
     cargo run -p build --example emit_c -- --trace off -o uninstrumented.c
     cargo run -p build --example emit_c -- -m ast.string_xor -o mutated.c
-    cargo run -p build --example emit_c -- -p real_payload.bin -o full.c"#
+
+    # Deconditioning mutations (require --deconditioner basic):
+    cargo run -p build --example emit_c -- --deconditioner basic -m ast.decon_rounds:count=50,method=fixed --trace off -o mutated.c
+    cargo run -p build --example emit_c -- --deconditioner basic -m ast.fill_pattern:pattern=nop_sled -m ast.exec_decoy:method=direct --trace off -o mutated.c
+    cargo run -p build --example emit_c -- --deconditioner basic -m ast.timing_pattern:min_ms=50,max_ms=200 --trace off -o mutated.c
+    cargo run -p build --example emit_c -- --deconditioner basic -m ast.protection_transition:pattern=rw_rwx --trace off -o mutated.c"#
     );
 }
