@@ -15,4 +15,4 @@ echo "[build-linux] REPO_ROOT = $REPO_ROOT"
 export CARGO_TARGET_DIR="$REPO_ROOT/target-wsl"
 
 # run scheduler
-cargo run --release -p scheduler
+cargo run --release -p controller

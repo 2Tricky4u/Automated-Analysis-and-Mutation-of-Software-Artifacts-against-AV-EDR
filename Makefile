@@ -54,17 +54,12 @@ etw-consumer:
 # Run controller
 run-controller:
 	@echo "Starting controller..."
-	cargo run --release -p scheduler
+	cargo run --release -p controller
 
 # Run worker
 run-worker:
 	@echo "Starting worker..."
 	cargo run --release -p worker-agent
-
-# Run triage client
-run-triage:
-	@echo "Running triage client..."
-	cargo run --release -p triage-client
 
 # Format code
 fmt:
@@ -117,7 +112,6 @@ help:
 	@echo "  etw-consumer       - Build ETW consumer (C++)"
 	@echo "  run-controller     - Run controller service"
 	@echo "  run-worker         - Run worker service"
-	@echo "  run-triage         - Run triage client"
 	@echo "  fmt                - Format code"
 	@echo "  lint               - Lint code"
 	@echo "  check-elastic      - Check Elasticsearch status"

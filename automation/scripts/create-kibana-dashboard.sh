@@ -1,7 +1,7 @@
 #!/bin/bash
 # Automated Kibana Dashboard Setup Script
 # Creates index patterns, saved searches, and dashboard
-# Based on ELASTICSEARCH-DATA-SCHEMA.md (verified against controller/scheduler/src/main.rs)
+# Based on ELASTICSEARCH-DATA-SCHEMA.md (verified against controller/src/main.rs)
 
 set -e
 
@@ -190,7 +190,7 @@ echo "    - payload_bb_ids (array): For event_type=coverage"
 echo "    - payload_hit_counts (array): For event_type=coverage"
 echo "    - payload_seq, payload_file, payload_line (for event_type=trace)"
 echo ""
-echo "  Runs fields (controller/scheduler/src/main.rs:565-578):"
+echo "  Runs fields (controller/src/main.rs:565-578):"
 echo "    - run_id (keyword): Unique execution identifier"
 echo "    - job_id (keyword): Job identifier (e.g., job-000001/round-1/baseline)"
 echo "    - status (keyword): 'success', 'error', 'timeout'"

@@ -76,7 +76,7 @@ try {
         Write-Info ""
         Write-Info "Troubleshooting:"
         Write-Info "  1. Check controller is running:"
-        Write-Info "     cd controller/scheduler && cargo run --release"
+        Write-Info "     cargo run --release -p controller"
         Write-Info "  2. Verify controller address: $ControllerAddress"
         Write-Info "  3. Check network connectivity:"
         Write-Info "     Test-NetConnection $($ControllerAddress.Split(':')[0]) -Port $($ControllerAddress.Split(':')[1])"

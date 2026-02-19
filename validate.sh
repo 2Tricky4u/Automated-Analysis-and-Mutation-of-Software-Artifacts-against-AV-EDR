@@ -15,9 +15,7 @@ echo ""
 # Check directory structure
 echo "Checking directory structure..."
 REQUIRED_DIRS=(
-    "controller/proto"
-    "controller/scheduler"
-    "controller/triage-client"
+    "controller/src"
     "worker/agent"
     "worker/harness-ipc"
     "build/dockerfiles"
@@ -44,7 +42,6 @@ REQUIRED_FILES=(
     "Cargo.toml"
     "README.md"
     "Makefile"
-    "controller/proto/edr.proto"
     "build/dockerfiles/docker-compose.yml"
     "telemetry/etw-consumer/CMakeLists.txt"
     "docs/ARCHITECTURE.md"
