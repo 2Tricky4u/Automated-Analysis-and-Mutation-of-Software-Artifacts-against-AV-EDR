@@ -265,6 +265,12 @@ AVAILABLE MUTATIONS:
     ast.timing_pattern              Inter-op delays (params: min_ms=10, max_ms=100)
     ast.protection_transition       Mem protection (params: pattern=rw_rx|rw_rwx|rw_r_rx)
     llvm.nop_insert                 LLVM IR NOP insertion (param: density=0.3)
+    llvm.opaque_predicate           LLVM IR opaque predicates (param: density=0.3)
+    llvm.junk_block                 LLVM IR dead blocks (param: count=2)
+
+    Note: llvm.* mutations operate on IR text, not C source. In emit_c they
+    will match block-label patterns in the C output but are intended for the
+    IR stage of the full build pipeline.
 
 EXAMPLES:
     cargo run -p build --example emit_c

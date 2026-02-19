@@ -259,9 +259,10 @@ fn test_unknown_mutation_skipped() {
 
 #[test]
 fn test_multiple_mutations_chained() {
-    // Use a C source that has both a block-like label (for nop_insert) and a
-    // string literal (for string_xor). nop_insert looks for non-indented lines
-    // ending with ':', and string_xor looks for quoted strings.
+    // IR mutations (nop_insert) run in phase 2 before legacy (string_xor)
+    // in phase 3, so the NOP's "nop" string literal gets XOR-encoded.
+    // We check for `asm sideeffect` which survives XOR encoding of the
+    // string argument.
     let c_source = "int main() {\nentry:\n  char *s = \"hi\";\n  return 0;\n}\n";
     let mutations = vec![
         MutationSpec {
@@ -283,9 +284,10 @@ fn test_multiple_mutations_chained() {
     assert!(applied.contains(&"ast.string_xor".to_string()));
     assert!(applied.contains(&"llvm.nop_insert".to_string()));
     // string_xor should have transformed the string
-    assert!(output_str.contains("xor_str_0"));
-    // nop_insert should have inserted a NOP after "entry:"
-    assert!(output_str.contains(r#"call void asm sideeffect "nop""#));
+    assert!(output_str.contains("xor_str_"));
+    // nop_insert should have inserted a NOP after "entry:" (asm sideeffect
+    // survives even though the "nop" string literal gets XOR-encoded)
+    assert!(output_str.contains("asm sideeffect"));
 }
 
 #[test]
@@ -380,10 +382,11 @@ fn test_string_xor_applied_twice() {
 }
 
 #[test]
-fn test_mutation_order_matters_when_cross_producing_content() {
-    // nop_insert inserts `call void asm sideeffect "nop", ""()` which contains
-    // string literals. If string_xor runs after nop_insert, it transforms those
-    // strings too. This test documents that mutation order CAN matter.
+fn test_ir_before_legacy_ordering() {
+    // With 3-way routing, IR mutations always run in phase 2 and legacy
+    // (string_xor) always in phase 3, regardless of input order.
+    // So nop_insert always runs first, then string_xor XOR-encodes
+    // both the original "hello" AND the NOP's "nop"/"" string literals.
     let source = "entry:\n  char *s = \"hello\";\n";
 
     let xor = MutationSpec {
@@ -397,35 +400,27 @@ fn test_mutation_order_matters_when_cross_producing_content() {
             .collect(),
     };
 
-    // xor-first: only "hello" is XOR'd, then NOP is inserted cleanly
-    let (out_xf, applied_xf) =
+    // Both orderings should produce identical output now
+    let (out_a, applied_a) =
         Mutator::apply(source.as_bytes(), &[xor.clone(), nop.clone()]).unwrap();
-    // nop-first: NOP is inserted (with "nop" and "" strings), then XOR transforms all strings
-    let (out_nf, applied_nf) = Mutator::apply(source.as_bytes(), &[nop, xor]).unwrap();
+    let (out_b, applied_b) = Mutator::apply(source.as_bytes(), &[nop, xor]).unwrap();
 
-    // Both orders should successfully apply both mutations
-    assert_eq!(applied_xf.len(), 2);
-    assert_eq!(applied_nf.len(), 2);
+    assert_eq!(applied_a.len(), 2);
+    assert_eq!(applied_b.len(), 2);
 
-    let xf_str = String::from_utf8(out_xf).unwrap();
-    let nf_str = String::from_utf8(out_nf).unwrap();
+    let a_str = String::from_utf8(out_a).unwrap();
+    let b_str = String::from_utf8(out_b).unwrap();
 
-    // xor-first: "hello" is XOR'd, NOP asm string is clean
-    assert!(
-        xf_str.contains("xor_str_0"),
-        "xor-first should XOR the hello string"
-    );
-    assert!(
-        xf_str.contains(r#"sideeffect "nop""#),
-        "xor-first: NOP string should be clean"
+    assert_eq!(
+        a_str, b_str,
+        "Input order should not affect output (IR always runs before legacy)"
     );
 
-    // nop-first: NOP's "nop" and "" strings are ALSO XOR'd by the second pass
-    assert!(nf_str.contains("xor_str_"), "nop-first should XOR strings");
-    // The NOP asm's string literals get transformed too
+    // NOP's string literals are XOR-encoded by string_xor (phase 3)
+    assert!(a_str.contains("xor_str_"), "Strings should be XOR-encoded");
     assert!(
-        !nf_str.contains(r#"sideeffect "nop""#),
-        "nop-first: NOP string should be XOR-transformed by second pass"
+        a_str.contains("asm sideeffect"),
+        "NOP asm should be present"
     );
 }
 
@@ -445,6 +440,208 @@ fn test_string_xor_with_escape_sequences() {
     assert!(applied.contains(&"ast.string_xor".to_string()));
     assert!(output_str.contains("xor_str_0"));
 }
+
+// ── Opaque predicate integration tests ───────────────────────────────────
+
+#[test]
+fn test_opaque_predicate_density_1() {
+    let ir = common::ir_multi_block(); // 2 unconditional branches
+    let mutation = MutationSpec {
+        id: "llvm.opaque_predicate".to_string(),
+        params: [("density".to_string(), "1.0".to_string())]
+            .into_iter()
+            .collect(),
+    };
+
+    let (output, applied) = Mutator::apply(ir.as_bytes(), &[mutation]).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(applied.contains(&"llvm.opaque_predicate".to_string()));
+    let pred_count = output_str.matches("icmp eq i32 0, 0").count();
+    assert_eq!(
+        pred_count, 2,
+        "Expected 2 opaque predicates, got {}",
+        pred_count
+    );
+}
+
+#[test]
+fn test_opaque_predicate_density_0() {
+    let ir = common::ir_multi_block();
+    let mutation = MutationSpec {
+        id: "llvm.opaque_predicate".to_string(),
+        params: [("density".to_string(), "0.0".to_string())]
+            .into_iter()
+            .collect(),
+    };
+
+    let (output, _) = Mutator::apply(ir.as_bytes(), &[mutation]).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert_eq!(output_str.matches("icmp eq i32 0, 0").count(), 0);
+}
+
+#[test]
+fn test_opaque_predicate_no_unconditional() {
+    // IR with only conditional branches
+    let ir = r#"define void @f() {
+entry:
+  %cmp = icmp eq i32 1, 1
+  br i1 %cmp, label %a, label %b
+a:
+  ret void
+b:
+  ret void
+}
+"#;
+    let mutation = MutationSpec {
+        id: "llvm.opaque_predicate".to_string(),
+        params: [("density".to_string(), "1.0".to_string())]
+            .into_iter()
+            .collect(),
+    };
+
+    let (output, _) = Mutator::apply(ir.as_bytes(), &[mutation]).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert_eq!(
+        output_str.matches("icmp eq i32 0, 0").count(),
+        0,
+        "No unconditional branches → no opaque predicates"
+    );
+}
+
+#[test]
+fn test_opaque_predicate_default_density() {
+    let ir = common::ir_multi_block();
+    let mutation = MutationSpec {
+        id: "llvm.opaque_predicate".to_string(),
+        params: HashMap::new(), // defaults to 0.3
+    };
+
+    let (output, applied) = Mutator::apply(ir.as_bytes(), &[mutation]).unwrap();
+    let _output_str = String::from_utf8(output).unwrap();
+    assert!(applied.contains(&"llvm.opaque_predicate".to_string()));
+}
+
+// ── Junk block integration tests ─────────────────────────────────────────
+
+#[test]
+fn test_junk_block_default_count() {
+    let ir = common::ir_multi_block();
+    let mutation = MutationSpec {
+        id: "llvm.junk_block".to_string(),
+        params: HashMap::new(), // defaults to count=2
+    };
+
+    let (output, applied) = Mutator::apply(ir.as_bytes(), &[mutation]).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(applied.contains(&"llvm.junk_block".to_string()));
+    assert_eq!(
+        output_str.matches("unreachable").count(),
+        2,
+        "Default count=2"
+    );
+}
+
+#[test]
+fn test_junk_block_custom_count() {
+    let ir = common::ir_multi_block();
+    let mutation = MutationSpec {
+        id: "llvm.junk_block".to_string(),
+        params: [("count".to_string(), "4".to_string())]
+            .into_iter()
+            .collect(),
+    };
+
+    let (output, _) = Mutator::apply(ir.as_bytes(), &[mutation]).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert_eq!(output_str.matches("unreachable").count(), 4);
+}
+
+#[test]
+fn test_junk_block_no_functions() {
+    let ir = common::ir_no_blocks(); // declarations only
+    let mutation = MutationSpec {
+        id: "llvm.junk_block".to_string(),
+        params: [("count".to_string(), "5".to_string())]
+            .into_iter()
+            .collect(),
+    };
+
+    let (output, _) = Mutator::apply(ir.as_bytes(), &[mutation]).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert_eq!(
+        output_str.matches("unreachable").count(),
+        0,
+        "Declarations only → no junk blocks"
+    );
+}
+
+#[test]
+fn test_junk_block_preserves_structure() {
+    let ir = common::ir_multi_block();
+    let mutation = MutationSpec {
+        id: "llvm.junk_block".to_string(),
+        params: [("count".to_string(), "3".to_string())]
+            .into_iter()
+            .collect(),
+    };
+
+    let (output, _) = Mutator::apply(ir.as_bytes(), &[mutation]).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    for line in ir.lines() {
+        assert!(
+            output_str.contains(line),
+            "Original line missing: {:?}",
+            line
+        );
+    }
+}
+
+// ── Combined IR mutations integration test ───────────────────────────────
+
+#[test]
+fn test_all_three_ir_mutations_combined() {
+    let ir = common::ir_multi_block();
+    let mutations = vec![
+        MutationSpec {
+            id: "llvm.nop_insert".to_string(),
+            params: [("density".to_string(), "1.0".to_string())]
+                .into_iter()
+                .collect(),
+        },
+        MutationSpec {
+            id: "llvm.opaque_predicate".to_string(),
+            params: [("density".to_string(), "1.0".to_string())]
+                .into_iter()
+                .collect(),
+        },
+        MutationSpec {
+            id: "llvm.junk_block".to_string(),
+            params: [("count".to_string(), "2".to_string())]
+                .into_iter()
+                .collect(),
+        },
+    ];
+
+    let (output, applied) = Mutator::apply(ir.as_bytes(), &mutations).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert_eq!(applied.len(), 3, "All 3 IR mutations should apply");
+    assert!(output_str.contains("asm sideeffect"), "NOPs present");
+    assert!(
+        output_str.contains("icmp eq i32 0, 0"),
+        "Opaque predicates present"
+    );
+    assert!(output_str.contains("unreachable"), "Junk blocks present");
+}
+
+// ── String content edge cases (unchanged) ────────────────────────────────
 
 #[test]
 fn test_string_xor_with_include_directive() {
