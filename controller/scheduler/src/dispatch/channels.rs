@@ -12,7 +12,9 @@
 
 use std::time::SystemTime;
 
-use super::types::{JobId, JobOutcome, MutationSpec, RoundId, RoundSummary, RunId, RunOutcome};
+use super::types::{
+    JobId, JobOutcome, ModuleSelectionSpec, MutationSpec, RoundId, RoundSummary, RunId, RunOutcome,
+};
 
 // ============================================================================
 // Service -> Orchestrator (Job Control Commands)
@@ -68,6 +70,7 @@ pub struct RoundCompletedData {
     pub instrumented_outcome: RunOutcome,
     pub mutation_specs: Vec<MutationSpec>,
     pub mutations: Vec<String>,
+    pub modules: ModuleSelectionSpec,
     pub baseline_vm_id: String,
     pub instrumented_vm_id: String,
     pub round_started_at: SystemTime,

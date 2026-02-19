@@ -11,6 +11,7 @@ use super::job_worker::JobWorker;
 use super::run_pool::RunPool;
 use super::types::{JobId, JobOutcome, JobSession, WorkerId, WorkerInfo};
 use crate::storage::{EsStorage, RunIndexParams, TelemetryContext};
+use crate::triage::coverage_selector::CoverageSelector;
 use crate::vm::{TargetEvent, TargetManager};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -163,7 +164,13 @@ impl Orchestrator {
             job_id, job.max_rounds, job.target_os, job.required_capabilities
         );
 
-        let worker = JobWorker::new(job, Arc::clone(&self.run_pool), self.job_event_tx.clone());
+        let selector = Arc::new(CoverageSelector::new());
+        let worker = JobWorker::new(
+            job,
+            Arc::clone(&self.run_pool),
+            self.job_event_tx.clone(),
+            selector,
+        );
 
         let shutdown_token = worker.cancellation_token();
         tokio::spawn(worker.run());
@@ -271,6 +278,7 @@ impl Orchestrator {
                     instrumented_outcome,
                     mutation_specs,
                     mutations,
+                    modules,
                     baseline_vm_id,
                     instrumented_vm_id,
                     round_started_at,
@@ -307,6 +315,7 @@ impl Orchestrator {
                             &b_run_id,
                             &i_run_id,
                             Some(&started_at_str),
+                            Some(&modules),
                         )
                         .await
                     {
