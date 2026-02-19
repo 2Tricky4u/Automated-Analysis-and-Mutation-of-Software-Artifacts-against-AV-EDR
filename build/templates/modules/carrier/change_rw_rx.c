@@ -23,6 +23,7 @@ int carrier() {
         return 2;
     }
 
+    ARTIFACT_CHECKPOINT("Launching");
     // 4. Execute
     (*(void(*)())(dest))();
 

@@ -87,17 +87,21 @@ int main(void) {
         // @MUTATE:dead_code_insertion
         return 1;
     }
+    ARTIFACT_CHECKPOINT("guardrails_passed");
 
     // @MUTATE:timing_jitter
     antiemulation();
+    ARTIFACT_CHECKPOINT("antiemulation_passed");
     // @MUTATE:api_sequence_obfuscation
 
     // @MUTATE:timing_jitter
     deconditioner();
+    ARTIFACT_CHECKPOINT("deconditioner_passed");
     // @MUTATE:api_sequence_obfuscation
 
     // @MUTATE:timing_jitter
     decoy();
+    ARTIFACT_CHECKPOINT("decoy_passed");
     // @MUTATE:api_sequence_obfuscation
 
     // @MUTATE:timing_jitter
