@@ -69,8 +69,7 @@ impl Mutator {
 
         // Phase 1: tree-sitter AST mutations (decon_rounds, fill_pattern, etc.)
         if !ts_mutations.is_empty() {
-            let source =
-                String::from_utf8(code.clone()).context("C source must be valid UTF-8")?;
+            let source = String::from_utf8(code.clone()).context("C source must be valid UTF-8")?;
             let mut ast = AstMutator::new().context("Failed to init tree-sitter")?;
             let refs: Vec<&MutationSpec> = ts_mutations.iter().copied().collect();
             let (mutated, ast_applied) = ast.apply(&source, &refs)?;

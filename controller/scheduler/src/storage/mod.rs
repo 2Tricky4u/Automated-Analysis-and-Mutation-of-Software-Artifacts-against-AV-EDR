@@ -20,7 +20,9 @@ use elasticsearch::Elasticsearch;
 
 use crate::automutate::common::TelemetryData;
 use crate::automutate::controller::StatusReport;
-use crate::dispatch::types::{JobOutcome, JobSession, ModuleSelectionSpec, MutationSpec, RoundSummary};
+use crate::dispatch::types::{
+    JobOutcome, JobSession, ModuleSelectionSpec, MutationSpec, RoundSummary,
+};
 pub use runs::RunIndexParams;
 
 /// Correlation context for enriching telemetry documents.

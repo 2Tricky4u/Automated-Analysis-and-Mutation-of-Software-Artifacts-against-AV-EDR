@@ -84,11 +84,12 @@ fn main() {
             eprintln!("[emit_c] Mutation: {} {:?}", spec.id, spec.params);
         }
         let (mutated, applied) =
-            build::mutator::Mutator::apply(assembled.as_bytes(), &args.mutations)
-                .unwrap_or_else(|e| {
+            build::mutator::Mutator::apply(assembled.as_bytes(), &args.mutations).unwrap_or_else(
+                |e| {
                     eprintln!("Mutation error: {}", e);
                     process::exit(1);
-                });
+                },
+            );
         if !applied.is_empty() {
             eprintln!("[emit_c] Applied mutations: {:?}", applied);
         }
