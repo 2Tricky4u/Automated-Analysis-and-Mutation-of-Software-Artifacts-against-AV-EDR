@@ -353,7 +353,7 @@ impl ArtifactBuilder {
                 .join(template_name)
                 .join(&ir_filename);
 
-            self.compile_source_to_ir(&temp_source_path, &ir_path)
+            self.compile_source_to_ir(&temp_source_path, &ir_path, true)
                 .await?;
 
             // Clean up temp source
@@ -630,7 +630,12 @@ impl ArtifactBuilder {
     }
 
     /// Compile C source to LLVM IR
-    async fn compile_source_to_ir(&self, source_path: &Path, ir_path: &Path) -> Result<()> {
+    async fn compile_source_to_ir(
+        &self,
+        source_path: &Path,
+        ir_path: &Path,
+        enable_instrumentation: bool,
+    ) -> Result<()> {
         let xwin = &self.xwin;
 
         // Get runtime include path for instrumentation.h
@@ -646,11 +651,15 @@ impl ArtifactBuilder {
         args.extend(xwin.include_args());
         args.extend_from_slice(&[
             "-I",
-            runtime_include,            // Add instrumentation header path
-            "-DENABLE_INSTRUMENTATION", // Always define when compiling to IR (instrumentation will be applied)
-            "-S",                       // Emit assembly (LLVM IR in this case)
-            "-emit-llvm",               // Output LLVM IR instead of native assembly
-            "-O0",                      // No optimization to preserve all instructions for mutation
+            runtime_include, // Add instrumentation header path
+        ]);
+        if enable_instrumentation {
+            args.push("-DENABLE_INSTRUMENTATION");
+        }
+        args.extend_from_slice(&[
+            "-S",         // Emit assembly (LLVM IR in this case)
+            "-emit-llvm", // Output LLVM IR instead of native assembly
+            "-O0",        // No optimization to preserve all instructions for mutation
             "-o",
             ir_path.to_str().unwrap(),
             source_path.to_str().unwrap(),
@@ -877,7 +886,7 @@ impl ArtifactBuilder {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        self.compile_source_to_ir(&source_for_compilation, &ir_path)
+        self.compile_source_to_ir(&source_for_compilation, &ir_path, true)
             .await
             .context("Failed to compile source to IR for instrumentation")?;
 
@@ -1256,23 +1265,36 @@ impl ArtifactBuilder {
             modules.guardrail
         );
 
-        // Step 4: Apply AST mutations or strip @MUTATE markers
-        let final_source = if !mutations.is_empty() {
-            // Apply AST mutations at @MUTATE marker locations
+        // Step 4: Partition mutations into AST and LLVM, apply AST mutations
+        let ast_mutations: Vec<_> = mutations
+            .iter()
+            .filter(|m| !m.id.starts_with("llvm."))
+            .cloned()
+            .collect();
+        let llvm_mutations: Vec<_> = mutations
+            .iter()
+            .filter(|m| m.id.starts_with("llvm."))
+            .cloned()
+            .collect();
+        let has_llvm_mutations = !llvm_mutations.is_empty();
+
+        // Apply AST mutations to C source (or just strip markers)
+        let (final_source, mut mutations_applied) = if !ast_mutations.is_empty() {
             let source_bytes = assembled_source.as_bytes().to_vec();
-            let (mutated, applied) = mutator::Mutator::apply(&source_bytes, mutations)?;
-
-            debug!("Applied {} mutations: {:?}", applied.len(), applied);
-
-            // Strip remaining @MUTATE markers (ones not matched by mutations)
-            crate::template::assembler::strip_mutation_markers(&String::from_utf8_lossy(&mutated))
+            let (mutated, applied) = mutator::Mutator::apply(&source_bytes, &ast_mutations)?;
+            debug!("Applied {} AST mutations: {:?}", applied.len(), applied);
+            let stripped = crate::template::assembler::strip_mutation_markers(
+                &String::from_utf8_lossy(&mutated),
+            );
+            (stripped, applied)
         } else {
-            // No mutations - just strip all @MUTATE markers for clean compilation
-            crate::template::assembler::strip_mutation_markers(&assembled_source)
+            (
+                crate::template::assembler::strip_mutation_markers(&assembled_source),
+                Vec::new(),
+            )
         };
 
-        // Step 5: Build the assembled source using existing infrastructure
-        // Create a unique artifact name based on module selection
+        // Step 5: Build the assembled source
         let artifact_name = format!(
             "modular_{}_{}_{}",
             modules.carrier,
@@ -1284,7 +1306,6 @@ impl ArtifactBuilder {
                 .unwrap_or("unknown")
         );
 
-        // Write assembled source to temp file
         let temp_source = self.config.output_dir.join(format!("{}.c", artifact_name));
 
         tokio::fs::write(&temp_source, &final_source)
@@ -1297,25 +1318,60 @@ impl ArtifactBuilder {
             final_source.len()
         );
 
-        // Determine if we need runtime linking
         let needs_runtime = trace_mode != "off" && !trace_mode.is_empty();
 
-        // Build using invoke_clang
         let unique_id = Uuid::new_v4();
         let temp_output = self
             .config
             .output_dir
             .join(format!("{}.{}.exe", artifact_name, unique_id));
 
-        // Use "modular" as template name for library lookup (no extra libs needed)
-        self.invoke_clang_internal("modular", &temp_source, &temp_output, needs_runtime)
-            .await
-            .context("Failed to compile assembled template")?;
+        if has_llvm_mutations {
+            // --- IR mutation path: C → IR → mutate IR → EXE ---
+            let temp_ir = self.config.output_dir.join(format!("{}.ll", artifact_name));
 
-        // Clean up temp source
-        let _ = tokio::fs::remove_file(&temp_source).await;
+            // Compile C source to LLVM IR (without instrumentation flag —
+            // ARTIFACT_CHECKPOINT expands to ((void)0) so no unresolved symbols)
+            self.compile_source_to_ir(&temp_source, &temp_ir, false)
+                .await
+                .context("Failed to compile source to IR for LLVM mutations")?;
 
-        // Finalize artifact
+            // Apply LLVM mutations to the IR
+            let ir_content = tokio::fs::read(&temp_ir)
+                .await
+                .context("Failed to read LLVM IR for mutation")?;
+
+            let (mutated_ir, llvm_applied) = mutator::Mutator::apply(&ir_content, &llvm_mutations)?;
+            debug!(
+                "Applied {} LLVM mutations: {:?}",
+                llvm_applied.len(),
+                llvm_applied
+            );
+            mutations_applied.extend(llvm_applied);
+
+            // Write mutated IR back
+            tokio::fs::write(&temp_ir, &mutated_ir)
+                .await
+                .context("Failed to write mutated IR")?;
+
+            // Compile IR → EXE at -O0 (preserves NOP inserts, opaque predicates)
+            self.compile_ir_to_exe(&temp_ir, &temp_output, "modular")
+                .await
+                .context("Failed to compile mutated IR to executable")?;
+
+            // Clean up IR file (keep .c for potential instrumentation)
+            let _ = tokio::fs::remove_file(&temp_ir).await;
+        } else {
+            // --- Direct path: C → EXE (unchanged from original) ---
+            self.invoke_clang_internal("modular", &temp_source, &temp_output, needs_runtime)
+                .await
+                .context("Failed to compile assembled template")?;
+
+            // Clean up temp source (no IR path needs it)
+            let _ = tokio::fs::remove_file(&temp_source).await;
+        }
+
+        // Step 6: Finalize artifact
         let (artifact_id, final_output, size_bytes) = self.finalize_artifact(&temp_output).await?;
 
         info!(
@@ -1323,12 +1379,11 @@ impl ArtifactBuilder {
             artifact_id, size_bytes, final_output
         );
 
-        let mutations_applied: Vec<String> = mutations.iter().map(|m| m.id.clone()).collect();
         let compiler_version = self.get_clang_version()?;
 
         let built = build_artifact_metadata(
             artifact_id,
-            temp_source.clone(), // We'll use this for instrumentation
+            temp_source.clone(),
             final_output,
             size_bytes,
             compiler_version,
@@ -1336,13 +1391,23 @@ impl ArtifactBuilder {
             mutations_applied,
         );
 
-        // Apply instrumentation if needed
+        // Step 7: Apply instrumentation if needed
         if needs_runtime {
-            // For modular templates, we need to save the source for instrumentation
-            // Re-write the source since we cleaned it up
-            tokio::fs::write(&temp_source, &final_source)
-                .await
-                .context("Failed to re-write source for instrumentation")?;
+            if has_llvm_mutations {
+                warn!(
+                    "LLVM mutations + instrumentation: the instrumented binary will be \
+                     re-compiled from AST-mutated source without IR mutations. \
+                     Per the two-run differential protocol, Run A (instrumented) is for \
+                     observation; Run B (baseline with IR mutations) is ground truth."
+                );
+            }
+
+            // Write source for instrumentation (IR path kept .c, direct path deleted it)
+            if !tokio::fs::try_exists(&temp_source).await.unwrap_or(false) {
+                tokio::fs::write(&temp_source, &final_source)
+                    .await
+                    .context("Failed to re-write source for instrumentation")?;
+            }
 
             let mut built_with_source = built;
             built_with_source.source_path = temp_source;
@@ -1351,11 +1416,14 @@ impl ArtifactBuilder {
                 .apply_instrumentation(built_with_source, trace_mode)
                 .await?;
 
-            // Clean up source file after instrumentation
             let _ = tokio::fs::remove_file(&instrumented.source_path).await;
 
             Ok(instrumented)
         } else {
+            // Clean up .c if IR path left it around
+            if has_llvm_mutations {
+                let _ = tokio::fs::remove_file(&temp_source).await;
+            }
             Ok(built)
         }
     }
