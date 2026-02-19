@@ -111,10 +111,7 @@ impl AstMutator {
             .get("count")
             .and_then(|v| v.parse().ok())
             .unwrap_or(20);
-        let method = params
-            .get("method")
-            .map(|s| s.as_str())
-            .unwrap_or("fixed");
+        let method = params.get("method").map(|s| s.as_str()).unwrap_or("fixed");
 
         let lines: Vec<&str> = source.lines().collect();
         let marker_idx = marker.line - 1; // 1-indexed → 0-indexed
@@ -123,7 +120,10 @@ impl AstMutator {
         let for_idx = (marker_idx + 1..lines.len()).find(|&i| lines[i].trim().starts_with("for"));
 
         let Some(for_idx) = for_idx else {
-            warn!("decon_rounds: no for-loop found after marker at line {}", marker.line);
+            warn!(
+                "decon_rounds: no for-loop found after marker at line {}",
+                marker.line
+            );
             return Ok(source.to_string());
         };
 
@@ -172,11 +172,14 @@ impl AstMutator {
         let marker_idx = marker.line - 1;
 
         // Find the fill loop start
-        let fill_start = (marker_idx + 1..lines.len())
-            .find(|&i| lines[i].trim().starts_with("for"));
+        let fill_start =
+            (marker_idx + 1..lines.len()).find(|&i| lines[i].trim().starts_with("for"));
 
         let Some(fill_start) = fill_start else {
-            warn!("fill_pattern: no for-loop found after marker at line {}", marker.line);
+            warn!(
+                "fill_pattern: no for-loop found after marker at line {}",
+                marker.line
+            );
             return Ok(source.to_string());
         };
 
@@ -295,7 +298,10 @@ impl AstMutator {
         });
 
         let Some(target_idx) = target_idx else {
-            warn!("timing_pattern: no target statement after marker at line {}", marker.line);
+            warn!(
+                "timing_pattern: no target statement after marker at line {}",
+                marker.line
+            );
             return Ok(source.to_string());
         };
 
@@ -319,10 +325,7 @@ impl AstMutator {
         marker: &MutationMarker,
         params: &HashMap<String, String>,
     ) -> Result<String> {
-        let pattern = params
-            .get("pattern")
-            .map(|s| s.as_str())
-            .unwrap_or("rw_rx");
+        let pattern = params.get("pattern").map(|s| s.as_str()).unwrap_or("rw_rx");
 
         if pattern == "rw_rx" {
             return Ok(source.to_string()); // default, no change
@@ -332,8 +335,7 @@ impl AstMutator {
         let marker_idx = marker.line - 1;
 
         // Find VirtualProtect line after marker
-        let vp_idx = (marker_idx + 1..lines.len())
-            .find(|&i| lines[i].contains("VirtualProtect"));
+        let vp_idx = (marker_idx + 1..lines.len()).find(|&i| lines[i].contains("VirtualProtect"));
 
         let Some(vp_idx) = vp_idx else {
             warn!(
@@ -355,13 +357,14 @@ impl AstMutator {
             }
             "rw_r_rx" => {
                 // Insert intermediate R protection before the RX step
-                let staged = format!(
-                    "{indent}VirtualProtect(buf, PAYLOAD_LEN, 0x02, &old_prot);"
-                );
+                let staged = format!("{indent}VirtualProtect(buf, PAYLOAD_LEN, 0x02, &old_prot);");
                 out.insert(vp_idx, staged);
             }
             _ => {
-                warn!("protection_transition: unknown pattern '{}', skipping", pattern);
+                warn!(
+                    "protection_transition: unknown pattern '{}', skipping",
+                    pattern
+                );
             }
         }
 
@@ -463,7 +466,10 @@ void deconditioner() {
     #[test]
     fn test_decon_rounds_runtime() {
         let mut ast = AstMutator::new().unwrap();
-        let spec = make_spec("ast.decon_rounds", &[("count", "50"), ("method", "runtime")]);
+        let spec = make_spec(
+            "ast.decon_rounds",
+            &[("count", "50"), ("method", "runtime")],
+        );
         let (out, applied) = ast.apply(basic_template(), &[&spec]).unwrap();
 
         assert!(applied.contains(&"ast.decon_rounds".to_string()));
@@ -582,7 +588,11 @@ void deconditioner() {
 
         // basic.c has two @MUTATE:timing_pattern markers
         let sleep_count = out.matches("Sleep(").count();
-        assert_eq!(sleep_count, 2, "Expected 2 Sleep() calls, got {}", sleep_count);
+        assert_eq!(
+            sleep_count, 2,
+            "Expected 2 Sleep() calls, got {}",
+            sleep_count
+        );
     }
 
     #[test]
@@ -604,7 +614,11 @@ void deconditioner() {
         assert!(applied.contains(&"ast.protection_transition".to_string()));
         // Should have the original VirtualProtect plus an intermediate one
         let vp_count = out.matches("VirtualProtect").count();
-        assert!(vp_count >= 2, "Expected at least 2 VirtualProtect calls, got {}", vp_count);
+        assert!(
+            vp_count >= 2,
+            "Expected at least 2 VirtualProtect calls, got {}",
+            vp_count
+        );
         assert!(out.contains("0x02")); // PAGE_READONLY
     }
 
