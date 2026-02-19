@@ -575,7 +575,7 @@ impl RoundAgg {
         instrumented: &RunOutcome,
         category: DifferentialCategory,
     ) -> f64 {
-        let timeout = self.timeout_ms.max(1) as f64;
+        let timeout = self.timeout_ms.max(100*1000) as f64;
         let survival_ratio = (baseline.elapsed_ms / timeout).clamp(0.0, 1.0);
         let payload_reached = if baseline.exit_code == 0 { 1.0 } else { 0.0 };
         let exits_match = baseline.exit_code == instrumented.exit_code;

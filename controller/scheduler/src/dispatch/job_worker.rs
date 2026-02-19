@@ -45,7 +45,7 @@ const MAX_IN_FLIGHT_ROUNDS: usize = 5;
 const MAX_PENDING_RUNS: usize = 6;
 
 /// Default timeout for run execution
-const DEFAULT_TIMEOUT_SECONDS: u32 = 120;
+const DEFAULT_TIMEOUT_SECONDS: u32 = 10;
 
 /// Interval for checking if more rounds can be produced
 const PRODUCTION_CHECK_INTERVAL_MS: u64 = 100;
