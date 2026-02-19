@@ -1,13 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    # Controller components
-    "controller/scheduler",
-    "controller/selector",
-    "controller/triage-engine",
-    "controller/rule-manager",
-    "controller/differential-analyzer",
-    "controller/triage-client",
+    # Controller
+    "controller",
 
     # Worker components
     "worker/agent",
