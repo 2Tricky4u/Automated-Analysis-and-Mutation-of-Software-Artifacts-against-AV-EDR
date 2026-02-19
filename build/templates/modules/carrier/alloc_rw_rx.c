@@ -32,6 +32,7 @@ int carrier() {
     }
     // @MUTATE:timing_jitter
 
+    ARTIFACT_CHECKPOINT("Launching");
     // @MUTATE:execution_method(direct|callback|fiber|threadpool)
     (*(void(*)())(dest))();
 

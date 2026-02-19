@@ -179,6 +179,7 @@ int carrier() {
     // @MUTATE:timing_jitter
 
     // @MUTATE:execution_method(direct|callback|fiber|threadpool)
+    ARTIFACT_CHECKPOINT("Launching");
     (*(void(*)())(dest))();
 
     return 0;
