@@ -105,7 +105,7 @@ async fn create_rounds_template(es: &Elasticsearch) -> anyhow::Result<()> {
                 "number_of_replicas": 0
             },
             "mappings": {
-                "_meta": { "version": 3 },
+                "_meta": { "version": 4 },
                 "properties": {
                     "round_id": { "type": "keyword" },
                     "job_id": { "type": "keyword" },
@@ -122,6 +122,18 @@ async fn create_rounds_template(es: &Elasticsearch) -> anyhow::Result<()> {
                     "detected": { "type": "boolean" },
                     "behavior_match": { "type": "boolean" },
                     "evasion_score": { "type": "float" },
+                    "differential_category": { "type": "keyword" },
+                    "modules": {
+                        "properties": {
+                            "carrier": { "type": "keyword" },
+                            "decoder": { "type": "keyword" },
+                            "antiemulation": { "type": "keyword" },
+                            "deconditioner": { "type": "keyword" },
+                            "guardrail": { "type": "keyword" },
+                            "virtualprotect": { "type": "keyword" },
+                            "decoy": { "type": "keyword" }
+                        }
+                    },
                     "status": { "type": "keyword" },
                     "started_at": { "type": "date" },
                     "completed_at": { "type": "date" }

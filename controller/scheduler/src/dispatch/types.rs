@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use crate::triage::SearchSpace;
+
 // ============================================================================
 // Build Configuration
 // ============================================================================
@@ -380,6 +382,7 @@ pub struct RoundSummary {
     pub round_id: RoundId,
     pub round_number: u32,
     pub mutations: Vec<String>,
+    pub modules: ModuleSelectionSpec,
     pub detected: bool,
     pub behavior_match: bool,
     pub evasion_score: f64,
@@ -399,6 +402,9 @@ pub struct JobSession {
 
     // Build configuration
     pub build_spec: ModularBuildSpec,
+
+    // Selection
+    pub search_space: SearchSpace,
 
     // Progress
     pub current_round: u32,
@@ -421,6 +427,7 @@ impl JobSession {
             target_os: None,
             required_capabilities: Vec::new(),
             build_spec,
+            search_space: SearchSpace::default(),
             current_round: 0,
             max_rounds,
             stop_on_evasion: false,
@@ -500,6 +507,7 @@ pub struct RoundSpec {
     pub job_id: JobId,
     pub round_number: u32,
     pub mutations: Vec<MutationSpec>,
+    pub modules: ModuleSelectionSpec,
 }
 
 /// Minimal outcome from a run
@@ -553,6 +561,7 @@ impl RoundAgg {
             round_id: self.spec.id.clone(),
             round_number: self.spec.round_number,
             mutations: self.spec.mutations.iter().map(|m| m.id.clone()).collect(),
+            modules: self.spec.modules.clone(),
             detected,
             behavior_match,
             evasion_score,
@@ -790,6 +799,7 @@ mod tests {
             round_id: id,
             round_number: 1,
             mutations: vec![],
+            modules: ModuleSelectionSpec::default(),
             detected: false,
             behavior_match: true,
             evasion_score: 1.0,
@@ -807,6 +817,7 @@ mod tests {
             job_id: JobId("j1".into()),
             round_number: 1,
             mutations: vec![],
+            modules: ModuleSelectionSpec::default(),
         };
 
         let mut agg = RoundAgg {
@@ -924,6 +935,7 @@ mod tests {
             round_id: rid,
             round_number: 1,
             mutations: vec![],
+            modules: ModuleSelectionSpec::default(),
             detected: false, // evasion
             behavior_match: true,
             evasion_score: 1.0,
@@ -947,6 +959,7 @@ mod tests {
             round_id: rid,
             round_number: 1,
             mutations: vec![],
+            modules: ModuleSelectionSpec::default(),
             detected: true, // detected
             behavior_match: true,
             evasion_score: 0.0,
@@ -969,6 +982,7 @@ mod tests {
             round_id: rid1,
             round_number: 1,
             mutations: vec![],
+            modules: ModuleSelectionSpec::default(),
             detected: true,
             behavior_match: true,
             evasion_score: 0.0,
@@ -981,6 +995,7 @@ mod tests {
             round_id: rid2,
             round_number: 2,
             mutations: vec![],
+            modules: ModuleSelectionSpec::default(),
             detected: true,
             behavior_match: true,
             evasion_score: 0.0,
@@ -1030,6 +1045,7 @@ mod tests {
             job_id: JobId("j1".into()),
             round_number: 1,
             mutations: vec![],
+            modules: ModuleSelectionSpec::default(),
         };
         let agg = RoundAgg {
             spec,
@@ -1075,6 +1091,7 @@ mod tests {
             job_id: JobId("j1".into()),
             round_number: 1,
             mutations: vec![],
+            modules: ModuleSelectionSpec::default(),
         };
         let agg = RoundAgg {
             spec,
@@ -1129,6 +1146,7 @@ mod tests {
                 id: "ast.string_xor".into(),
                 params: None,
             }],
+            modules: ModuleSelectionSpec::default(),
         };
         let agg = RoundAgg {
             spec,
@@ -1343,6 +1361,7 @@ mod tests {
             job_id: JobId("j1".into()),
             round_number: 1,
             mutations: vec![],
+            modules: ModuleSelectionSpec::default(),
         };
         let agg = RoundAgg {
             spec,
@@ -1392,6 +1411,7 @@ mod tests {
                     job_id: JobId("j".into()),
                     round_number: 1,
                     mutations: vec![],
+                    modules: ModuleSelectionSpec::default(),
                 },
                 baseline_run_id: RunId("b".into()),
                 instrumented_run_id: RunId("i".into()),
@@ -1443,6 +1463,7 @@ mod tests {
             round_id: rid,
             round_number: 1,
             mutations: vec![],
+            modules: ModuleSelectionSpec::default(),
             detected: false,
             behavior_match: false,
             evasion_score: 0.6,

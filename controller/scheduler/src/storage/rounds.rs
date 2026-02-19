@@ -4,7 +4,7 @@
 //! Document ID: {job_id}/{round_id}
 
 use super::helpers;
-use crate::dispatch::types::{MutationSpec, RoundSummary};
+use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
 use elasticsearch::{Elasticsearch, IndexParts};
 use serde_json::json;
 use tracing::info;
@@ -18,6 +18,7 @@ pub async fn index_round(
     baseline_run_id: &str,
     instrumented_run_id: &str,
     started_at: Option<&str>,
+    modules: Option<&ModuleSelectionSpec>,
 ) -> anyhow::Result<()> {
     let index_name = helpers::es_index_name("rounds");
 
@@ -44,6 +45,15 @@ pub async fn index_round(
         "behavior_match": summary.behavior_match,
         "evasion_score": summary.evasion_score,
         "differential_category": summary.differential_category.as_str(),
+        "modules": modules.map(|m| json!({
+            "carrier": m.carrier,
+            "decoder": m.decoder,
+            "antiemulation": m.antiemulation,
+            "deconditioner": m.deconditioner,
+            "guardrail": m.guardrail,
+            "virtualprotect": m.virtualprotect,
+            "decoy": m.decoy,
+        })),
         "status": "completed",
         "completed_at": helpers::system_time_to_rfc3339(summary.completed_at),
         "started_at": started_at,

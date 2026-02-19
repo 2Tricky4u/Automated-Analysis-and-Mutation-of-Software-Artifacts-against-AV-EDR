@@ -22,6 +22,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod api;
 mod dispatch;
 mod storage;
+mod triage;
 mod vm;
 
 use api::SchedulerService;

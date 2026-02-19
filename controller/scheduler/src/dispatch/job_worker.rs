@@ -32,6 +32,7 @@ use super::types::{
     ArtifactRef, JobId, JobOutcome, JobSession, ModularBuildSpec, RoundAgg, RoundId, RoundSpec,
     RunEnvelope, RunId, RunType,
 };
+use crate::triage::Selector;
 
 // ============================================================================
 // Configuration
@@ -77,6 +78,9 @@ pub struct JobWorker {
     /// Event output (to Orchestrator for ES indexing)
     event_tx: mpsc::Sender<JobWorkerEvent>,
 
+    /// Mutation selector (coverage-driven or token-guided)
+    selector: Arc<dyn Selector>,
+
     /// Shutdown token
     shutdown_token: CancellationToken,
 }
@@ -87,6 +91,7 @@ impl JobWorker {
         job: JobSession,
         run_pool: Arc<RunPool>,
         event_tx: mpsc::Sender<JobWorkerEvent>,
+        selector: Arc<dyn Selector>,
     ) -> Self {
         let (result_tx, result_rx) = mpsc::channel(64);
         Self {
@@ -96,6 +101,7 @@ impl JobWorker {
             result_tx,
             round_aggs: HashMap::new(),
             event_tx,
+            selector,
             shutdown_token: CancellationToken::new(),
         }
     }
@@ -271,17 +277,43 @@ impl JobWorker {
             self.job.id, round_num, round_id
         );
 
-        // Create round spec
+        // Call selector with in-memory history
+        let selection = self
+            .selector
+            .select(
+                &self.job.id.0,
+                round_num,
+                &self.job.search_space,
+                &self.job.build_spec.modules,
+                &self.job.rounds,
+                None,
+            )
+            .await;
+
+        info!(
+            "[JobWorker:{}] Selector: {}",
+            self.job.id, selection.rationale
+        );
+
+        // Create round spec with SELECTED modules
         let spec = RoundSpec {
             id: round_id.clone(),
             job_id: self.job.id.clone(),
             round_number: round_num,
-            mutations: vec![], // TODO: integrate with mutation selector
+            mutations: selection.mutations,
+            modules: selection.modules.clone(),
+        };
+
+        // Build with SELECTED modules (not job defaults)
+        let selected_build_spec = ModularBuildSpec {
+            modules: selection.modules,
+            payload_path: self.job.build_spec.payload_path.clone(),
+            encoding: self.job.build_spec.encoding.clone(),
         };
 
         // Build baseline artifact (trace_mode = off)
         let baseline_built = self
-            .build_artifact(&self.job.build_spec, "off", &spec)
+            .build_artifact(&selected_build_spec, "off", &spec)
             .await
             .map_err(|e| {
                 error!(
@@ -293,7 +325,7 @@ impl JobWorker {
 
         // Build instrumented artifact (trace_mode = lines)
         let instrumented_built = self
-            .build_artifact(&self.job.build_spec, "lines", &spec)
+            .build_artifact(&selected_build_spec, "lines", &spec)
             .await
             .map_err(|e| {
                 error!(
@@ -503,6 +535,7 @@ impl JobWorker {
         let instrumented_outcome = agg.instrumented.clone().unwrap();
         let mutation_specs = agg.spec.mutations.clone();
         let mutations: Vec<String> = agg.spec.mutations.iter().map(|m| m.id.clone()).collect();
+        let modules = agg.spec.modules.clone();
         let baseline_vm_id = agg.baseline_vm_id.clone();
         let instrumented_vm_id = agg.instrumented_vm_id.clone();
         let round_started_at = agg.started_at;
@@ -523,13 +556,11 @@ impl JobWorker {
             self.job.id, round_id, summary.detected, summary.evasion_score
         );
 
-        // Record in job session
+        // Record in job session (selector reads history from here)
         self.job.record_round_summary(summary.clone());
 
         // Update job registry for API visibility
         self.run_pool.update_job_progress(&self.job);
-
-        // TODO: Report to mutation selector for feedback
 
         // Emit enriched event for ES indexing (round + both runs)
         let _ = self
@@ -545,6 +576,7 @@ impl JobWorker {
                     instrumented_outcome,
                     mutation_specs,
                     mutations,
+                    modules,
                     baseline_vm_id,
                     instrumented_vm_id,
                     round_started_at,
@@ -567,7 +599,9 @@ impl std::fmt::Debug for JobWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::types::{ModularBuildSpec, ModuleSelectionSpec};
+    use crate::dispatch::types::{ModularBuildSpec, ModuleSelectionSpec, RoundSummary};
+    use crate::triage::{SearchSpace, Selection, Selector, TriageGuidance};
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
     fn test_build_spec() -> ModularBuildSpec {
@@ -578,13 +612,34 @@ mod tests {
         }
     }
 
+    struct NoopSelector;
+
+    #[async_trait::async_trait]
+    impl Selector for NoopSelector {
+        async fn select(
+            &self,
+            _: &str,
+            _: u32,
+            _: &SearchSpace,
+            defaults: &ModuleSelectionSpec,
+            _: &BTreeMap<u32, RoundSummary>,
+            _: Option<&TriageGuidance>,
+        ) -> Selection {
+            Selection {
+                modules: defaults.clone(),
+                mutations: vec![],
+                rationale: "noop".into(),
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_job_worker_creation() {
         let pool = Arc::new(RunPool::new());
         let (event_tx, _) = mpsc::channel(10);
 
         let job = JobSession::new("test-job", 3, test_build_spec());
-        let worker = JobWorker::new(job, pool, event_tx);
+        let worker = JobWorker::new(job, pool, event_tx, Arc::new(NoopSelector));
 
         assert_eq!(worker.job_id().0, "test-job");
     }
@@ -595,7 +650,7 @@ mod tests {
         let (event_tx, _) = mpsc::channel(10);
 
         let job = JobSession::new("test-job", 3, test_build_spec());
-        let worker = JobWorker::new(job, pool, event_tx);
+        let worker = JobWorker::new(job, pool, event_tx, Arc::new(NoopSelector));
 
         // Should be able to produce initially
         assert!(worker.can_produce_round());
