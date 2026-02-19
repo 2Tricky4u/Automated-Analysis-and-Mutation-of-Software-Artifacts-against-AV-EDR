@@ -9,12 +9,15 @@
 /// - ast.timing_pattern:        Inter-operation delays (tree-sitter)
 /// - ast.protection_transition: Memory protection pattern (tree-sitter)
 /// - ast.string_xor:            XOR-encode string literals (legacy)
-/// - llvm.nop_insert:           Insert NOP instructions in LLVM IR (legacy)
+/// - llvm.nop_insert:           Insert NOP instructions in LLVM IR
+/// - llvm.opaque_predicate:     Opaque predicates in LLVM IR
+/// - llvm.junk_block:           Dead unreachable blocks in LLVM IR
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use tracing::{info, warn};
 
 use crate::transform::AstMutator;
+use crate::transform::IrMutator;
 
 /// Mutation specification from proto (edr.common.Mutation)
 #[derive(Debug, Clone)]
@@ -49,10 +52,10 @@ impl Mutator {
     /// # Returns
     /// Transformed code and list of successfully applied mutation IDs
     ///
-    /// Mutation routing:
+    /// Mutation routing (3-way):
     /// - `ast.*` (except `string_xor`) → tree-sitter `AstMutator`
+    /// - `llvm.*`                      → `IrMutator`
     /// - `ast.string_xor`              → legacy inline transformer
-    /// - `llvm.nop_insert`             → legacy IR transformer
     pub fn apply(input: &[u8], mutations: &[MutationSpec]) -> Result<(Vec<u8>, Vec<String>)> {
         if mutations.is_empty() {
             return Ok((input.to_vec(), vec![]));
@@ -61,32 +64,45 @@ impl Mutator {
         let mut code = input.to_vec();
         let mut applied = Vec::new();
 
-        // Partition: tree-sitter AST mutations vs legacy
-        let (ts_mutations, legacy): (Vec<_>, Vec<_>) = mutations.iter().partition(|m| {
+        // 3-way partition
+        let mut ts_mutations = Vec::new();
+        let mut ir_mutations = Vec::new();
+        let mut legacy = Vec::new();
+
+        for m in mutations.iter() {
             let (cat, name) = m.parse();
-            cat == "ast" && name != "string_xor"
-        });
+            match cat {
+                "ast" if name != "string_xor" => ts_mutations.push(m),
+                "llvm" => ir_mutations.push(m),
+                _ => legacy.push(m),
+            }
+        }
 
         // Phase 1: tree-sitter AST mutations (decon_rounds, fill_pattern, etc.)
         if !ts_mutations.is_empty() {
             let source = String::from_utf8(code.clone()).context("C source must be valid UTF-8")?;
             let mut ast = AstMutator::new().context("Failed to init tree-sitter")?;
-            let refs: Vec<&MutationSpec> = ts_mutations.iter().copied().collect();
+            let refs: Vec<&MutationSpec> = ts_mutations.into_iter().collect();
             let (mutated, ast_applied) = ast.apply(&source, &refs)?;
             code = mutated.into_bytes();
             applied.extend(ast_applied);
         }
 
-        // Phase 2: legacy mutations (string_xor, llvm.nop_insert)
+        // Phase 2: LLVM IR mutations (nop_insert, opaque_predicate, junk_block)
+        if !ir_mutations.is_empty() {
+            let ir_text = String::from_utf8(code.clone()).context("IR text must be valid UTF-8")?;
+            let mut ir = IrMutator::new().context("Failed to init IrMutator")?;
+            let refs: Vec<&MutationSpec> = ir_mutations.into_iter().collect();
+            let (mutated, ir_applied) = ir.apply(&ir_text, &refs)?;
+            code = mutated.into_bytes();
+            applied.extend(ir_applied);
+        }
+
+        // Phase 3: legacy mutations (string_xor)
         for mutation in &legacy {
             let (category, name) = mutation.parse();
 
             match (category, name) {
-                ("llvm", "nop_insert") => {
-                    info!("Applying mutation: llvm.nop_insert");
-                    code = Self::insert_llvm_nops(&code, mutation)?;
-                    applied.push(mutation.id.clone());
-                }
                 ("ast", "string_xor") => {
                     info!("Applying mutation: ast.string_xor");
                     code = Self::xor_encode_strings(&code, mutation)?;
@@ -99,48 +115,6 @@ impl Mutator {
         }
 
         Ok((code, applied))
-    }
-
-    /// Insert NOP instructions in LLVM IR (control-flow jitter)
-    ///
-    /// Strategy: Insert `call void asm sideeffect "nop", ""()` after each basic block entry
-    /// This jitters timing and makes binary signatures less predictable.
-    ///
-    /// Parameters:
-    /// - `density` (default: 0.3): Probability of inserting NOP at each insertion point
-    fn insert_llvm_nops(ir_code: &[u8], spec: &MutationSpec) -> Result<Vec<u8>> {
-        let ir_text = String::from_utf8(ir_code.to_vec()).context("LLVM IR must be valid UTF-8")?;
-
-        let density: f32 = spec
-            .params
-            .get("density")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0.3);
-
-        info!("NOP insertion density: {}", density);
-
-        // Find all basic block entries (lines starting with a label, e.g., "entry:")
-        let mut output = String::new();
-        let mut rng_state = 1234u32; // Simple LCG for deterministic randomness
-
-        for line in ir_text.lines() {
-            output.push_str(line);
-            output.push('\n');
-
-            // Check if this is a basic block label (ends with ':' and is not indented)
-            if line.ends_with(':') && !line.starts_with(' ') && !line.starts_with('\t') {
-                // Simple LCG random: next = (a * current + c) mod m
-                rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
-                let rand_val = (rng_state >> 16) as f32 / 32768.0;
-
-                if rand_val < density {
-                    // Insert NOP inline assembly
-                    output.push_str("  call void asm sideeffect \"nop\", \"\"()\n");
-                }
-            }
-        }
-
-        Ok(output.into_bytes())
     }
 
     /// XOR-encode string literals in C source (constant encoding)
