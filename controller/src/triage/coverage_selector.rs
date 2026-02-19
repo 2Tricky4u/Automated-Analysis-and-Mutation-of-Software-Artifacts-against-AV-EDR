@@ -48,6 +48,12 @@ impl VariantStats {
 /// All state comes via `select()` arguments — cheap to construct, easy to test.
 pub struct CoverageSelector;
 
+impl Default for CoverageSelector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CoverageSelector {
     pub fn new() -> Self {
         Self

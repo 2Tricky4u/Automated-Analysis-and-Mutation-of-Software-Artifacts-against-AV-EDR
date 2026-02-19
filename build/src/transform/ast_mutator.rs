@@ -1,16 +1,18 @@
 //! AST-level mutations using tree-sitter for structural code transforms.
 //!
-//! Generic over all module types — matches MutationSpec IDs to @MUTATE markers:
-//!   MutationSpec { id: "ast.<marker_name>", params } → all @MUTATE:<marker_name> locations
+//! Two mutation modes:
+//! - **Marker-based**: MutationSpec { id: "ast.<name>" } → `@MUTATE:<name>` locations
+//! - **Global**: `ast.string_xor` → all string literals (no markers needed)
 //!
-//! Supported mutations (research-informed deconditioning):
+//! Supported mutations:
 //! - `ast.decon_rounds`          — iteration count (EDR cutoff threshold)
 //! - `ast.fill_pattern`          — benign data content (entropy / memory scan)
 //! - `ast.exec_decoy`            — execute from allocated memory (#1 EDR signal)
 //! - `ast.timing_pattern`        — inter-operation delays (temporal tokens)
 //! - `ast.protection_transition` — memory protection pattern (rule match)
+//! - `ast.string_xor`            — XOR-encode string literals (global, tree-sitter)
 //!
-//! Adding a new mutation:
+//! Adding a new marker-based mutation:
 //!   1. Add a `// @MUTATE:<name>` marker in the C template
 //!   2. Add a match arm in `apply_at_marker()`
 //!   3. Implement the handler method
@@ -41,6 +43,10 @@ impl AstMutator {
     /// Apply AST mutations to source code.
     ///
     /// Returns the mutated source and a list of applied mutation IDs.
+    ///
+    /// Mutation routing:
+    /// - `string_xor` → global (tree-sitter walk, no markers needed), runs last
+    /// - All others   → marker-based (`@MUTATE:<name>` comments)
     pub fn apply(
         &mut self,
         source: &str,
@@ -49,7 +55,21 @@ impl AstMutator {
         let mut result = source.to_string();
         let mut applied = Vec::new();
 
+        // Separate global mutations from marker-based ones
+        let mut string_xor_spec: Option<&MutationSpec> = None;
+        let mut marker_mutations: Vec<&MutationSpec> = Vec::new();
+
         for mutation in mutations {
+            let (_category, name) = mutation.parse();
+            if name == "string_xor" {
+                string_xor_spec = Some(mutation);
+            } else {
+                marker_mutations.push(mutation);
+            }
+        }
+
+        // Phase 1: marker-based mutations
+        for mutation in &marker_mutations {
             let (_category, name) = mutation.parse();
 
             let markers = extract_mutation_markers(&result);
@@ -74,6 +94,13 @@ impl AstMutator {
 
             applied.push(mutation.id.clone());
             info!("Applied ast.{} at {} location(s)", name, count);
+        }
+
+        // Phase 2: global string_xor (after marker mutations, so new code is also encoded)
+        if let Some(spec) = string_xor_spec {
+            result = self.apply_string_xor(&result, &spec.params)?;
+            applied.push(spec.id.clone());
+            info!("Applied ast.string_xor globally");
         }
 
         Ok((result, applied))
@@ -317,6 +344,74 @@ impl AstMutator {
         Ok(out.join("\n"))
     }
 
+    // ── string_xor (global, no marker needed) ───────────────────────────
+
+    fn apply_string_xor(
+        &mut self,
+        source: &str,
+        params: &HashMap<String, String>,
+    ) -> Result<String> {
+        let xor_key: u8 = params
+            .get("xor_key")
+            .and_then(|v| {
+                if v.starts_with("0x") || v.starts_with("0X") {
+                    u8::from_str_radix(&v[2..], 16).ok()
+                } else {
+                    v.parse().ok()
+                }
+            })
+            .unwrap_or(0xAA);
+
+        info!("String XOR key: 0x{:02X}", xor_key);
+
+        let tree = match self.parser.parse(source, None) {
+            Some(t) => t,
+            None => {
+                warn!("tree-sitter failed to parse source for string_xor");
+                return Ok(source.to_string());
+            }
+        };
+
+        let mut literals: Vec<(usize, usize, String)> = Vec::new();
+        collect_string_literals(tree.root_node(), source.as_bytes(), &mut literals);
+
+        if literals.is_empty() {
+            return Ok(source.to_string());
+        }
+
+        // Build replacements with forward-ordered counters
+        let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+        for (counter, (start, end, content)) in literals.iter().enumerate() {
+            let var_name = format!("xor_str_{}", counter);
+            let encoded: Vec<String> = content
+                .bytes()
+                .map(|b| format!("0x{:02X}", b ^ xor_key))
+                .collect();
+
+            let replacement = format!(
+                "({{static char {}[]={{{}}}; static int init_{}=0; if(!init_{}){{for(int i=0;i<{};i++){}[i]^=0x{:02X}; init_{}=1;}} {};}})",
+                var_name,
+                encoded.join(","),
+                var_name,
+                var_name,
+                encoded.len(),
+                var_name,
+                xor_key,
+                var_name,
+                var_name
+            );
+            replacements.push((*start, *end, replacement));
+        }
+
+        // Apply in reverse order to preserve byte offsets
+        let mut result = source.to_string();
+        for (start, end, replacement) in replacements.into_iter().rev() {
+            result.replace_range(start..end, &replacement);
+        }
+
+        Ok(result)
+    }
+
     // ── protection_transition ─────────────────────────────────────────────
 
     fn apply_protection_transition(
@@ -375,6 +470,42 @@ impl AstMutator {
 impl Default for AstMutator {
     fn default() -> Self {
         Self::new().expect("Failed to initialize AstMutator")
+    }
+}
+
+/// Walk tree-sitter AST and collect string literal nodes for XOR encoding.
+///
+/// Skips string literals inside preprocessor directives (e.g., `#include "..."`,
+/// `#pragma comment(lib, "...")`). Nodes are returned in document order.
+fn collect_string_literals(
+    node: tree_sitter::Node,
+    source: &[u8],
+    out: &mut Vec<(usize, usize, String)>,
+) {
+    if node.kind() == "string_literal" {
+        // Skip strings inside preprocessor directives
+        let mut ancestor = node.parent();
+        while let Some(a) = ancestor {
+            if a.kind().starts_with("preproc_") {
+                return;
+            }
+            ancestor = a.parent();
+        }
+
+        // Extract content between quotes
+        if let Ok(text) = node.utf8_text(source) {
+            if text.len() >= 2 && text.starts_with('"') && text.ends_with('"') {
+                let content = &text[1..text.len() - 1];
+                out.push((node.start_byte(), node.end_byte(), content.to_string()));
+            }
+        }
+        return;
+    }
+
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i) {
+            collect_string_literals(child, source, out);
+        }
     }
 }
 

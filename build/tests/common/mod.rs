@@ -205,8 +205,8 @@ int main() {
 }
 
 pub fn c_source_pragma_and_strings() -> &'static str {
-    // >100 chars of non-string content between pragma and the regular string
-    // so that the mutator's 100-char recent_chars buffer flushes the pragma context.
+    // Pragma strings are inside preproc_call and won't be seen as string_literal
+    // by tree-sitter. The regular string should still be encoded.
     r#"#pragma comment(lib, "user32")
 int setup(void);
 int init_subsystem(void);
