@@ -259,10 +259,8 @@ fn test_unknown_mutation_skipped() {
 
 #[test]
 fn test_multiple_mutations_chained() {
-    // IR mutations (nop_insert) run in phase 2 before legacy (string_xor)
-    // in phase 3, so the NOP's "nop" string literal gets XOR-encoded.
-    // We check for `asm sideeffect` which survives XOR encoding of the
-    // string argument.
+    // AST mutations (string_xor) run in phase 1, then IR mutations (nop_insert)
+    // run in phase 2. Both should be applied.
     let c_source = "int main() {\nentry:\n  char *s = \"hi\";\n  return 0;\n}\n";
     let mutations = vec![
         MutationSpec {
@@ -382,11 +380,9 @@ fn test_string_xor_applied_twice() {
 }
 
 #[test]
-fn test_ir_before_legacy_ordering() {
-    // With 3-way routing, IR mutations always run in phase 2 and legacy
-    // (string_xor) always in phase 3, regardless of input order.
-    // So nop_insert always runs first, then string_xor XOR-encodes
-    // both the original "hello" AND the NOP's "nop"/"" string literals.
+fn test_ast_before_ir_ordering() {
+    // With 2-way routing, AST mutations (including string_xor) always run
+    // in phase 1 and IR mutations in phase 2, regardless of input order.
     let source = "entry:\n  char *s = \"hello\";\n";
 
     let xor = MutationSpec {
@@ -400,7 +396,7 @@ fn test_ir_before_legacy_ordering() {
             .collect(),
     };
 
-    // Both orderings should produce identical output now
+    // Both orderings should produce identical output (AST always runs before IR)
     let (out_a, applied_a) =
         Mutator::apply(source.as_bytes(), &[xor.clone(), nop.clone()]).unwrap();
     let (out_b, applied_b) = Mutator::apply(source.as_bytes(), &[nop, xor]).unwrap();
@@ -413,10 +409,9 @@ fn test_ir_before_legacy_ordering() {
 
     assert_eq!(
         a_str, b_str,
-        "Input order should not affect output (IR always runs before legacy)"
+        "Input order should not affect output (AST always runs before IR)"
     );
 
-    // NOP's string literals are XOR-encoded by string_xor (phase 3)
     assert!(a_str.contains("xor_str_"), "Strings should be XOR-encoded");
     assert!(
         a_str.contains("asm sideeffect"),
