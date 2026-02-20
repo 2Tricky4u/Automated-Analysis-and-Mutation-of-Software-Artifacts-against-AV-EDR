@@ -274,11 +274,7 @@ pub fn build_manifest(product_name: &str) -> String {
 /// Build a complete VS_VERSIONINFO resource structure
 ///
 /// Returns raw bytes ready to embed in a .rsrc section
-pub fn build_version_info(
-    product_name: &str,
-    company_name: &str,
-    file_version: &str,
-) -> Vec<u8> {
+pub fn build_version_info(product_name: &str, company_name: &str, file_version: &str) -> Vec<u8> {
     let mut buf = Vec::new();
 
     // We'll build the structure bottom-up, then assemble
@@ -305,7 +301,10 @@ pub fn build_version_info(
         ("FileDescription", product_name),
         ("FileVersion", file_version),
         ("InternalName", product_name),
-        ("LegalCopyright", &format!("Copyright (C) {} 2024", company_name)),
+        (
+            "LegalCopyright",
+            &format!("Copyright (C) {} 2024", company_name),
+        ),
         ("OriginalFilename", "app.exe"),
         ("ProductName", product_name),
         ("ProductVersion", file_version),
@@ -577,11 +576,7 @@ mod tests {
 
     #[test]
     fn test_build_version_info_not_empty() {
-        let vi = build_version_info(
-            "Test Application",
-            "Microsoft Corporation",
-            "1.0.0.0",
-        );
+        let vi = build_version_info("Test Application", "Microsoft Corporation", "1.0.0.0");
         // Should be non-trivial size (typically 500+ bytes)
         assert!(vi.len() > 100);
 

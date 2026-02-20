@@ -21,10 +21,7 @@ pub struct RoundIndexParams<'a> {
 }
 
 /// Index a completed round summary with mutation recipe and run IDs.
-pub async fn index_round(
-    es: &Elasticsearch,
-    params: &RoundIndexParams<'_>,
-) -> anyhow::Result<()> {
+pub async fn index_round(es: &Elasticsearch, params: &RoundIndexParams<'_>) -> anyhow::Result<()> {
     let index_name = helpers::es_index_name("rounds");
     let summary = params.summary;
 
