@@ -20,14 +20,15 @@
 //! # Quick Start
 //!
 //! ```rust,ignore
-//! use build::{ArtifactBuilder, BuilderConfig, BuildInput};
+//! use build::{ArtifactBuilder, BuilderConfig, BuildInput, EncodingType, ModuleSelection};
 //!
 //! let config = BuilderConfig::default();
 //! let builder = ArtifactBuilder::new(config)?;
 //!
-//! let artifact = builder.build(BuildInput::SourceFile {
-//!     template_name: "eicar_test".to_string(),
-//!     source_file: "eicar_test.c".to_string(),
+//! let artifact = builder.build(BuildInput::ModularTemplate {
+//!     modules: ModuleSelection::default(),
+//!     payload: shellcode_bytes,
+//!     encoding: EncodingType::Xor,
 //!     mutations: vec![],
 //!     trace_mode: "off".to_string(),
 //! }).await?;
