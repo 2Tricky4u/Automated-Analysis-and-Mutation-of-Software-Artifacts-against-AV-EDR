@@ -22,17 +22,22 @@
  * When compiled with instrumentation (trace != off):
  *   - Macros expand to actual function calls
  *   - Runtime functions are linked automatically
+ *   - minimal_runtime.o provides __runtime_exit() (direct syscall termination)
  *
  * When compiled without instrumentation (trace=off):
  *   - Macros expand to no-ops (empty statements)
- *   - __runtime_exit() is still available (from minimal_runtime.c)
+ *   - No runtime objects linked — baseline binary is artifact-free
  */
 
 #ifndef INSTRUMENTATION_H
 #define INSTRUMENTATION_H
 
-// Include minimal runtime (provides __runtime_exit, always available)
+// Include minimal runtime header only when instrumentation is enabled.
+// For baseline (trace=off) builds, minimal_runtime.o is not linked,
+// so we avoid declaring symbols that won't be available.
+#ifdef ENABLE_INSTRUMENTATION
 #include "minimal_runtime.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
