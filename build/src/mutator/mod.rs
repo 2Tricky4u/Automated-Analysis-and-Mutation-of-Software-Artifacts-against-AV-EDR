@@ -71,6 +71,7 @@ impl Mutator {
             match cat {
                 "ast" => ast_mutations.push(m),
                 "llvm" => ir_mutations.push(m),
+                "binary" => {} // Handled post-link in builder.rs
                 _ => {
                     warn!("Unknown mutation category: {}", m.id);
                 }

@@ -34,3 +34,6 @@ dirs = "6.0.0"
 
 # For Base64 encoding in instrumentation
 base64 = "0.22"
+
+# For PE parsing/validation in binary mutations
+goblin = "0.9"

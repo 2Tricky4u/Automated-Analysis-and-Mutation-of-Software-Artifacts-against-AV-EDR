@@ -52,7 +52,7 @@ pub mod transform;
 // ============================================================================
 
 // Transform module
-pub use transform::{AstMutator, IrMutator};
+pub use transform::{AstMutator, BinaryMutator, IrMutator};
 
 // Instrument module
 pub use instrument::{

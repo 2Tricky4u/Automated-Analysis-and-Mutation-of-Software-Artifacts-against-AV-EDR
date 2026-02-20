@@ -95,13 +95,11 @@ pub async fn build_artifact(
     };
 
     // Parse encoding type (default to XOR)
-    let encoding = std::str::FromStr::from_str(
-        if modular.encoding.is_empty() {
-            "xor"
-        } else {
-            &modular.encoding
-        },
-    )
+    let encoding = std::str::FromStr::from_str(if modular.encoding.is_empty() {
+        "xor"
+    } else {
+        &modular.encoding
+    })
     .unwrap_or(build::EncodingType::Xor);
 
     // Build the artifact using ModularTemplate

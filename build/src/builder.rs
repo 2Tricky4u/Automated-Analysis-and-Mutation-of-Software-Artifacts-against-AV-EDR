@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::mutator;
 use crate::template::assembler::{Assembler, ModuleSelection};
 use crate::template::payload::{EncodingType, PayloadEncoder};
+use crate::transform::BinaryMutator;
 
 /// Configuration for the artifact builder
 #[derive(Debug, Clone)]
@@ -1061,6 +1062,34 @@ impl ArtifactBuilder {
 
             // Clean up temp source (no IR path needs it)
             let _ = tokio::fs::remove_file(&temp_source).await;
+        }
+
+        // Step 5b: Apply binary mutations (post-link PE transforms)
+        let binary_mutations: Vec<&mutator::MutationSpec> = mutations
+            .iter()
+            .filter(|m| m.id.starts_with("binary."))
+            .collect();
+
+        if !binary_mutations.is_empty() {
+            let pe_bytes = tokio::fs::read(&temp_output)
+                .await
+                .context("Failed to read PE for binary mutations")?;
+
+            let mutator = BinaryMutator::new(pe_bytes);
+            let (mutated_pe, binary_applied) = mutator
+                .apply(&binary_mutations)
+                .context("Binary mutations failed")?;
+
+            debug!(
+                "Applied {} binary mutations: {:?}",
+                binary_applied.len(),
+                binary_applied
+            );
+            mutations_applied.extend(binary_applied);
+
+            tokio::fs::write(&temp_output, &mutated_pe)
+                .await
+                .context("Failed to write binary-mutated PE")?;
         }
 
         // Step 6: Finalize artifact

@@ -9,21 +9,28 @@ use elasticsearch::{Elasticsearch, IndexParts};
 use serde_json::json;
 use tracing::info;
 
+/// Context for indexing a round (groups identity and metadata fields).
+pub struct RoundIndexParams<'a> {
+    pub job_id: &'a str,
+    pub summary: &'a RoundSummary,
+    pub mutation_specs: &'a [MutationSpec],
+    pub baseline_run_id: &'a str,
+    pub instrumented_run_id: &'a str,
+    pub started_at: Option<&'a str>,
+    pub modules: Option<&'a ModuleSelectionSpec>,
+}
+
 /// Index a completed round summary with mutation recipe and run IDs.
 pub async fn index_round(
     es: &Elasticsearch,
-    job_id: &str,
-    summary: &RoundSummary,
-    mutation_specs: &[MutationSpec],
-    baseline_run_id: &str,
-    instrumented_run_id: &str,
-    started_at: Option<&str>,
-    modules: Option<&ModuleSelectionSpec>,
+    params: &RoundIndexParams<'_>,
 ) -> anyhow::Result<()> {
     let index_name = helpers::es_index_name("rounds");
+    let summary = params.summary;
 
     // Serialize mutation recipe (full specs with params)
-    let mutation_recipe: Vec<serde_json::Value> = mutation_specs
+    let mutation_recipe: Vec<serde_json::Value> = params
+        .mutation_specs
         .iter()
         .map(|m| {
             json!({
@@ -35,17 +42,17 @@ pub async fn index_round(
 
     let doc = json!({
         "round_id": summary.round_id.0,
-        "job_id": job_id,
+        "job_id": params.job_id,
         "round_number": summary.round_number,
         "mutations": summary.mutations,
         "mutation_recipe": mutation_recipe,
-        "baseline_run_id": baseline_run_id,
-        "instrumented_run_id": instrumented_run_id,
+        "baseline_run_id": params.baseline_run_id,
+        "instrumented_run_id": params.instrumented_run_id,
         "detected": summary.detected,
         "behavior_match": summary.behavior_match,
         "evasion_score": summary.evasion_score,
         "differential_category": summary.differential_category.as_str(),
-        "modules": modules.map(|m| json!({
+        "modules": params.modules.map(|m| json!({
             "carrier": m.carrier,
             "decoder": m.decoder,
             "antiemulation": m.antiemulation,
@@ -56,10 +63,10 @@ pub async fn index_round(
         })),
         "status": "completed",
         "completed_at": helpers::system_time_to_rfc3339(summary.completed_at),
-        "started_at": started_at,
+        "started_at": params.started_at,
     });
 
-    let doc_id = format!("{}/{}", job_id, summary.round_id.0);
+    let doc_id = format!("{}/{}", params.job_id, summary.round_id.0);
     let response = es
         .index(IndexParts::IndexId(&index_name, &doc_id))
         .body(doc)
