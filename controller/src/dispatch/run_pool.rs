@@ -521,6 +521,8 @@ mod tests {
                 error: None,
                 success: true,
                 elapsed_ms: 0.0,
+                detection_verdict: String::new(),
+                last_checkpoint: String::new(),
             },
             vm_id: "vm-1".to_string(),
         };

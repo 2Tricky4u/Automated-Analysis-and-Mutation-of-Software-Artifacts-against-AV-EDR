@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
+use crate::dispatch::classifier;
 use crate::dispatch::guards::{DELAY, MonitorGuard, ProcessGuard, RedEdrGuard};
 use crate::dispatch::sink::ControlPlaneSink;
 use crate::dispatch::types::{RunContext, RunOutcome, RunPhaseTimings, RunRequest};
@@ -606,6 +607,31 @@ pub async fn execute_run(
 
     phase_timings.telemetry_collect_ms = telemetry_start.elapsed().as_millis() as u64;
 
+    // ====================================================================
+    // Phase 7b: Classify detection outcome
+    // ====================================================================
+
+    let actual_elapsed =
+        Duration::from_millis(phase_timings.process_spawn_ms + phase_timings.process_wait_ms);
+
+    let (verdict, last_checkpoint) = classifier::classify_run(
+        exit_code,
+        timed_out,
+        actual_elapsed.as_secs_f64() * 1000.0,
+        &telemetry_events,
+        None, // dry_run_exit_code: future dry-run integration
+    );
+
+    info!(
+        "Detection verdict: {:?} (detected={}), last_checkpoint={:?}",
+        verdict,
+        verdict.is_detected(),
+        last_checkpoint
+    );
+
+    let detection_verdict = verdict.as_str().to_string();
+    let last_checkpoint_str = last_checkpoint.unwrap_or_default();
+
     // Add phase timings as a telemetry event for observability
     telemetry_events.push(crate::automutate::common::TelemetryData {
         job_id: request.job_id.clone(),
@@ -680,10 +706,6 @@ pub async fn execute_run(
     // Build outcome
     // ====================================================================
 
-    // Use the actual wall-clock elapsed time from process spawn to completion
-    let actual_elapsed =
-        Duration::from_millis(phase_timings.process_spawn_ms + phase_timings.process_wait_ms);
-
     Ok(RunOutcome {
         exit_code,
         timed_out,
@@ -692,5 +714,7 @@ pub async fn execute_run(
         telemetry_events,
         elapsed: actual_elapsed,
         phase_timings,
+        detection_verdict,
+        last_checkpoint: last_checkpoint_str,
     })
 }

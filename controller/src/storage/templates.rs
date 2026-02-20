@@ -161,7 +161,7 @@ async fn create_runs_template(es: &Elasticsearch) -> anyhow::Result<()> {
                 "number_of_replicas": 0
             },
             "mappings": {
-                "_meta": { "version": 3 },
+                "_meta": { "version": 4 },
                 "properties": {
                     "run_id": { "type": "keyword" },
                     "job_id": { "type": "keyword" },
@@ -178,6 +178,8 @@ async fn create_runs_template(es: &Elasticsearch) -> anyhow::Result<()> {
                     "detected": { "type": "boolean" },
                     "exit_code": { "type": "integer" },
                     "detection_outcome": { "type": "keyword" },
+                    "detection_verdict": { "type": "keyword" },
+                    "last_checkpoint": { "type": "keyword" },
                     "trace_mode": { "type": "keyword" },
                     "elapsed_seconds": { "type": "float" },
                     "telemetry_events_count": { "type": "long" },

@@ -47,6 +47,10 @@ pub struct RunOutcome {
     pub telemetry_events: Vec<TelemetryData>,
     pub elapsed: Duration,
     pub phase_timings: RunPhaseTimings,
+    /// Fine-grained classifier verdict string (e.g. "killed_pre_payload")
+    pub detection_verdict: String,
+    /// Last checkpoint reached before exit (e.g. "Launching")
+    pub last_checkpoint: String,
 }
 
 /// Timing breakdown for each execution phase
@@ -91,6 +95,8 @@ pub fn sample_response_error(
         detected: false,
         error: error.to_string(),
         elapsed_ms: 0.0,
+        detection_verdict: "infra_error".to_string(),
+        last_checkpoint: String::new(),
     }
 }
 
@@ -101,11 +107,17 @@ pub fn sample_response_ok(
     outcome: &RunOutcome,
     output: String,
 ) -> SampleResponse {
-    // Derive detected from exit_code (matches storage/runs.rs derive_detection_outcome)
-    let detected = match outcome.exit_code {
-        -2 => true,      // Killed by AV/EDR
-        0 | -1 => false, // Clean exit or timeout
-        _ => true,       // Abnormal exit → likely detection
+    // Use classifier verdict for detected flag when available, fall back to legacy logic
+    let detected = if !outcome.detection_verdict.is_empty() {
+        edr_config::DetectionVerdict::from_verdict_str(&outcome.detection_verdict)
+            .map(|v| v.is_detected())
+            .unwrap_or(outcome.exit_code != 0 && outcome.exit_code != -1)
+    } else {
+        match outcome.exit_code {
+            -2 => true,
+            0 | -1 => false,
+            _ => true,
+        }
     };
 
     SampleResponse {
@@ -118,6 +130,8 @@ pub fn sample_response_ok(
         detected,
         error: String::new(),
         elapsed_ms: outcome.elapsed.as_secs_f64() * 1000.0,
+        detection_verdict: outcome.detection_verdict.clone(),
+        last_checkpoint: outcome.last_checkpoint.clone(),
     }
 }
 
