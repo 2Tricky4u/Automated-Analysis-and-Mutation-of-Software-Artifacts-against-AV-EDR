@@ -69,6 +69,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "automutate-common"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "automutate-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "toml 0.9.8",
+]
+
+[[package]]
 name = "aws-lc-rs"
 version = "1.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -357,11 +374,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "automutate-common",
+ "automutate-config",
  "base64 0.22.1",
  "build",
  "chrono",
  "dashmap",
- "edr-config",
  "elasticsearch",
  "futures",
  "prost",
@@ -551,16 +569,6 @@ name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
-
-[[package]]
-name = "edr-config"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "toml 0.9.8",
-]
 
 [[package]]
 name = "either"
@@ -3776,9 +3784,10 @@ name = "worker-agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "automutate-common",
+ "automutate-config",
  "base64 0.22.1",
  "chrono",
- "edr-config",
  "flate2",
  "prost",
  "regex",

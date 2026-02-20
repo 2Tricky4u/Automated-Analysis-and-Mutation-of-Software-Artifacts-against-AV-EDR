@@ -2,7 +2,7 @@
 ///
 /// This binary validates that automation/templates/controller.toml parses correctly.
 /// Used by CI to catch config errors early.
-use edr_config::ControllerConfig;
+use automutate_config::ControllerConfig;
 
 fn main() {
     println!("Validating automation/templates/controller.toml...");

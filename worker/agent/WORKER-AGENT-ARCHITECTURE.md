@@ -1228,7 +1228,7 @@ All tests pass on Windows. The named pipe integration test uses Win32 `CreateFil
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| `edr-config` | workspace | Shared TOML configuration |
+| `automutate-config` | workspace | Shared TOML configuration |
 | `tokio` | workspace | Async runtime |
 | `tonic` / `prost` | workspace | gRPC framework + protobuf |
 | `reqwest` | 0.13 | HTTP client for RedEDR API |

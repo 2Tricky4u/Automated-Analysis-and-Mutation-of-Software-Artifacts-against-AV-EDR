@@ -27,17 +27,17 @@ pub struct RunIndexParams<'a> {
 
 /// Derive detection outcome from verdict (preferred) or exit code (legacy fallback).
 ///
-/// Uses `edr_config::DetectionVerdict` as the single source of truth for
+/// Uses `automutate_common::DetectionVerdict` as the single source of truth for
 /// verdict → (detection_outcome, detected) mapping.
 fn derive_detection_outcome(exit_code: i32, verdict: &str) -> (&'static str, bool) {
-    if let Some(v) = edr_config::DetectionVerdict::from_verdict_str(verdict) {
+    if let Some(v) = automutate_common::DetectionVerdict::from_verdict_str(verdict) {
         return (v.detection_outcome(), v.is_detected());
     }
     // Legacy exit-code-only fallback (old workers without classifier)
     match exit_code {
         0 => ("FULL_EVASION", false),
         -1 => ("KILLED_PRE_PAYLOAD", true), // conservative
-        _ => ("KILLED_PRE_PAYLOAD", true),   // no checkpoint info available
+        _ => ("KILLED_PRE_PAYLOAD", true),  // no checkpoint info available
     }
 }
 

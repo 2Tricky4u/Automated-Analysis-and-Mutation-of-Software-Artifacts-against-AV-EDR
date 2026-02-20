@@ -96,7 +96,7 @@ crate worker_agent
 #[derive(Clone)]
 struct WorkerAgentService {
     worker_id: String,
-    config: WorkerConfig,                                    // TOML config (edr_config)
+    config: WorkerConfig,                                    // TOML config (automutate_config)
     system_info: Arc<Mutex<System>>,                         // sysinfo for health
     execution_lock: Arc<Mutex<ExecutionState>>,               // ONE run at a time
     stream_handler: Arc<RwLock<Option<Arc<StreamHandler>>>>,  // Lazy init on stream

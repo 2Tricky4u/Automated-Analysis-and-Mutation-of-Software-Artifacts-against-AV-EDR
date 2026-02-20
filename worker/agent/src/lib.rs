@@ -23,9 +23,9 @@ pub mod session;
 pub mod telemetry;
 
 // Re-export WorkerAgentService for use in session and main
+use automutate_config::WorkerConfig;
 use capabilities::WorkerCapabilities;
 use dispatch::state::ExecutionState;
-use edr_config::WorkerConfig;
 use std::sync::Arc;
 use sysinfo::System;
 use tokio::sync::Mutex;

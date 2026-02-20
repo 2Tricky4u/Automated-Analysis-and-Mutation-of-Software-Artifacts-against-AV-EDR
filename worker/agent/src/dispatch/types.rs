@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::automutate::common::{SampleResponse, TelemetryData};
-use edr_config::WorkerConfig;
+use automutate_config::WorkerConfig;
 
 /// Typed request for executing an artifact run
 pub struct RunRequest {
@@ -109,7 +109,7 @@ pub fn sample_response_ok(
 ) -> SampleResponse {
     // Use classifier verdict for detected flag when available, fall back to legacy logic
     let detected = if !outcome.detection_verdict.is_empty() {
-        edr_config::DetectionVerdict::from_verdict_str(&outcome.detection_verdict)
+        automutate_common::DetectionVerdict::from_verdict_str(&outcome.detection_verdict)
             .map(|v| v.is_detected())
             .unwrap_or(outcome.exit_code != 0 && outcome.exit_code != -1)
     } else {

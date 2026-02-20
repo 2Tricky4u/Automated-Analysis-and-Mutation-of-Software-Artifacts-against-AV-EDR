@@ -5,7 +5,7 @@ use tracing::info;
 use worker_agent::{WorkerAgentService, automutate, capabilities};
 
 use automutate::worker::worker_agent_server::WorkerAgentServer;
-use edr_config::WorkerConfig;
+use automutate_config::WorkerConfig;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

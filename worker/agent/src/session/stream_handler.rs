@@ -24,7 +24,7 @@ use crate::automutate::common::{
 
 use crate::dispatch::state::ExecutionState;
 use crate::session::worker_state::WorkerState;
-use edr_config::WorkerConfig;
+use automutate_config::WorkerConfig;
 
 /// Handles incoming controller messages and sends worker responses via bidirectional stream.
 ///
