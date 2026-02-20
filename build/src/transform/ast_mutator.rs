@@ -519,8 +519,8 @@ fn find_block_end(lines: &[&str], start_line: usize) -> usize {
     let mut depth: i32 = 0;
     let mut found_open = false;
 
-    for i in start_line..lines.len() {
-        for ch in lines[i].chars() {
+    for (i, line) in lines.iter().enumerate().skip(start_line) {
+        for ch in line.chars() {
             if ch == '{' {
                 depth += 1;
                 found_open = true;

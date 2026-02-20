@@ -10,7 +10,7 @@ use super::channels::{JobControlCommand, JobWorkerEvent, RoundCompletedData};
 use super::job_worker::JobWorker;
 use super::run_pool::RunPool;
 use super::types::{JobId, JobOutcome, JobSession, WorkerId, WorkerInfo};
-use crate::storage::{EsStorage, RunIndexParams, TelemetryContext};
+use crate::storage::{EsStorage, RoundIndexParams, RunIndexParams, TelemetryContext};
 use crate::triage::coverage_selector::CoverageSelector;
 use crate::vm::{TargetEvent, TargetManager};
 use std::collections::HashMap;
@@ -308,15 +308,15 @@ impl Orchestrator {
                     }
                     // Index round summary
                     if let Err(e) = storage
-                        .index_round(
-                            &jid,
-                            &summary,
-                            &mutation_specs,
-                            &b_run_id,
-                            &i_run_id,
-                            Some(&started_at_str),
-                            Some(&modules),
-                        )
+                        .index_round(&RoundIndexParams {
+                            job_id: &jid,
+                            summary: &summary,
+                            mutation_specs: &mutation_specs,
+                            baseline_run_id: &b_run_id,
+                            instrumented_run_id: &i_run_id,
+                            started_at: Some(&started_at_str),
+                            modules: Some(&modules),
+                        })
                         .await
                     {
                         error!("Failed to index round: {}", e);
