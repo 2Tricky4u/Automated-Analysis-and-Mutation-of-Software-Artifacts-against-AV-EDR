@@ -4,7 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-edr-config = { path = "../config" }
+automutate-common = { path = "../common" }
+automutate-config = { path = "../config" }
 build = { path = "../build" }
 tokio.workspace = true
 tokio-util = "0.7"

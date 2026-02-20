@@ -7,7 +7,7 @@
 //! 4. gRPC server accepts job submissions -> Orchestrator
 //! 5. Orchestrator spawns JobWorkers and handles all events
 
-use edr_config::ControllerConfig;
+use automutate_config::ControllerConfig;
 use elasticsearch::Elasticsearch;
 use elasticsearch::http::transport::Transport;
 use std::fs::OpenOptions;

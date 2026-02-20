@@ -13,7 +13,7 @@
 //! - `extract_evidence()` matches `event_type` against all checkpoint variants.
 //! - `detection_outcome()` strings: `KILLED_PRE_PAYLOAD`, `KILLED_POST_PAYLOAD`.
 
-pub use edr_config::DetectionVerdict;
+pub use automutate_common::DetectionVerdict;
 
 use crate::automutate::common::TelemetryData;
 use chrono::NaiveDateTime;
@@ -54,9 +54,7 @@ struct ClassificationEvidence {
 ///
 /// Matches `event_type` against `"checkpoint"`, `"artifact_success"`, and
 /// `"artifact_failure"` — all three carry a `CheckpointEvent` typed_event.
-fn extract_evidence(
-    telemetry_events: &[TelemetryData],
-) -> (bool, Option<String>, Option<f64>) {
+fn extract_evidence(telemetry_events: &[TelemetryData]) -> (bool, Option<String>, Option<f64>) {
     let mut has_launching = false;
     let mut last_checkpoint: Option<String> = None;
     let mut max_etw_ts: Option<f64> = None;

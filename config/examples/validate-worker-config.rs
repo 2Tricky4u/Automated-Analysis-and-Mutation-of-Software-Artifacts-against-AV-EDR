@@ -2,7 +2,7 @@
 ///
 /// This binary validates that automation/templates/worker.toml parses correctly.
 /// Used by CI to catch config errors early.
-use edr_config::WorkerConfig;
+use automutate_config::WorkerConfig;
 
 fn main() {
     println!("Validating automation/templates/worker.toml...");

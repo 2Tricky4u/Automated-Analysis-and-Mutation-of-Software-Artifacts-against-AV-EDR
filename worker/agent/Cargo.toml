@@ -12,7 +12,8 @@ name = "worker-agent"
 path = "src/main.rs"
 
 [dependencies]
-edr-config = { path = "../../config" }
+automutate-common = { path = "../../common" }
+automutate-config = { path = "../../config" }
 tokio.workspace = true
 tonic.workspace = true
 prost.workspace = true

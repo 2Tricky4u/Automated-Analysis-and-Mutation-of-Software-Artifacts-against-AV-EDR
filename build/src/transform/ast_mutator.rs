@@ -494,10 +494,13 @@ fn collect_string_literals(
 
         // Extract content between quotes
         if let Ok(text) = node.utf8_text(source)
-            && text.len() >= 2 && text.starts_with('"') && text.ends_with('"') {
-                let content = &text[1..text.len() - 1];
-                out.push((node.start_byte(), node.end_byte(), content.to_string()));
-            }
+            && text.len() >= 2
+            && text.starts_with('"')
+            && text.ends_with('"')
+        {
+            let content = &text[1..text.len() - 1];
+            out.push((node.start_byte(), node.end_byte(), content.to_string()));
+        }
         return;
     }
 
