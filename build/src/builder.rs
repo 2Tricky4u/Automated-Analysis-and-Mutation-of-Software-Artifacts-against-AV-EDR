@@ -18,8 +18,6 @@ use crate::template::payload::{EncodingType, PayloadEncoder};
 /// Configuration for the artifact builder
 #[derive(Debug, Clone)]
 pub struct BuilderConfig {
-    /// Path to templates directory (e.g., "corpus/templates")
-    pub templates_dir: PathBuf,
     /// Path to output directory for artifacts (e.g., "artifacts")
     pub output_dir: PathBuf,
     /// Path to xwin SDK (e.g., "/root/.xwin")
@@ -36,7 +34,6 @@ pub struct BuilderConfig {
 impl Default for BuilderConfig {
     fn default() -> Self {
         Self {
-            templates_dir: PathBuf::from("corpus/templates"),
             output_dir: PathBuf::from("artifacts"),
             xwin_dir: PathBuf::from("/root/.xwin"),
             runtime_src: PathBuf::from("build/runtime/instrumentation_runtime.c"),
@@ -72,19 +69,10 @@ pub struct BuiltArtifact {
 /// Template-specific library dependencies
 /// Returns base library names (without .lib extension or -Wl prefix)
 /// Caller is responsible for formatting for specific linker
-fn get_template_libs(template_name: &str) -> &'static [&'static str] {
-    //TODO change that
-    match template_name {
-        "loader_v1" => &[],
-        "rwx_direct" => &["advapi32", "wininet"],
-        "process_injection" => &["user32"],
-        "network_beacon" => &["ws2_32"],
-        "eicar_test" => &["advapi32"], // GetUserNameA requires advapi32.lib
-        _ => {
-            debug!("Unknown template '{}', using no extra libs", template_name);
-            &[]
-        }
-    }
+fn get_template_libs(_template_name: &str) -> &'static [&'static str] {
+    // Modular templates link all needed libs via the standard flags;
+    // no per-template overrides are required.
+    &[]
 }
 
 /// Format template-specific library names as clang `-Wl,-defaultlib:name` args
@@ -95,27 +83,10 @@ fn format_template_lib_args(template_name: &str) -> Vec<String> {
         .collect()
 }
 
-/// Generate a unique temporary `.exe` path for concurrent builds.
-fn temp_exe_path(base_dir: &Path, source_file: &str) -> PathBuf {
-    let unique_id = Uuid::new_v4();
-    let output_name = source_file.replace(".c", &format!(".{}.exe", unique_id));
-    base_dir.join(&output_name)
-}
-
 /// Input format for artifact building
 #[derive(Debug, Clone)]
 pub enum BuildInput {
-    /// Build from C source file
-    SourceFile {
-        template_name: String,
-        source_file: String,
-        mutations: Vec<mutator::MutationSpec>,
-        /// Instrumentation mode: "off" | "lines" | "api" | "bb" | "api+bb" | "all" | "lines-around-bb=<id>"
-        /// Default: "lines" if empty
-        trace_mode: String,
-    },
-    /// Build from modular template assembly
-    /// This is the preferred method for new artifacts - uses @MODULE markers
+    /// Build from modular template assembly using @MODULE markers
     ModularTemplate {
         /// Module selection (carrier, decoder, antiemulation, etc.)
         modules: ModuleSelection,
@@ -125,7 +96,7 @@ pub enum BuildInput {
         encoding: EncodingType,
         /// AST mutations to apply at @MUTATE marker locations
         mutations: Vec<mutator::MutationSpec>,
-        /// Instrumentation mode
+        /// Instrumentation mode: "off" | "lines" | "api" | "bb" | "api+bb" | "all"
         trace_mode: String,
     },
 }
@@ -153,317 +124,29 @@ impl ArtifactBuilder {
         Ok(Self { config, xwin })
     }
 
-    /// Build artifact from various input formats (unified API)
+    /// Build artifact from modular template input
     ///
     /// # Arguments
-    /// * `input` - Source input (file, LLVM IR, or in-memory source)
-    /// * `template_name` - Optional template name for library lookup (required for SourceFile)
+    /// * `input` - Modular template specification (modules, payload, encoding, mutations, trace)
     ///
     /// # Returns
     /// Metadata about the built artifact
     pub async fn build(&self, input: BuildInput) -> Result<BuiltArtifact> {
-        match input {
-            BuildInput::SourceFile {
-                template_name,
-                source_file,
-                mutations,
-                trace_mode,
-            } => {
-                debug!("Building {} with trace_mode: {}", source_file, trace_mode);
-
-                // Determine if we need to link runtime (any trace mode except "off")
-                let needs_runtime = trace_mode != "off" && !trace_mode.is_empty();
-
-                // Build artifact (with or without mutations)
-                let mut built = if mutations.is_empty() {
-                    self.build_template_with_runtime(&template_name, &source_file, needs_runtime)
-                        .await?
-                } else {
-                    self.build_template_with_mutations_and_runtime(
-                        &template_name,
-                        &source_file,
-                        &mutations,
-                        needs_runtime,
-                    )
-                    .await?
-                };
-
-                // Apply instrumentation if trace_mode is not "off"
-                if needs_runtime {
-                    debug!("Applying instrumentation: trace_mode={}", trace_mode);
-                    built = self.apply_instrumentation(built, &trace_mode).await?;
-                }
-
-                Ok(built)
-            }
-
-            BuildInput::ModularTemplate {
-                modules,
-                payload,
-                encoding,
-                mutations,
-                trace_mode,
-            } => {
-                debug!(
-                    "Building modular template with carrier={}, decoder={}, trace_mode={}",
-                    modules.carrier, modules.decoder, trace_mode
-                );
-
-                self.build_modular_template(modules, &payload, encoding, &mutations, &trace_mode)
-                    .await
-            }
-        }
-    }
-
-    /// Build a template from source file with optional runtime linking
-    ///
-    /// # Arguments
-    /// * `template_name` - Template directory name (e.g., "rwx_direct")
-    /// * `source_file` - Source filename (e.g., "rwx_direct.c")
-    /// * `link_runtime` - If true, link with instrumentation runtime
-    ///
-    /// # Returns
-    /// Metadata about the built artifact
-    async fn build_template_with_runtime(
-        &self,
-        template_name: &str,
-        source_file: &str,
-        link_runtime: bool,
-    ) -> Result<BuiltArtifact> {
-        // 1. Validate source exists
-        let source_path = self
-            .config
-            .templates_dir
-            .join(template_name)
-            .join(source_file);
-
-        if !source_path.exists() {
-            anyhow::bail!("Source file not found: {:?}", source_path);
-        }
+        let BuildInput::ModularTemplate {
+            modules,
+            payload,
+            encoding,
+            mutations,
+            trace_mode,
+        } = input;
 
         debug!(
-            "Building template: {} from {:?}",
-            template_name, source_path
+            "Building modular template with carrier={}, decoder={}, trace_mode={}",
+            modules.carrier, modules.decoder, trace_mode
         );
 
-        // 2. Invoke clang to build
-        // Use UUID to ensure unique temp filenames for concurrent builds (parallel baseline + instrumented)
-        let template_dir = self.config.templates_dir.join(template_name);
-        let temp_output = temp_exe_path(&template_dir, source_file);
-
-        self.invoke_clang_internal(template_name, &source_path, &temp_output, link_runtime)
-            .await?;
-
-        // 3. Finalize: read, hash, rename, return metadata
-        let (artifact_id, final_output, size_bytes) = self.finalize_artifact(&temp_output).await?;
-
-        info!(
-            "Artifact built: {} ({} bytes) -> {:?}",
-            artifact_id, size_bytes, final_output
-        );
-
-        let compiler_version = self.get_clang_version()?;
-
-        Ok(build_artifact_metadata(
-            artifact_id,
-            source_path,
-            final_output,
-            size_bytes,
-            compiler_version,
-            self.get_compiler_flags(template_name),
-            vec![],
-        ))
-    }
-
-    /// Build template with mutations and optional runtime linking
-    async fn build_template_with_mutations_and_runtime(
-        &self,
-        template_name: &str,
-        source_file: &str,
-        mutations: &[mutator::MutationSpec],
-        link_runtime: bool,
-    ) -> Result<BuiltArtifact> {
-        if mutations.is_empty() {
-            // No mutations - use original build path
-            return self
-                .build_template_with_runtime(template_name, source_file, link_runtime)
-                .await;
-        }
-
-        debug!(
-            "Building template {} with {} mutations",
-            template_name,
-            mutations.len()
-        );
-
-        // 1. Read original source
-        let source_path = self
-            .config
-            .templates_dir
-            .join(template_name)
-            .join(source_file);
-
-        if !source_path.exists() {
-            anyhow::bail!("Source file not found: {:?}", source_path);
-        }
-
-        let original_source = tokio::fs::read(&source_path)
+        self.build_modular_template(modules, &payload, encoding, &mutations, &trace_mode)
             .await
-            .context("Failed to read source file")?;
-
-        // 2. Separate AST and LLVM mutations
-        let has_llvm_mutations = mutations.iter().any(|m| m.id.starts_with("llvm."));
-        let has_ast_mutations = mutations.iter().any(|m| m.id.starts_with("ast."));
-
-        // 3. Apply AST mutations to source first (if any)
-        let mut working_source = original_source.clone();
-        let mut all_mutations_applied = Vec::new();
-
-        if has_ast_mutations {
-            let ast_mutations: Vec<_> = mutations
-                .iter()
-                .filter(|m| m.id.starts_with("ast."))
-                .cloned()
-                .collect();
-
-            let (mutated, applied) = mutator::Mutator::apply(&working_source, &ast_mutations)?;
-            working_source = mutated;
-            all_mutations_applied.extend(applied);
-        }
-
-        // 4. If we have LLVM mutations, use IR path
-        if has_llvm_mutations {
-            // 4a. Write (possibly AST-mutated) source to temp file
-            let temp_source_filename = format!("temp_mutated_{}", source_file);
-            let temp_source_path = self
-                .config
-                .templates_dir
-                .join(template_name)
-                .join(&temp_source_filename);
-
-            tokio::fs::write(&temp_source_path, &working_source)
-                .await
-                .context("Failed to write temp source")?;
-
-            // 4b. Compile source -> LLVM IR
-            let ir_filename = source_file.replace(".c", ".ll");
-            let ir_path = self
-                .config
-                .templates_dir
-                .join(template_name)
-                .join(&ir_filename);
-
-            self.compile_source_to_ir(&temp_source_path, &ir_path, true)
-                .await?;
-
-            // Clean up temp source
-            let _ = tokio::fs::remove_file(&temp_source_path).await;
-
-            // 4c. Apply LLVM mutations to IR
-            let ir_content = tokio::fs::read(&ir_path)
-                .await
-                .context("Failed to read LLVM IR")?;
-
-            let llvm_mutations: Vec<_> = mutations
-                .iter()
-                .filter(|m| m.id.starts_with("llvm."))
-                .cloned()
-                .collect();
-
-            let (mutated_ir, llvm_applied) = mutator::Mutator::apply(&ir_content, &llvm_mutations)?;
-            all_mutations_applied.extend(llvm_applied);
-
-            // 4d. Write mutated IR
-            tokio::fs::write(&ir_path, &mutated_ir)
-                .await
-                .context("Failed to write mutated IR")?;
-
-            debug!(
-                "Applied {} mutations: {:?}",
-                all_mutations_applied.len(),
-                all_mutations_applied
-            );
-
-            // 4e. Compile IR -> binary
-            // Use UUID to ensure unique temp filenames for concurrent builds
-            let template_dir = self.config.templates_dir.join(template_name);
-            let temp_output = temp_exe_path(&template_dir, source_file);
-
-            self.compile_ir_to_exe(&ir_path, &temp_output, template_name)
-                .await?;
-
-            // Clean up IR file
-            let _ = tokio::fs::remove_file(&ir_path).await;
-
-            // Finalize artifact
-            let (artifact_id, final_output, size_bytes) =
-                self.finalize_artifact(&temp_output).await?;
-
-            debug!(
-                "Mutated artifact built (IR path): {} ({} bytes) -> {:?}",
-                artifact_id, size_bytes, final_output
-            );
-
-            let compiler_version = self.get_clang_version()?;
-
-            return Ok(build_artifact_metadata(
-                artifact_id,
-                source_path,
-                final_output,
-                size_bytes,
-                compiler_version,
-                self.get_compiler_flags(template_name),
-                all_mutations_applied,
-            ));
-        }
-
-        // 5. AST-only mutations: write mutated source and compile directly
-        debug!(
-            "Applied {} mutations: {:?}",
-            all_mutations_applied.len(),
-            all_mutations_applied
-        );
-
-        let mutated_filename = format!("mutated_{}", source_file);
-        let mutated_path = self
-            .config
-            .templates_dir
-            .join(template_name)
-            .join(&mutated_filename);
-
-        tokio::fs::write(&mutated_path, &working_source)
-            .await
-            .context("Failed to write mutated source")?;
-
-        // Use UUID to ensure unique temp filenames for concurrent builds
-        let template_dir = self.config.templates_dir.join(template_name);
-        let temp_output = temp_exe_path(&template_dir, source_file);
-
-        self.invoke_clang_internal(template_name, &mutated_path, &temp_output, link_runtime)
-            .await?;
-
-        // 6. Clean up mutated source file
-        let _ = tokio::fs::remove_file(&mutated_path).await;
-
-        // 7. Finalize artifact
-        let (artifact_id, final_output, size_bytes) = self.finalize_artifact(&temp_output).await?;
-
-        debug!(
-            "Mutated artifact built (AST path): {} ({} bytes) -> {:?}",
-            artifact_id, size_bytes, final_output
-        );
-
-        let compiler_version = self.get_clang_version()?;
-
-        Ok(build_artifact_metadata(
-            artifact_id,
-            source_path,
-            final_output,
-            size_bytes,
-            compiler_version,
-            self.get_compiler_flags(template_name),
-            all_mutations_applied,
-        ))
     }
 
     /// Compile minimal_runtime.o if it doesn't already exist. Returns the object path.
@@ -1590,13 +1273,6 @@ fn build_artifact_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_template_libs() {
-        assert_eq!(get_template_libs("loader_v1").len(), 0);
-        assert_eq!(get_template_libs("rwx_direct").len(), 2);
-        assert_eq!(get_template_libs("network_beacon").len(), 1);
-    }
 
     #[test]
     fn test_compute_sha256() {

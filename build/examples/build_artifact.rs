@@ -51,7 +51,6 @@ fn main() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     let config = BuilderConfig {
-        templates_dir: args.templates_dir,
         output_dir: args.output_dir.clone(),
         xwin_dir: args.xwin,
         runtime_src: manifest.join("runtime/instrumentation_runtime.c"),
@@ -176,7 +175,6 @@ struct Args {
     mutations: Vec<String>,
     xwin: PathBuf,
     output_dir: PathBuf,
-    templates_dir: PathBuf,
     // Track which flags the user explicitly set (for auto-sync)
     decoder_set: bool,
     encoding_set: bool,
@@ -200,7 +198,6 @@ impl Args {
             mutations: vec![],
             xwin: PathBuf::from("/root/.xwin"),
             output_dir: PathBuf::from("./artifacts"),
-            templates_dir: PathBuf::from("corpus/templates"),
             decoder_set: false,
             encoding_set: false,
         };
@@ -267,10 +264,6 @@ impl Args {
                     i += 1;
                     a.output_dir = PathBuf::from(&argv[i]);
                 }
-                "--templates-dir" => {
-                    i += 1;
-                    a.templates_dir = PathBuf::from(&argv[i]);
-                }
                 other => {
                     eprintln!("Unknown argument: {}", other);
                     process::exit(1);
@@ -330,7 +323,6 @@ OPTIONS:
     -m, --mutation <ID>             Mutation to apply (repeatable)
     --xwin <DIR>                    xwin SDK path (default: /root/.xwin)
     --output-dir <DIR>              Build output dir (default: ./artifacts)
-    --templates-dir <DIR>           Legacy templates dir (default: corpus/templates)
 
 EXAMPLES:
     # Default build

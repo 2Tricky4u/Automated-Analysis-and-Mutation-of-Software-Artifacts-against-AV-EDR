@@ -9,17 +9,23 @@ pub async fn build_artifact(
 ) -> Result<Response<BuildResponse>, Status> {
     let req = request.into_inner();
 
+    // Require modular_build spec — legacy SourceFile path has been removed
+    let modular = req.modular_build.ok_or_else(|| {
+        Status::invalid_argument(
+            "modular_build field is required. Legacy template_name/source_file builds are no longer supported.",
+        )
+    })?;
+
     // Extract trace_mode with default (backwards compatibility)
     let trace_mode = if req.trace_mode.is_empty() {
-        "lines".to_string() // Default: API + BB coverage for mutation loop
+        "lines".to_string()
     } else {
         req.trace_mode.clone()
     };
 
     info!(
-        "Build request: template={}, source={}, mutations={}, trace_mode={}",
-        req.template_name,
-        req.source_file,
+        "Build request (modular): encoding={}, mutations={}, trace_mode={}",
+        modular.encoding,
         req.mutations.len(),
         trace_mode
     );
@@ -48,12 +54,62 @@ pub async fn build_artifact(
         );
     }
 
-    // Build the artifact with mutations
-    // NOTE: trace_mode is passed to builder; emitter support pending
+    // Convert proto ModuleSelection to build crate's ModuleSelection
+    let proto_modules = modular.modules.unwrap_or_default();
+    let modules = build::ModuleSelection {
+        carrier: if proto_modules.carrier.is_empty() {
+            "change_rw_rx".into()
+        } else {
+            proto_modules.carrier
+        },
+        decoder: if proto_modules.decoder.is_empty() {
+            "xor".into()
+        } else {
+            proto_modules.decoder
+        },
+        antiemulation: if proto_modules.antiemulation.is_empty() {
+            "none".into()
+        } else {
+            proto_modules.antiemulation
+        },
+        deconditioner: if proto_modules.deconditioner.is_empty() {
+            "none".into()
+        } else {
+            proto_modules.deconditioner
+        },
+        guardrail: if proto_modules.guardrail.is_empty() {
+            "none".into()
+        } else {
+            proto_modules.guardrail
+        },
+        virtualprotect: if proto_modules.virtualprotect.is_empty() {
+            "standard".into()
+        } else {
+            proto_modules.virtualprotect
+        },
+        decoy: if proto_modules.decoy.is_empty() {
+            "none".into()
+        } else {
+            proto_modules.decoy
+        },
+    };
+
+    // Parse encoding type (default to XOR)
+    let encoding = std::str::FromStr::from_str(
+        if modular.encoding.is_empty() {
+            "xor"
+        } else {
+            &modular.encoding
+        },
+    )
+    .unwrap_or(build::EncodingType::Xor);
+
+    // Build the artifact using ModularTemplate
     let built = artifact_builder
-        .build(build::BuildInput::SourceFile {
-            template_name: req.template_name.clone(),
-            source_file: req.source_file.clone(),
+        .build(build::BuildInput::ModularTemplate {
+            modules,
+            payload: modular.payload,
+            encoding,
             mutations,
             trace_mode: trace_mode.clone(),
         })
@@ -78,7 +134,7 @@ pub async fn build_artifact(
         storage_path: built.output_path.to_string_lossy().to_string(),
         build_timestamp: built.build_timestamp.timestamp(),
         mutations_applied: built.mutations_applied,
-        trace_mode, // Echo back the trace_mode that was used
+        trace_mode,
     }))
 }
 
