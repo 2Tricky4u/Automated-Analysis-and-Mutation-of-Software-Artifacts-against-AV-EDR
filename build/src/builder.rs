@@ -543,9 +543,16 @@ impl ArtifactBuilder {
             args.push(lib_arg.as_str());
         }
 
-        // ALWAYS compile and link minimal_runtime.o (provides __runtime_exit)
-        let minimal_runtime_obj = self.ensure_minimal_runtime().await?;
-        let minimal_runtime_str = minimal_runtime_obj.to_string_lossy().into_owned();
+        // Compile minimal_runtime.o only when instrumentation is enabled.
+        // It provides __runtime_exit() (direct syscall termination + telemetry flush).
+        // For trace=off (baseline) builds, we skip it so the binary doesn't contain
+        // direct syscall patterns that taint ground-truth EDR measurements.
+        let minimal_runtime_str = if link_runtime {
+            let obj = self.ensure_minimal_runtime().await?;
+            Some(obj.to_string_lossy().into_owned())
+        } else {
+            None
+        };
 
         // If linking with instrumentation, compile instrumentation_runtime too
         let runtime_obj_str = if link_runtime {
@@ -569,8 +576,10 @@ impl ArtifactBuilder {
         args.push(output_str);
         args.push(source_str);
 
-        // ALWAYS add minimal_runtime.o
-        args.push(minimal_runtime_str.as_str());
+        // Add minimal_runtime.o when instrumentation is enabled (telemetry flush + syscall exit)
+        if let Some(ref minimal_str) = minimal_runtime_str {
+            args.push(minimal_str.as_str());
+        }
 
         // Add instrumentation_runtime.o if instrumentation is enabled
         if let Some(ref runtime_str) = runtime_obj_str {
