@@ -79,12 +79,13 @@ fn extract_evidence(telemetry_events: &[TelemetryData]) -> (bool, Option<String>
                 // Format: "YYYY-MM-DD-HH-MM-SS"
                 if let Some(source) = event.metadata.get("source")
                     && source == "rededr"
-                        && let Some(ts) = parse_rededr_date(&event.payload) {
-                            max_etw_ts = Some(match max_etw_ts {
-                                Some(prev) => prev.max(ts),
-                                None => ts,
-                            });
-                        }
+                    && let Some(ts) = parse_rededr_date(&event.payload)
+                {
+                    max_etw_ts = Some(match max_etw_ts {
+                        Some(prev) => prev.max(ts),
+                        None => ts,
+                    });
+                }
             }
             _ => {}
         }
@@ -135,9 +136,10 @@ fn classify_outcome(ev: &ClassificationEvidence) -> DetectionVerdict {
 
     // Step 3: Dry-run gate — matching non-zero exit code → confirmed non-AV failure
     if let Some(dry_run_code) = ev.dry_run_exit_code
-        && dry_run_code == ev.exit_code {
-            return DetectionVerdict::InfraError;
-        }
+        && dry_run_code == ev.exit_code
+    {
+        return DetectionVerdict::InfraError;
+    }
 
     // Step 4: exit_code == -1 (wait() failed / spawn failed)
     // Conservative: could be static detection (file quarantined before spawn)

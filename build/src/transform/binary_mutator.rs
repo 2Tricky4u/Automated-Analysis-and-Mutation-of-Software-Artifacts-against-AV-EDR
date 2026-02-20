@@ -19,12 +19,11 @@
 use anyhow::{Context, Result};
 use tracing::{debug, warn};
 
-use crate::mutator::MutationSpec;
 use super::binary_data::{
-    encode_rich_header, get_rich_profile, build_manifest, build_version_info,
-    generate_low_entropy_padding, BENIGN_IMPORTS, BENIGN_STRINGS,
-    MSVC_STANDARD_SECTIONS, DEFAULT_PDB_PATH,
+    BENIGN_IMPORTS, BENIGN_STRINGS, DEFAULT_PDB_PATH, MSVC_STANDARD_SECTIONS, build_manifest,
+    build_version_info, encode_rich_header, generate_low_entropy_padding, get_rich_profile,
 };
+use crate::mutator::MutationSpec;
 
 // ============================================================================
 // PE Constants
@@ -231,12 +230,7 @@ impl BinaryMutator {
     ///
     /// Appends the section data (padded to FileAlignment) at the end of the file,
     /// writes a new section header entry, and updates NumberOfSections + SizeOfImage.
-    fn add_section(
-        &mut self,
-        name: &[u8; 8],
-        data: &[u8],
-        characteristics: u32,
-    ) -> Result<u32> {
+    fn add_section(&mut self, name: &[u8; 8], data: &[u8], characteristics: u32) -> Result<u32> {
         let (sec_table_off, num_sec) = self.section_table_info();
         let file_align = self.file_alignment();
         let sec_align = self.section_alignment();
@@ -362,8 +356,7 @@ impl BinaryMutator {
         let max_records = (available - overhead) / 8;
         let records_to_use = std::cmp::min(profile.records.len(), max_records);
 
-        let rich_bytes =
-            encode_rich_header(&profile.records[..records_to_use], profile.checksum);
+        let rich_bytes = encode_rich_header(&profile.records[..records_to_use], profile.checksum);
 
         // Zero-fill the gap
         for byte in self.pe_bytes[DOS_HEADER_END..e_lfanew].iter_mut() {
@@ -429,12 +422,7 @@ impl BinaryMutator {
             }
 
             let remaining = max_count - total_funcs;
-            let funcs: Vec<&str> = import
-                .functions
-                .iter()
-                .take(remaining)
-                .copied()
-                .collect();
+            let funcs: Vec<&str> = import.functions.iter().take(remaining).copied().collect();
             total_funcs += funcs.len();
             new_dlls.push((import.dll, funcs));
         }
@@ -488,11 +476,7 @@ impl BinaryMutator {
         };
 
         // Build the import section data
-        let section_data = build_import_section(
-            &existing_idt_bytes,
-            &new_dlls,
-            new_section_va,
-        );
+        let section_data = build_import_section(&existing_idt_bytes, &new_dlls, new_section_va);
 
         // Add the section
         let actual_va = self.add_section(
@@ -508,15 +492,13 @@ impl BinaryMutator {
                 new_section_va, actual_va
             );
             // Rebuild with correct RVA
-            let section_data =
-                build_import_section(&existing_idt_bytes, &new_dlls, actual_va);
+            let section_data = build_import_section(&existing_idt_bytes, &new_dlls, actual_va);
 
             // Overwrite the section data we just wrote
             let (sec_off, num) = self.section_table_info();
             let last = sec_off + (num - 1) * SECTION_HEADER_SIZE;
             let raw_ptr = self.read_u32(last + 20) as usize;
-            self.pe_bytes[raw_ptr..raw_ptr + section_data.len()]
-                .copy_from_slice(&section_data);
+            self.pe_bytes[raw_ptr..raw_ptr + section_data.len()].copy_from_slice(&section_data);
         }
 
         // Update DataDirectory[1] (Import Table) to point to our new combined IDT
@@ -576,8 +558,7 @@ impl BinaryMutator {
         };
 
         // Build resource directory + data
-        let section_data =
-            build_resource_section(&version_data, &manifest_data, new_section_va);
+        let section_data = build_resource_section(&version_data, &manifest_data, new_section_va);
 
         let actual_va = self.add_section(
             b".rsrc\0\0\0",
@@ -590,13 +571,11 @@ impl BinaryMutator {
                 "Resource section VA mismatch: predicted {:#x}, got {:#x}. Rebuilding.",
                 new_section_va, actual_va
             );
-            let section_data =
-                build_resource_section(&version_data, &manifest_data, actual_va);
+            let section_data = build_resource_section(&version_data, &manifest_data, actual_va);
             let (sec_off, num) = self.section_table_info();
             let last = sec_off + (num - 1) * SECTION_HEADER_SIZE;
             let raw_ptr = self.read_u32(last + 20) as usize;
-            self.pe_bytes[raw_ptr..raw_ptr + section_data.len()]
-                .copy_from_slice(&section_data);
+            self.pe_bytes[raw_ptr..raw_ptr + section_data.len()].copy_from_slice(&section_data);
         }
 
         // Update DataDirectory[2] (Resource Table)
@@ -627,7 +606,10 @@ impl BinaryMutator {
             let name: [u8; 8] = self.pe_bytes[so..so + 8].try_into().unwrap();
 
             // Skip if already a standard MSVC section name
-            if MSVC_STANDARD_SECTIONS.iter().any(|std_name| **std_name == name) {
+            if MSVC_STANDARD_SECTIONS
+                .iter()
+                .any(|std_name| **std_name == name)
+            {
                 continue;
             }
 
@@ -642,8 +624,7 @@ impl BinaryMutator {
                 && chars & IMAGE_SCN_MEM_WRITE != 0
             {
                 b".data\0\0\0"
-            } else if chars & IMAGE_SCN_CNT_INITIALIZED_DATA != 0
-                && chars & IMAGE_SCN_MEM_READ != 0
+            } else if chars & IMAGE_SCN_CNT_INITIALIZED_DATA != 0 && chars & IMAGE_SCN_MEM_READ != 0
             {
                 b".rdata\0\0"
             } else {
@@ -703,8 +684,8 @@ impl BinaryMutator {
             }
             // Estimate: padding has entropy ~3.5 bits/byte
             let pad_entropy = 3.5;
-            let combined = (current * file_len as f64 + pad_entropy * mid as f64)
-                / (file_len + mid) as f64;
+            let combined =
+                (current * file_len as f64 + pad_entropy * mid as f64) / (file_len + mid) as f64;
             if combined <= target {
                 best_size = mid;
                 hi = mid;
@@ -726,10 +707,7 @@ impl BinaryMutator {
         let new_entropy = compute_entropy(&self.pe_bytes);
         debug!(
             "Entropy normalized: {:.2} → {:.2} (target {:.2}, added {} bytes padding)",
-            current,
-            new_entropy,
-            target,
-            pad_size
+            current, new_entropy, target, pad_size
         );
 
         Ok(())
@@ -1021,11 +999,7 @@ fn build_import_section(
             base_rva + dll_name_offsets[i] as u32,
         );
         // FirstThunk (IAT RVA)
-        write_u32_at(
-            &mut data,
-            desc_off + 16,
-            base_rva + iat_offsets[i] as u32,
-        );
+        write_u32_at(&mut data, desc_off + 16, base_rva + iat_offsets[i] as u32);
     }
     // Null terminator descriptor is already zeros
 
@@ -1075,11 +1049,7 @@ const RT_VERSION: u32 = 16;
 const RT_MANIFEST: u32 = 24;
 
 /// Build a .rsrc section with RT_VERSION and RT_MANIFEST resources
-fn build_resource_section(
-    version_data: &[u8],
-    manifest_data: &[u8],
-    section_rva: u32,
-) -> Vec<u8> {
+fn build_resource_section(version_data: &[u8], manifest_data: &[u8], section_rva: u32) -> Vec<u8> {
     // Layout:
     //
     // [Root Dir]       16 bytes + 2 entries (16 bytes)  = 32 bytes  @ 0x00
@@ -1178,8 +1148,7 @@ fn build_resource_section(
     write_u32_at(&mut data, 0x94, manifest_data.len() as u32);
 
     // Version data
-    data[ver_data_offset..ver_data_offset + version_data.len()]
-        .copy_from_slice(version_data);
+    data[ver_data_offset..ver_data_offset + version_data.len()].copy_from_slice(version_data);
 
     // Manifest data
     data[manifest_data_offset..manifest_data_offset + manifest_data.len()]
@@ -1403,8 +1372,7 @@ mod tests {
 
         // Verify checksum matches calc profile
         let rich_pos = result.windows(4).position(|w| w == b"Rich").unwrap();
-        let checksum =
-            u32::from_le_bytes(result[rich_pos + 4..rich_pos + 8].try_into().unwrap());
+        let checksum = u32::from_le_bytes(result[rich_pos + 4..rich_pos + 8].try_into().unwrap());
         assert_eq!(checksum, binary_data::PROFILE_CALC.checksum);
     }
 
@@ -1427,7 +1395,10 @@ mod tests {
         let parsed = goblin::pe::PE::parse(&result).expect("PE should be valid after import pad");
 
         // Should have new imports
-        assert!(!parsed.imports.is_empty(), "Should have imports after padding");
+        assert!(
+            !parsed.imports.is_empty(),
+            "Should have imports after padding"
+        );
 
         // Check that at least one of our benign DLLs is present
         let dll_names: Vec<String> = parsed
@@ -1438,7 +1409,11 @@ mod tests {
         let has_benign = dll_names
             .iter()
             .any(|d| d == "user32.dll" || d == "advapi32.dll" || d == "shell32.dll");
-        assert!(has_benign, "Should contain benign DLL imports, got: {:?}", dll_names);
+        assert!(
+            has_benign,
+            "Should contain benign DLL imports, got: {:?}",
+            dll_names
+        );
     }
 
     #[test]
@@ -1506,7 +1481,8 @@ mod tests {
         assert_eq!(applied.len(), 3);
 
         // Validate final PE
-        let parsed = goblin::pe::PE::parse(&result).expect("PE should be valid after all transforms");
+        let parsed =
+            goblin::pe::PE::parse(&result).expect("PE should be valid after all transforms");
 
         // 3 sections: .text + .idata + .rsrc
         assert_eq!(parsed.header.coff_header.number_of_sections, 3);
@@ -1630,10 +1606,13 @@ mod tests {
         assert!(applied.contains(&"binary.section_rename".to_string()));
 
         // Section should be renamed from .foo to .text (CODE | EXECUTE | READ)
-        let parsed = goblin::pe::PE::parse(&result)
-            .expect("PE should be valid after section rename");
+        let parsed =
+            goblin::pe::PE::parse(&result).expect("PE should be valid after section rename");
         let name = &parsed.sections[0].name;
-        assert_eq!(name, b".text\0\0\0", "Code section should be renamed to .text");
+        assert_eq!(
+            name, b".text\0\0\0",
+            "Code section should be renamed to .text"
+        );
     }
 
     #[test]
@@ -1667,7 +1646,11 @@ mod tests {
             pe[i] = ((i * 137 + 97) % 251) as u8; // pseudo-random, high entropy
         }
         let initial_entropy = compute_entropy(&pe);
-        assert!(initial_entropy > 5.0, "Setup: PE should have high entropy, got {:.2}", initial_entropy);
+        assert!(
+            initial_entropy > 5.0,
+            "Setup: PE should have high entropy, got {:.2}",
+            initial_entropy
+        );
 
         let mutator = BinaryMutator::new(pe);
 
@@ -1682,13 +1665,18 @@ mod tests {
         assert!(applied.contains(&"binary.entropy_normalize".to_string()));
 
         // Verify new section was added
-        let parsed = goblin::pe::PE::parse(&result)
-            .expect("PE should be valid after entropy normalize");
+        let parsed =
+            goblin::pe::PE::parse(&result).expect("PE should be valid after entropy normalize");
         assert!(parsed.header.coff_header.number_of_sections >= 2);
 
         // Entropy should have decreased
         let new_entropy = compute_entropy(&result);
-        assert!(new_entropy < initial_entropy, "Entropy should decrease: {:.2} → {:.2}", initial_entropy, new_entropy);
+        assert!(
+            new_entropy < initial_entropy,
+            "Entropy should decrease: {:.2} → {:.2}",
+            initial_entropy,
+            new_entropy
+        );
     }
 
     #[test]
@@ -1707,8 +1695,8 @@ mod tests {
         assert!(applied.contains(&"binary.string_inject".to_string()));
 
         // Verify PE is valid
-        let parsed = goblin::pe::PE::parse(&result)
-            .expect("PE should be valid after string inject");
+        let parsed =
+            goblin::pe::PE::parse(&result).expect("PE should be valid after string inject");
         assert_eq!(parsed.header.coff_header.number_of_sections, 2);
 
         // Verify at least 5 benign strings are present in the result
@@ -1761,8 +1749,8 @@ mod tests {
         assert!(applied.contains(&"binary.debug_dir".to_string()));
 
         // Verify PE is valid
-        let parsed = goblin::pe::PE::parse(&result)
-            .expect("PE should be valid after debug dir inject");
+        let parsed =
+            goblin::pe::PE::parse(&result).expect("PE should be valid after debug dir inject");
 
         // DataDirectory[6] (Debug) should be set
         if let Some(opt) = parsed.header.optional_header {
@@ -1842,8 +1830,8 @@ mod tests {
         assert_eq!(applied.len(), 8, "All 8 transforms should apply");
 
         // Validate final PE
-        let parsed = goblin::pe::PE::parse(&result)
-            .expect("PE should be valid after all 8 transforms");
+        let parsed =
+            goblin::pe::PE::parse(&result).expect("PE should be valid after all 8 transforms");
 
         // Should have multiple sections
         assert!(
@@ -1862,6 +1850,10 @@ mod tests {
         assert!(result.windows(4).any(|w| w == b"RSDS"));
 
         // File size >= 8KB
-        assert!(result.len() >= 8192, "Expected >= 8192 bytes, got {}", result.len());
+        assert!(
+            result.len() >= 8192,
+            "Expected >= 8192 bytes, got {}",
+            result.len()
+        );
     }
 }
