@@ -120,16 +120,21 @@ impl IrMutator {
         for line in ir_text.lines() {
             let trimmed = line.trim();
 
-            // Match unconditional branch: `br label %<target>`
+            // Match unconditional branch: `br label %<target>[, !metadata ...]`
             if let Some(rest) = trimmed.strip_prefix("br label ") {
                 let rand_val = self.next_rand();
                 if rand_val < density {
-                    let target = rest.trim();
+                    // Separate label from trailing metadata (e.g. ", !llvm.loop !6")
+                    let (label, metadata) = if let Some(comma_pos) = rest.find(", !") {
+                        (rest[..comma_pos].trim(), &rest[comma_pos..])
+                    } else {
+                        (rest.trim(), "")
+                    };
                     let indent = &line[..line.len() - trimmed.len()];
                     output.push_str(&format!("{}%__op_{} = icmp eq i32 0, 0\n", indent, counter));
                     output.push_str(&format!(
-                        "{}br i1 %__op_{}, label {}, label {}\n",
-                        indent, counter, target, target
+                        "{}br i1 %__op_{}, label {}, label {}{}\n",
+                        indent, counter, label, label, metadata
                     ));
                     counter += 1;
                     continue;
@@ -347,6 +352,37 @@ b:
         let (out, _) = m.apply(ir, &[&spec]).unwrap();
 
         assert_eq!(out.matches("icmp eq i32 0, 0").count(), 0);
+    }
+
+    #[test]
+    fn opaque_preserves_branch_metadata() {
+        // Branches with metadata like !llvm.loop must be handled correctly
+        let ir_with_meta = r#"define void @f() {
+entry:
+  br label %loop
+
+loop:
+  br label %exit, !llvm.loop !6
+
+exit:
+  ret void
+}
+"#;
+        let spec = make_spec("llvm.opaque_predicate", &[("density", "1.0")]);
+        let mut m = IrMutator::new().unwrap();
+        let (out, _) = m.apply(ir_with_meta, &[&spec]).unwrap();
+
+        // Should produce valid IR: metadata after both labels
+        assert!(
+            out.contains("label %exit, label %exit, !llvm.loop !6"),
+            "Metadata should appear once at the end, got:\n{}",
+            out
+        );
+        // Should NOT duplicate metadata per label
+        assert!(
+            !out.contains("label %exit, !llvm.loop !6, label %exit, !llvm.loop !6"),
+            "Metadata must not be duplicated"
+        );
     }
 
     #[test]
