@@ -274,13 +274,7 @@ impl VMExecutor {
             run_id: envelope.run_id,
             job_id: envelope.job_id,
             round_id: envelope.round_id,
-            outcome: RunOutcome {
-                detected: result.detected,
-                exit_code: result.exit_code,
-                error: result.error,
-                success: result.success,
-                elapsed_ms: result.elapsed_ms,
-            },
+            outcome: result.into(),
             vm_id: self.id.clone(),
         };
 
@@ -305,6 +299,8 @@ impl VMExecutor {
                 error: Some(error),
                 success: false,
                 elapsed_ms: 0.0,
+                detection_verdict: "infra_error".to_string(),
+                last_checkpoint: String::new(),
             },
             vm_id: self.id.clone(),
         };

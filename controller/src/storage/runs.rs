@@ -25,20 +25,19 @@ pub struct RunIndexParams<'a> {
     pub vm_id: &'a str,
 }
 
-/// Derive detection outcome from exit code.
+/// Derive detection outcome from verdict (preferred) or exit code (legacy fallback).
 ///
-/// ```text
-/// exit_code == -2  → detected=true,  outcome="MUTATION_FAILED"
-/// exit_code == 0   → detected=false, outcome="FULL_EVASION"
-/// exit_code == -1  → detected=false, outcome="TIMEOUT"
-/// other            → detected=true,  outcome="MUTATION_SUCCESS"
-/// ```
-fn derive_detection_outcome(exit_code: i32) -> (&'static str, bool) {
+/// Uses `edr_config::DetectionVerdict` as the single source of truth for
+/// verdict → (detection_outcome, detected) mapping.
+fn derive_detection_outcome(exit_code: i32, verdict: &str) -> (&'static str, bool) {
+    if let Some(v) = edr_config::DetectionVerdict::from_verdict_str(verdict) {
+        return (v.detection_outcome(), v.is_detected());
+    }
+    // Legacy exit-code-only fallback (old workers without classifier)
     match exit_code {
-        -2 => ("MUTATION_FAILED", true),
         0 => ("FULL_EVASION", false),
-        -1 => ("TIMEOUT", false),
-        _ => ("MUTATION_SUCCESS", true),
+        -1 => ("KILLED_PRE_PAYLOAD", true), // conservative
+        _ => ("KILLED_PRE_PAYLOAD", true),   // no checkpoint info available
     }
 }
 
@@ -59,7 +58,8 @@ pub async fn index_run_result(
 ) -> anyhow::Result<()> {
     let index_name = helpers::es_index_name("runs");
 
-    let (detection_outcome, derived_detected) = derive_detection_outcome(params.outcome.exit_code);
+    let (detection_outcome, derived_detected) =
+        derive_detection_outcome(params.outcome.exit_code, &params.outcome.detection_verdict);
     // Use the RunOutcome.detected if available, otherwise use derived
     let detected = params.outcome.detected || derived_detected;
 
@@ -79,6 +79,8 @@ pub async fn index_run_result(
         "success": params.outcome.success,
         "elapsed_ms": params.outcome.elapsed_ms,
         "detection_outcome": detection_outcome,
+        "detection_verdict": params.outcome.detection_verdict,
+        "last_checkpoint": params.outcome.last_checkpoint,
         "trace_mode": trace_mode_from_run_type(params.run_type),
         "finished_at": now,
         "timestamp": now,

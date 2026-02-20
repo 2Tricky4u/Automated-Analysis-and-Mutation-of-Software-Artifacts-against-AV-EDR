@@ -40,6 +40,10 @@ pub struct RemoteRunResult {
     pub success: bool,
     pub error: Option<String>,
     pub elapsed_ms: f64,
+    /// Fine-grained classifier verdict (e.g. "killed_pre_payload"), empty for legacy workers
+    pub detection_verdict: String,
+    /// Last checkpoint reached before exit (e.g. "Launching")
+    pub last_checkpoint: String,
 }
 
 impl From<RemoteRunResult> for RunOutcome {
@@ -50,6 +54,8 @@ impl From<RemoteRunResult> for RunOutcome {
             error: r.error,
             success: r.success,
             elapsed_ms: r.elapsed_ms,
+            detection_verdict: r.detection_verdict,
+            last_checkpoint: r.last_checkpoint,
         }
     }
 }

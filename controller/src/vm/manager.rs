@@ -539,6 +539,8 @@ impl TargetManager {
                                 Some(response.error.clone())
                             },
                             elapsed_ms: response.elapsed_ms,
+                            detection_verdict: response.detection_verdict.clone(),
+                            last_checkpoint: response.last_checkpoint.clone(),
                         };
                         let _ = result_tx.send(result).await;
                     }

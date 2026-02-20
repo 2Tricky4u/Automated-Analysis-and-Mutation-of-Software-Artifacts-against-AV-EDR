@@ -520,6 +520,12 @@ pub struct RunOutcome {
     pub success: bool,
     /// Wall-clock execution time in milliseconds
     pub elapsed_ms: f64,
+    /// Fine-grained classifier verdict (e.g. "killed_pre_payload"), empty for legacy
+    #[serde(default)]
+    pub detection_verdict: String,
+    /// Last checkpoint reached before exit (e.g. "Launching")
+    #[serde(default)]
+    pub last_checkpoint: String,
 }
 
 /// Ephemeral join state for a round until both runs finish
@@ -841,6 +847,8 @@ mod tests {
             error: None,
             success: true,
             elapsed_ms: 60_000.0,
+            detection_verdict: String::new(),
+            last_checkpoint: String::new(),
         });
         assert!(!agg.is_complete());
 
@@ -850,6 +858,8 @@ mod tests {
             error: None,
             success: true,
             elapsed_ms: 62_000.0,
+            detection_verdict: String::new(),
+            last_checkpoint: String::new(),
         });
         assert!(agg.is_complete());
 
@@ -1057,6 +1067,8 @@ mod tests {
                 error: None,
                 success: false,
                 elapsed_ms: 5_000.0,
+                detection_verdict: String::new(),
+                last_checkpoint: String::new(),
             }),
             instrumented: Some(RunOutcome {
                 detected: false,
@@ -1064,6 +1076,8 @@ mod tests {
                 error: None,
                 success: true,
                 elapsed_ms: 60_000.0,
+                detection_verdict: String::new(),
+                last_checkpoint: String::new(),
             }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
@@ -1103,6 +1117,8 @@ mod tests {
                 error: None,
                 success: true,
                 elapsed_ms: 100_000.0,
+                detection_verdict: String::new(),
+                last_checkpoint: String::new(),
             }),
             instrumented: Some(RunOutcome {
                 detected: true,
@@ -1110,6 +1126,8 @@ mod tests {
                 error: None,
                 success: false,
                 elapsed_ms: 15_000.0,
+                detection_verdict: String::new(),
+                last_checkpoint: String::new(),
             }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
@@ -1158,6 +1176,8 @@ mod tests {
                 error: None,
                 success: true,
                 elapsed_ms: 120_000.0,
+                detection_verdict: String::new(),
+                last_checkpoint: String::new(),
             }),
             instrumented: Some(RunOutcome {
                 detected: false,
@@ -1165,6 +1185,8 @@ mod tests {
                 error: None,
                 success: true,
                 elapsed_ms: 118_000.0,
+                detection_verdict: String::new(),
+                last_checkpoint: String::new(),
             }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
@@ -1373,6 +1395,8 @@ mod tests {
                 error: None,
                 success: false,
                 elapsed_ms: 50_000.0,
+                detection_verdict: String::new(),
+                last_checkpoint: String::new(),
             }),
             instrumented: Some(RunOutcome {
                 detected: true,
@@ -1380,6 +1404,8 @@ mod tests {
                 error: None,
                 success: false,
                 elapsed_ms: 48_000.0,
+                detection_verdict: String::new(),
+                last_checkpoint: String::new(),
             }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
@@ -1421,6 +1447,8 @@ mod tests {
                     error: None,
                     success: false,
                     elapsed_ms: elapsed,
+                    detection_verdict: String::new(),
+                    last_checkpoint: String::new(),
                 }),
                 instrumented: Some(RunOutcome {
                     detected: true,
@@ -1428,6 +1456,8 @@ mod tests {
                     error: None,
                     success: false,
                     elapsed_ms: elapsed,
+                    detection_verdict: String::new(),
+                    last_checkpoint: String::new(),
                 }),
                 baseline_vm_id: String::new(),
                 instrumented_vm_id: String::new(),
