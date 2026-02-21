@@ -94,10 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api::jobs::get_round),
         )
         // Run endpoints
-        .route(
-            "/api/runs/:run_id/trace",
-            get(api::jobs::get_trace_lines),
-        )
+        .route("/api/runs/:run_id/trace", get(api::jobs::get_trace_lines))
         .route("/api/runs/compare", get(api::jobs::compare_runs))
         // Worker endpoints
         .route("/api/workers", get(api::workers::list_workers))
