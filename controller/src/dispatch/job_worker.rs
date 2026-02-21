@@ -323,6 +323,9 @@ impl JobWorker {
                 e
             })?;
 
+        // Capture assembled source from baseline build (same for both runs in a round)
+        let assembled_source = baseline_built.assembled_source.clone();
+
         // Build instrumented artifact (trace_mode = lines)
         let instrumented_built = self
             .build_artifact(&selected_build_spec, "lines", &spec)
@@ -387,6 +390,7 @@ impl JobWorker {
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
             timeout_ms: DEFAULT_TIMEOUT_SECONDS as u64 * 1000,
+            assembled_source,
         };
         self.round_aggs.insert(round_id.clone(), agg);
 
@@ -539,6 +543,7 @@ impl JobWorker {
         let baseline_vm_id = agg.baseline_vm_id.clone();
         let instrumented_vm_id = agg.instrumented_vm_id.clone();
         let round_started_at = agg.started_at;
+        let assembled_source = agg.assembled_source.clone();
 
         let summary = match agg.to_summary() {
             Some(s) => s,
@@ -580,6 +585,7 @@ impl JobWorker {
                     baseline_vm_id,
                     instrumented_vm_id,
                     round_started_at,
+                    assembled_source,
                 },
             )))
             .await;

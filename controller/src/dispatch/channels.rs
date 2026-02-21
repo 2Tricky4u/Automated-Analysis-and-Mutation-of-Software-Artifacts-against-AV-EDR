@@ -80,6 +80,8 @@ pub struct RoundCompletedData {
     pub baseline_vm_id: String,
     pub instrumented_vm_id: String,
     pub round_started_at: SystemTime,
+    /// Pre-instrumentation assembled C source for line trace resolution.
+    pub assembled_source: Option<String>,
 }
 
 /// Events emitted by JobWorker to Orchestrator for tracking and ES indexing.
