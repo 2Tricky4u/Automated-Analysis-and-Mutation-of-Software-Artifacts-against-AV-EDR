@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Source Viewer - AutoMutate++</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+
+        /* Toolbar */
+        .toolbar {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: #16213e;
+            border-bottom: 2px solid #0f3460;
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .toolbar h1 {
+            color: #e94560;
+            font-size: 1.1rem;
+            white-space: nowrap;
+        }
+
+        .toolbar-info {
+            font-size: 0.8rem;
+            color: #8b949e;
+        }
+
+        .toolbar-info strong {
+            color: #c9d1d9;
+        }
+
+        .toolbar-stats {
+            display: flex;
+            gap: 16px;
+            font-size: 0.8rem;
+        }
+
+        .toolbar-stats .stat {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .legend-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+        }
+
+        .legend-dot.executed { background: #1a3a1a; border: 1px solid #2d6a2d; }
+        .legend-dot.cutoff { background: #3b1d1d; border: 1px solid #8b3a3a; }
+
+        .back-link {
+            color: #58a6ff;
+            text-decoration: none;
+            font-size: 0.85rem;
+        }
+        .back-link:hover { text-decoration: underline; }
+
+        /* Error / loading state */
+        .status-msg {
+            padding: 40px 20px;
+            text-align: center;
+            color: #8b949e;
+            font-size: 1rem;
+        }
+        .status-msg.error { color: #fca5a5; }
+
+        /* Source container */
+        .source-container {
+            padding: 0 0 40px 0;
+        }
+
+        .source-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .source-table tr:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .source-table td {
+            padding: 0 12px;
+            vertical-align: top;
+            white-space: pre;
+            border: none;
+        }
+
+        /* Line number gutter */
+        .source-table td.gutter {
+            width: 60px;
+            min-width: 60px;
+            text-align: right;
+            color: #484f58;
+            user-select: none;
+            cursor: pointer;
+            padding-right: 16px;
+            border-right: 1px solid #21262d;
+        }
+
+        .source-table td.gutter:hover {
+            color: #c9d1d9;
+        }
+
+        /* Code cell */
+        .source-table td.code {
+            padding-left: 16px;
+        }
+
+        /* Highlighted line (hash navigation) */
+        .source-table tr.highlighted td {
+            background: rgba(56, 139, 253, 0.15);
+        }
+
+        .source-table tr.highlighted td.gutter {
+            color: #58a6ff;
+            font-weight: bold;
+        }
+
+        /* Trace overlay: executed lines */
+        .source-table tr.trace-executed td {
+            background: rgba(35, 134, 54, 0.12);
+        }
+
+        .source-table tr.trace-executed td.gutter {
+            color: #3fb950;
+        }
+
+        /* Trace overlay: cutoff line */
+        .source-table tr.trace-cutoff td {
+            background: rgba(218, 54, 51, 0.18);
+        }
+
+        .source-table tr.trace-cutoff td.gutter {
+            color: #f85149;
+            font-weight: bold;
+        }
+
+        /* Syntax highlighting */
+        .syn-keyword { color: #ff7b72; }
+        .syn-type { color: #79c0ff; }
+        .syn-preproc { color: #d2a8ff; }
+        .syn-string { color: #a5d6ff; }
+        .syn-comment { color: #8b949e; font-style: italic; }
+        .syn-number { color: #79c0ff; }
+        .syn-func { color: #d2a8ff; }
+    </style>
+</head>
+<body>
+    <div class="toolbar" id="toolbar">
+        <h1>Source Viewer</h1>
+        <a class="back-link" href="index.html">Back to Dashboard</a>
+        <div class="toolbar-info" id="toolbarInfo">Loading...</div>
+        <div class="toolbar-stats" id="toolbarStats" style="display: none;">
+            <div class="stat"><span class="legend-dot executed"></span> Executed</div>
+            <div class="stat"><span class="legend-dot cutoff"></span> Cutoff</div>
+            <div class="stat" id="statExecuted"></div>
+            <div class="stat" id="statTotal"></div>
+        </div>
+    </div>
+
+    <div id="content">
+        <div class="status-msg" id="loadingMsg">Loading source...</div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+        const params = new URLSearchParams(window.location.search);
+        const jobId = params.get('job_id');
+        const roundId = params.get('round_id');
+        const runId = params.get('run_id');
+
+        // ================================================================
+        // Syntax Highlighting (regex-based, single-line only)
+        // ================================================================
+
+        const C_KEYWORDS = new Set([
+            'auto', 'break', 'case', 'char', 'const', 'continue', 'default',
+            'do', 'double', 'else', 'enum', 'extern', 'float', 'for', 'goto',
+            'if', 'inline', 'int', 'long', 'register', 'return', 'short',
+            'signed', 'sizeof', 'static', 'struct', 'switch', 'typedef',
+            'union', 'unsigned', 'void', 'volatile', 'while',
+            'NULL', 'TRUE', 'FALSE', 'WINAPI', 'CALLBACK',
+            'PAGE_READWRITE', 'PAGE_READONLY', 'PAGE_EXECUTE_READ',
+            'PAGE_EXECUTE_READWRITE', 'PAGE_NOACCESS',
+            'MEM_COMMIT', 'MEM_RESERVE', 'MEM_RELEASE',
+        ]);
+
+        const C_TYPES = new Set([
+            'DWORD', 'BOOL', 'HANDLE', 'LPVOID', 'LPCVOID', 'PVOID',
+            'SIZE_T', 'BYTE', 'WORD', 'LONG', 'ULONG', 'UINT', 'INT',
+            'HMODULE', 'FARPROC', 'LPARAM', 'WPARAM', 'LRESULT',
+            'HWND', 'HINSTANCE', 'LPSTR', 'LPCSTR', 'LPWSTR', 'LPCWSTR',
+            'LPTHREAD_START_ROUTINE', 'PAPCFUNC',
+            'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
+            'int8_t', 'int16_t', 'int32_t', 'int64_t',
+            'size_t', 'ptrdiff_t', 'uintptr_t', 'intptr_t',
+            'PIMAGE_DOS_HEADER', 'PIMAGE_NT_HEADERS', 'PIMAGE_SECTION_HEADER',
+            'IMAGE_DOS_HEADER', 'IMAGE_NT_HEADERS', 'IMAGE_SECTION_HEADER',
+        ]);
+
+        function escapeHtml(text) {
+            return text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function highlightLine(line) {
+            const escaped = escapeHtml(line);
+
+            // Single-line comments — highlight rest of line
+            const commentIdx = escaped.indexOf('//');
+            if (commentIdx !== -1) {
+                const before = escaped.substring(0, commentIdx);
+                const comment = escaped.substring(commentIdx);
+                return highlightCode(before) + `<span class="syn-comment">${comment}</span>`;
+            }
+
+            // Preprocessor directives
+            if (/^\s*#/.test(escaped)) {
+                return `<span class="syn-preproc">${escaped}</span>`;
+            }
+
+            return highlightCode(escaped);
+        }
+
+        function highlightCode(code) {
+            // Tokenize and highlight: strings, numbers, identifiers, function calls
+            // Process in order: strings first, then the rest
+            let result = '';
+            let i = 0;
+
+            while (i < code.length) {
+                // String literal (already escaped, so quotes are &quot;)
+                if (code.startsWith('&quot;', i)) {
+                    const end = code.indexOf('&quot;', i + 6);
+                    if (end !== -1) {
+                        const str = code.substring(i, end + 6);
+                        result += `<span class="syn-string">${str}</span>`;
+                        i = end + 6;
+                        continue;
+                    }
+                }
+
+                // Char literal
+                if (code[i] === "'") {
+                    const end = code.indexOf("'", i + 1);
+                    if (end !== -1 && end - i <= 6) {
+                        const str = code.substring(i, end + 1);
+                        result += `<span class="syn-string">${str}</span>`;
+                        i = end + 1;
+                        continue;
+                    }
+                }
+
+                // Hex number
+                const hexMatch = code.substring(i).match(/^0[xX][0-9a-fA-F]+/);
+                if (hexMatch) {
+                    result += `<span class="syn-number">${hexMatch[0]}</span>`;
+                    i += hexMatch[0].length;
+                    continue;
+                }
+
+                // Decimal number (not preceded by letter/underscore)
+                if (i === 0 || /[^a-zA-Z_]/.test(code[i - 1])) {
+                    const numMatch = code.substring(i).match(/^[0-9]+/);
+                    if (numMatch) {
+                        result += `<span class="syn-number">${numMatch[0]}</span>`;
+                        i += numMatch[0].length;
+                        continue;
+                    }
+                }
+
+                // Identifier (keyword / type / function call)
+                const idMatch = code.substring(i).match(/^[a-zA-Z_][a-zA-Z0-9_]*/);
+                if (idMatch) {
+                    const word = idMatch[0];
+                    const afterIdx = i + word.length;
+                    // Check if followed by '(' → function call
+                    const afterChar = afterIdx < code.length ? code[afterIdx] : '';
+
+                    if (C_KEYWORDS.has(word)) {
+                        result += `<span class="syn-keyword">${word}</span>`;
+                    } else if (C_TYPES.has(word)) {
+                        result += `<span class="syn-type">${word}</span>`;
+                    } else if (afterChar === '(') {
+                        result += `<span class="syn-func">${word}</span>`;
+                    } else {
+                        result += word;
+                    }
+                    i += word.length;
+                    continue;
+                }
+
+                // HTML entity (pass through)
+                if (code[i] === '&') {
+                    const entityEnd = code.indexOf(';', i);
+                    if (entityEnd !== -1 && entityEnd - i < 10) {
+                        result += code.substring(i, entityEnd + 1);
+                        i = entityEnd + 1;
+                        continue;
+                    }
+                }
+
+                result += code[i];
+                i++;
+            }
+
+            return result;
+        }
+
+        // ================================================================
+        // Rendering
+        // ================================================================
+
+        function renderSource(sourceText, traceLines) {
+            const lines = sourceText.split('\n');
+            const traceSet = new Set();
+            let cutoffLine = -1;
+
+            if (traceLines && traceLines.length > 0) {
+                traceLines.forEach(tl => traceSet.add(tl.line));
+                // Last line in the sorted trace is the cutoff
+                const sorted = [...traceLines].sort((a, b) => a.seq - b.seq);
+                cutoffLine = sorted[sorted.length - 1].line;
+            }
+
+            // Parse hash for initial highlight
+            let hashLine = 0;
+            const hashMatch = window.location.hash.match(/^#L(\d+)$/);
+            if (hashMatch) hashLine = parseInt(hashMatch[1]);
+
+            let html = '<div class="source-container"><table class="source-table"><tbody>';
+
+            lines.forEach((line, idx) => {
+                const lineNum = idx + 1;
+                const classes = [];
+
+                if (lineNum === cutoffLine) {
+                    classes.push('trace-cutoff');
+                } else if (traceSet.has(lineNum)) {
+                    classes.push('trace-executed');
+                }
+
+                if (lineNum === hashLine) {
+                    classes.push('highlighted');
+                }
+
+                const trClass = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
+
+                html += `<tr id="L${lineNum}"${trClass}>`;
+                html += `<td class="gutter" onclick="goToLine(${lineNum})">${lineNum}</td>`;
+                html += `<td class="code">${highlightLine(line)}</td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table></div>';
+
+            document.getElementById('content').innerHTML = html;
+
+            // Update toolbar
+            document.getElementById('toolbarInfo').innerHTML =
+                `<strong>Round:</strong> ${escapeHtml(roundId || '-')} &nbsp; <strong>Lines:</strong> ${lines.length}`;
+
+            // Show trace stats if we have trace data
+            if (traceSet.size > 0) {
+                document.getElementById('toolbarStats').style.display = 'flex';
+                document.getElementById('statExecuted').textContent = `${traceSet.size} executed`;
+                document.getElementById('statTotal').textContent = `of ${lines.length} lines`;
+            }
+
+            // Scroll to target
+            if (cutoffLine > 0 && !hashMatch) {
+                scrollToLine(cutoffLine);
+            } else if (hashLine > 0) {
+                scrollToLine(hashLine);
+            }
+        }
+
+        function scrollToLine(lineNum) {
+            const row = document.getElementById('L' + lineNum);
+            if (row) {
+                row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+
+        function goToLine(lineNum) {
+            // Remove previous highlight
+            const prev = document.querySelector('.source-table tr.highlighted');
+            if (prev) prev.classList.remove('highlighted');
+
+            // Add highlight
+            const row = document.getElementById('L' + lineNum);
+            if (row) row.classList.add('highlighted');
+
+            // Update hash without scrolling
+            history.replaceState(null, '', '#L' + lineNum);
+        }
+
+        // Handle hash changes
+        window.addEventListener('hashchange', () => {
+            const match = window.location.hash.match(/^#L(\d+)$/);
+            if (match) {
+                const line = parseInt(match[1]);
+                goToLine(line);
+                scrollToLine(line);
+            }
+        });
+
+        // ================================================================
+        // Data Loading
+        // ================================================================
+
+        async function loadSource() {
+            if (!jobId || !roundId) {
+                document.getElementById('loadingMsg').className = 'status-msg error';
+                document.getElementById('loadingMsg').textContent =
+                    'Missing required URL parameters: job_id and round_id';
+                return;
+            }
+
+            try {
+                // Fetch round data (contains assembled_source)
+                const roundResp = await fetch(`${API_BASE}/api/jobs/${jobId}/rounds/${roundId}`);
+                const roundData = await roundResp.json();
+                const round = roundData.data;
+
+                if (!round || !round.assembled_source) {
+                    document.getElementById('loadingMsg').className = 'status-msg error';
+                    document.getElementById('loadingMsg').textContent =
+                        'No assembled source found for this round';
+                    return;
+                }
+
+                // Optionally fetch trace data
+                let traceLines = null;
+                if (runId) {
+                    try {
+                        const traceResp = await fetch(`${API_BASE}/api/runs/${runId}/trace?last=5000`);
+                        const traceData = await traceResp.json();
+                        if (traceData.data && traceData.data.lines) {
+                            traceLines = traceData.data.lines;
+                        }
+                    } catch (e) {
+                        console.warn('Failed to load trace data:', e);
+                    }
+                }
+
+                document.title = `Source: ${roundId} - AutoMutate++`;
+                renderSource(round.assembled_source, traceLines);
+
+            } catch (e) {
+                document.getElementById('loadingMsg').className = 'status-msg error';
+                document.getElementById('loadingMsg').textContent =
+                    `Error loading source: ${e.message}`;
+            }
+        }
+
+        loadSource();
+    </script>
+</body>
+</html>

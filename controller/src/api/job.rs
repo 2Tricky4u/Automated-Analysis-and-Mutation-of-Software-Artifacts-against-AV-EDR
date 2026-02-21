@@ -450,6 +450,8 @@ pub async fn get_trace_lines(
     service: &SchedulerService,
     request: Request<GetTraceLinesRequest>,
 ) -> Result<Response<GetTraceLinesResponse>, Status> {
+    use crate::triage::source_resolver::SourceMap;
+
     let req = request.get_ref();
     debug!(
         "[RPC] GetTraceLines: run_id={}, last={}",
@@ -461,15 +463,68 @@ pub async fn get_trace_lines(
         .query_trace_lines(&req.run_id, req.last)
         .await;
 
+    // Try to build a SourceMap for code resolution:
+    // run doc → job_id + round_id → round doc → assembled_source
+    let source_map = 'resolve: {
+        let run_docs = service
+            .storage
+            .query_runs_by_ids(&[&req.run_id])
+            .await;
+        let run_doc = match run_docs.first() {
+            Some(d) => d,
+            None => {
+                debug!("Source resolution: run doc not found for {}", req.run_id);
+                break 'resolve None;
+            }
+        };
+        let job_id = str_field(run_doc, "job_id");
+        let round_id = str_field(run_doc, "round_id");
+        if job_id.is_empty() || round_id.is_empty() {
+            debug!("Source resolution: missing job_id/round_id on run {}", req.run_id);
+            break 'resolve None;
+        }
+        let round_doc = match service.storage.query_round(&job_id, &round_id).await {
+            Some(d) => d,
+            None => {
+                debug!("Source resolution: round doc not found for {}/{}", job_id, round_id);
+                break 'resolve None;
+            }
+        };
+        let assembled = str_field(&round_doc, "assembled_source");
+        if assembled.is_empty() {
+            debug!("Source resolution: no assembled_source in round {}", round_id);
+            break 'resolve None;
+        }
+        Some(SourceMap::new(&assembled))
+    };
+
     let lines: Vec<TraceLine> = docs
         .iter()
-        .map(|doc| TraceLine {
-            seq: u64_field(doc, "payload_seq"),
-            file: str_field(doc, "payload_file"),
-            line: u32_field(doc, "payload_line"),
-            func: str_field(doc, "payload_func"),
-            code: String::new(), // Phase 2: source resolution
-            ts_us: u64_field(doc, "payload_ts_us"),
+        .map(|doc| {
+            let line_num = u32_field(doc, "payload_line");
+            let mut func = str_field(doc, "payload_func");
+            let mut code = String::new();
+
+            // Resolve code + fallback func from SourceMap
+            if let Some(ref sm) = source_map {
+                if let Some(resolved) = sm.resolve(line_num as usize) {
+                    code = resolved.code;
+                    if func.is_empty() {
+                        if let Some(f) = resolved.func {
+                            func = f;
+                        }
+                    }
+                }
+            }
+
+            TraceLine {
+                seq: u64_field(doc, "payload_seq"),
+                file: str_field(doc, "payload_file"),
+                line: line_num,
+                func,
+                code,
+                ts_us: u64_field(doc, "payload_ts_us"),
+            }
         })
         .collect();
 
