@@ -749,13 +749,32 @@
                     body: JSON.stringify(payload)
                 });
                 const data = await resp.json();
-                responseBox.textContent = JSON.stringify(data, null, 2);
+                const d = data.data;
 
-                if (data.data?.job_id) {
-                    document.getElementById('jobIdInput').value = data.data.job_id;
+                if (d) {
+                    const acceptedBadge = d.accepted
+                        ? '<span class="badge badge-completed">ACCEPTED</span>'
+                        : '<span class="badge badge-failed">REJECTED</span>';
+
+                    let html = `
+                        <div class="stat-line">${acceptedBadge} &nbsp; ${escapeHtml(d.message)}</div>
+                    `;
+                    if (d.job_id) {
+                        html += `<div class="stat-line"><strong>Job ID:</strong> ${escapeHtml(d.job_id)}</div>`;
+                    }
+                    html += `<div class="stat-line"><strong>Max Rounds:</strong> ${d.max_rounds}</div>`;
+                    responseBox.innerHTML = html;
+
+                    if (d.job_id) {
+                        document.getElementById('jobIdInput').value = d.job_id;
+                    }
+                } else if (data.error) {
+                    responseBox.innerHTML = `<div class="stat-line" style="color: #fca5a5;"><strong>Error:</strong> ${escapeHtml(data.error)}</div>`;
+                } else {
+                    responseBox.textContent = JSON.stringify(data, null, 2);
                 }
             } catch (e) {
-                responseBox.textContent = `Error: ${e.message}`;
+                responseBox.innerHTML = `<div class="stat-line" style="color: #fca5a5;">Error: ${escapeHtml(e.message)}</div>`;
             }
         });
 
