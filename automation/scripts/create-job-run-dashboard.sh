@@ -295,7 +295,7 @@ VIS_STATE=$(jq -n '{
     type: "pie",
     aggs: [
         { id: "1", enabled: true, type: "count", params: {}, schema: "metric" },
-        { id: "2", enabled: true, type: "terms", params: { field: "differential_category", orderBy: "1", order: "desc", size: 10 }, schema: "segment" }
+        { id: "2", enabled: true, type: "terms", params: { field: "differential_category.keyword", orderBy: "1", order: "desc", size: 10 }, schema: "segment" }
     ],
     params: {
         type: "pie",
@@ -479,7 +479,7 @@ DASHBOARD_JSON=$(jq -n \
             version: 1,
             timeRestore: true,
             timeTo: "now",
-            timeFrom: "now-1y",
+            timeFrom: "now-7d",
             refreshInterval: { pause: false, value: 30000 },
             kibanaSavedObjectMeta: {
                 searchSourceJSON: "{\"query\":{\"language\":\"kuery\",\"query\":\"\"},\"filter\":[]}"
