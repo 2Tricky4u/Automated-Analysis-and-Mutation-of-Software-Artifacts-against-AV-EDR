@@ -10,6 +10,7 @@
 //!   queries ES for token-level data.
 
 pub mod coverage_selector;
+pub mod source_resolver;
 
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
 use async_trait::async_trait;

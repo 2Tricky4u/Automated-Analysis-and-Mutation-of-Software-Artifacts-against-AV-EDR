@@ -410,6 +410,7 @@ message RoundProto {
   RunResultProto instrumented_run = 6;
   string status = 7;
   BehaviorComparisonProto behavior_match = 8;
+  string assembled_source = 9;
 }
 
 message RunResultProto {

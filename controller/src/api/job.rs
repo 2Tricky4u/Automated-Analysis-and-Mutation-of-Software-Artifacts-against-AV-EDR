@@ -321,6 +321,7 @@ pub async fn get_round(
         instrumented_run,
         status: str_field(&source, "status"),
         behavior_match,
+        assembled_source: str_field(&source, "assembled_source"),
     };
 
     Ok(Response::new(GetRoundResponse { round: Some(round) }))
