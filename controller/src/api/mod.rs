@@ -12,13 +12,15 @@ pub mod worker;
 use crate::automutate::common::TelemetryData;
 use crate::automutate::controller::{
     BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse, DeployRequest,
-    DeployResponse, GetAvailableWorkersRequest, GetAvailableWorkersResponse,
-    GetOrchestratorStatusRequest, GetOrchestratorStatusResponse, GetPoolMetricsRequest,
-    GetPoolMetricsResponse, GetRoundRequest, GetRoundResponse, GetTraceLinesRequest,
-    GetTraceLinesResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkerRequest,
-    GetWorkerResponse, JobProgressRequest, JobProgressResponse, JobRequest, JobResponse,
-    JobStatusRequest, JobStatusResponse, ListWorkersRequest, ListWorkersResponse, PingRequest,
-    PingResponse, QueryRequest, QueryResponse, StatusAck, StatusReport, StopJobRequest,
+    DeployResponse, DisconnectAllWorkersRequest, DisconnectAllWorkersResponse,
+    DisconnectWorkerRequest, DisconnectWorkerResponse, GetAvailableWorkersRequest,
+    GetAvailableWorkersResponse, GetOrchestratorStatusRequest, GetOrchestratorStatusResponse,
+    GetPoolMetricsRequest, GetPoolMetricsResponse, GetRoundRequest, GetRoundResponse,
+    GetTraceLinesRequest, GetTraceLinesResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, GetWorkerRequest, GetWorkerResponse, JobProgressRequest,
+    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
+    ListWorkersRequest, ListWorkersResponse, PingRequest, PingResponse, PingWorkerRequest,
+    PingWorkerResponse, QueryRequest, QueryResponse, StatusAck, StatusReport, StopJobRequest,
     StopJobResponse, TriageRequest, TriageResponse, controller_server::Controller,
 };
 use crate::dispatch::{JobControlCommand, JobSession, RunPool};
@@ -206,5 +208,27 @@ impl Controller for SchedulerService {
         request: Request<GetOrchestratorStatusRequest>,
     ) -> Result<Response<GetOrchestratorStatusResponse>, Status> {
         worker::get_orchestrator_status(self, request).await
+    }
+
+    // Admin command handlers
+    async fn ping_worker(
+        &self,
+        request: Request<PingWorkerRequest>,
+    ) -> Result<Response<PingWorkerResponse>, Status> {
+        worker::ping_worker(self, request).await
+    }
+
+    async fn disconnect_worker(
+        &self,
+        request: Request<DisconnectWorkerRequest>,
+    ) -> Result<Response<DisconnectWorkerResponse>, Status> {
+        worker::disconnect_worker(self, request).await
+    }
+
+    async fn disconnect_all_workers(
+        &self,
+        request: Request<DisconnectAllWorkersRequest>,
+    ) -> Result<Response<DisconnectAllWorkersResponse>, Status> {
+        worker::disconnect_all_workers(self, request).await
     }
 }
