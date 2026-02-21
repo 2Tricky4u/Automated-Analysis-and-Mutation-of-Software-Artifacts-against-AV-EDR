@@ -24,9 +24,9 @@ use anyhow::{Context, Result};
 use tracing::{debug, warn};
 
 use super::binary_data::{
-    BENIGN_IMPORTS, BENIGN_STRINGS, DEFAULT_COMPANY, DEFAULT_PDB_PATH, DEFAULT_PRODUCT,
-    MSVC_STANDARD_SECTIONS, build_manifest, build_version_info, encode_rich_header,
-    generate_low_entropy_padding, get_rich_profile,
+    BENIGN_IMPORTS, BENIGN_STRINGS, DEFAULT_COMPANY, DEFAULT_PRODUCT, MSVC_STANDARD_SECTIONS,
+    build_manifest, build_version_info, compute_rich_checksum, encode_rich_header,
+    fnv1a_hash_bytes, fnv1a_hash_u32, generate_low_entropy_padding, get_rich_profile,
 };
 use crate::mutator::MutationSpec;
 
@@ -134,8 +134,8 @@ impl BinaryMutator {
             }
         }
 
-        // Zero PE checksum (optional for user-mode executables, avoids stale value)
-        self.zero_pe_checksum();
+        // Compute proper PE checksum (matches MSVC link.exe behavior)
+        self.compute_pe_checksum();
 
         // Final validation: re-parse with goblin to ensure we produced a valid PE
         goblin::pe::PE::parse(&self.pe_bytes)
@@ -231,12 +231,35 @@ impl BinaryMutator {
         self.write_u16(e_lfanew + 4 + 2, val);
     }
 
-    /// Zero the PE checksum field
-    fn zero_pe_checksum(&mut self) {
-        let off = self.optional_header_offset() + 0x40;
-        if off + 4 <= self.pe_bytes.len() {
-            self.write_u32(off, 0);
+    /// Compute and write the standard PE checksum.
+    ///
+    /// Algorithm: 16-bit carry-fold sum over all u16 words in the file
+    /// (skipping the checksum field itself), then add the file length.
+    fn compute_pe_checksum(&mut self) {
+        let checksum_offset = self.optional_header_offset() + 0x40;
+        if checksum_offset + 4 > self.pe_bytes.len() {
+            return;
         }
+        // Zero the field first
+        self.write_u32(checksum_offset, 0);
+        // Sum all u16 words with carry, skipping the checksum field
+        let mut sum: u32 = 0;
+        let len = self.pe_bytes.len();
+        for i in (0..len).step_by(2) {
+            if i == checksum_offset || i == checksum_offset + 2 {
+                continue;
+            }
+            let word = if i + 1 < len {
+                u16::from_le_bytes([self.pe_bytes[i], self.pe_bytes[i + 1]]) as u32
+            } else {
+                self.pe_bytes[i] as u32
+            };
+            sum += word;
+            sum = (sum & 0xFFFF) + (sum >> 16); // fold carry
+        }
+        sum = (sum & 0xFFFF) + (sum >> 16); // final carry fold
+        sum += len as u32;
+        self.write_u32(checksum_offset, sum);
     }
 
     /// Convert RVA to file offset using section table
@@ -352,6 +375,10 @@ impl BinaryMutator {
 
     /// Inject an MSVC-style Rich header between DOS stub and PE signature
     ///
+    /// KNOWN ISSUE: Rich records claim MSVC toolchain but binary is Clang-compiled.
+    /// Cross-correlation (Rich tool IDs vs .text code patterns) can detect mismatch.
+    /// Full fix requires compiling with MSVC or stripping Rich header entirely.
+    ///
     /// Params:
     /// - `donor`: "notepad" | "calc" | "explorer" (default: "notepad")
     fn apply_rich_header(&mut self, spec: &MutationSpec) -> Result<()> {
@@ -386,7 +413,11 @@ impl BinaryMutator {
         let max_records = (available - overhead) / 8;
         let records_to_use = std::cmp::min(profile.records.len(), max_records);
 
-        let rich_bytes = encode_rich_header(&profile.records[..records_to_use], profile.checksum);
+        // Compute checksum from actual DOS header bytes + records (matches real Rich algorithm)
+        let records = &profile.records[..records_to_use];
+        let checksum = compute_rich_checksum(&self.pe_bytes, e_lfanew as u32, records);
+
+        let rich_bytes = encode_rich_header(records, checksum);
 
         // Zero-fill the gap
         for byte in self.pe_bytes[DOS_HEADER_END..e_lfanew].iter_mut() {
@@ -416,6 +447,10 @@ impl BinaryMutator {
     ///
     /// Params:
     /// - `count`: max number of benign functions to add (default: 50)
+    ///
+    /// KNOWN ISSUE: Added imports are never called at runtime. Dynamic analysis
+    /// (API call tracing) reveals dead imports. Static coverage analysis of .text
+    /// references to IAT slots could also detect unused imports.
     fn apply_import_pad(&mut self, spec: &MutationSpec) -> Result<()> {
         let max_count: usize = spec
             .params
@@ -436,7 +471,7 @@ impl BinaryMutator {
         };
 
         // Select benign DLLs not already imported
-        let mut new_dlls: Vec<(&str, Vec<&str>)> = Vec::new();
+        let mut new_dlls: Vec<(&str, Vec<(&str, u16)>)> = Vec::new();
         let mut total_funcs = 0;
 
         for import in BENIGN_IMPORTS.iter() {
@@ -452,7 +487,7 @@ impl BinaryMutator {
             }
 
             let remaining = max_count - total_funcs;
-            let funcs: Vec<&str> = import.functions.iter().take(remaining).copied().collect();
+            let funcs: Vec<(&str, u16)> = import.functions.iter().take(remaining).copied().collect();
             total_funcs += funcs.len();
             new_dlls.push((import.dll, funcs));
         }
@@ -554,9 +589,13 @@ impl BinaryMutator {
 
     /// Add version info + manifest resources
     ///
+    /// KNOWN ISSUE: No RT_ICON resource — most real apps have an icon.
+    /// FileVersion is static "1.0.0.0" — could be parameterized.
+    ///
     /// Params:
     /// - `product_name`: (default: DEFAULT_PRODUCT)
     /// - `company`: (default: DEFAULT_COMPANY)
+    /// - `original_filename`: (default: "app.exe")
     fn apply_resource_inject(&mut self, spec: &MutationSpec) -> Result<()> {
         let product_name = spec
             .params
@@ -568,9 +607,14 @@ impl BinaryMutator {
             .get("company")
             .map(|s| s.as_str())
             .unwrap_or(DEFAULT_COMPANY);
+        let original_filename = spec
+            .params
+            .get("original_filename")
+            .map(|s| s.as_str())
+            .unwrap_or("app.exe");
 
         // Build resource data payloads
-        let version_data = build_version_info(product_name, company, "1.0.0.0");
+        let version_data = build_version_info(product_name, company, "1.0.0.0", original_filename);
         let manifest_data = build_manifest(product_name, company).into_bytes();
 
         // Calculate where new section will go
@@ -625,6 +669,9 @@ impl BinaryMutator {
     // ========================================================================
 
     /// Rename non-standard sections to MSVC defaults based on characteristics.
+    ///
+    /// KNOWN ISSUE: May create duplicate section names (e.g., multiple .rdata).
+    /// Valid per PE spec but uncommon — minor statistical anomaly.
     ///
     /// Params: none (deterministic)
     fn apply_section_rename(&mut self, _spec: &MutationSpec) -> Result<()> {
@@ -681,6 +728,10 @@ impl BinaryMutator {
 
     /// Backdate the PE timestamp to make it look like an older build.
     ///
+    /// KNOWN ISSUE: Linker version in optional header (set by Clang) may not match
+    /// the backdated timestamp era. E.g., timestamp says 2023 but linker version
+    /// is from 2025 Clang — inconsistency detectable by cross-correlation.
+    ///
     /// Params:
     /// - `age_days`: backdate by N days (default: "365")
     /// - `timestamp`: explicit Unix epoch value (overrides age_days)
@@ -696,11 +747,11 @@ impl BinaryMutator {
                 .get("age_days")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(365);
-            // Deterministic jitter derived from existing timestamp (±30 days)
-            let jitter = (current_ts % 60) * 86400;
-            current_ts
-                .saturating_sub(age_days * 86400)
-                .saturating_add(jitter % (30 * 86400))
+            // Hash-based jitter: ±15 days, varies with both timestamp and age_days
+            let jitter_seed = fnv1a_hash_u32(current_ts, age_days);
+            let jitter_days = (jitter_seed % 31) as i64 - 15; // -15 to +15 days
+            let target = current_ts as i64 - (age_days as i64 * 86400) + (jitter_days * 86400);
+            target.max(0) as u32
         };
 
         // Update COFF TimeDateStamp
@@ -774,27 +825,39 @@ impl BinaryMutator {
         let mut data = Vec::new();
 
         // ── 1. Debug directory (goes first, needs known offset for fixup) ──
+        //
+        // KNOWN ISSUE: Padding content has fixed block-type rotation pattern.
+        // Varying block order via seed mitigates but doesn't eliminate structural fingerprint.
+        // Debug GUID is derived from timestamp — same timestamp = same GUID.
         let debug_info = if let Some(spec) = debug_dir_spec {
-            let pdb_path = spec
-                .params
-                .get("pdb_path")
-                .map(|s| s.as_str())
-                .unwrap_or(DEFAULT_PDB_PATH);
-            let e_lfanew = self.read_u32(0x3C) as usize;
-            let timestamp = self.read_u32(e_lfanew + 4 + 4);
+            let e_lfanew_val = self.read_u32(0x3C) as usize;
+            let timestamp_val = self.read_u32(e_lfanew_val + 4 + 4);
+            // PDB path: use explicit param, or generate a varied path from timestamp
+            // KNOWN ISSUE: PDB path still follows a predictable pattern. A dedicated analyst
+            // could fingerprint the path format. True variation requires controller-level naming.
+            let pdb_path_owned: String;
+            let pdb_path = if let Some(p) = spec.params.get("pdb_path") {
+                p.as_str()
+            } else {
+                let dir_hash = fnv1a_hash_u32(timestamp_val, 0x5044_4221) as usize;
+                let dirs = ["build", "work", "dev", "proj", "src", "out"];
+                let dir = dirs[dir_hash % dirs.len()];
+                pdb_path_owned = format!("C:\\src\\{}\\obj\\x64\\Release\\app.pdb", dir);
+                &pdb_path_owned
+            };
+            let timestamp = timestamp_val;
 
             let dd_offset = data.len();
             // IMAGE_DEBUG_DIRECTORY: 28 bytes (placeholder, filled after add_section)
             data.extend(std::iter::repeat_n(0u8, 28));
 
             let cv_offset = data.len();
-            // CodeView RSDS data
+            // CodeView RSDS data — GUID with independently derived DWORDs
             data.extend_from_slice(b"RSDS");
-            let guid_base = timestamp.wrapping_mul(0x01000193);
-            data.extend_from_slice(&guid_base.to_le_bytes());
-            data.extend_from_slice(&guid_base.wrapping_add(1).to_le_bytes());
-            data.extend_from_slice(&guid_base.wrapping_add(2).to_le_bytes());
-            data.extend_from_slice(&guid_base.wrapping_add(3).to_le_bytes());
+            data.extend_from_slice(&fnv1a_hash_u32(timestamp, 0x811C_9DC5).to_le_bytes());
+            data.extend_from_slice(&fnv1a_hash_u32(timestamp, 0xA3B1_4D7E).to_le_bytes());
+            data.extend_from_slice(&fnv1a_hash_u32(timestamp, 0x5E6F_2C8A).to_le_bytes());
+            data.extend_from_slice(&fnv1a_hash_u32(timestamp, 0xD4E5_F6A7).to_le_bytes());
             data.extend_from_slice(&1u32.to_le_bytes()); // Age = 1
             data.extend_from_slice(pdb_path.as_bytes());
             data.push(0);
@@ -823,13 +886,17 @@ impl BinaryMutator {
             }
         }
 
+        // Compute seed from PE bytes for padding variation (each artifact gets unique padding)
+        let seed_len = 512.min(self.pe_bytes.len());
+        let padding_seed = fnv1a_hash_bytes(&self.pe_bytes[..seed_len]);
+
         // ── 3. Size padding ──
         if let Some(kb) = target_size_kb {
             let target_bytes = kb * 1024;
             let current_size = self.pe_bytes.len() + data.len();
             if current_size < target_bytes {
                 let extra = target_bytes - current_size;
-                data.extend_from_slice(&generate_low_entropy_padding(extra));
+                data.extend_from_slice(&generate_low_entropy_padding(extra, padding_seed));
             }
         }
 
@@ -843,7 +910,8 @@ impl BinaryMutator {
                     target_h,
                 );
                 if extra > 0 {
-                    data.extend_from_slice(&generate_low_entropy_padding(extra));
+                    // Use a different seed variant for entropy padding
+                    data.extend_from_slice(&generate_low_entropy_padding(extra, padding_seed.wrapping_add(1)));
                 }
             }
         }
@@ -914,7 +982,7 @@ impl BinaryMutator {
 /// Build complete import section data with combined IDT + new ILTs/IATs/names
 fn build_import_section(
     existing_idt_bytes: &[u8],
-    new_dlls: &[(&str, Vec<&str>)],
+    new_dlls: &[(&str, Vec<(&str, u16)>)],
     base_rva: u32,
 ) -> Vec<u8> {
     let existing_desc_count = existing_idt_bytes.len() / IMPORT_DESC_SIZE;
@@ -944,10 +1012,10 @@ fn build_import_section(
     let mut hint_name_offsets: Vec<Vec<usize>> = Vec::new();
     for (_, funcs) in new_dlls {
         let mut dll_offsets = Vec::new();
-        for func in funcs {
+        for (func_name, _) in funcs {
             dll_offsets.push(offset);
             // Hint (u16) + name + null, padded to WORD boundary
-            let entry_size = 2 + func.len() + 1;
+            let entry_size = 2 + func_name.len() + 1;
             offset += (entry_size + 1) & !1;
         }
         hint_name_offsets.push(dll_offsets);
@@ -1008,11 +1076,12 @@ fn build_import_section(
 
     // Write Hint/Name entries
     for (i, (_, funcs)) in new_dlls.iter().enumerate() {
-        for (j, func) in funcs.iter().enumerate() {
+        for (j, (func_name, hint)) in funcs.iter().enumerate() {
             let off = hint_name_offsets[i][j];
-            // Hint = 0 (already zero, let loader resolve)
+            // Write hint ordinal (approximate, non-zero)
+            write_u16_at(&mut data, off, *hint);
             // Function name (after 2-byte hint)
-            data[off + 2..off + 2 + func.len()].copy_from_slice(func.as_bytes());
+            data[off + 2..off + 2 + func_name.len()].copy_from_slice(func_name.as_bytes());
             // Null terminator already zero
         }
     }
@@ -1399,10 +1468,16 @@ mod tests {
         let (result, applied) = mutator.apply(&[&spec]).unwrap();
         assert_eq!(applied.len(), 1);
 
-        // Verify checksum matches calc profile
+        // Verify Rich header is present with a non-zero computed checksum
         let rich_pos = result.windows(4).position(|w| w == b"Rich").unwrap();
         let checksum = u32::from_le_bytes(result[rich_pos + 4..rich_pos + 8].try_into().unwrap());
-        assert_eq!(checksum, binary_data::PROFILE_CALC.checksum);
+        assert_ne!(checksum, 0, "Rich checksum should be non-zero");
+
+        // Verify checksum was computed from DOS header (validate by recomputing)
+        let e_lfanew = u32::from_le_bytes(result[0x3C..0x40].try_into().unwrap());
+        let profile = binary_data::get_rich_profile("calc");
+        let expected = binary_data::compute_rich_checksum(&result, e_lfanew, profile.records);
+        assert_eq!(checksum, expected, "Rich checksum should match DOS-header-based computation");
     }
 
     #[test]
@@ -1797,12 +1872,10 @@ mod tests {
             "RSDS CodeView signature should be present"
         );
 
-        // Default PDB path should be present
+        // A PDB path ending in "app.pdb" should be present (varies per artifact)
         assert!(
-            result
-                .windows(binary_data::DEFAULT_PDB_PATH.len())
-                .any(|w| w == binary_data::DEFAULT_PDB_PATH.as_bytes()),
-            "Default PDB path should be present"
+            result.windows(7).any(|w| w == b"app.pdb"),
+            "PDB path containing 'app.pdb' should be present"
         );
     }
 
@@ -2207,5 +2280,209 @@ mod tests {
                 name_trimmed
             );
         }
+    }
+
+    // ====================================================================
+    // New hardening tests
+    // ====================================================================
+
+    #[test]
+    fn test_pe_checksum_nonzero() {
+        let pe = create_test_pe();
+        let mutator = BinaryMutator::new(pe);
+
+        let spec = MutationSpec {
+            id: "binary.rich_header".to_string(),
+            params: HashMap::new(),
+        };
+
+        let (result, _) = mutator.apply(&[&spec]).unwrap();
+
+        // PE checksum field should be non-zero after apply()
+        let opt_off = {
+            let e_lfanew = u32::from_le_bytes(result[0x3C..0x40].try_into().unwrap()) as usize;
+            e_lfanew + 4 + 20
+        };
+        let checksum = u32::from_le_bytes(result[opt_off + 0x40..opt_off + 0x44].try_into().unwrap());
+        assert_ne!(checksum, 0, "PE checksum should be non-zero");
+    }
+
+    #[test]
+    fn test_pe_checksum_correct() {
+        let pe = create_test_pe();
+        let mutator = BinaryMutator::new(pe);
+
+        let spec = MutationSpec {
+            id: "binary.import_pad".to_string(),
+            params: [("count".to_string(), "5".to_string())].into_iter().collect(),
+        };
+
+        let (result, _) = mutator.apply(&[&spec]).unwrap();
+
+        let opt_off = {
+            let e_lfanew = u32::from_le_bytes(result[0x3C..0x40].try_into().unwrap()) as usize;
+            e_lfanew + 4 + 20
+        };
+        let stored_checksum = u32::from_le_bytes(result[opt_off + 0x40..opt_off + 0x44].try_into().unwrap());
+
+        // Recompute the checksum and verify it matches
+        let checksum_offset = opt_off + 0x40;
+        let mut sum: u32 = 0;
+        let len = result.len();
+        for i in (0..len).step_by(2) {
+            if i == checksum_offset || i == checksum_offset + 2 {
+                continue;
+            }
+            let word = if i + 1 < len {
+                u16::from_le_bytes([result[i], result[i + 1]]) as u32
+            } else {
+                result[i] as u32
+            };
+            sum += word;
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+        sum = (sum & 0xFFFF) + (sum >> 16);
+        sum += len as u32;
+
+        assert_eq!(stored_checksum, sum, "PE checksum should match recomputation");
+    }
+
+    #[test]
+    fn test_import_hints_nonzero() {
+        let pe = create_test_pe();
+        let mutator = BinaryMutator::new(pe);
+
+        let spec = MutationSpec {
+            id: "binary.import_pad".to_string(),
+            params: [("count".to_string(), "10".to_string())].into_iter().collect(),
+        };
+
+        let (result, _) = mutator.apply(&[&spec]).unwrap();
+
+        // Parse and check that import hints are non-zero
+        let parsed = goblin::pe::PE::parse(&result).unwrap();
+        // Find the .idata section
+        let idata_sec = parsed.sections.iter().find(|s| {
+            String::from_utf8_lossy(&s.name).starts_with(".idata")
+        }).expect("Should have .idata section");
+
+        let raw_ptr = idata_sec.pointer_to_raw_data as usize;
+        let raw_size = idata_sec.size_of_raw_data as usize;
+        let section_data = &result[raw_ptr..raw_ptr + raw_size];
+
+        // Search for hint/name entries by looking for known function names
+        // and checking the 2 bytes before them are non-zero
+        let test_func = b"GetSystemMetrics";
+        if let Some(pos) = section_data.windows(test_func.len()).position(|w| w == test_func) {
+            // Hint is 2 bytes before the function name
+            if pos >= 2 {
+                let hint = u16::from_le_bytes([section_data[pos - 2], section_data[pos - 1]]);
+                assert_ne!(hint, 0, "Import hint for GetSystemMetrics should be non-zero");
+            }
+        }
+    }
+
+    #[test]
+    fn test_padding_varies_with_seed() {
+        // Two different PEs should produce different padding content
+        let pe1 = create_test_pe();
+        let mut pe2 = create_test_pe();
+        // Make pe2 different within the first 512 bytes (seed hash range)
+        // Change DOS stub area (between 0x02 and 0x3C)
+        pe2[0x04] = 0xFF;
+        pe2[0x05] = 0xAB;
+
+        let mutator1 = BinaryMutator::new(pe1);
+        let mutator2 = BinaryMutator::new(pe2);
+
+        let spec = MutationSpec {
+            id: "binary.size_pad".to_string(),
+            params: [("target_kb".to_string(), "8".to_string())].into_iter().collect(),
+        };
+
+        let (result1, _) = mutator1.apply(&[&spec]).unwrap();
+        let (result2, _) = mutator2.apply(&[&spec]).unwrap();
+
+        // The padding sections should differ (seeds derived from different PE content)
+        // Compare the last 1024 bytes (deep in the padding region)
+        let tail1 = &result1[result1.len() - 1024..];
+        let tail2 = &result2[result2.len() - 1024..];
+        assert_ne!(tail1, tail2, "Padding should vary between different PEs");
+    }
+
+    #[test]
+    fn test_rich_checksum_computed() {
+        let pe = create_test_pe();
+        let mutator = BinaryMutator::new(pe);
+
+        let spec = MutationSpec {
+            id: "binary.rich_header".to_string(),
+            params: [("donor".to_string(), "notepad".to_string())].into_iter().collect(),
+        };
+
+        let (result, _) = mutator.apply(&[&spec]).unwrap();
+
+        // Extract checksum from Rich footer
+        let rich_pos = result.windows(4).position(|w| w == b"Rich").unwrap();
+        let checksum = u32::from_le_bytes(result[rich_pos + 4..rich_pos + 8].try_into().unwrap());
+
+        // Recompute from DOS header + records and verify match
+        let e_lfanew = u32::from_le_bytes(result[0x3C..0x40].try_into().unwrap());
+        let profile = binary_data::get_rich_profile("notepad");
+        let expected = binary_data::compute_rich_checksum(&result, e_lfanew, profile.records);
+        assert_eq!(checksum, expected, "Rich checksum should match DOS-header computation");
+    }
+
+    #[test]
+    fn test_debug_guid_not_sequential() {
+        let pe = create_test_pe();
+        let mutator = BinaryMutator::new(pe);
+
+        let spec = MutationSpec {
+            id: "binary.debug_dir".to_string(),
+            params: HashMap::new(),
+        };
+
+        let (result, _) = mutator.apply(&[&spec]).unwrap();
+
+        // Find RSDS marker and extract GUID DWORDs
+        let rsds_pos = result.windows(4).position(|w| w == b"RSDS").unwrap();
+        let guid_offset = rsds_pos + 4;
+        let dw0 = u32::from_le_bytes(result[guid_offset..guid_offset + 4].try_into().unwrap());
+        let dw1 = u32::from_le_bytes(result[guid_offset + 4..guid_offset + 8].try_into().unwrap());
+        let dw2 = u32::from_le_bytes(result[guid_offset + 8..guid_offset + 12].try_into().unwrap());
+        let dw3 = u32::from_le_bytes(result[guid_offset + 12..guid_offset + 16].try_into().unwrap());
+
+        // GUID DWORDs should NOT have a sequential relationship
+        assert_ne!(dw1, dw0.wrapping_add(1), "GUID DWORDs should not be sequential");
+        assert_ne!(dw2, dw1.wrapping_add(1), "GUID DWORDs should not be sequential");
+        assert_ne!(dw3, dw2.wrapping_add(1), "GUID DWORDs should not be sequential");
+    }
+
+    #[test]
+    fn test_timestamp_jitter_varies() {
+        // Different age_days on the same PE should produce different jitter
+        let pe = create_test_pe();
+        let e_lfanew = u32::from_le_bytes(pe[0x3C..0x40].try_into().unwrap()) as usize;
+
+        let spec1 = MutationSpec {
+            id: "binary.timestamp".to_string(),
+            params: [("age_days".to_string(), "180".to_string())].into_iter().collect(),
+        };
+        let spec2 = MutationSpec {
+            id: "binary.timestamp".to_string(),
+            params: [("age_days".to_string(), "365".to_string())].into_iter().collect(),
+        };
+
+        let mutator1 = BinaryMutator::new(pe.clone());
+        let (result1, _) = mutator1.apply(&[&spec1]).unwrap();
+        let ts1 = u32::from_le_bytes(result1[e_lfanew + 8..e_lfanew + 12].try_into().unwrap());
+
+        let mutator2 = BinaryMutator::new(pe);
+        let (result2, _) = mutator2.apply(&[&spec2]).unwrap();
+        let ts2 = u32::from_le_bytes(result2[e_lfanew + 8..e_lfanew + 12].try_into().unwrap());
+
+        // Timestamps should differ (different age_days produces different jitter)
+        assert_ne!(ts1, ts2, "Different age_days should produce different timestamps");
     }
 }
