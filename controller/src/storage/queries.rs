@@ -98,6 +98,63 @@ pub async fn update_job_field(
     Ok(())
 }
 
+/// Query trace-line telemetry events for a run, sorted by payload_seq descending.
+/// Returns the last `last_n` events (most recent execution points).
+pub async fn query_trace_lines(es: &Elasticsearch, run_id: &str, last_n: u32) -> (Vec<Value>, u64) {
+    let size = if last_n == 0 { 50 } else { last_n };
+
+    // First get total count
+    let count_resp = es
+        .search(SearchParts::Index(&["telemetry-*"]))
+        .body(json!({
+            "query": {
+                "bool": {
+                    "must": [
+                        { "term": { "run_id": run_id } },
+                        { "term": { "event_type": "trace" } }
+                    ]
+                }
+            },
+            "size": 0,
+            "track_total_hits": true
+        }))
+        .send()
+        .await;
+
+    let total = match count_resp {
+        Ok(resp) => {
+            if let Ok(body) = resp.json::<Value>().await {
+                body["hits"]["total"]["value"].as_u64().unwrap_or(0)
+            } else {
+                0
+            }
+        }
+        Err(_) => 0,
+    };
+
+    // Now fetch the last N lines sorted by seq desc
+    let response = es
+        .search(SearchParts::Index(&["telemetry-*"]))
+        .body(json!({
+            "query": {
+                "bool": {
+                    "must": [
+                        { "term": { "run_id": run_id } },
+                        { "term": { "event_type": "trace" } }
+                    ]
+                }
+            },
+            "sort": [{ "payload_seq": "desc" }],
+            "size": size,
+            "_source": ["payload_seq", "payload_file", "payload_line", "payload_func", "payload_ts_us"]
+        }))
+        .send()
+        .await;
+
+    let sources = extract_sources(response).await;
+    (sources, total)
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

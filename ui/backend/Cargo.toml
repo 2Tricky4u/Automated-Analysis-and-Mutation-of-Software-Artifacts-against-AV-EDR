@@ -5,14 +5,12 @@ edition.workspace = true
 
 [dependencies]
 # Web framework
-axum = { version = "0.7", features = ["ws"] }
+axum = "0.7"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
-tokio-stream = "0.1"
-futures = "0.3"
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }

@@ -5,10 +5,11 @@
 use crate::generated::controller::{
     BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse, DeployRequest,
     DeployResponse, GetOrchestratorStatusRequest, GetOrchestratorStatusResponse, GetRoundRequest,
-    GetRoundResponse, JobProgressRequest, JobProgressResponse, JobRequest, JobResponse,
-    JobStatusRequest, JobStatusResponse, ListWorkersRequest, ListWorkersResponse, ModuleSelection,
-    PingRequest, PingResponse, QueryRequest, QueryResponse, StopJobRequest, StopJobResponse,
-    TriageRequest, TriageResponse, controller_client::ControllerClient,
+    GetRoundResponse, GetTraceLinesRequest, GetTraceLinesResponse, JobProgressRequest,
+    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
+    ListWorkersRequest, ListWorkersResponse, ModuleSelection, PingRequest, PingResponse,
+    QueryRequest, QueryResponse, StopJobRequest, StopJobResponse, TriageRequest, TriageResponse,
+    controller_client::ControllerClient,
 };
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
@@ -234,6 +235,27 @@ impl ControllerGrpcClient {
             .compare_runs(request)
             .await
             .map_err(|e| anyhow!("CompareRuns failed: {}", e))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Get trace lines for a run
+    pub async fn get_trace_lines(
+        &self,
+        run_id: &str,
+        last: u32,
+    ) -> Result<GetTraceLinesResponse> {
+        let mut client = self.get_client().await?;
+
+        let request = GetTraceLinesRequest {
+            run_id: run_id.to_string(),
+            last,
+        };
+
+        let response = client
+            .get_trace_lines(request)
+            .await
+            .map_err(|e| anyhow!("GetTraceLines failed: {}", e))?;
 
         Ok(response.into_inner())
     }

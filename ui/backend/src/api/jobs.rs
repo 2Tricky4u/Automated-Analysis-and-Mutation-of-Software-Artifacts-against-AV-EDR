@@ -335,6 +335,72 @@ pub async fn get_round(
     }
 }
 
+// ============================================================================
+// Trace Lines Types & Handler
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+pub struct TraceLineInfo {
+    pub seq: u64,
+    pub file: String,
+    pub line: u32,
+    pub func: String,
+    pub code: String,
+    pub ts_us: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TraceLinesResponse {
+    pub run_id: String,
+    pub lines: Vec<TraceLineInfo>,
+    pub total_events: u32,
+}
+
+/// GET /api/runs/:run_id/trace?last=N - Get trace lines for a run
+#[derive(Debug, Deserialize)]
+pub struct TraceLinesQuery {
+    pub last: Option<u32>,
+}
+
+pub async fn get_trace_lines(
+    State(client): State<Arc<ControllerGrpcClient>>,
+    Path(run_id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<TraceLinesQuery>,
+) -> Result<Json<ApiResponse<TraceLinesResponse>>, ApiError> {
+    let last = query.last.unwrap_or(50);
+    debug!("REST: Get trace lines (run_id={}, last={})", run_id, last);
+
+    match client.get_trace_lines(&run_id, last).await {
+        Ok(resp) => {
+            let lines: Vec<TraceLineInfo> = resp
+                .lines
+                .into_iter()
+                .map(|l| TraceLineInfo {
+                    seq: l.seq,
+                    file: l.file,
+                    line: l.line,
+                    func: l.func,
+                    code: l.code,
+                    ts_us: l.ts_us,
+                })
+                .collect();
+
+            Ok(Json(ApiResponse::new(TraceLinesResponse {
+                run_id: resp.run_id,
+                lines,
+                total_events: resp.total_events,
+            })))
+        }
+        Err(e) => {
+            error!("Failed to get trace lines: {}", e);
+            Err(ApiError::unavailable(format!(
+                "Controller unavailable: {}",
+                e
+            )))
+        }
+    }
+}
+
 /// GET /api/runs/compare?baseline=X&instrumented=Y - Compare runs
 #[derive(Debug, Deserialize)]
 pub struct CompareRunsQuery {

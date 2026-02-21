@@ -14,12 +14,12 @@ use crate::automutate::controller::{
     BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse, DeployRequest,
     DeployResponse, GetAvailableWorkersRequest, GetAvailableWorkersResponse,
     GetOrchestratorStatusRequest, GetOrchestratorStatusResponse, GetPoolMetricsRequest,
-    GetPoolMetricsResponse, GetRoundRequest, GetRoundResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, GetWorkerRequest, GetWorkerResponse, JobProgressRequest,
-    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
-    ListWorkersRequest, ListWorkersResponse, PingRequest, PingResponse, QueryRequest,
-    QueryResponse, StatusAck, StatusReport, StopJobRequest, StopJobResponse, TriageRequest,
-    TriageResponse, controller_server::Controller,
+    GetPoolMetricsResponse, GetRoundRequest, GetRoundResponse, GetTraceLinesRequest,
+    GetTraceLinesResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkerRequest,
+    GetWorkerResponse, JobProgressRequest, JobProgressResponse, JobRequest, JobResponse,
+    JobStatusRequest, JobStatusResponse, ListWorkersRequest, ListWorkersResponse, PingRequest,
+    PingResponse, QueryRequest, QueryResponse, StatusAck, StatusReport, StopJobRequest,
+    StopJobResponse, TriageRequest, TriageResponse, controller_server::Controller,
 };
 use crate::dispatch::{JobControlCommand, JobSession, RunPool};
 use crate::storage::EsStorage;
@@ -163,6 +163,13 @@ impl Controller for SchedulerService {
         request: Request<CompareRunsRequest>,
     ) -> Result<Response<CompareRunsResponse>, Status> {
         job::compare_runs(self, request).await
+    }
+
+    async fn get_trace_lines(
+        &self,
+        request: Request<GetTraceLinesRequest>,
+    ) -> Result<Response<GetTraceLinesResponse>, Status> {
+        job::get_trace_lines(self, request).await
     }
 
     // Monitoring handlers

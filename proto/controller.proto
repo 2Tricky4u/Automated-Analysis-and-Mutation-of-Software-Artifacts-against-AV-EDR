@@ -48,6 +48,9 @@ service Controller {
   // NEW: Compare two runs (differential analysis)
   rpc CompareRuns(CompareRunsRequest) returns (CompareRunsResponse);
 
+  // Get trace lines for a run (instrumented execution path)
+  rpc GetTraceLines(GetTraceLinesRequest) returns (GetTraceLinesResponse);
+
   // === MONITORING & ADMIN ENDPOINTS ===
 
   // Get a specific worker by ID
@@ -579,4 +582,26 @@ message ActiveJobEntry {
   uint32 current_round = 3;
   uint32 max_rounds = 4;
   string status = 5;
+}
+
+// ===== TRACE LINES MESSAGES =====
+
+message GetTraceLinesRequest {
+  string run_id = 1;
+  uint32 last = 2;  // Return last N trace lines (default: 50)
+}
+
+message GetTraceLinesResponse {
+  string run_id = 1;
+  repeated TraceLine lines = 2;
+  uint32 total_events = 3;  // Total trace events in ES for this run
+}
+
+message TraceLine {
+  uint64 seq = 1;          // payload_seq - execution sequence number
+  string file = 2;         // payload_file
+  uint32 line = 3;         // payload_line
+  string func = 4;         // payload_func
+  string code = 5;         // resolved source line (empty initially)
+  uint64 ts_us = 6;        // payload_ts_us - timestamp in microseconds
 }
