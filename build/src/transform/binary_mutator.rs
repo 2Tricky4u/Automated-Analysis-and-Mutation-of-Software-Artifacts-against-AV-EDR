@@ -760,11 +760,10 @@ impl BinaryMutator {
 
         // If debug directory exists, update its timestamp too
         let (debug_rva, debug_size) = self.read_data_dir(DD_DEBUG);
-        if debug_rva > 0 && debug_size >= 28 {
-            if let Some(debug_off) = self.rva_to_offset(debug_rva) {
+        if debug_rva > 0 && debug_size >= 28
+            && let Some(debug_off) = self.rva_to_offset(debug_rva) {
                 self.write_u32(debug_off + 4, timestamp); // IMAGE_DEBUG_DIRECTORY.TimeDateStamp
             }
-        }
 
         debug!("Timestamp backdated: {:#x} → {:#x}", current_ts, timestamp);
 
