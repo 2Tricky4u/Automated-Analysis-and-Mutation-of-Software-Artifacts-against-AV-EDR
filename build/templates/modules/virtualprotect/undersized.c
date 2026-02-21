@@ -6,7 +6,7 @@
 
 #define VP_SIZE 16
 
-BOOL MyVirtualProtect(LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect, PDWORD lpflOldProtect) {
+FORCE_INLINE BOOL MyVirtualProtect(LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect, PDWORD lpflOldProtect) {
     char *dest = (char *)lpAddress;
 
     // Loop through memory pages (4096 bytes)
