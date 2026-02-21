@@ -5,6 +5,7 @@
 
 use super::helpers;
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
+use crate::triage::source_resolver::CoverageResult;
 use elasticsearch::{Elasticsearch, IndexParts};
 use serde_json::json;
 use tracing::info;
@@ -76,5 +77,48 @@ pub async fn index_round(es: &Elasticsearch, params: &RoundIndexParams<'_>) -> a
     helpers::check_index_response(response, "round", &doc_id).await?;
 
     info!("Indexed round {} to {}", doc_id, index_name);
+    Ok(())
+}
+
+/// Update an existing round document with computed coverage fields.
+pub async fn update_round_coverage(
+    es: &Elasticsearch,
+    job_id: &str,
+    round_id: &str,
+    coverage: &CoverageResult,
+) -> anyhow::Result<()> {
+    let doc_id = format!("{}/{}", job_id, round_id);
+
+    let function_coverage: Vec<serde_json::Value> = coverage
+        .functions
+        .iter()
+        .map(|f| {
+            json!({
+                "name": f.name,
+                "total": f.total_lines,
+                "executed": f.executed_lines,
+                "percent": (f.percent * 10.0).round() / 10.0,
+            })
+        })
+        .collect();
+
+    let body = json!({
+        "doc": {
+            "coverage_total_lines": coverage.total_lines,
+            "coverage_executable_lines": coverage.total_executable,
+            "coverage_executed_lines": coverage.executed_lines,
+            "coverage_percent": (coverage.coverage_percent * 10.0).round() / 10.0,
+            "cutoff_line": coverage.cutoff_line,
+            "cutoff_func": coverage.cutoff_func,
+            "function_coverage": function_coverage,
+        }
+    });
+
+    helpers::update_doc_by_id(es, "rounds-*", "round_id", round_id, body, "round-coverage").await?;
+
+    info!(
+        "Updated round {} coverage: {:.1}% ({}/{})",
+        doc_id, coverage.coverage_percent, coverage.executed_lines, coverage.total_executable
+    );
     Ok(())
 }

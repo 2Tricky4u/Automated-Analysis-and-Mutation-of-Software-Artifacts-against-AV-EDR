@@ -191,6 +191,42 @@ pub async fn query_trace_lines(es: &Elasticsearch, run_id: &str, last_n: u32) ->
     (docs, total)
 }
 
+/// Fetch raw trace JSONL content for a run (lightweight — returns just the string).
+///
+/// Same ES query as `query_trace_lines` but skips JSONL parsing and field
+/// remapping. The caller extracts what it needs from the raw content.
+pub async fn query_trace_content(es: &Elasticsearch, run_id: &str) -> Option<String> {
+    let response = es
+        .search(SearchParts::Index(&["telemetry-*"]))
+        .body(json!({
+            "query": {
+                "bool": {
+                    "must": [
+                        { "term": { "run_id": run_id } },
+                        { "term": { "event_type": "trace_log" } }
+                    ]
+                }
+            },
+            "size": 1,
+            "_source": ["payload_content"]
+        }))
+        .send()
+        .await
+        .ok()?;
+
+    let body = response.json::<Value>().await.ok()?;
+    let content = body["hits"]["hits"]
+        .as_array()
+        .and_then(|h| h.first())
+        .and_then(|hit| hit["_source"]["payload_content"].as_str())?;
+
+    if content.is_empty() {
+        None
+    } else {
+        Some(content.to_string())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

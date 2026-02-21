@@ -973,6 +973,26 @@
                     ${formatRunInfo('Instrumented (trace=lines)', d.instrumented_run)}
                 `;
 
+                // Coverage info bar (server-computed)
+                if (d.coverage_percent > 0) {
+                    const pct = d.coverage_percent.toFixed(1);
+                    const barColor = d.coverage_percent > 60 ? '#4caf50' : d.coverage_percent > 30 ? '#ff9800' : '#f44336';
+                    html += `<div style="margin-top: 8px; padding: 8px 12px; background: #1e1e2e; border-radius: 6px; border: 1px solid #333;">`;
+                    html += `<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">`;
+                    html += `<span style="font-weight: 600; color: #ccc;">Coverage:</span>`;
+                    html += `<span style="color: ${barColor}; font-weight: 700;">${pct}%</span>`;
+                    html += `<div style="flex: 1; height: 8px; background: #333; border-radius: 4px; overflow: hidden;">`;
+                    html += `<div style="width: ${pct}%; height: 100%; background: ${barColor}; border-radius: 4px;"></div>`;
+                    html += `</div>`;
+                    html += `</div>`;
+                    if (d.cutoff_line > 0) {
+                        html += `<div style="font-size: 12px; color: #888;">Cutoff: line ${d.cutoff_line}`;
+                        if (d.cutoff_func) html += ` (<code>${escapeHtml(d.cutoff_func)}</code>)`;
+                        html += `</div>`;
+                    }
+                    html += `</div>`;
+                }
+
                 // Action buttons row
                 const hasInstrumented = d.instrumented_run && d.instrumented_run.run_id;
                 const hasSource = !!d.assembled_source;

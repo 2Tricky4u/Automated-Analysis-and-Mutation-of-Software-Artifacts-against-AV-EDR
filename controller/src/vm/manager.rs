@@ -181,6 +181,7 @@ impl TargetManager {
     }
 
     /// Get the run pool.
+    #[allow(dead_code)]
     pub fn run_pool(&self) -> Arc<RunPool> {
         Arc::clone(&self.run_pool)
     }
@@ -254,6 +255,7 @@ impl TargetManager {
         self.targets.len()
     }
 
+    #[allow(dead_code)]
     pub fn get_available(&self) -> Vec<TargetId> {
         self.targets
             .iter()

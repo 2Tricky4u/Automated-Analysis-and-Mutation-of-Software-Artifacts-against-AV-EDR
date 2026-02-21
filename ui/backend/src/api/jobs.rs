@@ -110,6 +110,9 @@ pub struct RoundDetailResponse {
     pub instrumented_run: Option<RunResultInfo>,
     pub status: String,
     pub assembled_source: Option<String>,
+    pub coverage_percent: f64,
+    pub cutoff_line: u32,
+    pub cutoff_func: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -320,6 +323,9 @@ pub async fn get_round(
                     } else {
                         Some(round.assembled_source)
                     },
+                    coverage_percent: round.coverage_percent,
+                    cutoff_line: round.cutoff_line,
+                    cutoff_func: round.cutoff_func,
                 })))
             } else {
                 Err(ApiError::not_found(format!("Round {} not found", round_id)))
