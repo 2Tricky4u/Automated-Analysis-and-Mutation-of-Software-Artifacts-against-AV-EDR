@@ -2,11 +2,14 @@
 
 use crate::api::SchedulerService;
 use crate::automutate::common::{TelemetryAck, TelemetryData, ToolVersions};
+use crate::automutate::common::{ControllerMessage, HealthCheckRequest, controller_message};
 use crate::automutate::controller::{
-    ActiveJobEntry, GetAvailableWorkersRequest, GetAvailableWorkersResponse,
-    GetOrchestratorStatusRequest, GetOrchestratorStatusResponse, GetPoolMetricsRequest,
-    GetPoolMetricsResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkerRequest,
-    GetWorkerResponse, ListWorkersRequest, ListWorkersResponse, PoolMetricsEntry, WorkerInfo,
+    ActiveJobEntry, DisconnectAllWorkersRequest, DisconnectAllWorkersResponse,
+    DisconnectWorkerRequest, DisconnectWorkerResponse, GetAvailableWorkersRequest,
+    GetAvailableWorkersResponse, GetOrchestratorStatusRequest, GetOrchestratorStatusResponse,
+    GetPoolMetricsRequest, GetPoolMetricsResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, GetWorkerRequest, GetWorkerResponse, ListWorkersRequest,
+    ListWorkersResponse, PingWorkerRequest, PingWorkerResponse, PoolMetricsEntry, WorkerInfo,
     WorkerMetadataEntry,
 };
 use crate::vm::{RegistrationType, TargetStatus};
@@ -373,5 +376,107 @@ pub async fn get_orchestrator_status(
         busy_workers,
         pool_ids,
         active_jobs,
+    }))
+}
+
+// ============================================================================
+// Admin Commands
+// ============================================================================
+
+/// Ping a worker (send HealthCheckRequest via bidirectional stream)
+pub async fn ping_worker(
+    service: &SchedulerService,
+    request: Request<PingWorkerRequest>,
+) -> Result<Response<PingWorkerResponse>, Status> {
+    let worker_id = &request.get_ref().worker_id;
+    info!("[RPC] PingWorker: worker_id={}", worker_id);
+
+    let msg = ControllerMessage {
+        payload: Some(controller_message::Payload::HealthCheck(
+            HealthCheckRequest {
+                request_id: format!("ping-{}", uuid::Uuid::new_v4()),
+            },
+        )),
+    };
+
+    match service.targets.send_command(worker_id, msg).await {
+        Ok(()) => Ok(Response::new(PingWorkerResponse {
+            success: true,
+            message: format!("Health check sent to {}", worker_id),
+        })),
+        Err(e) => {
+            warn!("PingWorker failed for {}: {}", worker_id, e);
+            Ok(Response::new(PingWorkerResponse {
+                success: false,
+                message: format!("Failed to ping {}: {}", worker_id, e),
+            }))
+        }
+    }
+}
+
+/// Disconnect a specific worker
+pub async fn disconnect_worker(
+    service: &SchedulerService,
+    request: Request<DisconnectWorkerRequest>,
+) -> Result<Response<DisconnectWorkerResponse>, Status> {
+    let req = request.get_ref();
+    info!(
+        "[RPC] DisconnectWorker: worker_id={}, reason={}",
+        req.worker_id, req.reason
+    );
+
+    let reason = if req.reason.is_empty() {
+        "admin_disconnect"
+    } else {
+        &req.reason
+    };
+
+    match service.targets.disconnect_one(&req.worker_id, reason).await {
+        Ok(()) => Ok(Response::new(DisconnectWorkerResponse {
+            success: true,
+            message: format!("Disconnected {}", req.worker_id),
+        })),
+        Err(e) => {
+            warn!("DisconnectWorker failed for {}: {}", req.worker_id, e);
+            Ok(Response::new(DisconnectWorkerResponse {
+                success: false,
+                message: format!("Failed to disconnect {}: {}", req.worker_id, e),
+            }))
+        }
+    }
+}
+
+/// Disconnect all workers
+pub async fn disconnect_all_workers(
+    service: &SchedulerService,
+    request: Request<DisconnectAllWorkersRequest>,
+) -> Result<Response<DisconnectAllWorkersResponse>, Status> {
+    let req = request.get_ref();
+    let reason = if req.reason.is_empty() {
+        "admin_disconnect_all"
+    } else {
+        &req.reason
+    };
+
+    info!(
+        "[RPC] DisconnectAllWorkers: reason={}, reconnect_allowed={}",
+        reason, req.reconnect_allowed
+    );
+
+    let count_before = service
+        .targets
+        .list_all()
+        .iter()
+        .filter(|t| t.status != crate::vm::TargetStatus::Offline)
+        .count() as u32;
+
+    service
+        .targets
+        .disconnect_all(reason, req.reconnect_allowed)
+        .await;
+
+    Ok(Response::new(DisconnectAllWorkersResponse {
+        disconnected_count: count_before,
+        message: format!("Disconnected {} workers: {}", count_before, reason),
     }))
 }

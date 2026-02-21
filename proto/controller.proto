@@ -67,6 +67,17 @@ service Controller {
 
   // Get orchestrator status (queue depth, pool count, etc.)
   rpc GetOrchestratorStatus(GetOrchestratorStatusRequest) returns (GetOrchestratorStatusResponse);
+
+  // === ADMIN COMMANDS ===
+
+  // Ping a specific worker (send HealthCheckRequest via stream)
+  rpc PingWorker(PingWorkerRequest) returns (PingWorkerResponse);
+
+  // Disconnect a specific worker
+  rpc DisconnectWorker(DisconnectWorkerRequest) returns (DisconnectWorkerResponse);
+
+  // Disconnect all workers
+  rpc DisconnectAllWorkers(DisconnectAllWorkersRequest) returns (DisconnectAllWorkersResponse);
 }
 
 // Selector Service - mutation selection with feedback
@@ -604,4 +615,35 @@ message TraceLine {
   string func = 4;         // payload_func
   string code = 5;         // resolved source line (empty initially)
   uint64 ts_us = 6;        // payload_ts_us - timestamp in microseconds
+}
+
+// ===== ADMIN COMMAND MESSAGES =====
+
+message PingWorkerRequest {
+  string worker_id = 1;
+}
+
+message PingWorkerResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message DisconnectWorkerRequest {
+  string worker_id = 1;
+  string reason = 2;
+}
+
+message DisconnectWorkerResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message DisconnectAllWorkersRequest {
+  string reason = 1;
+  bool reconnect_allowed = 2;
+}
+
+message DisconnectAllWorkersResponse {
+  uint32 disconnected_count = 1;
+  string message = 2;
 }

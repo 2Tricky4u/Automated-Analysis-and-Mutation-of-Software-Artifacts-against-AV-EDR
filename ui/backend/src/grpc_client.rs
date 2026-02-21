@@ -4,12 +4,15 @@
 
 use crate::generated::controller::{
     BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse, DeployRequest,
-    DeployResponse, GetOrchestratorStatusRequest, GetOrchestratorStatusResponse, GetRoundRequest,
-    GetRoundResponse, GetTraceLinesRequest, GetTraceLinesResponse, JobProgressRequest,
-    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
-    ListWorkersRequest, ListWorkersResponse, ModuleSelection, PingRequest, PingResponse,
-    QueryRequest, QueryResponse, StopJobRequest, StopJobResponse, TriageRequest, TriageResponse,
-    controller_client::ControllerClient,
+    DeployResponse, DisconnectAllWorkersRequest, DisconnectAllWorkersResponse,
+    DisconnectWorkerRequest, DisconnectWorkerResponse, GetAvailableWorkersRequest,
+    GetAvailableWorkersResponse, GetOrchestratorStatusRequest, GetOrchestratorStatusResponse,
+    GetRoundRequest, GetRoundResponse, GetTraceLinesRequest, GetTraceLinesResponse,
+    GetWorkerMetadataRequest, GetWorkerMetadataResponse, JobProgressRequest, JobProgressResponse,
+    JobRequest, JobResponse, JobStatusRequest, JobStatusResponse, ListWorkersRequest,
+    ListWorkersResponse, ModuleSelection, PingRequest, PingResponse, PingWorkerRequest,
+    PingWorkerResponse, QueryRequest, QueryResponse, StopJobRequest, StopJobResponse,
+    TriageRequest, TriageResponse, controller_client::ControllerClient,
 };
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
@@ -284,6 +287,104 @@ impl ControllerGrpcClient {
             .get_orchestrator_status(request)
             .await
             .map_err(|e| anyhow!("GetOrchestratorStatus failed: {}", e))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Get enhanced worker metadata (health, tools, last_seen)
+    pub async fn get_worker_metadata(
+        &self,
+        worker_id: &str,
+    ) -> Result<GetWorkerMetadataResponse> {
+        let mut client = self.get_client().await?;
+
+        let request = GetWorkerMetadataRequest {
+            worker_id: worker_id.to_string(),
+        };
+
+        let response = client
+            .get_worker_metadata(request)
+            .await
+            .map_err(|e| anyhow!("GetWorkerMetadata failed: {}", e))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Get available workers filtered by OS and capabilities
+    pub async fn get_available_workers(
+        &self,
+        target_os: &str,
+        capabilities: Vec<String>,
+    ) -> Result<GetAvailableWorkersResponse> {
+        let mut client = self.get_client().await?;
+
+        let request = GetAvailableWorkersRequest {
+            target_os: target_os.to_string(),
+            required_capabilities: capabilities,
+        };
+
+        let response = client
+            .get_available_workers(request)
+            .await
+            .map_err(|e| anyhow!("GetAvailableWorkers failed: {}", e))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Ping a specific worker
+    pub async fn ping_worker(&self, worker_id: &str) -> Result<PingWorkerResponse> {
+        let mut client = self.get_client().await?;
+
+        let request = PingWorkerRequest {
+            worker_id: worker_id.to_string(),
+        };
+
+        let response = client
+            .ping_worker(request)
+            .await
+            .map_err(|e| anyhow!("PingWorker failed: {}", e))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Disconnect a specific worker
+    pub async fn disconnect_worker(
+        &self,
+        worker_id: &str,
+        reason: &str,
+    ) -> Result<DisconnectWorkerResponse> {
+        let mut client = self.get_client().await?;
+
+        let request = DisconnectWorkerRequest {
+            worker_id: worker_id.to_string(),
+            reason: reason.to_string(),
+        };
+
+        let response = client
+            .disconnect_worker(request)
+            .await
+            .map_err(|e| anyhow!("DisconnectWorker failed: {}", e))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Disconnect all workers
+    pub async fn disconnect_all_workers(
+        &self,
+        reason: &str,
+        reconnect_allowed: bool,
+    ) -> Result<DisconnectAllWorkersResponse> {
+        let mut client = self.get_client().await?;
+
+        let request = DisconnectAllWorkersRequest {
+            reason: reason.to_string(),
+            reconnect_allowed,
+        };
+
+        let response = client
+            .disconnect_all_workers(request)
+            .await
+            .map_err(|e| anyhow!("DisconnectAllWorkers failed: {}", e))?;
 
         Ok(response.into_inner())
     }

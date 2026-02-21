@@ -180,11 +180,7 @@ impl TargetManager {
         }
     }
 
-    // TODO: wire into Orchestrator for pool access
-    // TODO: wire get_available* into round scheduling
-    // TODO: wire send_command/broadcast into admin gRPC handlers
     /// Get the run pool.
-    #[allow(dead_code)]
     pub fn run_pool(&self) -> Arc<RunPool> {
         Arc::clone(&self.run_pool)
     }
@@ -258,7 +254,6 @@ impl TargetManager {
         self.targets.len()
     }
 
-    #[allow(dead_code)]
     pub fn get_available(&self) -> Vec<TargetId> {
         self.targets
             .iter()
@@ -431,6 +426,11 @@ impl TargetManager {
         debug!("Stream established with target {}", id);
 
         self.mark_connected(id)?;
+
+        // Store stream_tx in Target so send_command() can use it
+        if let Some(mut target) = self.targets.get_mut(id) {
+            target.stream_tx = Some(stream_tx.clone());
+        }
 
         // Create channel for results from VM (run completions)
         let (result_tx, result_rx) = mpsc::channel::<RemoteRunResult>(128);
@@ -623,7 +623,6 @@ impl TargetManager {
         results
     }
 
-    #[allow(dead_code)]
     pub async fn send_command(&self, id: impl AsRef<str>, msg: ControllerMessage) -> Result<()> {
         let id = id.as_ref();
         let tx = self
@@ -652,7 +651,6 @@ impl TargetManager {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn broadcast(&self, msg: ControllerMessage) -> usize {
         let ids = self.list_ids();
         let mut success = 0;
@@ -664,7 +662,6 @@ impl TargetManager {
         success
     }
 
-    #[allow(dead_code)]
     pub async fn disconnect_all(&self, reason: &str, reconnect_allowed: bool) {
         info!("Disconnecting all targets: {}", reason);
 
@@ -690,6 +687,42 @@ impl TargetManager {
             target.stream_tx = None;
             target.status = TargetStatus::Offline;
         }
+    }
+
+    /// Disconnect a single target by sending DisconnectNotice and marking offline.
+    pub async fn disconnect_one(&self, id: impl AsRef<str>, reason: &str) -> Result<()> {
+        let id = id.as_ref();
+        let target = self
+            .targets
+            .get(id)
+            .ok_or_else(|| anyhow!("Target not found: {}", id))?;
+
+        if target.status == TargetStatus::Offline {
+            return Err(anyhow!("Target {} is already offline", id));
+        }
+
+        if target.status == TargetStatus::Busy {
+            warn!(
+                "Disconnecting target {} while busy (job: {:?})",
+                id, target.current_job
+            );
+        }
+        drop(target);
+
+        // Send disconnect notice
+        let msg = ControllerMessage {
+            payload: Some(controller_message::Payload::Disconnect(DisconnectNotice {
+                reason: reason.to_string(),
+                reconnect_allowed: true,
+            })),
+        };
+
+        // Best-effort send; mark offline regardless
+        let _ = self.send_command(id, msg).await;
+        self.mark_offline(id)?;
+
+        info!("Disconnected target {}: {}", id, reason);
+        Ok(())
     }
 
     // ========================================================================

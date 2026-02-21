@@ -471,18 +471,25 @@
             <!-- Workers Card -->
             <div class="card">
                 <h2>Workers</h2>
-                <button class="btn-secondary btn-sm mb-10" onclick="refreshWorkers()">Refresh</button>
+                <div class="flex-row mb-10">
+                    <button class="btn-secondary btn-sm" onclick="refreshWorkers()">Refresh</button>
+                    <button class="btn-danger btn-sm" onclick="disconnectAllWorkers()">Disconnect All</button>
+                </div>
                 <table id="workersTable">
                     <thead>
                         <tr>
                             <th>ID</th>
                             <th>OS</th>
                             <th>Capabilities</th>
+                            <th>Health</th>
+                            <th>Tools</th>
+                            <th>Last Seen</th>
                             <th>Status</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="workersBody">
-                        <tr><td colspan="4">Loading...</td></tr>
+                        <tr><td colspan="8">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -632,9 +639,26 @@
         // Workers
         // ================================================================
 
+        function formatLastSeen(seconds) {
+            if (seconds < 0 || seconds > 999999) return 'never';
+            if (seconds < 60) return seconds + 's ago';
+            if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+            return Math.floor(seconds / 3600) + 'h ago';
+        }
+
+        function formatTools(tools) {
+            if (!tools) return '-';
+            const parts = [];
+            if (tools.rededr_version) parts.push('RedEDR ' + tools.rededr_version);
+            if (tools.defender_version) parts.push('Def ' + tools.defender_version);
+            if (tools.etw_version) parts.push('ETW ' + tools.etw_version);
+            if (tools.llvm_version) parts.push('LLVM ' + tools.llvm_version);
+            return parts.length > 0 ? escapeHtml(parts.join(', ')) : '-';
+        }
+
         async function refreshWorkers() {
             try {
-                const resp = await fetch(`${API_BASE}/api/workers`);
+                const resp = await fetch(`${API_BASE}/api/workers/metadata`);
                 const data = await resp.json();
                 const workers = data.data.workers || [];
 
@@ -644,21 +668,33 @@
 
                 const tbody = document.getElementById('workersBody');
                 if (workers.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="4">No workers connected</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="8">No workers connected</td></tr>';
                     return;
                 }
 
-                tbody.innerHTML = workers.map(w => `
+                tbody.innerHTML = workers.map(w => {
+                    const healthDot = w.healthy
+                        ? '<span class="status-dot healthy" style="display:inline-block;width:10px;height:10px;"></span>'
+                        : '<span class="status-dot offline" style="display:inline-block;width:10px;height:10px;"></span>';
+                    const isOffline = w.status === 'offline';
+                    return `
                     <tr>
                         <td>${escapeHtml(w.id)}</td>
                         <td>${escapeHtml(w.os_version)}</td>
                         <td>${escapeHtml(w.capabilities.join(', ') || '-')}</td>
+                        <td>${healthDot}</td>
+                        <td style="font-size:0.75rem;">${formatTools(w.tools)}</td>
+                        <td>${formatLastSeen(w.last_seen_seconds_ago)}</td>
                         <td>${statusBadge(w.status)}</td>
-                    </tr>
-                `).join('');
+                        <td>
+                            <button class="btn-secondary btn-sm" onclick="pingWorker('${escapeHtml(w.id)}')" ${isOffline ? 'disabled' : ''}>Ping</button>
+                            <button class="btn-danger btn-sm" onclick="disconnectWorker('${escapeHtml(w.id)}')" ${isOffline ? 'disabled' : ''}>Disconnect</button>
+                        </td>
+                    </tr>`;
+                }).join('');
             } catch (e) {
                 document.getElementById('workersBody').innerHTML =
-                    `<tr><td colspan="4">Error: ${escapeHtml(e.message)}</td></tr>`;
+                    `<tr><td colspan="8">Error: ${escapeHtml(e.message)}</td></tr>`;
             }
         }
 
@@ -1166,6 +1202,64 @@
                 responseBox.textContent = JSON.stringify(data, null, 2);
             } catch (e) {
                 responseBox.textContent = `Error: ${e.message}`;
+            }
+        }
+
+        // ================================================================
+        // Worker Admin Commands
+        // ================================================================
+
+        async function pingWorker(workerId) {
+            try {
+                const resp = await fetch(`${API_BASE}/api/workers/${workerId}/ping`, { method: 'POST' });
+                const data = await resp.json();
+                const d = data.data;
+                if (d && d.success) {
+                    alert(`Ping sent to ${workerId}: ${d.message}`);
+                } else {
+                    alert(`Ping failed: ${d ? d.message : 'Unknown error'}`);
+                }
+            } catch (e) {
+                alert(`Error pinging worker: ${e.message}`);
+            }
+        }
+
+        async function disconnectWorker(workerId) {
+            if (!confirm(`Disconnect worker ${workerId}?`)) return;
+            try {
+                const resp = await fetch(`${API_BASE}/api/workers/${workerId}/disconnect`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason: 'admin_disconnect' })
+                });
+                const data = await resp.json();
+                const d = data.data;
+                if (d && d.success) {
+                    refreshWorkers();
+                } else {
+                    alert(`Disconnect failed: ${d ? d.message : 'Unknown error'}`);
+                }
+            } catch (e) {
+                alert(`Error disconnecting worker: ${e.message}`);
+            }
+        }
+
+        async function disconnectAllWorkers() {
+            if (!confirm('Disconnect ALL workers? This will interrupt any running jobs.')) return;
+            try {
+                const resp = await fetch(`${API_BASE}/api/workers/disconnect-all`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason: 'admin_disconnect_all', reconnect_allowed: true })
+                });
+                const data = await resp.json();
+                const d = data.data;
+                if (d) {
+                    alert(`Disconnected ${d.disconnected_count} workers: ${d.message}`);
+                    refreshWorkers();
+                }
+            } catch (e) {
+                alert(`Error disconnecting workers: ${e.message}`);
             }
         }
 
