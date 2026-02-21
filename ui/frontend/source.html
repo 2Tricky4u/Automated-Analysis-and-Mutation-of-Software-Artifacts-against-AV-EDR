@@ -163,12 +163,217 @@
         .syn-comment { color: #8b949e; font-style: italic; }
         .syn-number { color: #79c0ff; }
         .syn-func { color: #d2a8ff; }
+
+        /* Function Nav Dropdown */
+        .func-nav-wrapper {
+            position: relative;
+        }
+
+        .func-nav-btn {
+            background: #21262d;
+            color: #c9d1d9;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 4px 12px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .func-nav-btn:hover {
+            background: #30363d;
+            border-color: #484f58;
+        }
+
+        .func-nav-dropdown {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            margin-top: 4px;
+            background: #1c2128;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            min-width: 280px;
+            max-height: 400px;
+            overflow-y: auto;
+            z-index: 200;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+
+        .func-nav-dropdown.open {
+            display: block;
+        }
+
+        .func-nav-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            color: #c9d1d9;
+            border-bottom: 1px solid #21262d;
+        }
+
+        .func-nav-item:last-child {
+            border-bottom: none;
+        }
+
+        .func-nav-item:hover {
+            background: #262c36;
+        }
+
+        .func-nav-item .func-name {
+            flex: 1;
+            font-family: 'Consolas', 'Courier New', monospace;
+            color: #d2a8ff;
+        }
+
+        .func-nav-item .func-cov {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            color: #8b949e;
+            min-width: 90px;
+        }
+
+        .func-cov-bar {
+            width: 50px;
+            height: 6px;
+            background: #21262d;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .func-cov-fill {
+            height: 100%;
+            border-radius: 3px;
+            background: #3fb950;
+            transition: width 0.3s;
+        }
+
+        /* Function Labels (purple pill on signature line) */
+        .func-label {
+            display: inline-block;
+            background: #6e40c9;
+            color: #e6dcfa;
+            font-size: 11px;
+            padding: 1px 8px;
+            border-radius: 10px;
+            margin-right: 8px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            vertical-align: middle;
+            line-height: 1.6;
+        }
+
+        .func-cov-pct {
+            color: #8b949e;
+            font-size: 11px;
+            margin-right: 8px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            vertical-align: middle;
+        }
+
+        /* Fold/Collapse */
+        .fold-toggle {
+            display: inline-block;
+            width: 14px;
+            cursor: pointer;
+            color: #484f58;
+            font-size: 10px;
+            transition: transform 0.15s;
+            text-align: center;
+            user-select: none;
+            margin-right: 2px;
+        }
+
+        .fold-toggle:hover {
+            color: #c9d1d9;
+        }
+
+        .fold-toggle.collapsed {
+            transform: rotate(-90deg);
+        }
+
+        tr.fold-hidden {
+            display: none !important;
+        }
+
+        tr.fold-summary {
+            display: none;
+        }
+
+        tr.fold-summary.visible {
+            display: table-row;
+        }
+
+        tr.fold-summary td {
+            text-align: center;
+            color: #484f58;
+            font-style: italic;
+            font-size: 12px;
+            padding: 2px 12px;
+            background: rgba(110, 64, 201, 0.05);
+        }
+
+        /* Function Boundary Lines */
+        tr.func-boundary td {
+            border-top: 2px solid #30363d;
+        }
+
+        /* Enhanced Cutoff Visibility */
+        .source-table tr.trace-cutoff td {
+            background: rgba(218, 54, 51, 0.25);
+        }
+
+        .source-table tr.trace-cutoff {
+            animation: cutoff-pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes cutoff-pulse {
+            0%, 100% { box-shadow: inset 0 0 8px rgba(248, 81, 73, 0.2); }
+            50% { box-shadow: inset 0 0 16px rgba(248, 81, 73, 0.45); }
+        }
+
+        tr.cutoff-marker td {
+            text-align: center;
+            padding: 4px 12px;
+            background: rgba(218, 54, 51, 0.08);
+            border-top: 1px dashed rgba(248, 81, 73, 0.3);
+            border-bottom: 1px dashed rgba(248, 81, 73, 0.3);
+        }
+
+        .cutoff-marker-label {
+            display: inline-block;
+            background: #da3633;
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 12px;
+            border-radius: 10px;
+            letter-spacing: 0.5px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            animation: cutoff-badge-pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes cutoff-badge-pulse {
+            0%, 100% { opacity: 0.85; }
+            50% { opacity: 1; }
+        }
     </style>
 </head>
 <body>
     <div class="toolbar" id="toolbar">
         <h1>Source Viewer</h1>
         <a class="back-link" href="index.html">Back to Dashboard</a>
+        <div class="func-nav-wrapper" id="funcNavWrapper" style="display: none;">
+            <button class="func-nav-btn" id="funcNavBtn" onclick="toggleFuncNav()">
+                Functions <span id="funcNavCount"></span> &#x25BC;
+            </button>
+            <div class="func-nav-dropdown" id="funcNavDropdown"></div>
+        </div>
         <div class="toolbar-info" id="toolbarInfo">Loading...</div>
         <div class="toolbar-stats" id="toolbarStats" style="display: none;">
             <div class="stat"><span class="legend-dot executed"></span> Executed</div>
@@ -331,6 +536,200 @@
         }
 
         // ================================================================
+        // Function Detection (ported from source_resolver.rs)
+        // ================================================================
+
+        const FUNC_REJECT_KEYWORDS = new Set([
+            'if', 'else', 'for', 'while', 'switch', 'return', 'sizeof', 'typeof', 'defined'
+        ]);
+
+        /**
+         * Try to extract a function name from a C function signature line.
+         * Port of Rust try_parse_func_signature.
+         */
+        function tryParseFuncSignature(line) {
+            const trimmed = line.trim();
+
+            // Skip obvious non-functions
+            if (trimmed.startsWith('typedef') ||
+                trimmed.startsWith('struct ') ||
+                trimmed.startsWith('enum ') ||
+                trimmed.startsWith('union ') ||
+                trimmed.endsWith(';')) {
+                return null;
+            }
+
+            // Must contain '(' for a function signature
+            const parenPos = trimmed.indexOf('(');
+            if (parenPos === -1) return null;
+
+            // The token immediately before '(' is the function name
+            const beforeParen = trimmed.substring(0, parenPos);
+            const tokens = beforeParen.split(/[^a-zA-Z0-9_]/).filter(s => s.length > 0);
+            if (tokens.length === 0) return null;
+
+            const name = tokens[tokens.length - 1];
+
+            // Must have at least one token before the name (the return type)
+            const nameStart = beforeParen.lastIndexOf(name);
+            const beforeName = beforeParen.substring(0, nameStart).trim();
+            if (beforeName.length === 0) return null;
+
+            // Reject keywords
+            if (FUNC_REJECT_KEYWORDS.has(name)) return null;
+
+            return name;
+        }
+
+        /**
+         * Detect C function boundaries by scanning for signatures and tracking braces.
+         * Port of Rust detect_functions.
+         * Returns array of { name, startLine, endLine } (1-based).
+         */
+        function detectFunctions(lines) {
+            const ranges = [];
+            let i = 0;
+
+            while (i < lines.length) {
+                const trimmed = lines[i].trim();
+
+                // Skip preprocessor, blank, comments
+                if (trimmed.length === 0 ||
+                    trimmed.startsWith('#') ||
+                    trimmed.startsWith('//') ||
+                    trimmed.startsWith('/*')) {
+                    i++;
+                    continue;
+                }
+
+                const name = tryParseFuncSignature(trimmed);
+                if (name) {
+                    // Find the opening brace (may be on same line or next few lines)
+                    let braceLine = i;
+                    let foundOpen = trimmed.includes('{');
+
+                    if (!foundOpen) {
+                        for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+                            if (lines[j].includes('{')) {
+                                braceLine = j;
+                                foundOpen = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (foundOpen) {
+                        const startLine = i + 1; // 1-based
+                        let depth = 0;
+                        let endLine = braceLine + 1; // 1-based default
+
+                        for (let k = braceLine; k < lines.length; k++) {
+                            for (const ch of lines[k]) {
+                                if (ch === '{') {
+                                    depth++;
+                                } else if (ch === '}') {
+                                    depth--;
+                                    if (depth === 0) {
+                                        endLine = k + 1; // 1-based
+                                        break;
+                                    }
+                                }
+                            }
+                            if (depth === 0 && k >= braceLine) {
+                                endLine = k + 1;
+                                break;
+                            }
+                        }
+
+                        ranges.push({ name, startLine, endLine });
+                        i = endLine; // skip past function body (0-based: endLine is 1-based, so this lands on next line)
+                        continue;
+                    }
+                }
+
+                i++;
+            }
+
+            return ranges;
+        }
+
+        /**
+         * Compute per-function coverage from trace data.
+         * Returns enriched array with { name, startLine, endLine, totalLines, executedLines, percent }.
+         * percent is -1 if no trace data.
+         */
+        function computeFunctionCoverage(funcRanges, traceSet, lines) {
+            const hasTrace = traceSet && traceSet.size > 0;
+
+            return funcRanges.map(fn => {
+                let totalLines = 0;
+                let executedLines = 0;
+
+                for (let l = fn.startLine; l <= fn.endLine; l++) {
+                    const text = (lines[l - 1] || '').trim();
+                    // Skip blank lines and lone braces
+                    if (text.length === 0 || text === '{' || text === '}') continue;
+                    totalLines++;
+                    if (hasTrace && traceSet.has(l)) executedLines++;
+                }
+
+                return {
+                    ...fn,
+                    totalLines,
+                    executedLines,
+                    percent: hasTrace ? (totalLines > 0 ? Math.round((executedLines / totalLines) * 100) : 0) : -1
+                };
+            });
+        }
+
+        // ================================================================
+        // Interaction: Fold/Collapse & Nav
+        // ================================================================
+
+        const foldState = {}; // funcName → boolean (true = collapsed)
+
+        function toggleFold(funcName) {
+            foldState[funcName] = !foldState[funcName];
+            const collapsed = foldState[funcName];
+
+            // Toggle body rows
+            document.querySelectorAll(`tr[data-func-body="${funcName}"]`).forEach(tr => {
+                tr.classList.toggle('fold-hidden', collapsed);
+            });
+
+            // Toggle summary row
+            const summary = document.querySelector(`tr[data-func-summary="${funcName}"]`);
+            if (summary) summary.classList.toggle('visible', collapsed);
+
+            // Toggle chevron
+            const chevron = document.querySelector(`.fold-toggle[data-func="${funcName}"]`);
+            if (chevron) chevron.classList.toggle('collapsed', collapsed);
+        }
+
+        function toggleFuncNav() {
+            const dropdown = document.getElementById('funcNavDropdown');
+            const isOpen = dropdown.classList.toggle('open');
+
+            if (isOpen) {
+                // Close on outside click
+                setTimeout(() => {
+                    document.addEventListener('click', function closeFuncNav(e) {
+                        if (!document.getElementById('funcNavWrapper').contains(e.target)) {
+                            dropdown.classList.remove('open');
+                            document.removeEventListener('click', closeFuncNav);
+                        }
+                    });
+                }, 0);
+            }
+        }
+
+        function jumpToFunction(lineNum) {
+            document.getElementById('funcNavDropdown').classList.remove('open');
+            goToLine(lineNum);
+            scrollToLine(lineNum);
+        }
+
+        // ================================================================
         // Rendering
         // ================================================================
 
@@ -351,11 +750,31 @@
             const hashMatch = window.location.hash.match(/^#L(\d+)$/);
             if (hashMatch) hashLine = parseInt(hashMatch[1]);
 
+            // --- Function detection ---
+            const funcRanges = detectFunctions(lines);
+            const funcCoverage = computeFunctionCoverage(funcRanges, traceSet, lines);
+
+            // Build lookup maps
+            const funcStartMap = new Map();   // startLine → funcCov entry
+            const funcBoundarySet = new Set();
+            const lineToFunc = new Map();     // lineNum → funcName (for body lines, excluding signature)
+
+            funcCoverage.forEach(fn => {
+                funcStartMap.set(fn.startLine, fn);
+                funcBoundarySet.add(fn.startLine);
+                // Body lines: startLine+1 to endLine (signature is startLine itself)
+                for (let l = fn.startLine + 1; l <= fn.endLine; l++) {
+                    lineToFunc.set(l, fn.name);
+                }
+            });
+
+            // --- Build HTML ---
             let html = '<div class="source-container"><table class="source-table"><tbody>';
 
             lines.forEach((line, idx) => {
                 const lineNum = idx + 1;
                 const classes = [];
+                const attrs = [];
 
                 if (lineNum === cutoffLine) {
                     classes.push('trace-cutoff');
@@ -367,12 +786,57 @@
                     classes.push('highlighted');
                 }
 
-                const trClass = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
+                if (funcBoundarySet.has(lineNum)) {
+                    classes.push('func-boundary');
+                }
 
-                html += `<tr id="L${lineNum}"${trClass}>`;
-                html += `<td class="gutter" onclick="goToLine(${lineNum})">${lineNum}</td>`;
-                html += `<td class="code">${highlightLine(line)}</td>`;
-                html += '</tr>';
+                // Tag body lines with function name for fold
+                if (lineToFunc.has(lineNum)) {
+                    attrs.push(`data-func-body="${lineToFunc.get(lineNum)}"`);
+                }
+
+                const trClass = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
+                const trAttrs = attrs.length > 0 ? ' ' + attrs.join(' ') : '';
+
+                // Check if this is a function signature line
+                const funcEntry = funcStartMap.get(lineNum);
+
+                if (funcEntry) {
+                    // Function signature line: add fold chevron + label
+                    const covText = funcEntry.percent >= 0
+                        ? `<span class="func-cov-pct">${funcEntry.percent}%</span>`
+                        : '';
+
+                    html += `<tr id="L${lineNum}"${trClass}${trAttrs}>`;
+                    html += `<td class="gutter" onclick="goToLine(${lineNum})">`;
+                    html += `<span class="fold-toggle" data-func="${funcEntry.name}" onclick="event.stopPropagation(); toggleFold('${funcEntry.name}')">&#x25BC;</span>`;
+                    html += `${lineNum}</td>`;
+                    html += `<td class="code"><span class="func-label">${escapeHtml(funcEntry.name)}</span>${covText}${highlightLine(line)}</td>`;
+                    html += '</tr>';
+
+                    // Insert fold summary row (hidden by default, shown when collapsed)
+                    const bodyCount = funcEntry.endLine - funcEntry.startLine; // lines after signature
+                    html += `<tr class="fold-summary" data-func-summary="${funcEntry.name}">`;
+                    html += `<td class="gutter"></td>`;
+                    html += `<td class="code">... ${bodyCount} lines hidden (${escapeHtml(funcEntry.name)})</td>`;
+                    html += '</tr>';
+                } else {
+                    html += `<tr id="L${lineNum}"${trClass}${trAttrs}>`;
+                    html += `<td class="gutter" onclick="goToLine(${lineNum})">${lineNum}</td>`;
+                    html += `<td class="code">${highlightLine(line)}</td>`;
+                    html += '</tr>';
+                }
+
+                // Insert cutoff marker after cutoff line
+                if (lineNum === cutoffLine) {
+                    const markerAttrs = lineToFunc.has(lineNum)
+                        ? ` data-func-body="${lineToFunc.get(lineNum)}"`
+                        : (funcStartMap.has(lineNum) ? ` data-func-body="${funcStartMap.get(lineNum).name}"` : '');
+                    html += `<tr class="cutoff-marker"${markerAttrs}>`;
+                    html += `<td class="gutter"></td>`;
+                    html += `<td class="code"><span class="cutoff-marker-label">EXECUTION STOPPED HERE</span></td>`;
+                    html += '</tr>';
+                }
             });
 
             html += '</tbody></table></div>';
@@ -388,6 +852,30 @@
                 document.getElementById('toolbarStats').style.display = 'flex';
                 document.getElementById('statExecuted').textContent = `${traceSet.size} executed`;
                 document.getElementById('statTotal').textContent = `of ${lines.length} lines`;
+            }
+
+            // --- Populate function nav dropdown ---
+            if (funcCoverage.length > 0) {
+                const navWrapper = document.getElementById('funcNavWrapper');
+                const navDropdown = document.getElementById('funcNavDropdown');
+                const navCount = document.getElementById('funcNavCount');
+
+                navCount.textContent = `(${funcCoverage.length})`;
+
+                let navHtml = '';
+                funcCoverage.forEach(fn => {
+                    let covHtml = '';
+                    if (fn.percent >= 0) {
+                        covHtml = `<div class="func-cov">` +
+                            `<div class="func-cov-bar"><div class="func-cov-fill" style="width: ${fn.percent}%"></div></div>` +
+                            `<span>${fn.percent}%</span></div>`;
+                    }
+                    navHtml += `<div class="func-nav-item" onclick="jumpToFunction(${fn.startLine})">` +
+                        `<span class="func-name">${escapeHtml(fn.name)}</span>${covHtml}</div>`;
+                });
+
+                navDropdown.innerHTML = navHtml;
+                navWrapper.style.display = '';
             }
 
             // Scroll to target
