@@ -23,8 +23,6 @@ pub struct RichRecord {
 /// Complete Rich header donor profile
 pub struct RichProfile {
     pub name: &'static str,
-    /// XOR checksum for encoding (arbitrary but fixed per profile)
-    pub checksum: u32,
     /// Compiler/linker records (decoded, before XOR)
     pub records: &'static [RichRecord],
 }
@@ -32,7 +30,6 @@ pub struct RichProfile {
 /// MSVC 2022 v17.8 — small console application (like notepad.exe)
 pub static PROFILE_NOTEPAD: RichProfile = RichProfile {
     name: "notepad",
-    checksum: 0x7B3D_1A2E,
     records: &[
         RichRecord {
             product_id: 0x0001,
@@ -65,7 +62,6 @@ pub static PROFILE_NOTEPAD: RichProfile = RichProfile {
 /// MSVC 2019 v16.11 — medium application (like calc.exe)
 pub static PROFILE_CALC: RichProfile = RichProfile {
     name: "calc",
-    checksum: 0x4A5C_2B3D,
     records: &[
         RichRecord {
             product_id: 0x0001,
@@ -98,7 +94,6 @@ pub static PROFILE_CALC: RichProfile = RichProfile {
 /// MSVC 2022 v17.4 — large C++ application (like explorer.exe)
 pub static PROFILE_EXPLORER: RichProfile = RichProfile {
     name: "explorer",
-    checksum: 0x5D6E_3C4F,
     records: &[
         RichRecord {
             product_id: 0x0001,
@@ -147,6 +142,25 @@ pub fn get_rich_profile(name: &str) -> &'static RichProfile {
     }
 }
 
+/// Compute the Rich header checksum from DOS header bytes and Rich records.
+///
+/// This is the documented Rich header checksum algorithm:
+/// 1. Start with e_lfanew
+/// 2. For each byte at position i (0..0x3C) in the DOS header: checksum += rotl32(byte, i)
+/// 3. For each Rich record: checksum += rotl32(comp_id, count)
+pub fn compute_rich_checksum(dos_header: &[u8], e_lfanew: u32, records: &[RichRecord]) -> u32 {
+    let mut cs = e_lfanew;
+    let end = 0x3C.min(dos_header.len());
+    for (i, &byte) in dos_header[..end].iter().enumerate() {
+        cs = cs.wrapping_add((byte as u32).rotate_left(i as u32));
+    }
+    for rec in records {
+        let comp_id = ((rec.product_id as u32) << 16) | (rec.build_number as u32);
+        cs = cs.wrapping_add(comp_id.rotate_left(rec.count & 0x1F));
+    }
+    cs
+}
+
 /// Encode a Rich header from records + checksum into raw bytes
 ///
 /// Format (all little-endian):
@@ -187,10 +201,14 @@ pub fn encode_rich_header(records: &[RichRecord], checksum: u32) -> Vec<u8> {
 // Benign Import Pool
 // ============================================================================
 
-/// A DLL and its benign exported functions
+/// A DLL and its benign exported functions with approximate import hints.
+///
+/// KNOWN ISSUE: Import hints are approximate, not exact ordinals.
+/// Hint mismatch causes PE loader to fall back to binary search —
+/// functionally correct but technically distinguishable from linker output.
 pub struct BenignImport {
     pub dll: &'static str,
-    pub functions: &'static [&'static str],
+    pub functions: &'static [(&'static str, u16)], // (name, hint)
 }
 
 pub static BENIGN_IMPORTS: &[BenignImport] = &[
@@ -198,107 +216,133 @@ pub static BENIGN_IMPORTS: &[BenignImport] = &[
     BenignImport {
         dll: "user32.dll",
         functions: &[
-            "GetSystemMetrics",
-            "GetDesktopWindow",
-            "GetWindowTextW",
-            "MessageBoxA",
+            ("GetSystemMetrics", 0x0127),
+            ("GetDesktopWindow", 0x00E0),
+            ("GetWindowTextW", 0x0163),
+            ("MessageBoxA", 0x01A5),
         ],
     },
     // Registry / Security
     BenignImport {
         dll: "advapi32.dll",
         functions: &[
-            "RegOpenKeyExW",
-            "RegQueryValueExW",
-            "GetUserNameW",
-            "OpenProcessToken",
+            ("RegOpenKeyExW", 0x0230),
+            ("RegQueryValueExW", 0x023A),
+            ("GetUserNameW", 0x01A0),
+            ("OpenProcessToken", 0x0200),
         ],
     },
     // Shell
     BenignImport {
         dll: "shell32.dll",
         functions: &[
-            "SHGetFolderPathW",
-            "ShellExecuteW",
-            "SHGetSpecialFolderPathW",
+            ("SHGetFolderPathW", 0x01B0),
+            ("ShellExecuteW", 0x0120),
+            ("SHGetSpecialFolderPathW", 0x01C0),
         ],
     },
     // COM
     BenignImport {
         dll: "ole32.dll",
-        functions: &["CoInitializeEx", "CoCreateInstance", "CoUninitialize"],
+        functions: &[
+            ("CoInitializeEx", 0x0032),
+            ("CoCreateInstance", 0x0017),
+            ("CoUninitialize", 0x0038),
+        ],
     },
     // Graphics
     BenignImport {
         dll: "gdi32.dll",
-        functions: &["GetDeviceCaps", "CreateCompatibleDC", "DeleteDC"],
+        functions: &[
+            ("GetDeviceCaps", 0x00B0),
+            ("CreateCompatibleDC", 0x0038),
+            ("DeleteDC", 0x0065),
+        ],
     },
     // File version queries
     BenignImport {
         dll: "version.dll",
-        functions: &["GetFileVersionInfoW", "VerQueryValueW"],
+        functions: &[
+            ("GetFileVersionInfoW", 0x0003),
+            ("VerQueryValueW", 0x000A),
+        ],
     },
     // Networking (normal for any app that talks to the internet)
     BenignImport {
         dll: "winhttp.dll",
         functions: &[
-            "WinHttpOpen",
-            "WinHttpConnect",
-            "WinHttpCloseHandle",
+            ("WinHttpOpen", 0x0019),
+            ("WinHttpConnect", 0x000B),
+            ("WinHttpCloseHandle", 0x0009),
         ],
     },
     BenignImport {
         dll: "ws2_32.dll",
         functions: &[
-            "WSAStartup",
-            "WSACleanup",
-            "getaddrinfo",
-            "freeaddrinfo",
+            ("WSAStartup", 0x0073),
+            ("WSACleanup", 0x0067),
+            ("getaddrinfo", 0x0003),
+            ("freeaddrinfo", 0x0002),
         ],
     },
     // Crypto (normal for apps handling config/updates/TLS)
     BenignImport {
         dll: "bcrypt.dll",
         functions: &[
-            "BCryptOpenAlgorithmProvider",
-            "BCryptCloseAlgorithmProvider",
-            "BCryptGenRandom",
+            ("BCryptOpenAlgorithmProvider", 0x001A),
+            ("BCryptCloseAlgorithmProvider", 0x0005),
+            ("BCryptGenRandom", 0x0011),
         ],
     },
     BenignImport {
         dll: "crypt32.dll",
         functions: &[
-            "CertOpenStore",
-            "CertCloseStore",
-            "CertFreeCertificateContext",
+            ("CertOpenStore", 0x0058),
+            ("CertCloseStore", 0x002A),
+            ("CertFreeCertificateContext", 0x0038),
         ],
     },
     // Path / string utilities
     BenignImport {
         dll: "shlwapi.dll",
-        functions: &["PathFileExistsW", "PathCombineW", "StrCmpIW"],
+        functions: &[
+            ("PathFileExistsW", 0x00B8),
+            ("PathCombineW", 0x00A0),
+            ("StrCmpIW", 0x0170),
+        ],
     },
     // Common controls
     BenignImport {
         dll: "comctl32.dll",
-        functions: &["InitCommonControlsEx", "ImageList_Create"],
+        functions: &[
+            ("InitCommonControlsEx", 0x000E),
+            ("ImageList_Create", 0x0009),
+        ],
     },
     // C runtime (common in MSVC-compiled apps)
     BenignImport {
         dll: "msvcrt.dll",
-        functions: &["malloc", "free", "memcpy", "sprintf"],
+        functions: &[
+            ("malloc", 0x027C),
+            ("free", 0x0260),
+            ("memcpy", 0x0284),
+            ("sprintf", 0x02C0),
+        ],
     },
     // Security / identity
     BenignImport {
         dll: "secur32.dll",
-        functions: &["GetUserNameExW", "LsaEnumerateLogonSessions"],
+        functions: &[
+            ("GetUserNameExW", 0x0012),
+            ("LsaEnumerateLogonSessions", 0x0018),
+        ],
     },
     // Terminal services
     BenignImport {
         dll: "wtsapi32.dll",
         functions: &[
-            "WTSQuerySessionInformationW",
-            "WTSFreeMemory",
+            ("WTSQuerySessionInformationW", 0x0012),
+            ("WTSFreeMemory", 0x0008),
         ],
     },
 ];
@@ -344,7 +388,12 @@ pub fn build_manifest(product_name: &str, company_name: &str) -> String {
 /// Build a complete VS_VERSIONINFO resource structure
 ///
 /// Returns raw bytes ready to embed in a .rsrc section
-pub fn build_version_info(product_name: &str, company_name: &str, file_version: &str) -> Vec<u8> {
+pub fn build_version_info(
+    product_name: &str,
+    company_name: &str,
+    file_version: &str,
+    original_filename: &str,
+) -> Vec<u8> {
     let mut buf = Vec::new();
 
     // We'll build the structure bottom-up, then assemble
@@ -375,7 +424,7 @@ pub fn build_version_info(product_name: &str, company_name: &str, file_version: 
             "LegalCopyright",
             &format!("Copyright (C) {} 2024", company_name),
         ),
-        ("OriginalFilename", "app.exe"),
+        ("OriginalFilename", original_filename),
         ("ProductName", product_name),
         ("ProductVersion", file_version),
     ];
@@ -531,8 +580,8 @@ pub static MSVC_STANDARD_SECTIONS: &[&[u8; 8]] = &[
 // Debug Directory Defaults
 // ============================================================================
 
-/// Default fake PDB path for binary.debug_dir
-pub const DEFAULT_PDB_PATH: &str = "C:\\src\\obj\\x64\\Release\\app.pdb";
+// PDB path is now generated per-artifact in apply_consolidated_padding()
+// using a hash-based directory variant (build/work/dev/proj/src/out).
 
 // ============================================================================
 // Resource Inject Defaults
@@ -548,6 +597,8 @@ pub const DEFAULT_PRODUCT: &str = "Application Service";
 // Benign Strings
 // ============================================================================
 
+// KNOWN ISSUE: These exact strings could become a YARA signature if
+// the tool becomes known. Consider rotating/expanding the pool over time.
 pub static BENIGN_STRINGS: &[&str] = &[
     "The operation completed successfully.",
     "Access is denied.",
@@ -597,6 +648,36 @@ static FORMAT_STRINGS: &[&str] = &[
     "(%d, %d)",
 ];
 
+/// FNV-1a hash of a u32 value with a given seed (produces well-distributed u32).
+pub fn fnv1a_hash_u32(value: u32, seed: u32) -> u32 {
+    let mut h = seed;
+    for &byte in &value.to_le_bytes() {
+        h ^= byte as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
+/// FNV-1a hash of a byte slice into u64 (for seeding).
+pub fn fnv1a_hash_bytes(data: &[u8]) -> u64 {
+    let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+    for &byte in data {
+        h ^= byte as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    h
+}
+
+/// Simple xorshift64 PRNG for seed-based variation.
+fn xorshift64(state: &mut u64) -> u64 {
+    let mut s = *state;
+    s ^= s << 13;
+    s ^= s >> 7;
+    s ^= s << 17;
+    *state = s;
+    s
+}
+
 /// Generate low-entropy padding that looks like real compiled PE data.
 ///
 /// Mixes multiple data types found in real `.rdata`/`.data` sections:
@@ -604,14 +685,45 @@ static FORMAT_STRINGS: &[&str] = &[
 /// - Aligned integer sequences (enum/flag tables)
 /// - Pointer-sized zero blocks (uninitialized pointer arrays)
 /// - Short format strings
-/// - 8-byte aligned non-zero values (vtable-like pointers)
+/// - Small aligned DWORD constants (flag/enum/size tables)
+///
+/// The `seed` parameter controls string selection order, block type sequence,
+/// and constant values — ensuring each artifact gets unique padding content.
+///
+/// KNOWN ISSUE: String pool is static (30 strings). Artifacts sharing
+/// the same strings in the same order could be clustered. Seed-based
+/// shuffling mitigates but doesn't change the pool itself.
 ///
 /// Produces H ≈ 3.5–4.5 bits/byte, resembling natural initialized data.
-pub fn generate_low_entropy_padding(size: usize) -> Vec<u8> {
+pub fn generate_low_entropy_padding(size: usize, seed: u64) -> Vec<u8> {
     let mut buf = Vec::with_capacity(size);
+    let mut rng = if seed == 0 { 0x1234_5678_9ABC_DEF0 } else { seed };
+
+    // Seed-based shuffled indices for string selection
+    let string_count = BENIGN_STRINGS.len();
+    let fmt_count = FORMAT_STRINGS.len();
+    let mut string_order: Vec<usize> = (0..string_count).collect();
+    let mut fmt_order: Vec<usize> = (0..fmt_count).collect();
+    // Fisher-Yates shuffle using seed
+    for i in (1..string_count).rev() {
+        let j = xorshift64(&mut rng) as usize % (i + 1);
+        string_order.swap(i, j);
+    }
+    for i in (1..fmt_count).rev() {
+        let j = xorshift64(&mut rng) as usize % (i + 1);
+        fmt_order.swap(i, j);
+    }
+
+    // Seed-based block type order (permutation of 0..6)
+    let mut block_order: Vec<u8> = (0..6).collect();
+    for i in (1..6).rev() {
+        let j = xorshift64(&mut rng) as usize % (i + 1);
+        block_order.swap(i, j);
+    }
+
     let mut string_idx = 0;
     let mut fmt_idx = 0;
-    let mut block_type = 0u8;
+    let mut block_step = 0usize;
 
     while buf.len() < size {
         let remaining = size - buf.len();
@@ -620,16 +732,19 @@ pub fn generate_low_entropy_padding(size: usize) -> Vec<u8> {
             break;
         }
 
-        match block_type % 6 {
-            0 => {
+        let block_type = block_order[block_step % 6];
+        block_step += 1;
+
+        match block_type {
+            0 | 5 => {
                 // Benign string (null-terminated, like error messages in .rdata)
-                let s = BENIGN_STRINGS[string_idx % BENIGN_STRINGS.len()];
+                let idx = string_order[string_idx % string_count];
                 string_idx += 1;
+                let s = BENIGN_STRINGS[idx];
                 let s_bytes = s.as_bytes();
                 if remaining > s_bytes.len() + 1 {
                     buf.extend_from_slice(s_bytes);
                     buf.push(0);
-                    // Align to 4 bytes (like MSVC string pooling)
                     while buf.len() % 4 != 0 && buf.len() < size {
                         buf.push(0);
                     }
@@ -639,20 +754,22 @@ pub fn generate_low_entropy_padding(size: usize) -> Vec<u8> {
             }
             1 => {
                 // Pointer-sized zero block (like uninitialized pointer arrays)
-                let count = remaining.min(48); // 6 pointers worth
+                let count = remaining.min(48);
                 buf.extend(std::iter::repeat_n(0u8, count));
             }
             2 => {
                 // Small aligned integer sequence (like enum tables / flag arrays)
+                let base = (xorshift64(&mut rng) & 0xFF) as u32;
                 let count = (remaining / 4).min(8);
                 for i in 0..count {
-                    buf.extend_from_slice(&(i as u32).to_le_bytes());
+                    buf.extend_from_slice(&(base + i as u32).to_le_bytes());
                 }
             }
             3 => {
                 // Short format string
-                let s = FORMAT_STRINGS[fmt_idx % FORMAT_STRINGS.len()];
+                let idx = fmt_order[fmt_idx % fmt_count];
                 fmt_idx += 1;
+                let s = FORMAT_STRINGS[idx];
                 if remaining > s.len() + 1 {
                     buf.extend_from_slice(s.as_bytes());
                     buf.push(0);
@@ -664,33 +781,30 @@ pub fn generate_low_entropy_padding(size: usize) -> Vec<u8> {
                 }
             }
             4 => {
-                // 8-byte aligned non-zero values (like vtable pointers / RVA tables)
-                let count = (remaining / 8).min(4);
-                for i in 0..count {
-                    // Values that look like RVAs: 0x1000-range addresses
-                    let fake_rva = 0x0000_0001_4000_1000u64 + (i as u64 * 0x100);
-                    buf.extend_from_slice(&fake_rva.to_le_bytes());
-                }
-            }
-            5 => {
-                // Another benign string for variety
-                let s = BENIGN_STRINGS[(string_idx + 7) % BENIGN_STRINGS.len()];
-                string_idx += 1;
-                let s_bytes = s.as_bytes();
-                if remaining > s_bytes.len() + 1 {
-                    buf.extend_from_slice(s_bytes);
-                    buf.push(0);
-                    while buf.len() % 4 != 0 && buf.len() < size {
-                        buf.push(0);
-                    }
-                } else {
-                    buf.extend(std::iter::repeat_n(0u8, remaining));
+                // Small aligned DWORD constants (like flag/enum/size tables in .rdata)
+                // Vary constants based on seed
+                let variant = xorshift64(&mut rng);
+                let constants: [u32; 12] = [
+                    0x0000_0000,
+                    (variant & 0xF) as u32,
+                    ((variant >> 4) & 0xF) as u32 + 1,
+                    0x0000_0004,
+                    0x0000_0008,
+                    ((variant >> 8) & 0xFF) as u32,
+                    0x0000_0100,
+                    0x0000_1000,
+                    0xFFFF_FFFF,
+                    0x0000_0000,
+                    ((variant >> 16) & 0x1F) as u32,
+                    0x0000_0007,
+                ];
+                let count = (remaining / 4).min(constants.len());
+                for c in constants.iter().take(count) {
+                    buf.extend_from_slice(&c.to_le_bytes());
                 }
             }
             _ => unreachable!(),
         }
-
-        block_type = block_type.wrapping_add(1);
     }
 
     buf.truncate(size);
@@ -704,7 +818,8 @@ mod tests {
     #[test]
     fn test_encode_rich_header_structure() {
         let records = &PROFILE_NOTEPAD.records[..2]; // Use first 2 records
-        let cs = PROFILE_NOTEPAD.checksum;
+        // Use a test checksum (in real usage this is computed from the DOS header)
+        let cs = 0x7B3D_1A2E_u32;
         let data = encode_rich_header(records, cs);
 
         // Size: 16 (header) + 2*8 (records) + 8 (footer) = 40 bytes
@@ -734,7 +849,7 @@ mod tests {
 
     #[test]
     fn test_build_version_info_not_empty() {
-        let vi = build_version_info("Test Application", "Microsoft Corporation", "1.0.0.0");
+        let vi = build_version_info("Test Application", "Microsoft Corporation", "1.0.0.0", "app.exe");
         // Should be non-trivial size (typically 500+ bytes)
         assert!(vi.len() > 100);
 
