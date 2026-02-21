@@ -11,17 +11,22 @@
 //! | `binary.import_pad`        | Add benign imports to dilute suspicious API ratio |
 //! | `binary.resource_inject`   | Add version info + manifest resources            |
 //! | `binary.section_rename`    | Rename sections to MSVC defaults                 |
-//! | `binary.entropy_normalize` | Add low-entropy padding section                  |
-//! | `binary.string_inject`     | Append benign strings section                    |
-//! | `binary.size_pad`          | Pad PE to target file size                       |
+//! | `binary.entropy_normalize` | Consolidated padding (low-entropy)               |
+//! | `binary.string_inject`     | Consolidated padding (benign strings)            |
+//! | `binary.size_pad`          | Consolidated padding (target file size)          |
 //! | `binary.debug_dir`         | Add fake PDB debug directory                     |
+//! | `binary.timestamp`         | Backdate PE timestamp                            |
+//!
+//! Note: `string_inject`, `entropy_normalize`, and `size_pad` are consolidated
+//! into a single `.rdata` section to avoid adding multiple non-standard sections.
 
 use anyhow::{Context, Result};
 use tracing::{debug, warn};
 
 use super::binary_data::{
-    BENIGN_IMPORTS, BENIGN_STRINGS, DEFAULT_PDB_PATH, MSVC_STANDARD_SECTIONS, build_manifest,
-    build_version_info, encode_rich_header, generate_low_entropy_padding, get_rich_profile,
+    BENIGN_IMPORTS, BENIGN_STRINGS, DEFAULT_COMPANY, DEFAULT_PDB_PATH, DEFAULT_PRODUCT,
+    MSVC_STANDARD_SECTIONS, build_manifest, build_version_info, encode_rich_header,
+    generate_low_entropy_padding, get_rich_profile,
 };
 use crate::mutator::MutationSpec;
 
@@ -67,6 +72,10 @@ impl BinaryMutator {
 
     /// Apply all requested binary mutations in order.
     ///
+    /// Consolidated transforms (`debug_dir`, `string_inject`, `entropy_normalize`,
+    /// `size_pad`) are merged into a single `.rdata` section to minimize section
+    /// count. All other transforms run in user-specified order.
+    ///
     /// Returns `(modified_pe_bytes, list_of_applied_mutation_ids)`.
     pub fn apply(mut self, mutations: &[&MutationSpec]) -> Result<(Vec<u8>, Vec<String>)> {
         // Validate this is actually a PE
@@ -76,17 +85,29 @@ impl BinaryMutator {
 
         let mut applied = Vec::new();
 
+        // Partition: separate consolidated transforms (padding + debug_dir) from the rest
+        let mut consolidated_specs: Vec<&MutationSpec> = Vec::new();
+        let mut other_specs: Vec<&MutationSpec> = Vec::new();
+
         for spec in mutations {
+            let (_, name) = spec.parse();
+            match name {
+                "string_inject" | "entropy_normalize" | "size_pad" | "debug_dir" => {
+                    consolidated_specs.push(spec);
+                }
+                _ => other_specs.push(spec),
+            }
+        }
+
+        // Phase 1: Apply non-consolidated transforms in order
+        for spec in &other_specs {
             let (_, name) = spec.parse();
             let result = match name {
                 "rich_header" => self.apply_rich_header(spec),
                 "import_pad" => self.apply_import_pad(spec),
                 "resource_inject" => self.apply_resource_inject(spec),
                 "section_rename" => self.apply_section_rename(spec),
-                "entropy_normalize" => self.apply_entropy_normalize(spec),
-                "string_inject" => self.apply_string_inject(spec),
-                "size_pad" => self.apply_size_pad(spec),
-                "debug_dir" => self.apply_debug_dir(spec),
+                "timestamp" => self.apply_timestamp(spec),
                 other => {
                     warn!("Unknown binary mutation: binary.{}", other);
                     continue;
@@ -101,6 +122,15 @@ impl BinaryMutator {
                 Err(e) => {
                     return Err(e).context(format!("Binary mutation {} failed", spec.id));
                 }
+            }
+        }
+
+        // Phase 2: Apply consolidated section (padding + debug_dir → single .rdata)
+        if !consolidated_specs.is_empty() {
+            self.apply_consolidated_padding(&consolidated_specs)?;
+            for spec in &consolidated_specs {
+                debug!("Applied binary mutation (consolidated): {}", spec.id);
+                applied.push(spec.id.clone());
             }
         }
 
@@ -385,13 +415,13 @@ impl BinaryMutator {
     /// Add benign imports to dilute the suspicious-import ratio
     ///
     /// Params:
-    /// - `count`: max number of benign functions to add (default: 30)
+    /// - `count`: max number of benign functions to add (default: 50)
     fn apply_import_pad(&mut self, spec: &MutationSpec) -> Result<()> {
         let max_count: usize = spec
             .params
             .get("count")
             .and_then(|s| s.parse().ok())
-            .unwrap_or(30);
+            .unwrap_or(50);
 
         // Parse existing imports to know what DLLs are already present
         let existing_dlls: Vec<String> = {
@@ -525,23 +555,23 @@ impl BinaryMutator {
     /// Add version info + manifest resources
     ///
     /// Params:
-    /// - `product_name`: (default: "System Configuration Utility")
-    /// - `company`: (default: "Microsoft Corporation")
+    /// - `product_name`: (default: DEFAULT_PRODUCT)
+    /// - `company`: (default: DEFAULT_COMPANY)
     fn apply_resource_inject(&mut self, spec: &MutationSpec) -> Result<()> {
         let product_name = spec
             .params
             .get("product_name")
             .map(|s| s.as_str())
-            .unwrap_or("System Configuration Utility");
+            .unwrap_or(DEFAULT_PRODUCT);
         let company = spec
             .params
             .get("company")
             .map(|s| s.as_str())
-            .unwrap_or("Microsoft Corporation");
+            .unwrap_or(DEFAULT_COMPANY);
 
         // Build resource data payloads
         let version_data = build_version_info(product_name, company, "1.0.0.0");
-        let manifest_data = build_manifest(product_name).into_bytes();
+        let manifest_data = build_manifest(product_name, company).into_bytes();
 
         // Calculate where new section will go
         let (sec_table_off, num_sec) = self.section_table_info();
@@ -646,274 +676,231 @@ impl BinaryMutator {
     }
 
     // ========================================================================
-    // Transform: binary.entropy_normalize
+    // Transform: binary.timestamp
     // ========================================================================
 
-    /// Add low-entropy padding section to dilute overall file entropy.
+    /// Backdate the PE timestamp to make it look like an older build.
     ///
     /// Params:
-    /// - `target`: target file entropy in bits/byte (default: "6.0")
-    fn apply_entropy_normalize(&mut self, spec: &MutationSpec) -> Result<()> {
-        let target: f64 = spec
-            .params
-            .get("target")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(6.0);
-
-        let current = compute_entropy(&self.pe_bytes);
-        if current <= target {
-            debug!(
-                "Entropy already at {:.2} (target {:.2}), skipping",
-                current, target
-            );
-            return Ok(());
-        }
-
-        // Binary search for the padding size needed.
-        // Adding N bytes of ~0 entropy data to a file of size L with entropy H:
-        // We estimate conservatively and iterate.
-        let file_len = self.pe_bytes.len();
-        let mut lo: usize = 0;
-        let mut hi: usize = file_len * 4; // max 4x file size padding
-        let mut best_size = hi;
-
-        for _ in 0..30 {
-            let mid = (lo + hi) / 2;
-            if mid == 0 {
-                break;
-            }
-            // Estimate: padding has entropy ~3.5 bits/byte
-            let pad_entropy = 3.5;
-            let combined =
-                (current * file_len as f64 + pad_entropy * mid as f64) / (file_len + mid) as f64;
-            if combined <= target {
-                best_size = mid;
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
-        }
-
-        // Minimum 512 bytes to be meaningful
-        let pad_size = best_size.max(512);
-        let padding = generate_low_entropy_padding(pad_size);
-
-        self.add_section(
-            b".reloc2\0",
-            &padding,
-            IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ,
-        )?;
-
-        let new_entropy = compute_entropy(&self.pe_bytes);
-        debug!(
-            "Entropy normalized: {:.2} → {:.2} (target {:.2}, added {} bytes padding)",
-            current, new_entropy, target, pad_size
-        );
-
-        Ok(())
-    }
-
-    // ========================================================================
-    // Transform: binary.string_inject
-    // ========================================================================
-
-    /// Append benign strings as a new section.
-    ///
-    /// Params:
-    /// - `count`: number of strings to include (default: "20")
-    fn apply_string_inject(&mut self, spec: &MutationSpec) -> Result<()> {
-        let count: usize = spec
-            .params
-            .get("count")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(20);
-
-        let count = count.min(BENIGN_STRINGS.len());
-
-        // Concatenate null-terminated ASCII strings
-        let mut string_data = Vec::new();
-        for s in BENIGN_STRINGS.iter().take(count) {
-            string_data.extend_from_slice(s.as_bytes());
-            string_data.push(0);
-        }
-
-        self.add_section(
-            b".rdata2\0",
-            &string_data,
-            IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ,
-        )?;
-
-        debug!(
-            "Injected {} benign strings ({} bytes) into .rdata2 section",
-            count,
-            string_data.len()
-        );
-
-        Ok(())
-    }
-
-    // ========================================================================
-    // Transform: binary.size_pad
-    // ========================================================================
-
-    /// Pad PE to a target file size.
-    ///
-    /// Params:
-    /// - `target_kb`: target file size in KB (default: "256")
-    fn apply_size_pad(&mut self, spec: &MutationSpec) -> Result<()> {
-        let target_kb: usize = spec
-            .params
-            .get("target_kb")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(256);
-
-        let target_bytes = target_kb * 1024;
-        let current_size = self.pe_bytes.len();
-
-        if current_size >= target_bytes {
-            debug!(
-                "File already {} bytes (target {} bytes), skipping size pad",
-                current_size, target_bytes
-            );
-            return Ok(());
-        }
-
-        let pad_needed = target_bytes - current_size;
-        let padding = generate_low_entropy_padding(pad_needed);
-
-        self.add_section(
-            b".data2\0\0",
-            &padding,
-            IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ,
-        )?;
-
-        debug!(
-            "Size padded: {} → {} bytes (target {} KB)",
-            current_size,
-            self.pe_bytes.len(),
-            target_kb
-        );
-
-        Ok(())
-    }
-
-    // ========================================================================
-    // Transform: binary.debug_dir
-    // ========================================================================
-
-    /// Add a fake PDB debug directory entry (CodeView/RSDS).
-    ///
-    /// Params:
-    /// - `pdb_path`: fake PDB path (default: DEFAULT_PDB_PATH)
-    fn apply_debug_dir(&mut self, spec: &MutationSpec) -> Result<()> {
-        let pdb_path = spec
-            .params
-            .get("pdb_path")
-            .map(|s| s.as_str())
-            .unwrap_or(DEFAULT_PDB_PATH);
-
-        // Read TimeDateStamp from COFF header for the debug directory entry
+    /// - `age_days`: backdate by N days (default: "365")
+    /// - `timestamp`: explicit Unix epoch value (overrides age_days)
+    fn apply_timestamp(&mut self, spec: &MutationSpec) -> Result<()> {
         let e_lfanew = self.read_u32(0x3C) as usize;
-        let timestamp = self.read_u32(e_lfanew + 4 + 4); // COFF header + 4 = TimeDateStamp
+        let current_ts = self.read_u32(e_lfanew + 8);
 
-        // Build CodeView (RSDS) debug info:
-        //   "RSDS" (4) + GUID (16) + Age (4) + PDB path (null-terminated)
-        let pdb_path_bytes = pdb_path.as_bytes();
-        let codeview_size = 4 + 16 + 4 + pdb_path_bytes.len() + 1;
-        let mut codeview = Vec::with_capacity(codeview_size);
-        codeview.extend_from_slice(b"RSDS");
-        // GUID: deterministic but looks random (derived from timestamp)
-        let guid_base = timestamp.wrapping_mul(0x01000193);
-        codeview.extend_from_slice(&guid_base.to_le_bytes());
-        codeview.extend_from_slice(&guid_base.wrapping_add(1).to_le_bytes());
-        codeview.extend_from_slice(&guid_base.wrapping_add(2).to_le_bytes());
-        codeview.extend_from_slice(&guid_base.wrapping_add(3).to_le_bytes());
-        // Age = 1
-        codeview.extend_from_slice(&1u32.to_le_bytes());
-        // PDB path (null-terminated)
-        codeview.extend_from_slice(pdb_path_bytes);
-        codeview.push(0);
-
-        // Build IMAGE_DEBUG_DIRECTORY (28 bytes)
-        // Will be filled with correct offsets after we know the section VA
-        let debug_dir_size: usize = 28;
-        let total_size = debug_dir_size + codeview.len();
-
-        // Pre-calculate section VA
-        let (sec_table_off, num_sec) = self.section_table_info();
-        let sec_align = self.section_alignment();
-        let new_section_va = if num_sec > 0 {
-            let last = sec_table_off + (num_sec - 1) * SECTION_HEADER_SIZE;
-            let last_va = self.read_u32(last + 12);
-            let last_vs = self.read_u32(last + 8);
-            let last_rs = self.read_u32(last + 16);
-            align_up(last_va + std::cmp::max(last_vs, last_rs), sec_align)
+        let timestamp: u32 = if let Some(ts) = spec.params.get("timestamp") {
+            ts.parse().context("Invalid timestamp value")?
         } else {
-            align_up(self.size_of_headers(), sec_align)
+            let age_days: u32 = spec
+                .params
+                .get("age_days")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(365);
+            // Deterministic jitter derived from existing timestamp (±30 days)
+            let jitter = (current_ts % 60) * 86400;
+            current_ts
+                .saturating_sub(age_days * 86400)
+                .saturating_add(jitter % (30 * 86400))
         };
 
-        // Build section data: [debug_directory (28 bytes)] + [codeview_data]
-        let codeview_rva = new_section_va + debug_dir_size as u32;
-        let mut section_data = vec![0u8; total_size];
+        // Update COFF TimeDateStamp
+        self.write_u32(e_lfanew + 8, timestamp);
 
-        // IMAGE_DEBUG_DIRECTORY fields:
-        // Characteristics (4) = 0
-        write_u32_at(&mut section_data, 0, 0);
-        // TimeDateStamp (4)
-        write_u32_at(&mut section_data, 4, timestamp);
-        // MajorVersion (2) + MinorVersion (2) = 0
-        write_u16_at(&mut section_data, 8, 0);
-        write_u16_at(&mut section_data, 10, 0);
-        // Type (4) = IMAGE_DEBUG_TYPE_CODEVIEW
-        write_u32_at(&mut section_data, 12, IMAGE_DEBUG_TYPE_CODEVIEW);
-        // SizeOfData (4)
-        write_u32_at(&mut section_data, 16, codeview.len() as u32);
-        // AddressOfRawData (RVA) (4) — will be fixed up after add_section
-        write_u32_at(&mut section_data, 20, codeview_rva);
-        // PointerToRawData (4) — will be fixed up after add_section
-        // (leave as 0 for now, fix below)
-        write_u32_at(&mut section_data, 24, 0);
+        // If debug directory exists, update its timestamp too
+        let (debug_rva, debug_size) = self.read_data_dir(DD_DEBUG);
+        if debug_rva > 0 && debug_size >= 28 {
+            if let Some(debug_off) = self.rva_to_offset(debug_rva) {
+                self.write_u32(debug_off + 4, timestamp); // IMAGE_DEBUG_DIRECTORY.TimeDateStamp
+            }
+        }
 
-        // Copy CodeView data
-        section_data[debug_dir_size..].copy_from_slice(&codeview);
+        debug!(
+            "Timestamp backdated: {:#x} → {:#x}",
+            current_ts, timestamp
+        );
 
-        // Add the section
+        Ok(())
+    }
+
+    // ========================================================================
+    // Consolidated section: debug_dir + string_inject + entropy_normalize + size_pad
+    // ========================================================================
+
+    /// Apply consolidated transforms as a single `.rdata` section.
+    ///
+    /// Embeds debug directory, benign strings, and size/entropy padding into
+    /// one section with a standard name, instead of creating multiple sections.
+    fn apply_consolidated_padding(&mut self, specs: &[&MutationSpec]) -> Result<()> {
+        // Extract params from each spec
+        let mut string_count: usize = 0;
+        let mut target_size_kb: Option<usize> = None;
+        let mut target_entropy: Option<f64> = None;
+        let mut debug_dir_spec: Option<&MutationSpec> = None;
+
+        for spec in specs {
+            let (_, name) = spec.parse();
+            match name {
+                "string_inject" => {
+                    string_count = spec
+                        .params
+                        .get("count")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(20);
+                }
+                "size_pad" => {
+                    target_size_kb = Some(
+                        spec.params
+                            .get("target_kb")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(256),
+                    );
+                }
+                "entropy_normalize" => {
+                    target_entropy = Some(
+                        spec.params
+                            .get("target")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(6.0),
+                    );
+                }
+                "debug_dir" => {
+                    debug_dir_spec = Some(spec);
+                }
+                _ => {}
+            }
+        }
+
+        // Build combined section buffer
+        let mut data = Vec::new();
+
+        // ── 1. Debug directory (goes first, needs known offset for fixup) ──
+        let debug_info = if let Some(spec) = debug_dir_spec {
+            let pdb_path = spec
+                .params
+                .get("pdb_path")
+                .map(|s| s.as_str())
+                .unwrap_or(DEFAULT_PDB_PATH);
+            let e_lfanew = self.read_u32(0x3C) as usize;
+            let timestamp = self.read_u32(e_lfanew + 4 + 4);
+
+            let dd_offset = data.len();
+            // IMAGE_DEBUG_DIRECTORY: 28 bytes (placeholder, filled after add_section)
+            data.extend(std::iter::repeat_n(0u8, 28));
+
+            let cv_offset = data.len();
+            // CodeView RSDS data
+            data.extend_from_slice(b"RSDS");
+            let guid_base = timestamp.wrapping_mul(0x01000193);
+            data.extend_from_slice(&guid_base.to_le_bytes());
+            data.extend_from_slice(&guid_base.wrapping_add(1).to_le_bytes());
+            data.extend_from_slice(&guid_base.wrapping_add(2).to_le_bytes());
+            data.extend_from_slice(&guid_base.wrapping_add(3).to_le_bytes());
+            data.extend_from_slice(&1u32.to_le_bytes()); // Age = 1
+            data.extend_from_slice(pdb_path.as_bytes());
+            data.push(0);
+            let cv_len = data.len() - cv_offset;
+
+            // Align to DWORD boundary
+            while data.len() % 4 != 0 {
+                data.push(0);
+            }
+
+            Some((dd_offset, cv_offset, cv_len, timestamp))
+        } else {
+            None
+        };
+
+        // ── 2. Benign strings ──
+        if string_count > 0 {
+            let count = string_count.min(BENIGN_STRINGS.len());
+            for s in BENIGN_STRINGS.iter().take(count) {
+                data.extend_from_slice(s.as_bytes());
+                data.push(0);
+                // Align to 4 bytes (like MSVC string pooling)
+                while data.len() % 4 != 0 {
+                    data.push(0);
+                }
+            }
+        }
+
+        // ── 3. Size padding ──
+        if let Some(kb) = target_size_kb {
+            let target_bytes = kb * 1024;
+            let current_size = self.pe_bytes.len() + data.len();
+            if current_size < target_bytes {
+                let extra = target_bytes - current_size;
+                data.extend_from_slice(&generate_low_entropy_padding(extra));
+            }
+        }
+
+        // ── 4. Entropy padding ──
+        if let Some(target_h) = target_entropy {
+            let current_h = compute_entropy_with_extra(&self.pe_bytes, &data);
+            if current_h > target_h {
+                let extra = estimate_entropy_padding(
+                    self.pe_bytes.len() + data.len(),
+                    current_h,
+                    target_h,
+                );
+                if extra > 0 {
+                    data.extend_from_slice(&generate_low_entropy_padding(extra));
+                }
+            }
+        }
+
+        if data.is_empty() {
+            debug!("Consolidated section: no data to add (all constraints already met)");
+            return Ok(());
+        }
+
+        // Single section with standard name
         let actual_va = self.add_section(
-            b".debug\0\0",
-            &section_data,
+            b".rdata\0\0",
+            &data,
             IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ,
         )?;
 
-        // Fix up RVAs and file offsets if actual_va differs from predicted
-        let actual_codeview_rva = actual_va + debug_dir_size as u32;
+        // ── Fix up debug directory RVAs if debug_dir was included ──
+        if let Some((dd_offset, cv_offset, cv_len, timestamp)) = debug_info {
+            let (sec_off, num) = self.section_table_info();
+            let last_sec = sec_off + (num - 1) * SECTION_HEADER_SIZE;
+            let raw_ptr = self.read_u32(last_sec + 20);
 
-        // Find the section we just added to get its raw pointer
-        let (sec_off, num) = self.section_table_info();
-        let last_sec = sec_off + (num - 1) * SECTION_HEADER_SIZE;
-        let raw_ptr = self.read_u32(last_sec + 20);
+            let dd_file_off = raw_ptr as usize + dd_offset;
+            let cv_rva = actual_va + cv_offset as u32;
+            let cv_file_off = raw_ptr + cv_offset as u32;
 
-        // Fix AddressOfRawData (RVA to codeview data)
-        let debug_dir_file_off = raw_ptr as usize;
-        write_u32_at(
-            &mut self.pe_bytes,
-            debug_dir_file_off + 20,
-            actual_codeview_rva,
-        );
-        // Fix PointerToRawData (file offset to codeview data)
-        write_u32_at(
-            &mut self.pe_bytes,
-            debug_dir_file_off + 24,
-            raw_ptr + debug_dir_size as u32,
-        );
+            // Write IMAGE_DEBUG_DIRECTORY
+            write_u32_at(&mut self.pe_bytes, dd_file_off, 0); // Characteristics
+            write_u32_at(&mut self.pe_bytes, dd_file_off + 4, timestamp);
+            write_u16_at(&mut self.pe_bytes, dd_file_off + 8, 0); // MajorVersion
+            write_u16_at(&mut self.pe_bytes, dd_file_off + 10, 0); // MinorVersion
+            write_u32_at(
+                &mut self.pe_bytes,
+                dd_file_off + 12,
+                IMAGE_DEBUG_TYPE_CODEVIEW,
+            );
+            write_u32_at(&mut self.pe_bytes, dd_file_off + 16, cv_len as u32);
+            write_u32_at(&mut self.pe_bytes, dd_file_off + 20, cv_rva);
+            write_u32_at(&mut self.pe_bytes, dd_file_off + 24, cv_file_off);
 
-        // Update DataDirectory[6] (Debug) → RVA of debug directory, Size = 28
-        self.write_data_dir(DD_DEBUG, actual_va, debug_dir_size as u32);
+            // Set DataDirectory[6] (Debug)
+            self.write_data_dir(DD_DEBUG, actual_va + dd_offset as u32, 28);
+
+            debug!(
+                "Debug directory embedded in consolidated section: codeview {} bytes",
+                cv_len
+            );
+        }
 
         debug!(
-            "Injected debug directory: PDB='{}', VA={:#x}, codeview {} bytes",
-            pdb_path,
-            actual_va,
-            codeview.len()
+            "Consolidated section: {} bytes in single .rdata section \
+             (debug={}, strings={}, size_target={:?}KB, entropy_target={:?})",
+            data.len(),
+            debug_dir_spec.is_some(),
+            string_count,
+            target_size_kb,
+            target_entropy
         );
 
         Ok(())
@@ -1162,6 +1149,7 @@ fn build_resource_section(version_data: &[u8], manifest_data: &[u8], section_rva
 // ============================================================================
 
 /// Compute Shannon entropy of a byte slice in bits per byte.
+#[cfg_attr(not(test), allow(dead_code))]
 fn compute_entropy(data: &[u8]) -> f64 {
     if data.is_empty() {
         return 0.0;
@@ -1179,6 +1167,47 @@ fn compute_entropy(data: &[u8]) -> f64 {
             -p * p.log2()
         })
         .sum()
+}
+
+/// Compute combined entropy of existing PE bytes + extra padding buffer.
+fn compute_entropy_with_extra(pe_bytes: &[u8], extra: &[u8]) -> f64 {
+    let total_len = pe_bytes.len() + extra.len();
+    if total_len == 0 {
+        return 0.0;
+    }
+    let mut counts = [0u64; 256];
+    for &b in pe_bytes {
+        counts[b as usize] += 1;
+    }
+    for &b in extra {
+        counts[b as usize] += 1;
+    }
+    let len = total_len as f64;
+    counts
+        .iter()
+        .filter(|&&c| c > 0)
+        .map(|&c| {
+            let p = c as f64 / len;
+            -p * p.log2()
+        })
+        .sum()
+}
+
+/// Estimate how many bytes of low-entropy padding (~3.5 bits/byte) are needed
+/// to bring a file of `current_size` bytes at `current_h` entropy down to `target_h`.
+fn estimate_entropy_padding(current_size: usize, current_h: f64, target_h: f64) -> usize {
+    if current_h <= target_h {
+        return 0;
+    }
+    let pad_entropy = 3.5; // approximate entropy of our generated padding
+    // Solve: (current_h * current_size + pad_entropy * N) / (current_size + N) = target_h
+    // N = current_size * (current_h - target_h) / (target_h - pad_entropy)
+    if target_h <= pad_entropy {
+        // Can't reach below padding entropy; use 4x file size as max
+        return current_size * 4;
+    }
+    let n = (current_size as f64 * (current_h - target_h)) / (target_h - pad_entropy);
+    (n.ceil() as usize).max(512) // minimum 512 bytes to be meaningful
 }
 
 fn align_up(val: u32, align: u32) -> u32 {
@@ -1664,7 +1693,7 @@ mod tests {
         let (result, applied) = mutator.apply(&[&spec]).unwrap();
         assert!(applied.contains(&"binary.entropy_normalize".to_string()));
 
-        // Verify new section was added
+        // Verify new section was added (consolidated as .rdata)
         let parsed =
             goblin::pe::PE::parse(&result).expect("PE should be valid after entropy normalize");
         assert!(parsed.header.coff_header.number_of_sections >= 2);
@@ -1694,7 +1723,7 @@ mod tests {
         let (result, applied) = mutator.apply(&[&spec]).unwrap();
         assert!(applied.contains(&"binary.string_inject".to_string()));
 
-        // Verify PE is valid
+        // Verify PE is valid — consolidated into single .rdata section
         let parsed =
             goblin::pe::PE::parse(&result).expect("PE should be valid after string inject");
         assert_eq!(parsed.header.coff_header.number_of_sections, 2);
@@ -1778,7 +1807,299 @@ mod tests {
     }
 
     #[test]
-    fn test_all_eight_transforms() {
+    fn test_debug_dir_rdata_name() {
+        let pe = create_test_pe();
+        let mutator = BinaryMutator::new(pe);
+
+        let spec = MutationSpec {
+            id: "binary.debug_dir".to_string(),
+            params: HashMap::new(),
+        };
+
+        let (result, _) = mutator.apply(&[&spec]).unwrap();
+        let parsed = goblin::pe::PE::parse(&result).unwrap();
+
+        // The debug section should be named .rdata, NOT .debug
+        let debug_section = &parsed.sections[1]; // second section (after .text)
+        let name = String::from_utf8_lossy(&debug_section.name);
+        assert!(
+            name.starts_with(".rdata"),
+            "Debug section should be named .rdata, got '{}'",
+            name.trim_end_matches('\0')
+        );
+    }
+
+    #[test]
+    fn test_consolidated_padding_single_section() {
+        // string_inject + size_pad + entropy_normalize → exactly 1 new section named .rdata
+        let pe = create_test_pe();
+        let mutator = BinaryMutator::new(pe);
+
+        let specs = vec![
+            MutationSpec {
+                id: "binary.string_inject".to_string(),
+                params: [("count".to_string(), "5".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+            MutationSpec {
+                id: "binary.size_pad".to_string(),
+                params: [("target_kb".to_string(), "4".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+            MutationSpec {
+                id: "binary.entropy_normalize".to_string(),
+                params: [("target".to_string(), "5.0".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+        ];
+        let spec_refs: Vec<&MutationSpec> = specs.iter().collect();
+
+        let (result, applied) = mutator.apply(&spec_refs).unwrap();
+        assert_eq!(applied.len(), 3, "All 3 padding transforms should be applied");
+
+        let parsed = goblin::pe::PE::parse(&result).unwrap();
+        // Should be exactly 2 sections: .text + 1 consolidated .rdata
+        assert_eq!(
+            parsed.header.coff_header.number_of_sections, 2,
+            "Expected 2 sections (.text + consolidated .rdata), got {}",
+            parsed.header.coff_header.number_of_sections
+        );
+
+        // The new section should be named .rdata
+        let new_section = &parsed.sections[1];
+        let name = String::from_utf8_lossy(&new_section.name);
+        assert!(
+            name.starts_with(".rdata"),
+            "Consolidated section should be named .rdata, got '{}'",
+            name.trim_end_matches('\0')
+        );
+    }
+
+    #[test]
+    fn test_consolidated_padding_strings_present() {
+        let pe = create_test_pe();
+        let mutator = BinaryMutator::new(pe);
+
+        let specs = vec![
+            MutationSpec {
+                id: "binary.string_inject".to_string(),
+                params: [("count".to_string(), "5".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+            MutationSpec {
+                id: "binary.size_pad".to_string(),
+                params: [("target_kb".to_string(), "4".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+        ];
+        let spec_refs: Vec<&MutationSpec> = specs.iter().collect();
+
+        let (result, _) = mutator.apply(&spec_refs).unwrap();
+
+        // Combined section should contain benign strings
+        let mut found = 0;
+        for s in binary_data::BENIGN_STRINGS.iter().take(5) {
+            if result.windows(s.len()).any(|w| w == s.as_bytes()) {
+                found += 1;
+            }
+        }
+        assert!(
+            found >= 5,
+            "Expected 5 benign strings in consolidated section, found {}",
+            found
+        );
+
+        // File size should meet target
+        assert!(
+            result.len() >= 4096,
+            "Expected >= 4096 bytes, got {}",
+            result.len()
+        );
+    }
+
+    #[test]
+    fn test_consolidated_padding_entropy_reduced() {
+        let mut pe = create_test_pe();
+        let text_start = 0x200usize;
+        for i in text_start..pe.len() {
+            pe[i] = ((i * 137 + 97) % 251) as u8;
+        }
+        let initial_entropy = compute_entropy(&pe);
+
+        let mutator = BinaryMutator::new(pe);
+
+        let specs = vec![
+            MutationSpec {
+                id: "binary.entropy_normalize".to_string(),
+                params: [("target".to_string(), "4.0".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+            MutationSpec {
+                id: "binary.string_inject".to_string(),
+                params: [("count".to_string(), "10".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+        ];
+        let spec_refs: Vec<&MutationSpec> = specs.iter().collect();
+
+        let (result, applied) = mutator.apply(&spec_refs).unwrap();
+        assert_eq!(applied.len(), 2);
+
+        let new_entropy = compute_entropy(&result);
+        assert!(
+            new_entropy < initial_entropy,
+            "Entropy should decrease: {:.2} → {:.2}",
+            initial_entropy,
+            new_entropy
+        );
+    }
+
+    #[test]
+    fn test_timestamp_backdates() {
+        let pe = create_test_pe();
+        let e_lfanew = u32::from_le_bytes(pe[0x3C..0x40].try_into().unwrap()) as usize;
+        let original_ts = u32::from_le_bytes(pe[e_lfanew + 8..e_lfanew + 12].try_into().unwrap());
+
+        let mutator = BinaryMutator::new(pe);
+
+        let spec = MutationSpec {
+            id: "binary.timestamp".to_string(),
+            params: [("age_days".to_string(), "180".to_string())]
+                .into_iter()
+                .collect(),
+        };
+
+        let (result, applied) = mutator.apply(&[&spec]).unwrap();
+        assert!(applied.contains(&"binary.timestamp".to_string()));
+
+        let new_ts = u32::from_le_bytes(result[e_lfanew + 8..e_lfanew + 12].try_into().unwrap());
+        assert!(
+            new_ts < original_ts,
+            "Timestamp should be backdated: {:#x} should be < {:#x}",
+            new_ts,
+            original_ts
+        );
+    }
+
+    #[test]
+    fn test_timestamp_updates_debug() {
+        let pe = create_test_pe();
+        let mutator = BinaryMutator::new(pe);
+
+        // Apply debug_dir first, then timestamp
+        let specs = vec![
+            MutationSpec {
+                id: "binary.debug_dir".to_string(),
+                params: HashMap::new(),
+            },
+            MutationSpec {
+                id: "binary.timestamp".to_string(),
+                params: [("age_days".to_string(), "365".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+        ];
+        let spec_refs: Vec<&MutationSpec> = specs.iter().collect();
+
+        let (result, applied) = mutator.apply(&spec_refs).unwrap();
+        assert_eq!(applied.len(), 2);
+
+        // Both COFF timestamp and debug directory timestamp should match
+        let e_lfanew = u32::from_le_bytes(result[0x3C..0x40].try_into().unwrap()) as usize;
+        let coff_ts = u32::from_le_bytes(result[e_lfanew + 8..e_lfanew + 12].try_into().unwrap());
+
+        // Find debug directory via data directory
+        let parsed = goblin::pe::PE::parse(&result).unwrap();
+        if let Some(opt) = parsed.header.optional_header {
+            let debug_table = opt
+                .data_directories
+                .get_debug_table()
+                .expect("Should have debug data directory");
+            // Read debug directory timestamp
+            let mutator_check = BinaryMutator::new(result.clone());
+            if let Some(debug_off) = mutator_check.rva_to_offset(debug_table.virtual_address) {
+                let debug_ts = u32::from_le_bytes(
+                    result[debug_off + 4..debug_off + 8].try_into().unwrap(),
+                );
+                assert_eq!(
+                    coff_ts, debug_ts,
+                    "COFF timestamp ({:#x}) should match debug directory timestamp ({:#x})",
+                    coff_ts, debug_ts
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_resource_inject_no_microsoft() {
+        let pe = create_test_pe();
+        let mutator = BinaryMutator::new(pe);
+
+        let spec = MutationSpec {
+            id: "binary.resource_inject".to_string(),
+            params: HashMap::new(), // Use defaults
+        };
+
+        let (result, applied) = mutator.apply(&[&spec]).unwrap();
+        assert!(applied.contains(&"binary.resource_inject".to_string()));
+
+        // Default resource_inject should NOT contain "Microsoft"
+        let result_str = String::from_utf8_lossy(&result);
+        assert!(
+            !result_str.contains("Microsoft"),
+            "Default resource_inject should not contain 'Microsoft'"
+        );
+    }
+
+    #[test]
+    fn test_import_pad_expanded_pool() {
+        let pe = create_test_pe();
+        let mutator = BinaryMutator::new(pe);
+
+        let spec = MutationSpec {
+            id: "binary.import_pad".to_string(),
+            params: [("count".to_string(), "50".to_string())]
+                .into_iter()
+                .collect(),
+        };
+
+        let (result, _) = mutator.apply(&[&spec]).unwrap();
+        let parsed = goblin::pe::PE::parse(&result).unwrap();
+
+        let dll_names: Vec<String> = parsed
+            .imports
+            .iter()
+            .map(|imp| imp.dll.to_lowercase())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        // Should have networking/crypto DLLs from expanded pool
+        let has_networking = dll_names.iter().any(|d| d == "winhttp.dll" || d == "ws2_32.dll");
+        let has_crypto = dll_names.iter().any(|d| d == "bcrypt.dll" || d == "crypt32.dll");
+
+        assert!(
+            has_networking,
+            "Expected networking DLLs (winhttp/ws2_32), got: {:?}",
+            dll_names
+        );
+        assert!(
+            has_crypto,
+            "Expected crypto DLLs (bcrypt/crypt32), got: {:?}",
+            dll_names
+        );
+    }
+
+    #[test]
+    fn test_full_normalize_section_count() {
+        // All 9 transforms → PE should have ≤ 6 sections total
         let pe = create_test_pe_large_headers();
         let mutator = BinaryMutator::new(pe);
 
@@ -1798,12 +2119,16 @@ mod tests {
                 params: HashMap::new(),
             },
             MutationSpec {
+                id: "binary.debug_dir".to_string(),
+                params: HashMap::new(),
+            },
+            MutationSpec {
                 id: "binary.section_rename".to_string(),
                 params: HashMap::new(),
             },
             MutationSpec {
-                id: "binary.entropy_normalize".to_string(),
-                params: [("target".to_string(), "5.0".to_string())]
+                id: "binary.timestamp".to_string(),
+                params: [("age_days".to_string(), "180".to_string())]
                     .into_iter()
                     .collect(),
             },
@@ -1820,24 +2145,31 @@ mod tests {
                     .collect(),
             },
             MutationSpec {
-                id: "binary.debug_dir".to_string(),
-                params: HashMap::new(),
+                id: "binary.entropy_normalize".to_string(),
+                params: [("target".to_string(), "5.0".to_string())]
+                    .into_iter()
+                    .collect(),
             },
         ];
         let spec_refs: Vec<&MutationSpec> = specs.iter().collect();
 
         let (result, applied) = mutator.apply(&spec_refs).unwrap();
-        assert_eq!(applied.len(), 8, "All 8 transforms should apply");
+        assert_eq!(applied.len(), 9, "All 9 transforms should apply");
 
-        // Validate final PE
         let parsed =
-            goblin::pe::PE::parse(&result).expect("PE should be valid after all 8 transforms");
+            goblin::pe::PE::parse(&result).expect("PE should be valid after all 9 transforms");
 
-        // Should have multiple sections
+        // Key assertion: ≤ 6 sections total
+        // .text(renamed from .foo) + .idata + .rsrc + .rdata(debug) + .rdata(padding) = 5
         assert!(
-            parsed.header.coff_header.number_of_sections >= 6,
-            "Expected >= 6 sections, got {}",
-            parsed.header.coff_header.number_of_sections
+            parsed.header.coff_header.number_of_sections <= 6,
+            "Expected ≤ 6 sections, got {} — sections: {:?}",
+            parsed.header.coff_header.number_of_sections,
+            parsed
+                .sections
+                .iter()
+                .map(|s| String::from_utf8_lossy(&s.name).to_string())
+                .collect::<Vec<_>>()
         );
 
         // Rich header present
@@ -1855,5 +2187,25 @@ mod tests {
             "Expected >= 8192 bytes, got {}",
             result.len()
         );
+
+        // No "Microsoft" in default resources
+        let result_str = String::from_utf8_lossy(&result);
+        assert!(
+            !result_str.contains("Microsoft"),
+            "Should not contain 'Microsoft' with default settings"
+        );
+
+        // All section names should be standard
+        for sec in &parsed.sections {
+            let name = String::from_utf8_lossy(&sec.name);
+            let name_trimmed = name.trim_end_matches('\0');
+            let is_standard = [".text", ".rdata", ".data", ".rsrc", ".idata", ".reloc", ".pdata", ".bss"]
+                .contains(&name_trimmed);
+            assert!(
+                is_standard,
+                "Section '{}' should have a standard name",
+                name_trimmed
+            );
+        }
     }
 }
