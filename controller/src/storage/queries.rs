@@ -98,41 +98,19 @@ pub async fn update_job_field(
     Ok(())
 }
 
-/// Query trace-line telemetry events for a run, sorted by payload_seq descending.
-/// Returns the last `last_n` events (most recent execution points).
+/// Query trace-line telemetry for a run.
+///
+/// Trace data is stored as a single `event_type: "trace_log"` document per run,
+/// with `payload_content` containing JSONL lines like:
+///   `{"seq":1,"thread_id":0,"file":"loader.c","line":42,"func":"main","ts_us":100}`
+///
+/// This function fetches that blob, parses the JSONL, and returns the last `last_n`
+/// lines as individual `Value` objects with `payload_*` field names (matching the
+/// shape the API handler expects).
 pub async fn query_trace_lines(es: &Elasticsearch, run_id: &str, last_n: u32) -> (Vec<Value>, u64) {
-    let size = if last_n == 0 { 50 } else { last_n };
+    let size = if last_n == 0 { 50 } else { last_n } as usize;
 
-    // First get total count
-    let count_resp = es
-        .search(SearchParts::Index(&["telemetry-*"]))
-        .body(json!({
-            "query": {
-                "bool": {
-                    "must": [
-                        { "term": { "run_id": run_id } },
-                        { "term": { "event_type": "trace" } }
-                    ]
-                }
-            },
-            "size": 0,
-            "track_total_hits": true
-        }))
-        .send()
-        .await;
-
-    let total = match count_resp {
-        Ok(resp) => {
-            if let Ok(body) = resp.json::<Value>().await {
-                body["hits"]["total"]["value"].as_u64().unwrap_or(0)
-            } else {
-                0
-            }
-        }
-        Err(_) => 0,
-    };
-
-    // Now fetch the last N lines sorted by seq desc
+    // Fetch the trace_log blob for this run
     let response = es
         .search(SearchParts::Index(&["telemetry-*"]))
         .body(json!({
@@ -140,19 +118,77 @@ pub async fn query_trace_lines(es: &Elasticsearch, run_id: &str, last_n: u32) ->
                 "bool": {
                     "must": [
                         { "term": { "run_id": run_id } },
-                        { "term": { "event_type": "trace" } }
+                        { "term": { "event_type": "trace_log" } }
                     ]
                 }
             },
-            "sort": [{ "payload_seq": "desc" }],
-            "size": size,
-            "_source": ["payload_seq", "payload_file", "payload_line", "payload_func", "payload_ts_us"]
+            "size": 1,
+            "_source": ["payload_content", "metadata"]
         }))
         .send()
         .await;
 
-    let sources = extract_sources(response).await;
-    (sources, total)
+    let doc = match response {
+        Ok(resp) => {
+            if let Ok(body) = resp.json::<Value>().await {
+                body["hits"]["hits"]
+                    .as_array()
+                    .and_then(|h| h.first())
+                    .map(|hit| hit["_source"].clone())
+            } else {
+                None
+            }
+        }
+        Err(_) => None,
+    };
+
+    let doc = match doc {
+        Some(d) => d,
+        None => return (Vec::new(), 0),
+    };
+
+    // Parse the JSONL content
+    let content = doc["payload_content"].as_str().unwrap_or("");
+    if content.is_empty() {
+        return (Vec::new(), 0);
+    }
+
+    let mut all_lines: Vec<Value> = content
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            serde_json::from_str::<Value>(line).ok()
+        })
+        .collect();
+
+    let total = all_lines.len() as u64;
+
+    // Sort by seq descending, take last N
+    all_lines.sort_by(|a, b| {
+        let sa = a["seq"].as_u64().unwrap_or(0);
+        let sb = b["seq"].as_u64().unwrap_or(0);
+        sb.cmp(&sa)
+    });
+    all_lines.truncate(size);
+
+    // Remap field names to payload_* prefix (what the API handler expects)
+    let docs: Vec<Value> = all_lines
+        .into_iter()
+        .map(|v| {
+            json!({
+                "payload_seq": v["seq"],
+                "payload_file": v["file"],
+                "payload_line": v["line"],
+                "payload_func": v["func"],
+                "payload_ts_us": v["ts_us"],
+            })
+        })
+        .collect();
+
+    (docs, total)
 }
 
 // ---------------------------------------------------------------------------
