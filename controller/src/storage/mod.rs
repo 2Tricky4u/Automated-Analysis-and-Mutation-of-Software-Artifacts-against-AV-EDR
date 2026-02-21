@@ -89,6 +89,15 @@ impl EsStorage {
         rounds::index_round(&self.client, params).await
     }
 
+    pub async fn update_round_coverage(
+        &self,
+        job_id: &str,
+        round_id: &str,
+        coverage: &crate::triage::source_resolver::CoverageResult,
+    ) -> anyhow::Result<()> {
+        rounds::update_round_coverage(&self.client, job_id, round_id, coverage).await
+    }
+
     // -- Runs --------------------------------------------------------------
 
     pub async fn index_run_result(&self, params: &RunIndexParams<'_>) -> anyhow::Result<()> {
@@ -132,6 +141,10 @@ impl EsStorage {
         last_n: u32,
     ) -> (Vec<serde_json::Value>, u64) {
         queries::query_trace_lines(&self.client, run_id, last_n).await
+    }
+
+    pub async fn query_trace_content(&self, run_id: &str) -> Option<String> {
+        queries::query_trace_content(&self.client, run_id).await
     }
 
     // -- Bootstrap ---------------------------------------------------------

@@ -1,8 +1,8 @@
 //! Worker handlers - worker listing, telemetry streaming, and monitoring
 
 use crate::api::SchedulerService;
-use crate::automutate::common::{TelemetryAck, TelemetryData, ToolVersions};
 use crate::automutate::common::{ControllerMessage, HealthCheckRequest, controller_message};
+use crate::automutate::common::{TelemetryAck, TelemetryData, ToolVersions};
 use crate::automutate::controller::{
     ActiveJobEntry, DisconnectAllWorkersRequest, DisconnectAllWorkersResponse,
     DisconnectWorkerRequest, DisconnectWorkerResponse, GetAvailableWorkersRequest,
@@ -400,10 +400,20 @@ pub async fn ping_worker(
     };
 
     match service.targets.send_command(worker_id, msg).await {
-        Ok(()) => Ok(Response::new(PingWorkerResponse {
-            success: true,
-            message: format!("Health check sent to {}", worker_id),
-        })),
+        Ok(()) => {
+            // Successful send proves stream is alive — update health
+            let _ = service.targets.update_health(worker_id);
+            // Defensive: if somehow Offline with a live stream, reconcile
+            if let Some(t) = service.targets.get(worker_id) {
+                if t.status == crate::vm::TargetStatus::Offline {
+                    let _ = service.targets.mark_connected(worker_id);
+                }
+            }
+            Ok(Response::new(PingWorkerResponse {
+                success: true,
+                message: format!("Health check sent to {}", worker_id),
+            }))
+        }
         Err(e) => {
             warn!("PingWorker failed for {}: {}", worker_id, e);
             Ok(Response::new(PingWorkerResponse {

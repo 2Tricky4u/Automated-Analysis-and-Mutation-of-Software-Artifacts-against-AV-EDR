@@ -97,11 +97,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/runs/:run_id/trace", get(api::jobs::get_trace_lines))
         .route("/api/runs/compare", get(api::jobs::compare_runs))
         // Worker endpoints (literal paths before parameterized)
-        .route("/api/workers/metadata", get(api::workers::get_worker_metadata))
-        .route("/api/workers/available", get(api::workers::get_available_workers))
-        .route("/api/workers/disconnect-all", post(api::workers::disconnect_all_workers))
+        .route(
+            "/api/workers/metadata",
+            get(api::workers::get_worker_metadata),
+        )
+        .route(
+            "/api/workers/available",
+            get(api::workers::get_available_workers),
+        )
+        .route(
+            "/api/workers/disconnect-all",
+            post(api::workers::disconnect_all_workers),
+        )
         .route("/api/workers/:id/ping", post(api::workers::ping_worker))
-        .route("/api/workers/:id/disconnect", post(api::workers::disconnect_worker))
+        .route(
+            "/api/workers/:id/disconnect",
+            post(api::workers::disconnect_worker),
+        )
         .route("/api/workers", get(api::workers::list_workers))
         // Orchestrator endpoints
         .route(

@@ -12,8 +12,10 @@ use super::run_pool::RunPool;
 use super::types::{JobId, JobOutcome, JobSession, WorkerId, WorkerInfo};
 use crate::storage::{EsStorage, RoundIndexParams, RunIndexParams, TelemetryContext};
 use crate::triage::coverage_selector::CoverageSelector;
+use crate::triage::source_resolver::SourceMap;
 use crate::vm::{TargetEvent, TargetManager};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -352,6 +354,38 @@ impl Orchestrator {
                         .await
                     {
                         error!("Failed to index instrumented run: {}", e);
+                    }
+
+                    // Compute line coverage from trace data
+                    if let Some(ref source) = assembled_source {
+                        if let Some(content) = storage.query_trace_content(&i_run_id).await {
+                            let executed_lines: HashSet<usize> = content
+                                .lines()
+                                .filter_map(|line| {
+                                    serde_json::from_str::<serde_json::Value>(line.trim()).ok()
+                                })
+                                .filter_map(|v| v["line"].as_u64().map(|n| n as usize))
+                                .collect();
+
+                            if !executed_lines.is_empty() {
+                                let sm = SourceMap::new(source);
+                                let coverage = sm.compute_coverage(&executed_lines);
+                                info!(
+                                    "Round {}/{}: coverage {:.1}% ({}/{} lines), cutoff: {:?}",
+                                    jid,
+                                    rid,
+                                    coverage.coverage_percent,
+                                    coverage.executed_lines,
+                                    coverage.total_executable,
+                                    coverage.cutoff_line,
+                                );
+                                if let Err(e) =
+                                    storage.update_round_coverage(&jid, &rid, &coverage).await
+                                {
+                                    error!("Failed to update round coverage: {}", e);
+                                }
+                            }
+                        }
                     }
                 });
             }

@@ -323,6 +323,9 @@ pub async fn get_round(
         status: str_field(&source, "status"),
         behavior_match,
         assembled_source: str_field(&source, "assembled_source"),
+        coverage_percent: f64_field(&source, "coverage_percent"),
+        cutoff_line: u32_field(&source, "cutoff_line"),
+        cutoff_func: str_field(&source, "cutoff_func"),
     };
 
     Ok(Response::new(GetRoundResponse { round: Some(round) }))
@@ -466,10 +469,7 @@ pub async fn get_trace_lines(
     // Try to build a SourceMap for code resolution:
     // run doc → job_id + round_id → round doc → assembled_source
     let source_map = 'resolve: {
-        let run_docs = service
-            .storage
-            .query_runs_by_ids(&[&req.run_id])
-            .await;
+        let run_docs = service.storage.query_runs_by_ids(&[&req.run_id]).await;
         let run_doc = match run_docs.first() {
             Some(d) => d,
             None => {
@@ -480,19 +480,28 @@ pub async fn get_trace_lines(
         let job_id = str_field(run_doc, "job_id");
         let round_id = str_field(run_doc, "round_id");
         if job_id.is_empty() || round_id.is_empty() {
-            debug!("Source resolution: missing job_id/round_id on run {}", req.run_id);
+            debug!(
+                "Source resolution: missing job_id/round_id on run {}",
+                req.run_id
+            );
             break 'resolve None;
         }
         let round_doc = match service.storage.query_round(&job_id, &round_id).await {
             Some(d) => d,
             None => {
-                debug!("Source resolution: round doc not found for {}/{}", job_id, round_id);
+                debug!(
+                    "Source resolution: round doc not found for {}/{}",
+                    job_id, round_id
+                );
                 break 'resolve None;
             }
         };
         let assembled = str_field(&round_doc, "assembled_source");
         if assembled.is_empty() {
-            debug!("Source resolution: no assembled_source in round {}", round_id);
+            debug!(
+                "Source resolution: no assembled_source in round {}",
+                round_id
+            );
             break 'resolve None;
         }
         Some(SourceMap::new(&assembled))

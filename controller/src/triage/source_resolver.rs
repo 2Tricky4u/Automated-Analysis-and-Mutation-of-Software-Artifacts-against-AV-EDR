@@ -4,6 +4,31 @@
 //! resolves `line:189` into the actual C code at that line, plus the enclosing
 //! function name (heuristic-based).
 
+use std::collections::HashSet;
+
+/// Per-function coverage statistics.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FunctionCoverage {
+    pub name: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub total_lines: usize,
+    pub executed_lines: usize,
+    pub percent: f64,
+}
+
+/// Aggregate coverage result for an assembled source.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CoverageResult {
+    pub total_lines: usize,
+    pub total_executable: usize,
+    pub executed_lines: usize,
+    pub coverage_percent: f64,
+    pub cutoff_line: Option<usize>,
+    pub cutoff_func: Option<String>,
+    pub functions: Vec<FunctionCoverage>,
+}
+
 /// A resolved source line with context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedLine {
@@ -58,6 +83,75 @@ impl SourceMap {
         self.lines.len()
     }
 
+    /// Compute coverage statistics from a set of executed line numbers (1-based).
+    pub fn compute_coverage(&self, executed: &HashSet<usize>) -> CoverageResult {
+        let total_lines = self.lines.len();
+
+        // Count global executable lines
+        let mut total_executable = 0usize;
+        let mut executed_count = 0usize;
+        for (i, line) in self.lines.iter().enumerate() {
+            let line_num = i + 1; // 1-based
+            if is_executable_line(line) {
+                total_executable += 1;
+                if executed.contains(&line_num) {
+                    executed_count += 1;
+                }
+            }
+        }
+
+        let coverage_percent = if total_executable > 0 {
+            (executed_count as f64 / total_executable as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        // Cutoff: highest executed line number
+        let cutoff_line = executed.iter().copied().max();
+        let cutoff_func = cutoff_line.and_then(|l| self.function_at(l));
+
+        // Per-function coverage
+        let functions: Vec<FunctionCoverage> = self
+            .func_ranges
+            .iter()
+            .map(|fr| {
+                let mut func_total = 0usize;
+                let mut func_executed = 0usize;
+                for ln in fr.start_line..=fr.end_line {
+                    if ln <= self.lines.len() && is_executable_line(&self.lines[ln - 1]) {
+                        func_total += 1;
+                        if executed.contains(&ln) {
+                            func_executed += 1;
+                        }
+                    }
+                }
+                let percent = if func_total > 0 {
+                    (func_executed as f64 / func_total as f64) * 100.0
+                } else {
+                    0.0
+                };
+                FunctionCoverage {
+                    name: fr.name.clone(),
+                    start_line: fr.start_line,
+                    end_line: fr.end_line,
+                    total_lines: func_total,
+                    executed_lines: func_executed,
+                    percent,
+                }
+            })
+            .collect();
+
+        CoverageResult {
+            total_lines,
+            total_executable,
+            executed_lines: executed_count,
+            coverage_percent,
+            cutoff_line,
+            cutoff_func,
+            functions,
+        }
+    }
+
     /// Find the enclosing function for a 1-based line number.
     fn function_at(&self, line: usize) -> Option<String> {
         self.func_ranges
@@ -65,6 +159,27 @@ impl SourceMap {
             .find(|r| line >= r.start_line && line <= r.end_line)
             .map(|r| r.name.clone())
     }
+}
+
+/// Classify a source line as "executable" (non-trivial).
+///
+/// Returns false for blank lines, preprocessor directives, lone braces,
+/// and comment-only lines.
+fn is_executable_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.starts_with('#') {
+        return false;
+    }
+    if trimmed == "{" || trimmed == "}" {
+        return false;
+    }
+    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+        return false;
+    }
+    true
 }
 
 /// Convenience: resolve one line without building a full SourceMap.
@@ -355,6 +470,65 @@ void bar() {
         // Line 10 (return) should be inside bar
         let resolved = map.resolve(10).unwrap();
         assert_eq!(resolved.func, Some("bar".to_string()));
+    }
+
+    #[test]
+    fn compute_coverage_basic() {
+        let map = SourceMap::new(SAMPLE_SOURCE);
+        // Execute some lines inside antiemulation (5-9) and main (22-25)
+        let executed: HashSet<usize> = [5, 6, 7, 8, 9, 22, 23, 24, 25].iter().copied().collect();
+        let cov = map.compute_coverage(&executed);
+
+        assert!(cov.total_lines > 0);
+        assert!(cov.total_executable > 0);
+        assert!(cov.executed_lines > 0);
+        assert!(cov.coverage_percent > 0.0);
+        assert!(cov.coverage_percent <= 100.0);
+        assert_eq!(cov.cutoff_line, Some(25));
+        assert_eq!(cov.cutoff_func, Some("main".to_string()));
+
+        // Should have 3 functions detected
+        assert_eq!(cov.functions.len(), 3);
+
+        // antiemulation should have coverage
+        let ae = cov
+            .functions
+            .iter()
+            .find(|f| f.name == "antiemulation")
+            .unwrap();
+        assert!(ae.executed_lines > 0);
+        assert!(ae.percent > 0.0);
+
+        // carrier should have 0 coverage (no lines executed there)
+        let carr = cov.functions.iter().find(|f| f.name == "carrier").unwrap();
+        assert_eq!(carr.executed_lines, 0);
+        assert_eq!(carr.percent, 0.0);
+    }
+
+    #[test]
+    fn compute_coverage_empty_executed() {
+        let map = SourceMap::new(SAMPLE_SOURCE);
+        let executed: HashSet<usize> = HashSet::new();
+        let cov = map.compute_coverage(&executed);
+
+        assert_eq!(cov.executed_lines, 0);
+        assert_eq!(cov.coverage_percent, 0.0);
+        assert_eq!(cov.cutoff_line, None);
+        assert_eq!(cov.cutoff_func, None);
+    }
+
+    #[test]
+    fn is_executable_line_cases() {
+        assert!(!is_executable_line(""));
+        assert!(!is_executable_line("   "));
+        assert!(!is_executable_line("#include <stdio.h>"));
+        assert!(!is_executable_line("  {"));
+        assert!(!is_executable_line("}"));
+        assert!(!is_executable_line("// comment"));
+        assert!(!is_executable_line("/* block comment */"));
+        assert!(!is_executable_line(" * middle of block comment"));
+        assert!(is_executable_line("int x = 5;"));
+        assert!(is_executable_line("  return 0;"));
     }
 
     #[test]

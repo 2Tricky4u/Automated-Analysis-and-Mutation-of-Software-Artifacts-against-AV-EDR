@@ -425,6 +425,10 @@ message RoundProto {
   string status = 7;
   BehaviorComparisonProto behavior_match = 8;
   string assembled_source = 9;
+  // Coverage fields (computed server-side from trace data)
+  double coverage_percent = 20;
+  uint32 cutoff_line = 21;
+  string cutoff_func = 22;
 }
 
 message RunResultProto {

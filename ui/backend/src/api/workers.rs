@@ -4,7 +4,10 @@
 
 use super::{ApiError, ApiResponse};
 use crate::grpc_client::ControllerGrpcClient;
-use axum::{Json, extract::{Path, Query, State}};
+use axum::{
+    Json,
+    extract::{Path, Query, State},
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, error};
@@ -236,12 +239,20 @@ pub async fn get_available_workers(
     State(client): State<Arc<ControllerGrpcClient>>,
     Query(query): Query<AvailableWorkersQuery>,
 ) -> Result<Json<ApiResponse<AvailableWorkersResponse>>, ApiError> {
-    debug!("REST: Get available workers os={:?} caps={:?}", query.os, query.capabilities);
+    debug!(
+        "REST: Get available workers os={:?} caps={:?}",
+        query.os, query.capabilities
+    );
 
     let os = query.os.unwrap_or_default();
     let caps: Vec<String> = query
         .capabilities
-        .map(|c| c.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .map(|c| {
+            c.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
         .unwrap_or_default();
 
     match client.get_available_workers(&os, caps).await {
@@ -377,7 +388,8 @@ pub async fn disconnect_all_workers(
 ) -> Result<Json<ApiResponse<DisconnectAllResponse>>, ApiError> {
     let (reason, reconnect) = match body {
         Some(Json(b)) => (
-            b.reason.unwrap_or_else(|| "admin_disconnect_all".to_string()),
+            b.reason
+                .unwrap_or_else(|| "admin_disconnect_all".to_string()),
             b.reconnect_allowed.unwrap_or(true),
         ),
         None => ("admin_disconnect_all".to_string(), true),

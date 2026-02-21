@@ -292,10 +292,7 @@ impl ControllerGrpcClient {
     }
 
     /// Get enhanced worker metadata (health, tools, last_seen)
-    pub async fn get_worker_metadata(
-        &self,
-        worker_id: &str,
-    ) -> Result<GetWorkerMetadataResponse> {
+    pub async fn get_worker_metadata(&self, worker_id: &str) -> Result<GetWorkerMetadataResponse> {
         let mut client = self.get_client().await?;
 
         let request = GetWorkerMetadataRequest {
