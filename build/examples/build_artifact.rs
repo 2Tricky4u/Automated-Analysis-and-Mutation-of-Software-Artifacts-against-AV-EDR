@@ -367,13 +367,17 @@ LLVM MUTATIONS (applied to LLVM IR):
 
 BINARY MUTATIONS (applied post-link to the PE file):
     binary.rich_header              Inject MSVC Rich header (param: donor=notepad|calc|explorer)
-    binary.import_pad               Add benign imports (param: count=30)
+    binary.import_pad               Add benign imports (param: count=50)
     binary.resource_inject          Add version info + manifest (params: product_name=..., company=...)
     binary.section_rename           Rename sections to MSVC defaults (no params)
-    binary.entropy_normalize        Add low-entropy padding (param: target=6.0)
-    binary.string_inject            Append benign strings section (param: count=20)
-    binary.size_pad                 Pad PE to target size (param: target_kb=256)
     binary.debug_dir                Add fake PDB debug directory (param: pdb_path=...)
+    binary.timestamp                Backdate PE timestamp (params: age_days=365, timestamp=<epoch>)
+    binary.string_inject            Benign strings (consolidated padding) (param: count=20)
+    binary.entropy_normalize        Low-entropy padding (consolidated) (param: target=6.0)
+    binary.size_pad                 Pad PE to target size (consolidated) (param: target_kb=256)
+
+    Note: string_inject, entropy_normalize, size_pad are consolidated into a
+    single .rdata section to avoid creating multiple non-standard sections.
 
 EXAMPLES:
     # Default build
@@ -388,14 +392,15 @@ EXAMPLES:
     # All binary mutations (recommended order)
     cargo run -p build --example build_artifact -- -p sc.bin \
       -m binary.rich_header:donor=notepad \
-      -m binary.import_pad:count=20 \
-      -m binary.resource_inject:product_name=Windows\ Update\ Helper \
-      -m binary.section_rename \
-      -m binary.string_inject:count=20 \
-      -m binary.entropy_normalize:target=6.0 \
-      -m binary.size_pad:target_kb=256 \
+      -m binary.import_pad:count=50 \
+      -m binary.resource_inject \
       -m binary.debug_dir \
-      -o evasive.exe
+      -m binary.section_rename \
+      -m binary.timestamp:age_days=180 \
+      -m binary.string_inject:count=25 \
+      -m binary.size_pad:target_kb=256 \
+      -m binary.entropy_normalize:target=6.0 \
+      -o normalized.exe
 
     # Mixed AST + binary mutations
     cargo run -p build --example build_artifact -- -p sc.bin \

@@ -194,6 +194,7 @@ pub struct BenignImport {
 }
 
 pub static BENIGN_IMPORTS: &[BenignImport] = &[
+    // UI / Window management
     BenignImport {
         dll: "user32.dll",
         functions: &[
@@ -203,6 +204,7 @@ pub static BENIGN_IMPORTS: &[BenignImport] = &[
             "MessageBoxA",
         ],
     },
+    // Registry / Security
     BenignImport {
         dll: "advapi32.dll",
         functions: &[
@@ -212,6 +214,7 @@ pub static BENIGN_IMPORTS: &[BenignImport] = &[
             "OpenProcessToken",
         ],
     },
+    // Shell
     BenignImport {
         dll: "shell32.dll",
         functions: &[
@@ -220,17 +223,83 @@ pub static BENIGN_IMPORTS: &[BenignImport] = &[
             "SHGetSpecialFolderPathW",
         ],
     },
+    // COM
     BenignImport {
         dll: "ole32.dll",
         functions: &["CoInitializeEx", "CoCreateInstance", "CoUninitialize"],
     },
+    // Graphics
     BenignImport {
         dll: "gdi32.dll",
         functions: &["GetDeviceCaps", "CreateCompatibleDC", "DeleteDC"],
     },
+    // File version queries
     BenignImport {
         dll: "version.dll",
         functions: &["GetFileVersionInfoW", "VerQueryValueW"],
+    },
+    // Networking (normal for any app that talks to the internet)
+    BenignImport {
+        dll: "winhttp.dll",
+        functions: &[
+            "WinHttpOpen",
+            "WinHttpConnect",
+            "WinHttpCloseHandle",
+        ],
+    },
+    BenignImport {
+        dll: "ws2_32.dll",
+        functions: &[
+            "WSAStartup",
+            "WSACleanup",
+            "getaddrinfo",
+            "freeaddrinfo",
+        ],
+    },
+    // Crypto (normal for apps handling config/updates/TLS)
+    BenignImport {
+        dll: "bcrypt.dll",
+        functions: &[
+            "BCryptOpenAlgorithmProvider",
+            "BCryptCloseAlgorithmProvider",
+            "BCryptGenRandom",
+        ],
+    },
+    BenignImport {
+        dll: "crypt32.dll",
+        functions: &[
+            "CertOpenStore",
+            "CertCloseStore",
+            "CertFreeCertificateContext",
+        ],
+    },
+    // Path / string utilities
+    BenignImport {
+        dll: "shlwapi.dll",
+        functions: &["PathFileExistsW", "PathCombineW", "StrCmpIW"],
+    },
+    // Common controls
+    BenignImport {
+        dll: "comctl32.dll",
+        functions: &["InitCommonControlsEx", "ImageList_Create"],
+    },
+    // C runtime (common in MSVC-compiled apps)
+    BenignImport {
+        dll: "msvcrt.dll",
+        functions: &["malloc", "free", "memcpy", "sprintf"],
+    },
+    // Security / identity
+    BenignImport {
+        dll: "secur32.dll",
+        functions: &["GetUserNameExW", "LsaEnumerateLogonSessions"],
+    },
+    // Terminal services
+    BenignImport {
+        dll: "wtsapi32.dll",
+        functions: &[
+            "WTSQuerySessionInformationW",
+            "WTSFreeMemory",
+        ],
     },
 ];
 
@@ -240,7 +309,7 @@ pub static BENIGN_IMPORTS: &[BenignImport] = &[
 
 pub static MANIFEST_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="1.0.0.0" processorArchitecture="amd64" name="Microsoft.Windows.{PRODUCT}" type="win32"/>
+  <assemblyIdentity version="1.0.0.0" processorArchitecture="amd64" name="{COMPANY}.{PRODUCT}" type="win32"/>
   <description>{DESCRIPTION}</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
@@ -260,9 +329,10 @@ pub static MANIFEST_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8" sta
   </compatibility>
 </assembly>"#;
 
-/// Build a manifest XML string with the given product name
-pub fn build_manifest(product_name: &str) -> String {
+/// Build a manifest XML string with the given product and company name
+pub fn build_manifest(product_name: &str, company_name: &str) -> String {
     MANIFEST_TEMPLATE
+        .replace("{COMPANY}", &company_name.replace(' ', ""))
         .replace("{PRODUCT}", &product_name.replace(' ', ""))
         .replace("{DESCRIPTION}", product_name)
 }
@@ -465,6 +535,16 @@ pub static MSVC_STANDARD_SECTIONS: &[&[u8; 8]] = &[
 pub const DEFAULT_PDB_PATH: &str = "C:\\src\\obj\\x64\\Release\\app.pdb";
 
 // ============================================================================
+// Resource Inject Defaults
+// ============================================================================
+
+/// Default company name for resource_inject — generic, non-impersonating
+pub const DEFAULT_COMPANY: &str = "Application Software Inc.";
+
+/// Default product name for resource_inject — bland, nondescript
+pub const DEFAULT_PRODUCT: &str = "Application Service";
+
+// ============================================================================
 // Benign Strings
 // ============================================================================
 
@@ -505,36 +585,112 @@ pub static BENIGN_STRINGS: &[&str] = &[
 // Low-Entropy Padding Generator
 // ============================================================================
 
-/// Generate low-entropy padding that looks like real PE data.
+/// Format strings that appear in typical compiled applications
+static FORMAT_STRINGS: &[&str] = &[
+    "%s: %d\n",
+    "%s\\%s",
+    "%d.%d.%d.%d",
+    "Error: %s (0x%08x)\n",
+    "%s=%s\r\n",
+    "\\\\?\\%s",
+    "%s [%d]\n",
+    "(%d, %d)",
+];
+
+/// Generate low-entropy padding that looks like real compiled PE data.
 ///
-/// Cycles through: null block (64 bytes) → benign string → null block → string → ...
-/// Produces H ≈ 3.5–4.5 bits/byte, which looks like natural initialized data.
+/// Mixes multiple data types found in real `.rdata`/`.data` sections:
+/// - Null-terminated strings (error messages, status text)
+/// - Aligned integer sequences (enum/flag tables)
+/// - Pointer-sized zero blocks (uninitialized pointer arrays)
+/// - Short format strings
+/// - 8-byte aligned non-zero values (vtable-like pointers)
+///
+/// Produces H ≈ 3.5–4.5 bits/byte, resembling natural initialized data.
 pub fn generate_low_entropy_padding(size: usize) -> Vec<u8> {
     let mut buf = Vec::with_capacity(size);
-    let null_block_size = 64;
     let mut string_idx = 0;
+    let mut fmt_idx = 0;
+    let mut block_type = 0u8;
 
     while buf.len() < size {
-        // Null block
         let remaining = size - buf.len();
-        let zeros = remaining.min(null_block_size);
-        buf.extend(std::iter::repeat_n(0u8, zeros));
-        if buf.len() >= size {
+        if remaining < 8 {
+            buf.extend(std::iter::repeat_n(0u8, remaining));
             break;
         }
 
-        // Benign string (null-terminated)
-        let s = BENIGN_STRINGS[string_idx % BENIGN_STRINGS.len()];
-        string_idx += 1;
-        let s_bytes = s.as_bytes();
-        let remaining = size - buf.len();
-        if remaining > s_bytes.len() + 1 {
-            buf.extend_from_slice(s_bytes);
-            buf.push(0); // null terminator
-        } else {
-            // Partial fill with zeros
-            buf.extend(std::iter::repeat_n(0u8, remaining));
+        match block_type % 6 {
+            0 => {
+                // Benign string (null-terminated, like error messages in .rdata)
+                let s = BENIGN_STRINGS[string_idx % BENIGN_STRINGS.len()];
+                string_idx += 1;
+                let s_bytes = s.as_bytes();
+                if remaining > s_bytes.len() + 1 {
+                    buf.extend_from_slice(s_bytes);
+                    buf.push(0);
+                    // Align to 4 bytes (like MSVC string pooling)
+                    while buf.len() % 4 != 0 && buf.len() < size {
+                        buf.push(0);
+                    }
+                } else {
+                    buf.extend(std::iter::repeat_n(0u8, remaining));
+                }
+            }
+            1 => {
+                // Pointer-sized zero block (like uninitialized pointer arrays)
+                let count = remaining.min(48); // 6 pointers worth
+                buf.extend(std::iter::repeat_n(0u8, count));
+            }
+            2 => {
+                // Small aligned integer sequence (like enum tables / flag arrays)
+                let count = (remaining / 4).min(8);
+                for i in 0..count {
+                    buf.extend_from_slice(&(i as u32).to_le_bytes());
+                }
+            }
+            3 => {
+                // Short format string
+                let s = FORMAT_STRINGS[fmt_idx % FORMAT_STRINGS.len()];
+                fmt_idx += 1;
+                if remaining > s.len() + 1 {
+                    buf.extend_from_slice(s.as_bytes());
+                    buf.push(0);
+                    while buf.len() % 4 != 0 && buf.len() < size {
+                        buf.push(0);
+                    }
+                } else {
+                    buf.extend(std::iter::repeat_n(0u8, remaining));
+                }
+            }
+            4 => {
+                // 8-byte aligned non-zero values (like vtable pointers / RVA tables)
+                let count = (remaining / 8).min(4);
+                for i in 0..count {
+                    // Values that look like RVAs: 0x1000-range addresses
+                    let fake_rva = 0x0000_0001_4000_1000u64 + (i as u64 * 0x100);
+                    buf.extend_from_slice(&fake_rva.to_le_bytes());
+                }
+            }
+            5 => {
+                // Another benign string for variety
+                let s = BENIGN_STRINGS[(string_idx + 7) % BENIGN_STRINGS.len()];
+                string_idx += 1;
+                let s_bytes = s.as_bytes();
+                if remaining > s_bytes.len() + 1 {
+                    buf.extend_from_slice(s_bytes);
+                    buf.push(0);
+                    while buf.len() % 4 != 0 && buf.len() < size {
+                        buf.push(0);
+                    }
+                } else {
+                    buf.extend(std::iter::repeat_n(0u8, remaining));
+                }
+            }
+            _ => unreachable!(),
         }
+
+        block_type = block_type.wrapping_add(1);
     }
 
     buf.truncate(size);
@@ -568,10 +724,12 @@ mod tests {
 
     #[test]
     fn test_build_manifest() {
-        let xml = build_manifest("System Configuration Utility");
+        let xml = build_manifest("System Configuration Utility", "Application Software Inc.");
         assert!(xml.contains("asInvoker"));
+        assert!(xml.contains("ApplicationSoftwareInc."));
         assert!(xml.contains("SystemConfigurationUtility"));
         assert!(xml.contains("System Configuration Utility"));
+        assert!(!xml.contains("Microsoft.Windows."));
     }
 
     #[test]
