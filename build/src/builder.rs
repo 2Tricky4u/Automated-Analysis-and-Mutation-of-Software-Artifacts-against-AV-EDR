@@ -65,6 +65,9 @@ pub struct BuiltArtifact {
     pub compiler_flags: Vec<String>,
     /// Mutations successfully applied
     pub mutations_applied: Vec<String>,
+    /// Pre-instrumentation assembled C source for line trace resolution.
+    /// Present for ModularTemplate builds; None for other build paths.
+    pub assembled_source: Option<String>,
 }
 
 /// Template-specific library dependencies
@@ -725,6 +728,7 @@ impl ArtifactBuilder {
             built.compiler_version,
             built.compiler_flags,
             built.mutations_applied,
+            built.assembled_source,
         ))
     }
 
@@ -1110,6 +1114,7 @@ impl ArtifactBuilder {
             compiler_version,
             self.get_compiler_flags("modular"),
             mutations_applied,
+            Some(final_source.clone()),
         );
 
         // Step 7: Apply instrumentation if needed
@@ -1285,6 +1290,7 @@ fn build_artifact_metadata(
     compiler_version: String,
     compiler_flags: Vec<String>,
     mutations_applied: Vec<String>,
+    assembled_source: Option<String>,
 ) -> BuiltArtifact {
     BuiltArtifact {
         artifact_id: artifact_id.clone(),
@@ -1296,6 +1302,7 @@ fn build_artifact_metadata(
         compiler_version,
         compiler_flags,
         mutations_applied,
+        assembled_source,
     }
 }
 
@@ -1371,6 +1378,7 @@ mod tests {
             "clang 17.0.6".to_string(),
             vec!["-O2".to_string()],
             vec!["ast.string_xor".to_string()],
+            None,
         );
 
         assert_eq!(artifact.artifact_id, "abc123");
@@ -1393,6 +1401,7 @@ mod tests {
             "unknown".to_string(),
             vec![],
             vec![],
+            None,
         );
 
         assert!(artifact.mutations_applied.is_empty());
@@ -1409,6 +1418,7 @@ mod tests {
             "".to_string(),
             vec![],
             vec![],
+            None,
         );
 
         assert_eq!(artifact.artifact_id, artifact.sha256);

@@ -282,6 +282,7 @@ impl Orchestrator {
                     baseline_vm_id,
                     instrumented_vm_id,
                     round_started_at,
+                    assembled_source,
                 } = *data;
                 info!(
                     "[Orchestrator] Round {} completed for job {}: detected={}, evasion={:.2}",
@@ -316,6 +317,7 @@ impl Orchestrator {
                             instrumented_run_id: &i_run_id,
                             started_at: Some(&started_at_str),
                             modules: Some(&modules),
+                            assembled_source: assembled_source.as_deref(),
                         })
                         .await
                     {

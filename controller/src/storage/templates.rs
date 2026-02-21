@@ -105,7 +105,7 @@ async fn create_rounds_template(es: &Elasticsearch) -> anyhow::Result<()> {
                 "number_of_replicas": 0
             },
             "mappings": {
-                "_meta": { "version": 4 },
+                "_meta": { "version": 5 },
                 "properties": {
                     "round_id": { "type": "keyword" },
                     "job_id": { "type": "keyword" },
@@ -136,7 +136,8 @@ async fn create_rounds_template(es: &Elasticsearch) -> anyhow::Result<()> {
                     },
                     "status": { "type": "keyword" },
                     "started_at": { "type": "date" },
-                    "completed_at": { "type": "date" }
+                    "completed_at": { "type": "date" },
+                    "assembled_source": { "type": "text", "index": false }
                 }
             }
         }

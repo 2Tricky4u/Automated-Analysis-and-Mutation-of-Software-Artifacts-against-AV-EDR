@@ -18,6 +18,8 @@ pub struct RoundIndexParams<'a> {
     pub instrumented_run_id: &'a str,
     pub started_at: Option<&'a str>,
     pub modules: Option<&'a ModuleSelectionSpec>,
+    /// Pre-instrumentation assembled C source for line trace resolution.
+    pub assembled_source: Option<&'a str>,
 }
 
 /// Index a completed round summary with mutation recipe and run IDs.
@@ -61,6 +63,7 @@ pub async fn index_round(es: &Elasticsearch, params: &RoundIndexParams<'_>) -> a
         "status": "completed",
         "completed_at": helpers::system_time_to_rfc3339(summary.completed_at),
         "started_at": params.started_at,
+        "assembled_source": params.assembled_source,
     });
 
     let doc_id = format!("{}/{}", params.job_id, summary.round_id.0);

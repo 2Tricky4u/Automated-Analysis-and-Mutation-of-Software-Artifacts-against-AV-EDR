@@ -541,6 +541,8 @@ pub struct RoundAgg {
     pub started_at: SystemTime,
     /// Timeout for the run in milliseconds, used for survival_ratio in evasion score
     pub timeout_ms: u64,
+    /// Pre-instrumentation assembled C source for line trace resolution.
+    pub assembled_source: Option<String>,
 }
 
 impl RoundAgg {
@@ -836,6 +838,7 @@ mod tests {
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
             timeout_ms: 120_000,
+            assembled_source: None,
         };
 
         assert!(!agg.is_complete());
@@ -1083,6 +1086,7 @@ mod tests {
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
             timeout_ms: 120_000,
+            assembled_source: None,
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1133,6 +1137,7 @@ mod tests {
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
             timeout_ms: 120_000,
+            assembled_source: None,
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1192,6 +1197,7 @@ mod tests {
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
             timeout_ms: 120_000,
+            assembled_source: None,
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1411,6 +1417,7 @@ mod tests {
             instrumented_vm_id: String::new(),
             started_at: SystemTime::now(),
             timeout_ms: 120_000,
+            assembled_source: None,
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1463,6 +1470,7 @@ mod tests {
                 instrumented_vm_id: String::new(),
                 started_at: SystemTime::now(),
                 timeout_ms: 120_000,
+                assembled_source: None,
             }
         };
 
