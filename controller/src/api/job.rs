@@ -11,9 +11,10 @@ use crate::api::SchedulerService;
 use crate::automutate::common::JobId;
 use crate::automutate::controller::{
     BehaviorComparisonProto, CompareRunsRequest, CompareRunsResponse, GetRoundRequest,
-    GetRoundResponse, JobProgressRequest, JobProgressResponse, JobRequest, JobResponse,
-    JobStatusRequest, JobStatusResponse, RoundSummaryProto, RunResultProto, StatusAck,
-    StatusReport, StopJobRequest, StopJobResponse,
+    GetRoundResponse, GetTraceLinesRequest, GetTraceLinesResponse, JobProgressRequest,
+    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
+    RoundSummaryProto, RunResultProto, StatusAck, StatusReport, StopJobRequest, StopJobResponse,
+    TraceLine,
 };
 use crate::dispatch::{
     JobControlCommand, JobId as DispatchJobId, JobSession, ModularBuildSpec, ModuleSelectionSpec,
@@ -442,6 +443,41 @@ pub async fn report_status(
     }
 
     Ok(Response::new(StatusAck { received: true }))
+}
+
+/// Get trace lines for a run (instrumented execution path)
+pub async fn get_trace_lines(
+    service: &SchedulerService,
+    request: Request<GetTraceLinesRequest>,
+) -> Result<Response<GetTraceLinesResponse>, Status> {
+    let req = request.get_ref();
+    debug!(
+        "[RPC] GetTraceLines: run_id={}, last={}",
+        req.run_id, req.last
+    );
+
+    let (docs, total) = service
+        .storage
+        .query_trace_lines(&req.run_id, req.last)
+        .await;
+
+    let lines: Vec<TraceLine> = docs
+        .iter()
+        .map(|doc| TraceLine {
+            seq: u64_field(doc, "payload_seq"),
+            file: str_field(doc, "payload_file"),
+            line: u32_field(doc, "payload_line"),
+            func: str_field(doc, "payload_func"),
+            code: String::new(), // Phase 2: source resolution
+            ts_us: u64_field(doc, "payload_ts_us"),
+        })
+        .collect();
+
+    Ok(Response::new(GetTraceLinesResponse {
+        run_id: req.run_id.clone(),
+        lines,
+        total_events: total as u32,
+    }))
 }
 
 // ===========================================================================

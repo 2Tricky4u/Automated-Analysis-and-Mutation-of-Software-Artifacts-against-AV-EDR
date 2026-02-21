@@ -126,6 +126,14 @@ impl EsStorage {
         queries::update_job_field(&self.client, job_id, field, value).await
     }
 
+    pub async fn query_trace_lines(
+        &self,
+        run_id: &str,
+        last_n: u32,
+    ) -> (Vec<serde_json::Value>, u64) {
+        queries::query_trace_lines(&self.client, run_id, last_n).await
+    }
+
     // -- Bootstrap ---------------------------------------------------------
 
     pub async fn ensure_templates(&self) -> anyhow::Result<()> {

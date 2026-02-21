@@ -1,6 +1,6 @@
 //! UI Backend REST API Server
 //!
-//! Provides HTTP REST API and WebSocket endpoints that wrap
+//! Provides HTTP REST API endpoints that wrap
 //! the Controller gRPC service for frontend integration.
 //!
 //! ## Endpoints
@@ -16,6 +16,10 @@
 //! - POST /api/jobs/:id/stop - Stop running job
 //! - GET /api/jobs/:job_id/rounds/:round_id - Get round details
 //!
+//! ### Runs
+//! - GET /api/runs/:run_id/trace?last=N - Get trace lines for a run
+//! - GET /api/runs/compare?baseline=X&instrumented=Y - Compare runs
+//!
 //! ### Workers
 //! - GET /api/workers - List all workers
 //!
@@ -25,21 +29,15 @@
 //! ### Query
 //! - POST /api/query - Execute ES query
 //! - POST /api/triage - Submit triage data
-//! - GET /api/runs/compare?baseline=X&instrumented=Y - Compare runs
-//!
-//! ### WebSocket
-//! - GET /ws/telemetry - Real-time telemetry stream
-//! - GET /ws/telemetry/filtered?job_id=X - Filtered telemetry stream
 
 mod api;
 mod generated;
 mod grpc_client;
-mod websocket;
 
 use api::{ApiResponse, HealthResponse};
 use axum::{
     Json, Router,
-    extract::{FromRef, State},
+    extract::State,
     http::{Method, header},
     routing::{get, post},
 };
@@ -49,28 +47,6 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::{Level, info};
-use websocket::TelemetryBroadcaster;
-
-/// Application state shared across handlers
-#[derive(Clone)]
-pub struct AppState {
-    pub grpc_client: Arc<ControllerGrpcClient>,
-    pub telemetry_broadcaster: Arc<TelemetryBroadcaster>,
-}
-
-// Allow extracting Arc<ControllerGrpcClient> from AppState
-impl FromRef<AppState> for Arc<ControllerGrpcClient> {
-    fn from_ref(state: &AppState) -> Self {
-        state.grpc_client.clone()
-    }
-}
-
-// Allow extracting Arc<TelemetryBroadcaster> from AppState
-impl FromRef<AppState> for Arc<TelemetryBroadcaster> {
-    fn from_ref(state: &AppState) -> Self {
-        state.telemetry_broadcaster.clone()
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -97,15 +73,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         timeout_secs: 30,
     }));
 
-    // Create telemetry broadcaster
-    let telemetry_broadcaster = Arc::new(TelemetryBroadcaster::new(1000));
-
-    // Create app state
-    let app_state = AppState {
-        grpc_client,
-        telemetry_broadcaster,
-    };
-
     // CORS configuration - allow all origins for development
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -126,6 +93,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/jobs/:job_id/rounds/:round_id",
             get(api::jobs::get_round),
         )
+        // Run endpoints
+        .route(
+            "/api/runs/:run_id/trace",
+            get(api::jobs::get_trace_lines),
+        )
+        .route("/api/runs/compare", get(api::jobs::compare_runs))
         // Worker endpoints
         .route("/api/workers", get(api::workers::list_workers))
         // Orchestrator endpoints
@@ -136,18 +109,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Query endpoints
         .route("/api/query", post(api::query::query_results))
         .route("/api/triage", post(api::query::submit_triage))
-        .route("/api/runs/compare", get(api::jobs::compare_runs))
-        // WebSocket endpoints
-        .route("/ws/telemetry", get(websocket::ws_handler))
-        .route(
-            "/ws/telemetry/filtered",
-            get(websocket::ws_handler_filtered),
-        )
         // Middleware
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         // State
-        .with_state(app_state)
+        .with_state(grpc_client)
         // Serve static frontend files (fallback for non-API routes)
         .fallback_service(ServeDir::new(&frontend_dir));
 

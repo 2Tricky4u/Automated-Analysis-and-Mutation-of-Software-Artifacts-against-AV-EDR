@@ -175,33 +175,14 @@
         .badge-running { background: #1e40af; color: #93c5fd; }
         .badge-completed { background: #166534; color: #4ade80; }
         .badge-failed { background: #7f1d1d; color: #fca5a5; }
-
-        .telemetry-log {
-            background: #0d1117;
-            border-radius: 4px;
-            padding: 10px;
-            height: 300px;
-            overflow-y: auto;
-            font-family: 'Consolas', monospace;
-            font-size: 0.8rem;
-        }
-
-        .telemetry-entry {
-            padding: 3px 0;
-            border-bottom: 1px solid #21262d;
-        }
-
-        .telemetry-entry .time {
-            color: #8b949e;
-        }
-
-        .telemetry-entry .type {
-            color: #58a6ff;
-        }
-
-        .telemetry-entry .job {
-            color: #f0883e;
-        }
+        .badge-detected { background: #7f1d1d; color: #fca5a5; }
+        .badge-not-detected { background: #166534; color: #4ade80; }
+        .badge-evasion { background: #166534; color: #4ade80; }
+        .badge-real_detection, .badge-real-detection { background: #7f1d1d; color: #fca5a5; }
+        .badge-instrumentation_artifact, .badge-instrumentation-artifact { background: #854d0e; color: #fbbf24; }
+        .badge-flaky { background: #854d0e; color: #fbbf24; }
+        .badge-match { background: #166534; color: #4ade80; }
+        .badge-mismatch { background: #7f1d1d; color: #fca5a5; }
 
         .response-box {
             background: #0d1117;
@@ -210,9 +191,104 @@
             margin-top: 10px;
             font-family: 'Consolas', monospace;
             font-size: 0.8rem;
-            max-height: 200px;
+            max-height: 400px;
             overflow-y: auto;
             white-space: pre-wrap;
+        }
+
+        .response-box table {
+            font-size: 0.8rem;
+        }
+
+        .response-box table th,
+        .response-box table td {
+            padding: 6px 8px;
+        }
+
+        .response-box ul {
+            margin: 5px 0;
+            padding-left: 20px;
+        }
+
+        .response-box ul li {
+            margin: 3px 0;
+        }
+
+        .response-box .run-info {
+            background: #161b22;
+            border: 1px solid #21262d;
+            border-radius: 4px;
+            padding: 8px 12px;
+            margin: 6px 0;
+        }
+
+        .response-box .run-info .run-label {
+            font-weight: bold;
+            color: #8b949e;
+            margin-bottom: 4px;
+        }
+
+        .response-box .muted {
+            color: #8b949e;
+            font-size: 0.75rem;
+        }
+
+        .response-box .stat-line {
+            margin: 4px 0;
+        }
+
+        .collapsible-header {
+            cursor: pointer;
+            color: #58a6ff;
+            padding: 4px 0;
+            user-select: none;
+        }
+
+        .collapsible-header:hover {
+            text-decoration: underline;
+        }
+
+        .collapsible-body {
+            display: none;
+            margin-top: 4px;
+        }
+
+        .collapsible-body.open {
+            display: block;
+        }
+
+        .source-block {
+            background: #0d1117;
+            border: 1px solid #21262d;
+            padding: 8px;
+            border-radius: 4px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-size: 0.75rem;
+            white-space: pre;
+            line-height: 1.4;
+        }
+
+        .trace-table {
+            width: 100%;
+        }
+
+        .trace-table tr.last-line {
+            background: #3b1d1d;
+        }
+
+        .trace-table td.seq-col {
+            color: #8b949e;
+            text-align: right;
+            width: 60px;
+        }
+
+        .trace-table td.loc-col {
+            color: #58a6ff;
+        }
+
+        .trace-table td.func-col {
+            color: #f0883e;
         }
 
         .flex-row {
@@ -229,34 +305,6 @@
         .mb-10 { margin-bottom: 10px; }
 
         .hidden { display: none; }
-
-        .tabs {
-            display: flex;
-            gap: 5px;
-            margin-bottom: 15px;
-        }
-
-        .tab {
-            padding: 8px 16px;
-            background: #0f3460;
-            border: none;
-            color: #aaa;
-            cursor: pointer;
-            border-radius: 4px 4px 0 0;
-        }
-
-        .tab.active {
-            background: #1a1a2e;
-            color: #e94560;
-        }
-
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.active {
-            display: block;
-        }
 
         .progress-bar {
             width: 100%;
@@ -434,11 +482,10 @@
             <div class="card">
                 <h2>Round Details</h2>
                 <div class="flex-row mb-10">
-                    <input type="text" id="roundJobId" placeholder="Job ID" class="flex-grow">
-                    <input type="text" id="roundId" placeholder="Round ID" class="flex-grow">
+                    <input type="text" id="roundId" placeholder="Round ID (e.g. job-20260216-...-round-4)" class="flex-grow">
                     <button class="btn-secondary" onclick="getRound()">Get Round</button>
                 </div>
-                <div class="response-box" id="roundResponse">Enter Job ID and Round ID</div>
+                <div class="response-box" id="roundResponse">Enter a Round ID</div>
             </div>
 
             <!-- Compare Runs Card -->
@@ -492,27 +539,53 @@
                 <button class="btn-secondary" onclick="submitTriage()">Submit Triage</button>
                 <div class="response-box mt-10 hidden" id="triageResponse"></div>
             </div>
-
-            <!-- Telemetry Card (Full Width) -->
-            <div class="card" style="grid-column: 1 / -1;">
-                <h2>Real-time Telemetry</h2>
-                <div class="flex-row mb-10">
-                    <input type="text" id="telemetryJobFilter" placeholder="Filter by Job ID (optional)" class="flex-grow">
-                    <button class="btn-primary" id="wsConnectBtn" onclick="toggleWebSocket()">Connect</button>
-                    <button class="btn-secondary" onclick="clearTelemetry()">Clear</button>
-                </div>
-                <div class="telemetry-log" id="telemetryLog">
-                    <div class="telemetry-entry">WebSocket disconnected. Click Connect to start.</div>
-                </div>
-            </div>
         </div>
     </div>
 
     <script>
         const API_BASE = '';  // Same origin
-        let ws = null;
 
+        // ================================================================
+        // Shared helpers
+        // ================================================================
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function detectedBadge(detected) {
+            return detected
+                ? '<span class="badge badge-detected">DETECTED</span>'
+                : '<span class="badge badge-not-detected">NOT DETECTED</span>';
+        }
+
+        function statusBadge(status) {
+            const cls = status ? status.toLowerCase().replace(/_/g, '-') : 'unknown';
+            return `<span class="badge badge-${cls}">${escapeHtml(status || 'unknown')}</span>`;
+        }
+
+        function categoryBadge(cat) {
+            if (!cat) return '';
+            const cls = cat.toLowerCase().replace(/_/g, '-');
+            const label = cat.replace(/_/g, ' ');
+            return `<span class="badge badge-${cls}">${escapeHtml(label)}</span>`;
+        }
+
+        function formatRunInfo(label, run) {
+            if (!run) return `<div class="run-info"><div class="run-label">${escapeHtml(label)}</div><span class="muted">No data</span></div>`;
+            return `<div class="run-info">
+    <div class="run-label">${escapeHtml(label)}</div>
+    <div class="stat-line">${detectedBadge(run.detected)} &nbsp; Outcome: <strong>${escapeHtml(run.outcome || '-')}</strong> &nbsp; Exit: <strong>${run.exit_code}</strong></div>
+    <div class="muted">${escapeHtml(run.run_id)}</div>
+</div>`;
+        }
+
+        // ================================================================
         // Health check
+        // ================================================================
+
         async function checkHealth() {
             try {
                 const resp = await fetch(`${API_BASE}/api/health`);
@@ -533,19 +606,20 @@
             }
         }
 
+        // ================================================================
         // Workers
+        // ================================================================
+
         async function refreshWorkers() {
             try {
                 const resp = await fetch(`${API_BASE}/api/workers`);
                 const data = await resp.json();
                 const workers = data.data.workers || [];
 
-                // Update stats
                 document.getElementById('statWorkers').textContent = data.data.total || 0;
                 document.getElementById('statAvailable').textContent = data.data.available || 0;
                 document.getElementById('statBusy').textContent = data.data.busy || 0;
 
-                // Update table
                 const tbody = document.getElementById('workersBody');
                 if (workers.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="4">No workers connected</td></tr>';
@@ -554,29 +628,30 @@
 
                 tbody.innerHTML = workers.map(w => `
                     <tr>
-                        <td>${w.id}</td>
-                        <td>${w.os_version}</td>
-                        <td>${w.capabilities.join(', ') || '-'}</td>
-                        <td><span class="badge badge-${w.status}">${w.status}</span></td>
+                        <td>${escapeHtml(w.id)}</td>
+                        <td>${escapeHtml(w.os_version)}</td>
+                        <td>${escapeHtml(w.capabilities.join(', ') || '-')}</td>
+                        <td>${statusBadge(w.status)}</td>
                     </tr>
                 `).join('');
             } catch (e) {
                 document.getElementById('workersBody').innerHTML =
-                    `<tr><td colspan="4">Error: ${e.message}</td></tr>`;
+                    `<tr><td colspan="4">Error: ${escapeHtml(e.message)}</td></tr>`;
             }
         }
 
+        // ================================================================
         // Orchestrator Status (Active Jobs)
+        // ================================================================
+
         async function refreshOrchestratorStatus() {
             try {
                 const resp = await fetch(`${API_BASE}/api/orchestrator/status`);
                 const data = await resp.json();
                 const jobs = data.data.active_jobs || [];
 
-                // Update pending runs stat
                 document.getElementById('statPendingRuns').textContent = data.data.pending_jobs || 0;
 
-                // Update active jobs table
                 const tbody = document.getElementById('activeJobsBody');
                 if (jobs.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="4">No active jobs</td></tr>';
@@ -587,30 +662,28 @@
                     const progress = j.max_rounds > 0
                         ? Math.round((j.current_round / j.max_rounds) * 100)
                         : 0;
-                    const statusClass = j.status.toLowerCase();
                     return `
                         <tr>
-                            <td title="${j.job_id}">${j.job_id.substring(0, 20)}...</td>
+                            <td title="${escapeHtml(j.job_id)}">${escapeHtml(j.job_id.substring(0, 20))}...</td>
                             <td>
                                 <div class="progress-bar" style="width: 100px; display: inline-block; vertical-align: middle;">
                                     <div class="progress-bar-fill" style="width: ${progress}%"></div>
                                 </div>
                                 <span style="margin-left: 5px;">${j.current_round}/${j.max_rounds}</span>
                             </td>
-                            <td><span class="badge badge-${statusClass}">${j.status}</span></td>
+                            <td>${statusBadge(j.status)}</td>
                             <td>
-                                <button class="btn-danger btn-sm" onclick="stopJobById('${j.job_id}')">Stop</button>
+                                <button class="btn-danger btn-sm" onclick="stopJobById('${escapeHtml(j.job_id)}')">Stop</button>
                             </td>
                         </tr>
                     `;
                 }).join('');
             } catch (e) {
                 document.getElementById('activeJobsBody').innerHTML =
-                    `<tr><td colspan="4">Error: ${e.message}</td></tr>`;
+                    `<tr><td colspan="4">Error: ${escapeHtml(e.message)}</td></tr>`;
             }
         }
 
-        // Stop job by ID (helper for active jobs table)
         async function stopJobById(jobId) {
             if (!confirm(`Stop job ${jobId}?`)) return;
             try {
@@ -624,7 +697,10 @@
             }
         }
 
+        // ================================================================
         // Submit Job
+        // ================================================================
+
         document.getElementById('submitJobForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const responseBox = document.getElementById('submitJobResponse');
@@ -661,7 +737,10 @@
             }
         });
 
-        // Job Status
+        // ================================================================
+        // Job Status (WI-4: formatted output)
+        // ================================================================
+
         async function getJobStatus() {
             const jobId = document.getElementById('jobIdInput').value;
             if (!jobId) return alert('Enter a Job ID');
@@ -672,13 +751,28 @@
             try {
                 const resp = await fetch(`${API_BASE}/api/jobs/${jobId}`);
                 const data = await resp.json();
-                responseBox.textContent = JSON.stringify(data, null, 2);
+                const d = data.data;
+
+                if (!d) {
+                    responseBox.textContent = 'No data returned';
+                    return;
+                }
+
+                responseBox.innerHTML = `
+                    <div class="stat-line"><strong>Job:</strong> ${escapeHtml(d.job_id)}</div>
+                    <div class="stat-line"><strong>Status:</strong> ${statusBadge(d.status)}</div>
+                    <div class="stat-line"><strong>Progress:</strong> ${d.progress_percent}%</div>
+                    <div class="stat-line"><strong>Phase:</strong> ${escapeHtml(d.current_phase)}</div>
+                `;
             } catch (e) {
                 responseBox.textContent = `Error: ${e.message}`;
             }
         }
 
-        // Job Progress
+        // ================================================================
+        // Job Progress (WI-4: formatted rounds table)
+        // ================================================================
+
         async function getJobProgress() {
             const jobId = document.getElementById('jobIdInput').value;
             if (!jobId) return alert('Enter a Job ID');
@@ -689,13 +783,52 @@
             try {
                 const resp = await fetch(`${API_BASE}/api/jobs/${jobId}/progress`);
                 const data = await resp.json();
-                responseBox.textContent = JSON.stringify(data, null, 2);
+                const d = data.data;
+
+                if (!d) {
+                    responseBox.textContent = 'No data returned';
+                    return;
+                }
+
+                let html = `
+                    <div class="stat-line">${statusBadge(d.status)} &nbsp; Progress: <strong>${d.progress_percent}%</strong> &nbsp; Round ${d.current_round}/${d.max_rounds}</div>
+                `;
+
+                if (d.rounds && d.rounds.length > 0) {
+                    html += `<table style="margin-top: 8px;">
+                        <thead><tr>
+                            <th>#</th>
+                            <th>Detected</th>
+                            <th>Category</th>
+                            <th>Evasion Score</th>
+                            <th>Status</th>
+                        </tr></thead><tbody>`;
+
+                    d.rounds.forEach(r => {
+                        html += `<tr>
+                            <td>${r.round_number}</td>
+                            <td>${detectedBadge(r.detected)}</td>
+                            <td>${categoryBadge(r.differential_category)}</td>
+                            <td>${r.evasion_score !== undefined ? r.evasion_score.toFixed(2) : '-'}</td>
+                            <td>${statusBadge(r.status)}</td>
+                        </tr>`;
+                    });
+
+                    html += '</tbody></table>';
+                } else {
+                    html += '<div class="muted" style="margin-top: 8px;">No rounds yet</div>';
+                }
+
+                responseBox.innerHTML = html;
             } catch (e) {
                 responseBox.textContent = `Error: ${e.message}`;
             }
         }
 
+        // ================================================================
         // Stop Job
+        // ================================================================
+
         async function stopJob() {
             const jobId = document.getElementById('jobIdInput').value;
             if (!jobId) return alert('Enter a Job ID');
@@ -707,31 +840,143 @@
             try {
                 const resp = await fetch(`${API_BASE}/api/jobs/${jobId}/stop`, { method: 'POST' });
                 const data = await resp.json();
-                responseBox.textContent = JSON.stringify(data, null, 2);
+                const d = data.data;
+                if (d) {
+                    responseBox.innerHTML = `<div class="stat-line">${d.stopped ? 'Stopped' : 'Failed'}: ${escapeHtml(d.message)}</div>`;
+                } else {
+                    responseBox.textContent = JSON.stringify(data, null, 2);
+                }
             } catch (e) {
                 responseBox.textContent = `Error: ${e.message}`;
             }
         }
 
-        // Get Round
+        // ================================================================
+        // Round Details (WI-2: single input, formatted, trace button)
+        // ================================================================
+
+        function parseRoundId(roundId) {
+            // Round IDs are "{job_id}-round-{N}"
+            // job_id itself contains hyphens, so find the last "-round-" occurrence
+            const idx = roundId.lastIndexOf('-round-');
+            if (idx === -1) return null;
+            return {
+                jobId: roundId.substring(0, idx),
+                roundId: roundId
+            };
+        }
+
         async function getRound() {
-            const jobId = document.getElementById('roundJobId').value;
-            const roundId = document.getElementById('roundId').value;
-            if (!jobId || !roundId) return alert('Enter both Job ID and Round ID');
+            const roundIdRaw = document.getElementById('roundId').value.trim();
+            if (!roundIdRaw) return alert('Enter a Round ID');
+
+            const parsed = parseRoundId(roundIdRaw);
+            if (!parsed) return alert('Invalid Round ID format. Expected: {job_id}-round-{N}');
 
             const responseBox = document.getElementById('roundResponse');
             responseBox.textContent = 'Loading...';
 
             try {
-                const resp = await fetch(`${API_BASE}/api/jobs/${jobId}/rounds/${roundId}`);
+                const resp = await fetch(`${API_BASE}/api/jobs/${parsed.jobId}/rounds/${parsed.roundId}`);
                 const data = await resp.json();
-                responseBox.textContent = JSON.stringify(data, null, 2);
+                const d = data.data;
+
+                if (!d) {
+                    responseBox.textContent = 'Round not found';
+                    return;
+                }
+
+                let html = `
+                    <div class="stat-line"><strong>Round ${d.round_number}</strong> &nbsp; ${statusBadge(d.status)}</div>
+                    ${formatRunInfo('Baseline (trace=off)', d.baseline_run)}
+                    ${formatRunInfo('Instrumented (trace=lines)', d.instrumented_run)}
+                `;
+
+                // "View Last Executed Lines" button for instrumented run
+                if (d.instrumented_run && d.instrumented_run.run_id) {
+                    html += `<div style="margin-top: 8px;">
+                        <button class="btn-secondary btn-sm" onclick="getTrace('${escapeHtml(d.instrumented_run.run_id)}')">View Last Executed Lines</button>
+                    </div>`;
+                }
+
+                // Collapsible assembled source
+                if (d.assembled_source) {
+                    const sourceId = 'source-' + Date.now();
+                    html += `
+                        <div style="margin-top: 8px;">
+                            <span class="collapsible-header" onclick="document.getElementById('${sourceId}').classList.toggle('open')">Assembled Source</span>
+                            <div class="collapsible-body" id="${sourceId}">
+                                <div class="source-block">${escapeHtml(d.assembled_source)}</div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                responseBox.innerHTML = html;
             } catch (e) {
                 responseBox.textContent = `Error: ${e.message}`;
             }
         }
 
-        // Compare Runs
+        // ================================================================
+        // Trace Lines Viewer (WI-3)
+        // ================================================================
+
+        async function getTrace(runId) {
+            const responseBox = document.getElementById('roundResponse');
+
+            // Append loading indicator
+            let traceDiv = document.getElementById('traceResults');
+            if (!traceDiv) {
+                traceDiv = document.createElement('div');
+                traceDiv.id = 'traceResults';
+                traceDiv.style.marginTop = '10px';
+                responseBox.appendChild(traceDiv);
+            }
+            traceDiv.innerHTML = '<div class="muted">Loading trace lines...</div>';
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/runs/${runId}/trace?last=50`);
+                const data = await resp.json();
+                const d = data.data;
+
+                if (!d || !d.lines || d.lines.length === 0) {
+                    traceDiv.innerHTML = '<div class="muted">No trace events found for this run</div>';
+                    return;
+                }
+
+                // Sort by seq ascending for display (API returns desc)
+                const lines = d.lines.sort((a, b) => a.seq - b.seq);
+
+                let html = `<div style="margin-bottom: 4px;"><strong>Last Executed Lines</strong> <span class="muted">(${d.lines.length} of ${d.total_events} total)</span></div>`;
+                html += '<table class="trace-table"><thead><tr><th>Seq</th><th>Location</th><th>Function</th></tr></thead><tbody>';
+
+                lines.forEach((l, i) => {
+                    const isLast = i === lines.length - 1;
+                    const cls = isLast ? ' class="last-line"' : '';
+                    html += `<tr${cls}>
+                        <td class="seq-col">${l.seq}</td>
+                        <td class="loc-col">${escapeHtml(l.file)}:${l.line}</td>
+                        <td class="func-col">${escapeHtml(l.func || '-')}</td>
+                    </tr>`;
+                });
+
+                html += '</tbody></table>';
+                if (lines.length > 0) {
+                    const last = lines[lines.length - 1];
+                    html += `<div class="muted" style="margin-top: 4px;">Execution cutoff at ${escapeHtml(last.file)}:${last.line}</div>`;
+                }
+
+                traceDiv.innerHTML = html;
+            } catch (e) {
+                traceDiv.innerHTML = `<div style="color: #fca5a5;">Error loading trace: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        // ================================================================
+        // Compare Runs (WI-4: formatted output)
+        // ================================================================
+
         async function compareRuns() {
             const baseline = document.getElementById('baselineRunId').value;
             const instrumented = document.getElementById('instrumentedRunId').value;
@@ -743,13 +988,41 @@
             try {
                 const resp = await fetch(`${API_BASE}/api/runs/compare?baseline=${baseline}&instrumented=${instrumented}`);
                 const data = await resp.json();
-                responseBox.textContent = JSON.stringify(data, null, 2);
+                const d = data.data;
+
+                if (!d) {
+                    responseBox.textContent = 'No comparison data returned';
+                    return;
+                }
+
+                const matchBadge = d.outcome_match
+                    ? '<span class="badge badge-match">MATCH</span>'
+                    : '<span class="badge badge-mismatch">MISMATCH</span>';
+
+                let html = `
+                    <div class="stat-line"><strong>Outcome:</strong> ${matchBadge}</div>
+                    <div class="stat-line"><strong>Baseline:</strong> ${detectedBadge(d.baseline_detected)}</div>
+                    <div class="stat-line"><strong>Instrumented:</strong> ${detectedBadge(d.instrumented_detected)}</div>
+                `;
+
+                if (d.differences && d.differences.length > 0) {
+                    html += '<div style="margin-top: 6px;"><strong>Differences:</strong></div><ul>';
+                    d.differences.forEach(diff => {
+                        html += `<li>${escapeHtml(diff)}</li>`;
+                    });
+                    html += '</ul>';
+                }
+
+                responseBox.innerHTML = html;
             } catch (e) {
                 responseBox.textContent = `Error: ${e.message}`;
             }
         }
 
-        // Query Results
+        // ================================================================
+        // Query Results (WI-4: formatted table)
+        // ================================================================
+
         async function queryResults() {
             const jobIds = document.getElementById('queryJobIds').value;
             const dateFrom = document.getElementById('queryDateFrom').value;
@@ -771,13 +1044,48 @@
                     body: JSON.stringify(payload)
                 });
                 const data = await resp.json();
-                responseBox.textContent = JSON.stringify(data, null, 2);
+                const d = data.data;
+
+                if (!d) {
+                    responseBox.textContent = 'No data returned';
+                    return;
+                }
+
+                let html = `<div class="stat-line"><strong>Total:</strong> ${d.total_count || 0} results</div>`;
+
+                if (d.results && d.results.length > 0) {
+                    html += `<table style="margin-top: 8px;">
+                        <thead><tr>
+                            <th>Job ID</th>
+                            <th>Detected</th>
+                            <th>Detection Rate</th>
+                            <th>Techniques</th>
+                        </tr></thead><tbody>`;
+
+                    d.results.forEach(r => {
+                        html += `<tr>
+                            <td>${escapeHtml(r.job_id)}</td>
+                            <td>${detectedBadge(r.detected)}</td>
+                            <td>${escapeHtml(r.detection_rate || '-')}</td>
+                            <td>${escapeHtml((r.evasion_techniques || []).join(', ') || '-')}</td>
+                        </tr>`;
+                    });
+
+                    html += '</tbody></table>';
+                } else {
+                    html += '<div class="muted" style="margin-top: 8px;">No results found</div>';
+                }
+
+                responseBox.innerHTML = html;
             } catch (e) {
                 responseBox.textContent = `Error: ${e.message}`;
             }
         }
 
+        // ================================================================
         // Submit Triage
+        // ================================================================
+
         async function submitTriage() {
             const jobId = document.getElementById('triageJobId').value;
             if (!jobId) return alert('Enter a Job ID');
@@ -805,76 +1113,16 @@
             }
         }
 
-        // WebSocket Telemetry
-        function toggleWebSocket() {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.close();
-                return;
-            }
-
-            const filter = document.getElementById('telemetryJobFilter').value;
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = filter
-                ? `${protocol}//${window.location.host}/ws/telemetry/filtered?job_id=${filter}`
-                : `${protocol}//${window.location.host}/ws/telemetry`;
-
-            ws = new WebSocket(wsUrl);
-            const log = document.getElementById('telemetryLog');
-            const btn = document.getElementById('wsConnectBtn');
-
-            ws.onopen = () => {
-                btn.textContent = 'Disconnect';
-                btn.className = 'btn-danger';
-                log.innerHTML = '<div class="telemetry-entry">Connected to telemetry stream...</div>';
-            };
-
-            ws.onclose = () => {
-                btn.textContent = 'Connect';
-                btn.className = 'btn-primary';
-                addTelemetryEntry('Disconnected');
-            };
-
-            ws.onerror = (e) => {
-                addTelemetryEntry(`Error: Connection failed`);
-            };
-
-            ws.onmessage = (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    const time = new Date().toLocaleTimeString();
-                    const entry = `<span class="time">[${time}]</span> <span class="type">${data.event_type}</span> <span class="job">${data.job_id}</span>`;
-                    addTelemetryEntry(entry);
-                } catch {
-                    addTelemetryEntry(e.data);
-                }
-            };
-        }
-
-        function addTelemetryEntry(html) {
-            const log = document.getElementById('telemetryLog');
-            const div = document.createElement('div');
-            div.className = 'telemetry-entry';
-            div.innerHTML = html;
-            log.appendChild(div);
-            log.scrollTop = log.scrollHeight;
-
-            // Keep only last 500 entries
-            while (log.children.length > 500) {
-                log.removeChild(log.firstChild);
-            }
-        }
-
-        function clearTelemetry() {
-            document.getElementById('telemetryLog').innerHTML = '';
-        }
-
+        // ================================================================
         // Init
+        // ================================================================
+
         checkHealth();
         refreshWorkers();
         refreshOrchestratorStatus();
         setInterval(checkHealth, 10000);
         setInterval(refreshWorkers, 30000);
-        setInterval(refreshOrchestratorStatus, 5000);  // More frequent for active jobs
+        setInterval(refreshOrchestratorStatus, 5000);
     </script>
 </body>
 </html>
