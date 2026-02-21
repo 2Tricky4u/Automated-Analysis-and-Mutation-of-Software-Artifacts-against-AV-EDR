@@ -262,10 +262,7 @@ pub static BENIGN_IMPORTS: &[BenignImport] = &[
     // File version queries
     BenignImport {
         dll: "version.dll",
-        functions: &[
-            ("GetFileVersionInfoW", 0x0003),
-            ("VerQueryValueW", 0x000A),
-        ],
+        functions: &[("GetFileVersionInfoW", 0x0003), ("VerQueryValueW", 0x000A)],
     },
     // Networking (normal for any app that talks to the internet)
     BenignImport {
@@ -697,7 +694,11 @@ fn xorshift64(state: &mut u64) -> u64 {
 /// Produces H ≈ 3.5–4.5 bits/byte, resembling natural initialized data.
 pub fn generate_low_entropy_padding(size: usize, seed: u64) -> Vec<u8> {
     let mut buf = Vec::with_capacity(size);
-    let mut rng = if seed == 0 { 0x1234_5678_9ABC_DEF0 } else { seed };
+    let mut rng = if seed == 0 {
+        0x1234_5678_9ABC_DEF0
+    } else {
+        seed
+    };
 
     // Seed-based shuffled indices for string selection
     let string_count = BENIGN_STRINGS.len();
@@ -849,7 +850,12 @@ mod tests {
 
     #[test]
     fn test_build_version_info_not_empty() {
-        let vi = build_version_info("Test Application", "Microsoft Corporation", "1.0.0.0", "app.exe");
+        let vi = build_version_info(
+            "Test Application",
+            "Microsoft Corporation",
+            "1.0.0.0",
+            "app.exe",
+        );
         // Should be non-trivial size (typically 500+ bytes)
         assert!(vi.len() > 100);
 
