@@ -223,7 +223,7 @@ VIS_STATE=$(jq -n '{
     type: "pie",
     aggs: [
         { id: "1", enabled: true, type: "count", params: {}, schema: "metric" },
-        { id: "2", enabled: true, type: "terms", params: { field: "status.keyword", orderBy: "1", order: "desc", size: 10 }, schema: "segment" }
+        { id: "2", enabled: true, type: "terms", params: { field: "status", orderBy: "1", order: "desc", size: 10 }, schema: "segment" }
     ],
     params: {
         type: "pie",
@@ -259,7 +259,7 @@ VIS_STATE=$(jq -n '{
     type: "pie",
     aggs: [
         { id: "1", enabled: true, type: "count", params: {}, schema: "metric" },
-        { id: "2", enabled: true, type: "terms", params: { field: "detection_outcome.keyword", orderBy: "1", order: "desc", size: 10 }, schema: "segment" }
+        { id: "2", enabled: true, type: "terms", params: { field: "detection_outcome", orderBy: "1", order: "desc", size: 10 }, schema: "segment" }
     ],
     params: {
         type: "pie",
@@ -295,7 +295,7 @@ VIS_STATE=$(jq -n '{
     type: "pie",
     aggs: [
         { id: "1", enabled: true, type: "count", params: {}, schema: "metric" },
-        { id: "2", enabled: true, type: "terms", params: { field: "differential_category.keyword", orderBy: "1", order: "desc", size: 10 }, schema: "segment" }
+        { id: "2", enabled: true, type: "terms", params: { field: "differential_category", orderBy: "1", order: "desc", size: 10 }, schema: "segment" }
     ],
     params: {
         type: "pie",
@@ -335,12 +335,15 @@ VIS_STATE=$(jq -n '{
     ],
     params: {
         type: "histogram",
-        grid: { categoryLines: false },
-        categoryAxes: [{ id: "CategoryAxis-1", type: "category", position: "bottom", show: true, labels: { show: true, truncate: 100 }, title: {} }],
-        valueAxes: [{ id: "ValueAxis-1", name: "LeftAxis-1", type: "value", position: "left", show: true, labels: { show: true, truncate: 100 }, title: { text: "Count" } }],
+        grid: { categoryLines: false, valueAxis: "ValueAxis-1" },
+        categoryAxes: [{ id: "CategoryAxis-1", type: "category", position: "bottom", show: true, style: {}, scale: { type: "linear" }, labels: { show: true, filter: true, truncate: 100 }, title: {} }],
+        valueAxes: [{ id: "ValueAxis-1", name: "LeftAxis-1", type: "value", position: "left", show: true, style: {}, scale: { type: "linear", mode: "normal", defaultYExtents: false }, labels: { show: true, rotate: 0, filter: false, truncate: 100 }, title: { text: "Count" } }],
+        seriesParams: [{ show: true, type: "histogram", mode: "stacked", data: { label: "Count", id: "1" }, valueAxis: "ValueAxis-1", drawLinesBetweenPoints: true, lineWidth: 2, showCircles: true }],
         addTooltip: true,
         addLegend: true,
-        legendPosition: "right"
+        legendPosition: "right",
+        times: [],
+        addTimeMarker: false
     }
 }')
 create_object "visualization" "viz-evasion-score-histogram" "$(jq -n \
@@ -368,7 +371,7 @@ VIS_STATE=$(jq -n '{
     type: "pie",
     aggs: [
         { id: "1", enabled: true, type: "count", params: {}, schema: "metric" },
-        { id: "2", enabled: true, type: "terms", params: { field: "run_type.keyword", orderBy: "1", order: "desc", size: 10 }, schema: "segment" }
+        { id: "2", enabled: true, type: "terms", params: { field: "run_type", orderBy: "1", order: "desc", size: 10 }, schema: "segment" }
     ],
     params: {
         type: "pie",
@@ -408,12 +411,15 @@ VIS_STATE=$(jq -n '{
     ],
     params: {
         type: "histogram",
-        grid: { categoryLines: false },
-        categoryAxes: [{ id: "CategoryAxis-1", type: "category", position: "bottom", show: true, labels: { show: true, truncate: 100 }, title: {} }],
-        valueAxes: [{ id: "ValueAxis-1", name: "LeftAxis-1", type: "value", position: "left", show: true, labels: { show: true, truncate: 100 }, title: { text: "Count" } }],
+        grid: { categoryLines: false, valueAxis: "ValueAxis-1" },
+        categoryAxes: [{ id: "CategoryAxis-1", type: "category", position: "bottom", show: true, style: {}, scale: { type: "linear" }, labels: { show: true, filter: true, truncate: 100 }, title: {} }],
+        valueAxes: [{ id: "ValueAxis-1", name: "LeftAxis-1", type: "value", position: "left", show: true, style: {}, scale: { type: "linear", mode: "normal", defaultYExtents: false }, labels: { show: true, rotate: 0, filter: false, truncate: 100 }, title: { text: "Count" } }],
+        seriesParams: [{ show: true, type: "histogram", mode: "stacked", data: { label: "Count", id: "1" }, valueAxis: "ValueAxis-1", drawLinesBetweenPoints: true, lineWidth: 2, showCircles: true }],
         addTooltip: true,
         addLegend: true,
-        legendPosition: "right"
+        legendPosition: "right",
+        times: [],
+        addTimeMarker: false
     }
 }')
 create_object "visualization" "viz-elapsed-time-histogram" "$(jq -n \
@@ -473,7 +479,7 @@ DASHBOARD_JSON=$(jq -n \
             version: 1,
             timeRestore: true,
             timeTo: "now",
-            timeFrom: "now-7d",
+            timeFrom: "now-1y",
             refreshInterval: { pause: false, value: 30000 },
             kibanaSavedObjectMeta: {
                 searchSourceJSON: "{\"query\":{\"language\":\"kuery\",\"query\":\"\"},\"filter\":[]}"
