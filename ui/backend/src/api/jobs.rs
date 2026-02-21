@@ -109,6 +109,7 @@ pub struct RoundDetailResponse {
     pub baseline_run: Option<RunResultInfo>,
     pub instrumented_run: Option<RunResultInfo>,
     pub status: String,
+    pub assembled_source: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -314,6 +315,11 @@ pub async fn get_round(
                     baseline_run,
                     instrumented_run,
                     status: round.status,
+                    assembled_source: if round.assembled_source.is_empty() {
+                        None
+                    } else {
+                        Some(round.assembled_source)
+                    },
                 })))
             } else {
                 Err(ApiError::not_found(format!("Round {} not found", round_id)))
