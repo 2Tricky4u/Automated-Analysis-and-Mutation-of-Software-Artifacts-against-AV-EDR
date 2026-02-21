@@ -937,26 +937,26 @@
                     ${formatRunInfo('Instrumented (trace=lines)', d.instrumented_run)}
                 `;
 
-                // "View Last Executed Lines" button for instrumented run
-                if (d.instrumented_run && d.instrumented_run.run_id) {
-                    html += `<div style="margin-top: 8px;">
-                        <button class="btn-secondary btn-sm" onclick="getTrace('${escapeHtml(d.instrumented_run.run_id)}')">View Last Executed Lines</button>
-                    </div>`;
-                }
+                // Action buttons row
+                const hasInstrumented = d.instrumented_run && d.instrumented_run.run_id;
+                const hasSource = !!d.assembled_source;
 
-                // Collapsible assembled source + "Open in Viewer" link
-                if (d.assembled_source) {
-                    const sourceId = 'source-' + Date.now();
-                    const viewerUrl = `source.html?job_id=${encodeURIComponent(parsed.jobId)}&round_id=${encodeURIComponent(parsed.roundId)}`;
-                    html += `
-                        <div style="margin-top: 8px;">
-                            <span class="collapsible-header" onclick="document.getElementById('${sourceId}').classList.toggle('open')">Assembled Source</span>
-                            <a class="viewer-link" href="${viewerUrl}" target="_blank">Open in Viewer</a>
-                            <div class="collapsible-body" id="${sourceId}">
-                                <div class="source-block">${escapeHtml(d.assembled_source)}</div>
-                            </div>
-                        </div>
-                    `;
+                if (hasInstrumented || hasSource) {
+                    html += '<div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">';
+
+                    if (hasInstrumented) {
+                        html += `<button class="btn-secondary btn-sm" onclick="getTrace('${escapeHtml(d.instrumented_run.run_id)}')">View Last Executed Lines</button>`;
+                    }
+
+                    if (hasSource) {
+                        let viewerUrl = `source.html?job_id=${encodeURIComponent(parsed.jobId)}&round_id=${encodeURIComponent(parsed.roundId)}`;
+                        if (hasInstrumented) {
+                            viewerUrl += `&run_id=${encodeURIComponent(d.instrumented_run.run_id)}`;
+                        }
+                        html += `<a class="viewer-link" href="${viewerUrl}" target="_blank">Open Source Viewer</a>`;
+                    }
+
+                    html += '</div>';
                 }
 
                 responseBox.innerHTML = html;
