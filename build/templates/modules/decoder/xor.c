@@ -7,7 +7,7 @@
 
 extern unsigned char XOR_KEY[2];
 
-void decode_payload(char *dest, int len) {
+FORCE_INLINE void decode_payload(char *dest, int len) {
     for(int i = 0; i < len; i++) {
         dest[i] = supermega_payload[i] ^ XOR_KEY[i % 2];
     }

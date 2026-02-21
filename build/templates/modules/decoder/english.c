@@ -10,7 +10,7 @@
 extern const char* DICTIONARY[];
 extern char supermega_payload_str[];
 
-void decode_payload(char *dest, int len) {
+FORCE_INLINE void decode_payload(char *dest, int len) {
     // Basic parser: split by space, lookup word in dictionary
     // NOTE: This implementation requires C standard library functions (strtok, strcmp)
     // which might be risky for some shellcode environments, but okay for loader.exe
