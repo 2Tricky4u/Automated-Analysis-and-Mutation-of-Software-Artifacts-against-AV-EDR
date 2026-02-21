@@ -487,7 +487,8 @@ impl BinaryMutator {
             }
 
             let remaining = max_count - total_funcs;
-            let funcs: Vec<(&str, u16)> = import.functions.iter().take(remaining).copied().collect();
+            let funcs: Vec<(&str, u16)> =
+                import.functions.iter().take(remaining).copied().collect();
             total_funcs += funcs.len();
             new_dlls.push((import.dll, funcs));
         }
@@ -765,10 +766,7 @@ impl BinaryMutator {
             }
         }
 
-        debug!(
-            "Timestamp backdated: {:#x} → {:#x}",
-            current_ts, timestamp
-        );
+        debug!("Timestamp backdated: {:#x} → {:#x}", current_ts, timestamp);
 
         Ok(())
     }
@@ -904,14 +902,14 @@ impl BinaryMutator {
         if let Some(target_h) = target_entropy {
             let current_h = compute_entropy_with_extra(&self.pe_bytes, &data);
             if current_h > target_h {
-                let extra = estimate_entropy_padding(
-                    self.pe_bytes.len() + data.len(),
-                    current_h,
-                    target_h,
-                );
+                let extra =
+                    estimate_entropy_padding(self.pe_bytes.len() + data.len(), current_h, target_h);
                 if extra > 0 {
                     // Use a different seed variant for entropy padding
-                    data.extend_from_slice(&generate_low_entropy_padding(extra, padding_seed.wrapping_add(1)));
+                    data.extend_from_slice(&generate_low_entropy_padding(
+                        extra,
+                        padding_seed.wrapping_add(1),
+                    ));
                 }
             }
         }
@@ -1477,7 +1475,10 @@ mod tests {
         let e_lfanew = u32::from_le_bytes(result[0x3C..0x40].try_into().unwrap());
         let profile = binary_data::get_rich_profile("calc");
         let expected = binary_data::compute_rich_checksum(&result, e_lfanew, profile.records);
-        assert_eq!(checksum, expected, "Rich checksum should match DOS-header-based computation");
+        assert_eq!(
+            checksum, expected,
+            "Rich checksum should match DOS-header-based computation"
+        );
     }
 
     #[test]
@@ -1931,7 +1932,11 @@ mod tests {
         let spec_refs: Vec<&MutationSpec> = specs.iter().collect();
 
         let (result, applied) = mutator.apply(&spec_refs).unwrap();
-        assert_eq!(applied.len(), 3, "All 3 padding transforms should be applied");
+        assert_eq!(
+            applied.len(),
+            3,
+            "All 3 padding transforms should be applied"
+        );
 
         let parsed = goblin::pe::PE::parse(&result).unwrap();
         // Should be exactly 2 sections: .text + 1 consolidated .rdata
@@ -2098,9 +2103,8 @@ mod tests {
             // Read debug directory timestamp
             let mutator_check = BinaryMutator::new(result.clone());
             if let Some(debug_off) = mutator_check.rva_to_offset(debug_table.virtual_address) {
-                let debug_ts = u32::from_le_bytes(
-                    result[debug_off + 4..debug_off + 8].try_into().unwrap(),
-                );
+                let debug_ts =
+                    u32::from_le_bytes(result[debug_off + 4..debug_off + 8].try_into().unwrap());
                 assert_eq!(
                     coff_ts, debug_ts,
                     "COFF timestamp ({:#x}) should match debug directory timestamp ({:#x})",
@@ -2155,8 +2159,12 @@ mod tests {
             .collect();
 
         // Should have networking/crypto DLLs from expanded pool
-        let has_networking = dll_names.iter().any(|d| d == "winhttp.dll" || d == "ws2_32.dll");
-        let has_crypto = dll_names.iter().any(|d| d == "bcrypt.dll" || d == "crypt32.dll");
+        let has_networking = dll_names
+            .iter()
+            .any(|d| d == "winhttp.dll" || d == "ws2_32.dll");
+        let has_crypto = dll_names
+            .iter()
+            .any(|d| d == "bcrypt.dll" || d == "crypt32.dll");
 
         assert!(
             has_networking,
@@ -2272,8 +2280,10 @@ mod tests {
         for sec in &parsed.sections {
             let name = String::from_utf8_lossy(&sec.name);
             let name_trimmed = name.trim_end_matches('\0');
-            let is_standard = [".text", ".rdata", ".data", ".rsrc", ".idata", ".reloc", ".pdata", ".bss"]
-                .contains(&name_trimmed);
+            let is_standard = [
+                ".text", ".rdata", ".data", ".rsrc", ".idata", ".reloc", ".pdata", ".bss",
+            ]
+            .contains(&name_trimmed);
             assert!(
                 is_standard,
                 "Section '{}' should have a standard name",
@@ -2303,7 +2313,8 @@ mod tests {
             let e_lfanew = u32::from_le_bytes(result[0x3C..0x40].try_into().unwrap()) as usize;
             e_lfanew + 4 + 20
         };
-        let checksum = u32::from_le_bytes(result[opt_off + 0x40..opt_off + 0x44].try_into().unwrap());
+        let checksum =
+            u32::from_le_bytes(result[opt_off + 0x40..opt_off + 0x44].try_into().unwrap());
         assert_ne!(checksum, 0, "PE checksum should be non-zero");
     }
 
@@ -2314,7 +2325,9 @@ mod tests {
 
         let spec = MutationSpec {
             id: "binary.import_pad".to_string(),
-            params: [("count".to_string(), "5".to_string())].into_iter().collect(),
+            params: [("count".to_string(), "5".to_string())]
+                .into_iter()
+                .collect(),
         };
 
         let (result, _) = mutator.apply(&[&spec]).unwrap();
@@ -2323,7 +2336,8 @@ mod tests {
             let e_lfanew = u32::from_le_bytes(result[0x3C..0x40].try_into().unwrap()) as usize;
             e_lfanew + 4 + 20
         };
-        let stored_checksum = u32::from_le_bytes(result[opt_off + 0x40..opt_off + 0x44].try_into().unwrap());
+        let stored_checksum =
+            u32::from_le_bytes(result[opt_off + 0x40..opt_off + 0x44].try_into().unwrap());
 
         // Recompute the checksum and verify it matches
         let checksum_offset = opt_off + 0x40;
@@ -2344,7 +2358,10 @@ mod tests {
         sum = (sum & 0xFFFF) + (sum >> 16);
         sum += len as u32;
 
-        assert_eq!(stored_checksum, sum, "PE checksum should match recomputation");
+        assert_eq!(
+            stored_checksum, sum,
+            "PE checksum should match recomputation"
+        );
     }
 
     #[test]
@@ -2354,7 +2371,9 @@ mod tests {
 
         let spec = MutationSpec {
             id: "binary.import_pad".to_string(),
-            params: [("count".to_string(), "10".to_string())].into_iter().collect(),
+            params: [("count".to_string(), "10".to_string())]
+                .into_iter()
+                .collect(),
         };
 
         let (result, _) = mutator.apply(&[&spec]).unwrap();
@@ -2362,9 +2381,11 @@ mod tests {
         // Parse and check that import hints are non-zero
         let parsed = goblin::pe::PE::parse(&result).unwrap();
         // Find the .idata section
-        let idata_sec = parsed.sections.iter().find(|s| {
-            String::from_utf8_lossy(&s.name).starts_with(".idata")
-        }).expect("Should have .idata section");
+        let idata_sec = parsed
+            .sections
+            .iter()
+            .find(|s| String::from_utf8_lossy(&s.name).starts_with(".idata"))
+            .expect("Should have .idata section");
 
         let raw_ptr = idata_sec.pointer_to_raw_data as usize;
         let raw_size = idata_sec.size_of_raw_data as usize;
@@ -2373,11 +2394,17 @@ mod tests {
         // Search for hint/name entries by looking for known function names
         // and checking the 2 bytes before them are non-zero
         let test_func = b"GetSystemMetrics";
-        if let Some(pos) = section_data.windows(test_func.len()).position(|w| w == test_func) {
+        if let Some(pos) = section_data
+            .windows(test_func.len())
+            .position(|w| w == test_func)
+        {
             // Hint is 2 bytes before the function name
             if pos >= 2 {
                 let hint = u16::from_le_bytes([section_data[pos - 2], section_data[pos - 1]]);
-                assert_ne!(hint, 0, "Import hint for GetSystemMetrics should be non-zero");
+                assert_ne!(
+                    hint, 0,
+                    "Import hint for GetSystemMetrics should be non-zero"
+                );
             }
         }
     }
@@ -2397,7 +2424,9 @@ mod tests {
 
         let spec = MutationSpec {
             id: "binary.size_pad".to_string(),
-            params: [("target_kb".to_string(), "8".to_string())].into_iter().collect(),
+            params: [("target_kb".to_string(), "8".to_string())]
+                .into_iter()
+                .collect(),
         };
 
         let (result1, _) = mutator1.apply(&[&spec]).unwrap();
@@ -2417,7 +2446,9 @@ mod tests {
 
         let spec = MutationSpec {
             id: "binary.rich_header".to_string(),
-            params: [("donor".to_string(), "notepad".to_string())].into_iter().collect(),
+            params: [("donor".to_string(), "notepad".to_string())]
+                .into_iter()
+                .collect(),
         };
 
         let (result, _) = mutator.apply(&[&spec]).unwrap();
@@ -2430,7 +2461,10 @@ mod tests {
         let e_lfanew = u32::from_le_bytes(result[0x3C..0x40].try_into().unwrap());
         let profile = binary_data::get_rich_profile("notepad");
         let expected = binary_data::compute_rich_checksum(&result, e_lfanew, profile.records);
-        assert_eq!(checksum, expected, "Rich checksum should match DOS-header computation");
+        assert_eq!(
+            checksum, expected,
+            "Rich checksum should match DOS-header computation"
+        );
     }
 
     #[test]
@@ -2450,13 +2484,33 @@ mod tests {
         let guid_offset = rsds_pos + 4;
         let dw0 = u32::from_le_bytes(result[guid_offset..guid_offset + 4].try_into().unwrap());
         let dw1 = u32::from_le_bytes(result[guid_offset + 4..guid_offset + 8].try_into().unwrap());
-        let dw2 = u32::from_le_bytes(result[guid_offset + 8..guid_offset + 12].try_into().unwrap());
-        let dw3 = u32::from_le_bytes(result[guid_offset + 12..guid_offset + 16].try_into().unwrap());
+        let dw2 = u32::from_le_bytes(
+            result[guid_offset + 8..guid_offset + 12]
+                .try_into()
+                .unwrap(),
+        );
+        let dw3 = u32::from_le_bytes(
+            result[guid_offset + 12..guid_offset + 16]
+                .try_into()
+                .unwrap(),
+        );
 
         // GUID DWORDs should NOT have a sequential relationship
-        assert_ne!(dw1, dw0.wrapping_add(1), "GUID DWORDs should not be sequential");
-        assert_ne!(dw2, dw1.wrapping_add(1), "GUID DWORDs should not be sequential");
-        assert_ne!(dw3, dw2.wrapping_add(1), "GUID DWORDs should not be sequential");
+        assert_ne!(
+            dw1,
+            dw0.wrapping_add(1),
+            "GUID DWORDs should not be sequential"
+        );
+        assert_ne!(
+            dw2,
+            dw1.wrapping_add(1),
+            "GUID DWORDs should not be sequential"
+        );
+        assert_ne!(
+            dw3,
+            dw2.wrapping_add(1),
+            "GUID DWORDs should not be sequential"
+        );
     }
 
     #[test]
@@ -2467,11 +2521,15 @@ mod tests {
 
         let spec1 = MutationSpec {
             id: "binary.timestamp".to_string(),
-            params: [("age_days".to_string(), "180".to_string())].into_iter().collect(),
+            params: [("age_days".to_string(), "180".to_string())]
+                .into_iter()
+                .collect(),
         };
         let spec2 = MutationSpec {
             id: "binary.timestamp".to_string(),
-            params: [("age_days".to_string(), "365".to_string())].into_iter().collect(),
+            params: [("age_days".to_string(), "365".to_string())]
+                .into_iter()
+                .collect(),
         };
 
         let mutator1 = BinaryMutator::new(pe.clone());
@@ -2483,6 +2541,9 @@ mod tests {
         let ts2 = u32::from_le_bytes(result2[e_lfanew + 8..e_lfanew + 12].try_into().unwrap());
 
         // Timestamps should differ (different age_days produces different jitter)
-        assert_ne!(ts1, ts2, "Different age_days should produce different timestamps");
+        assert_ne!(
+            ts1, ts2,
+            "Different age_days should produce different timestamps"
+        );
     }
 }
