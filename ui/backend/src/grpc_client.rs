@@ -240,11 +240,7 @@ impl ControllerGrpcClient {
     }
 
     /// Get trace lines for a run
-    pub async fn get_trace_lines(
-        &self,
-        run_id: &str,
-        last: u32,
-    ) -> Result<GetTraceLinesResponse> {
+    pub async fn get_trace_lines(&self, run_id: &str, last: u32) -> Result<GetTraceLinesResponse> {
         let mut client = self.get_client().await?;
 
         let request = GetTraceLinesRequest {
