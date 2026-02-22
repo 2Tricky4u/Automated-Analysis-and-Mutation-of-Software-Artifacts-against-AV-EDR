@@ -403,6 +403,9 @@ pub struct JobSession {
     // Build configuration
     pub build_spec: ModularBuildSpec,
 
+    // Instrumented run trace mode (default: "lines")
+    pub trace_mode: String,
+
     // Selection
     pub search_space: SearchSpace,
 
@@ -427,6 +430,7 @@ impl JobSession {
             target_os: None,
             required_capabilities: Vec::new(),
             build_spec,
+            trace_mode: "lines".to_string(),
             search_space: SearchSpace::default(),
             current_round: 0,
             max_rounds,

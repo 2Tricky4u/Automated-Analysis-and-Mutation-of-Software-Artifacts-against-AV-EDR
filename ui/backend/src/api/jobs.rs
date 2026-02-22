@@ -42,6 +42,10 @@ pub struct SubmitJobRequest {
     /// Stop after first successful evasion
     #[serde(default)]
     pub stop_on_evasion: bool,
+
+    /// Instrumented run trace mode (default: "lines")
+    /// Valid: "off", "api", "bb", "api+bb", "lines", "all"
+    pub trace_mode: Option<String>,
 }
 
 fn default_max_rounds() -> u32 {
@@ -176,6 +180,7 @@ pub async fn submit_job(
             modules,
             encoding: payload.encoding,
             stop_on_evasion: payload.stop_on_evasion,
+            trace_mode: payload.trace_mode,
         })
         .await
     {

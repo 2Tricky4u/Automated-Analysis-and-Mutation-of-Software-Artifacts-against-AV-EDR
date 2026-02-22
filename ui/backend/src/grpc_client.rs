@@ -45,6 +45,7 @@ pub struct ScheduleJobParams {
     pub modules: Option<ModuleSelection>,
     pub encoding: Option<String>,
     pub stop_on_evasion: bool,
+    pub trace_mode: Option<String>,
 }
 
 /// gRPC client wrapper with connection management
@@ -145,6 +146,7 @@ impl ControllerGrpcClient {
             modules: params.modules,
             encoding: params.encoding.unwrap_or_else(|| "xor".to_string()),
             stop_on_evasion: params.stop_on_evasion,
+            trace_mode: params.trace_mode.unwrap_or_default(),
             ..Default::default()
         };
 

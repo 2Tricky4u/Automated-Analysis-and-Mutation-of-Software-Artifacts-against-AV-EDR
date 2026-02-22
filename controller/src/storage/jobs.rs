@@ -18,7 +18,7 @@ pub async fn index_job(es: &Elasticsearch, job: &JobSession) -> anyhow::Result<(
         "status": "queued",
         "template_name": "modular_template",
         "source_file": job.build_spec.payload_path.display().to_string(),
-        "trace_mode": "dual",
+        "trace_mode": job.trace_mode,
         "encoding": job.build_spec.encoding,
         "priority": 0,
         "current_round": job.current_round,
