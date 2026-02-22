@@ -395,6 +395,7 @@ message RoundSummaryProto {
   string status = 7;
   int64 completed_at = 8;  // Unix timestamp
   string differential_category = 9;  // "real_detection"|"instrumentation_artifact"|"flaky"|"evasion"
+  double coverage_percent = 10;
 }
 
 // Stop job
@@ -417,6 +418,13 @@ message GetRoundResponse {
   RoundProto round = 1;
 }
 
+message FunctionCoverageProto {
+  string name = 1;
+  uint32 total_lines = 2;
+  uint32 executed_lines = 3;
+  double percent = 4;
+}
+
 message RoundProto {
   string round_id = 1;
   string job_id = 2;
@@ -431,6 +439,12 @@ message RoundProto {
   double coverage_percent = 20;
   uint32 cutoff_line = 21;
   string cutoff_func = 22;
+  // Extended coverage & module data
+  repeated FunctionCoverageProto function_coverage = 23;
+  ModuleSelection modules = 24;
+  uint32 coverage_total_lines = 25;
+  uint32 coverage_executable_lines = 26;
+  uint32 coverage_executed_lines = 27;
 }
 
 message RunResultProto {

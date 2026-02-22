@@ -10,11 +10,11 @@ use super::extract::{
 use crate::api::SchedulerService;
 use crate::automutate::common::JobId;
 use crate::automutate::controller::{
-    BehaviorComparisonProto, CompareRunsRequest, CompareRunsResponse, GetRoundRequest,
-    GetRoundResponse, GetTraceLinesRequest, GetTraceLinesResponse, JobProgressRequest,
-    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
-    RoundSummaryProto, RunResultProto, StatusAck, StatusReport, StopJobRequest, StopJobResponse,
-    TraceLine,
+    BehaviorComparisonProto, CompareRunsRequest, CompareRunsResponse, FunctionCoverageProto,
+    GetRoundRequest, GetRoundResponse, GetTraceLinesRequest, GetTraceLinesResponse,
+    JobProgressRequest, JobProgressResponse, JobRequest, JobResponse, JobStatusRequest,
+    JobStatusResponse, ModuleSelection, RoundSummaryProto, RunResultProto, StatusAck, StatusReport,
+    StopJobRequest, StopJobResponse, TraceLine,
 };
 use crate::dispatch::{
     JobControlCommand, JobId as DispatchJobId, JobSession, ModularBuildSpec, ModuleSelectionSpec,
@@ -322,6 +322,36 @@ pub async fn get_round(
         None
     };
 
+    // Parse function_coverage array from ES
+    let function_coverage: Vec<FunctionCoverageProto> = source["function_coverage"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|fc| FunctionCoverageProto {
+                    name: str_field(fc, "name"),
+                    total_lines: u32_field(fc, "total_lines"),
+                    executed_lines: u32_field(fc, "executed_lines"),
+                    percent: f64_field(fc, "percent"),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Parse modules object from ES
+    let modules = if source["modules"].is_object() {
+        Some(ModuleSelection {
+            carrier: str_field(&source["modules"], "carrier"),
+            decoder: str_field(&source["modules"], "decoder"),
+            antiemulation: str_field(&source["modules"], "antiemulation"),
+            guardrail: str_field(&source["modules"], "guardrail"),
+            virtualprotect: str_field(&source["modules"], "virtualprotect"),
+            decoy: str_field(&source["modules"], "decoy"),
+            deconditioner: str_field(&source["modules"], "deconditioner"),
+        })
+    } else {
+        None
+    };
+
     let round = RoundProto {
         round_id: str_field(&source, "round_id"),
         job_id: str_field(&source, "job_id"),
@@ -335,6 +365,11 @@ pub async fn get_round(
         coverage_percent: f64_field(&source, "coverage_percent"),
         cutoff_line: u32_field(&source, "cutoff_line"),
         cutoff_func: str_field(&source, "cutoff_func"),
+        function_coverage,
+        modules,
+        coverage_total_lines: u32_field(&source, "coverage_total_lines"),
+        coverage_executable_lines: u32_field(&source, "coverage_executable_lines"),
+        coverage_executed_lines: u32_field(&source, "coverage_executed_lines"),
     };
 
     Ok(Response::new(GetRoundResponse { round: Some(round) }))
@@ -568,6 +603,7 @@ fn round_doc_to_proto(source: &Value) -> RoundSummaryProto {
         status: str_field(source, "status"),
         completed_at: parse_date_to_unix_secs(&source["completed_at"]),
         differential_category: str_field(source, "differential_category"),
+        coverage_percent: f64_field(source, "coverage_percent"),
     }
 }
 
