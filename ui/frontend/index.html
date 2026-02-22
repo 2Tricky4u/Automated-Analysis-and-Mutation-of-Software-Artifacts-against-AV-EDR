@@ -457,6 +457,83 @@
                                 <option value="english">english</option>
                             </select>
                         </div>
+                        <div class="form-group flex-grow">
+                            <label>Anti-Emulation</label>
+                            <select id="moduleAntiemulation">
+                                <option value="none">none</option>
+                                <option value="sirallocalot">sirallocalot</option>
+                                <option value="timeraw">timeraw</option>
+                                <option value="cpuburn">cpuburn</option>
+                                <option value="fsenum">fsenum</option>
+                                <option value="heapstress">heapstress</option>
+                                <option value="sleepaccel">sleepaccel</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex-row">
+                        <div class="form-group flex-grow">
+                            <label>Deconditioner</label>
+                            <select id="moduleDeconditioner">
+                                <option value="none">none</option>
+                                <option value="alloc_loop">alloc_loop</option>
+                                <option value="alloc_exec">alloc_exec</option>
+                                <option value="thread_alloc">thread_alloc</option>
+                                <option value="mixed_apis">mixed_apis</option>
+                                <option value="entropy_flood">entropy_flood</option>
+                            </select>
+                        </div>
+                        <div class="form-group flex-grow">
+                            <label>Guardrail</label>
+                            <select id="moduleGuardrail">
+                                <option value="none">none</option>
+                                <option value="env">env</option>
+                            </select>
+                        </div>
+                        <div class="form-group flex-grow">
+                            <label>VirtualProtect</label>
+                            <select id="moduleVirtualprotect">
+                                <option value="standard">standard</option>
+                                <option value="undersized">undersized</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex-row">
+                        <div class="form-group flex-grow">
+                            <label>Decoy</label>
+                            <select id="moduleDecoy">
+                                <option value="none">none</option>
+                                <option value="winexec">winexec</option>
+                            </select>
+                        </div>
+                        <div class="form-group flex-grow">
+                            <label>Trace Mode</label>
+                            <select id="jobTraceMode">
+                                <option value="lines">lines</option>
+                                <option value="off">off</option>
+                                <option value="api">api</option>
+                                <option value="bb">bb</option>
+                                <option value="api+bb">api+bb</option>
+                                <option value="all">all</option>
+                            </select>
+                        </div>
+                        <div class="form-group flex-grow">
+                            <label>Encoding</label>
+                            <select id="jobEncoding">
+                                <option value="xor">xor</option>
+                                <option value="english">english</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label style="margin-bottom: 8px;">Variable Categories (selector varies these across rounds)</label>
+                        <div class="flex-row" style="flex-wrap: wrap; gap: 12px;">
+                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="deconditioner" checked> deconditioner</label>
+                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="antiemulation"> antiemulation</label>
+                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="carrier"> carrier</label>
+                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="guardrail"> guardrail</label>
+                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="virtualprotect"> virtualprotect</label>
+                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="decoy"> decoy</label>
+                        </div>
                     </div>
                     <div class="form-group">
                         <label>
@@ -766,6 +843,7 @@
             responseBox.textContent = 'Submitting...';
 
             const caps = document.getElementById('jobCapabilities').value;
+            const varCategories = [...document.querySelectorAll('.varCategory:checked')].map(cb => cb.value);
             const payload = {
                 source: document.getElementById('jobSource').value,
                 max_rounds: parseInt(document.getElementById('jobMaxRounds').value),
@@ -773,9 +851,17 @@
                 required_capabilities: caps ? caps.split(',').map(c => c.trim()) : [],
                 modules: {
                     carrier: document.getElementById('moduleCarrier').value,
-                    decoder: document.getElementById('moduleDecoder').value
+                    decoder: document.getElementById('moduleDecoder').value,
+                    antiemulation: document.getElementById('moduleAntiemulation').value,
+                    deconditioner: document.getElementById('moduleDeconditioner').value,
+                    guardrail: document.getElementById('moduleGuardrail').value,
+                    virtualprotect: document.getElementById('moduleVirtualprotect').value,
+                    decoy: document.getElementById('moduleDecoy').value,
                 },
-                stop_on_evasion: document.getElementById('jobStopOnEvasion').checked
+                encoding: document.getElementById('jobEncoding').value || null,
+                trace_mode: document.getElementById('jobTraceMode').value || null,
+                stop_on_evasion: document.getElementById('jobStopOnEvasion').checked,
+                variable_categories: varCategories,
             };
 
             try {
