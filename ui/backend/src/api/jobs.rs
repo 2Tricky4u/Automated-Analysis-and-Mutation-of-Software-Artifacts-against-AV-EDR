@@ -46,6 +46,10 @@ pub struct SubmitJobRequest {
     /// Instrumented run trace mode (default: "lines")
     /// Valid: "off", "api", "bb", "api+bb", "lines", "all"
     pub trace_mode: Option<String>,
+
+    /// Which module categories the selector may vary across rounds
+    #[serde(default)]
+    pub variable_categories: Vec<String>,
 }
 
 fn default_max_rounds() -> u32 {
@@ -181,6 +185,7 @@ pub async fn submit_job(
             encoding: payload.encoding,
             stop_on_evasion: payload.stop_on_evasion,
             trace_mode: payload.trace_mode,
+            variable_categories: payload.variable_categories,
         })
         .await
     {
