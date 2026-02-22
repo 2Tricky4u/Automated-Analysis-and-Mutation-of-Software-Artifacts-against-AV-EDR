@@ -253,13 +253,16 @@ async fn extract_sources(
     }
 }
 
-/// Find the concrete index name for a document (ES update requires it).
+/// Find the concrete index name and document `_id` for a document (ES update requires both).
+///
+/// Returns `(index_name, doc_id)`. The `doc_id` is the actual ES `_id`,
+/// which may differ from the field value (e.g. rounds use composite `_id`).
 pub(crate) async fn find_index(
     es: &Elasticsearch,
     pattern: &str,
     id_field: &str,
     id_value: &str,
-) -> Option<String> {
+) -> Option<(String, String)> {
     let resp = es
         .search(SearchParts::Index(&[pattern]))
         .body(json!({
@@ -272,9 +275,8 @@ pub(crate) async fn find_index(
         .ok()?;
 
     let body = resp.json::<Value>().await.ok()?;
-    body["hits"]["hits"]
-        .as_array()
-        .and_then(|h| h.first())
-        .and_then(|hit| hit["_index"].as_str())
-        .map(String::from)
+    let hit = body["hits"]["hits"].as_array()?.first()?;
+    let index = hit["_index"].as_str()?.to_string();
+    let doc_id = hit["_id"].as_str()?.to_string();
+    Some((index, doc_id))
 }

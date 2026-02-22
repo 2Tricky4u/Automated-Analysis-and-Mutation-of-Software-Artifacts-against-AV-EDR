@@ -323,14 +323,15 @@ pub async fn get_round(
     };
 
     // Parse function_coverage array from ES
+    // ES stores fields as "total" and "executed" (see storage/rounds.rs)
     let function_coverage: Vec<FunctionCoverageProto> = source["function_coverage"]
         .as_array()
         .map(|arr| {
             arr.iter()
                 .map(|fc| FunctionCoverageProto {
                     name: str_field(fc, "name"),
-                    total_lines: u32_field(fc, "total_lines"),
-                    executed_lines: u32_field(fc, "executed_lines"),
+                    total_lines: u32_field(fc, "total"),
+                    executed_lines: u32_field(fc, "executed"),
                     percent: f64_field(fc, "percent"),
                 })
                 .collect()
