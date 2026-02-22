@@ -35,6 +35,8 @@ pub fn now_rfc3339() -> String {
 /// `Ok(false)` if the document was not found (logged as a warning).
 ///
 /// `body` must already be wrapped as `{"doc": { ... }}`.
+///
+/// Uses the actual ES `_id` (which may differ from the field value) for the update.
 pub async fn update_doc_by_id(
     es: &Elasticsearch,
     index_pattern: &str,
@@ -43,11 +45,11 @@ pub async fn update_doc_by_id(
     body: Value,
     entity_label: &str,
 ) -> anyhow::Result<bool> {
-    let index_name = queries::find_index(es, index_pattern, id_field, doc_id).await;
+    let found = queries::find_index(es, index_pattern, id_field, doc_id).await;
 
-    if let Some(ref idx) = index_name {
+    if let Some((ref idx, ref es_doc_id)) = found {
         let response = es
-            .update(UpdateParts::IndexId(idx, doc_id))
+            .update(UpdateParts::IndexId(idx, es_doc_id))
             .body(body)
             .send()
             .await?;
