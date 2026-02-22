@@ -119,15 +119,14 @@ impl VMExecutor {
         let shutdown_token = self.run_pool.cancellation_token();
 
         // Pick up any runs already queued (e.g. after reconnection)
-        if !shutdown_token.is_cancelled() {
-            if let Some(run) = self
+        if !shutdown_token.is_cancelled()
+            && let Some(run) = self
                 .run_pool
                 .take_run(&self.info.os, &self.info.capabilities)
                 .await
             {
                 self.dispatch(run).await;
             }
-        }
 
         loop {
             tokio::select! {

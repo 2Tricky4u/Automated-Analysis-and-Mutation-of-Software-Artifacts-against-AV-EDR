@@ -358,34 +358,58 @@ impl Orchestrator {
 
                     // Compute line coverage from trace data
                     if let Some(ref source) = assembled_source {
-                        if let Some(content) = storage.query_trace_content(&i_run_id).await {
-                            let executed_lines: HashSet<usize> = content
-                                .lines()
-                                .filter_map(|line| {
-                                    serde_json::from_str::<serde_json::Value>(line.trim()).ok()
-                                })
-                                .filter_map(|v| v["line"].as_u64().map(|n| n as usize))
-                                .collect();
+                        // Retry trace query: ES may not have refreshed yet after worker streaming
+                        let mut trace_content = None;
+                        for attempt in 0..3 {
+                            if attempt > 0 {
+                                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                            }
+                            if let Some(content) = storage.query_trace_content(&i_run_id).await {
+                                trace_content = Some(content);
+                                break;
+                            }
+                            debug!(
+                                "Round {}/{}: trace content not found (attempt {}/3)",
+                                jid, rid, attempt + 1
+                            );
+                        }
+                        match trace_content {
+                            Some(content) => {
+                                let executed_lines: HashSet<usize> = content
+                                    .lines()
+                                    .filter_map(|line| {
+                                        serde_json::from_str::<serde_json::Value>(line.trim()).ok()
+                                    })
+                                    .filter_map(|v| v["line"].as_u64().map(|n| n as usize))
+                                    .collect();
 
-                            if !executed_lines.is_empty() {
-                                let sm = SourceMap::new(source);
-                                let coverage = sm.compute_coverage(&executed_lines);
-                                info!(
-                                    "Round {}/{}: coverage {:.1}% ({}/{} lines), cutoff: {:?}",
-                                    jid,
-                                    rid,
-                                    coverage.coverage_percent,
-                                    coverage.executed_lines,
-                                    coverage.total_executable,
-                                    coverage.cutoff_line,
-                                );
-                                if let Err(e) =
-                                    storage.update_round_coverage(&jid, &rid, &coverage).await
-                                {
-                                    error!("Failed to update round coverage: {}", e);
+                                if !executed_lines.is_empty() {
+                                    let sm = SourceMap::new(source);
+                                    let coverage = sm.compute_coverage(&executed_lines);
+                                    info!(
+                                        "Round {}/{}: coverage {:.1}% ({}/{} lines), cutoff: {:?}",
+                                        jid,
+                                        rid,
+                                        coverage.coverage_percent,
+                                        coverage.executed_lines,
+                                        coverage.total_executable,
+                                        coverage.cutoff_line,
+                                    );
+                                    if let Err(e) =
+                                        storage.update_round_coverage(&jid, &rid, &coverage).await
+                                    {
+                                        error!("Failed to update round coverage: {}", e);
+                                    }
+                                } else {
+                                    warn!("Round {}/{}: trace content found but no line numbers parsed", jid, rid);
                                 }
                             }
+                            None => {
+                                warn!("Round {}/{}: no trace content found after 3 attempts, skipping coverage", jid, rid);
+                            }
                         }
+                    } else {
+                        debug!("Round {}/{}: no assembled source, skipping coverage", jid, rid);
                     }
                 });
             }

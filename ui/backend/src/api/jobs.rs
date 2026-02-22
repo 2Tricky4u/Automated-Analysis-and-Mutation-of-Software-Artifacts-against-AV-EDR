@@ -371,11 +371,7 @@ pub async fn get_round(
                     deconditioner: m.deconditioner,
                 });
 
-                let mutations: Vec<String> = round
-                    .mutations
-                    .into_iter()
-                    .map(|m| m.id)
-                    .collect();
+                let mutations: Vec<String> = round.mutations.into_iter().map(|m| m.id).collect();
 
                 Ok(Json(ApiResponse::new(RoundDetailResponse {
                     round_id: round.round_id,
