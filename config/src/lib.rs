@@ -138,6 +138,8 @@ pub struct SchedulerConfig {
     pub run_timeout_secs: u64,
     pub poll_interval_ms: u64,
     pub health_timeout_seconds: u64,
+    #[serde(default = "default_reconnect_interval_secs")]
+    pub reconnect_interval_secs: u64,
     //pub max_retries: u32,
     //pub retry_backoff_secs: u64,
     /// Format: [{id: "win10-worker-01", address: "10.200.200.11:50052", enabled: true}]
@@ -155,6 +157,10 @@ pub struct WorkerEntryConfig {
 
 fn default_worker_enabled() -> bool {
     true
+}
+
+fn default_reconnect_interval_secs() -> u64 {
+    60
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -652,6 +658,7 @@ impl ControllerConfig {
                 run_timeout_secs: 300,
                 poll_interval_ms: 500,
                 health_timeout_seconds: 30,
+                reconnect_interval_secs: 60,
                 workers: vec![],
             },
             logging: LoggingConfig {
