@@ -101,12 +101,33 @@ pub struct RoundSummaryInfo {
     pub evasion_score: f64,
     pub differential_category: String,
     pub status: String,
+    pub coverage_percent: f64,
+    pub mutations: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct StopJobResponse {
     pub stopped: bool,
     pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FunctionCoverageInfo {
+    pub name: String,
+    pub total_lines: u32,
+    pub executed_lines: u32,
+    pub percent: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModulesInfo {
+    pub carrier: String,
+    pub decoder: String,
+    pub antiemulation: String,
+    pub guardrail: String,
+    pub virtualprotect: String,
+    pub decoy: String,
+    pub deconditioner: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -121,6 +142,12 @@ pub struct RoundDetailResponse {
     pub coverage_percent: f64,
     pub cutoff_line: u32,
     pub cutoff_func: String,
+    pub function_coverage: Vec<FunctionCoverageInfo>,
+    pub modules: Option<ModulesInfo>,
+    pub mutations: Vec<String>,
+    pub coverage_total_lines: u32,
+    pub coverage_executable_lines: u32,
+    pub coverage_executed_lines: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -253,6 +280,8 @@ pub async fn get_job_progress(
                     evasion_score: r.evasion_score,
                     differential_category: r.differential_category,
                     status: r.status,
+                    coverage_percent: r.coverage_percent,
+                    mutations: r.mutations,
                 })
                 .collect();
 
@@ -321,6 +350,33 @@ pub async fn get_round(
                     outcome: r.outcome,
                 });
 
+                let function_coverage: Vec<FunctionCoverageInfo> = round
+                    .function_coverage
+                    .into_iter()
+                    .map(|fc| FunctionCoverageInfo {
+                        name: fc.name,
+                        total_lines: fc.total_lines,
+                        executed_lines: fc.executed_lines,
+                        percent: fc.percent,
+                    })
+                    .collect();
+
+                let modules = round.modules.map(|m| ModulesInfo {
+                    carrier: m.carrier,
+                    decoder: m.decoder,
+                    antiemulation: m.antiemulation,
+                    guardrail: m.guardrail,
+                    virtualprotect: m.virtualprotect,
+                    decoy: m.decoy,
+                    deconditioner: m.deconditioner,
+                });
+
+                let mutations: Vec<String> = round
+                    .mutations
+                    .into_iter()
+                    .map(|m| m.id)
+                    .collect();
+
                 Ok(Json(ApiResponse::new(RoundDetailResponse {
                     round_id: round.round_id,
                     job_id: round.job_id,
@@ -336,6 +392,12 @@ pub async fn get_round(
                     coverage_percent: round.coverage_percent,
                     cutoff_line: round.cutoff_line,
                     cutoff_func: round.cutoff_func,
+                    function_coverage,
+                    modules,
+                    mutations,
+                    coverage_total_lines: round.coverage_total_lines,
+                    coverage_executable_lines: round.coverage_executable_lines,
+                    coverage_executed_lines: round.coverage_executed_lines,
                 })))
             } else {
                 Err(ApiError::not_found(format!("Round {} not found", round_id)))

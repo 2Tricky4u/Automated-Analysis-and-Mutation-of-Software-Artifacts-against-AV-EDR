@@ -365,6 +365,152 @@
             font-size: 0.75rem;
             color: #aaa;
         }
+
+        .coverage-mini {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .coverage-mini-bar {
+            width: 50px;
+            height: 6px;
+            background: #333;
+            border-radius: 3px;
+            overflow: hidden;
+            display: inline-block;
+            vertical-align: middle;
+        }
+
+        .coverage-mini-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+        }
+
+        .coverage-mini-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .func-cov-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+            margin-top: 6px;
+        }
+
+        .func-cov-table th, .func-cov-table td {
+            padding: 5px 8px;
+            border-bottom: 1px solid #21262d;
+        }
+
+        .func-cov-table th {
+            color: #8b949e;
+            font-weight: 500;
+            text-align: left;
+        }
+
+        .func-cov-bar {
+            width: 80px;
+            height: 6px;
+            background: #333;
+            border-radius: 3px;
+            overflow: hidden;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+
+        .func-cov-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+        }
+
+        .module-pill {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            margin: 2px 4px 2px 0;
+            background: #1e3a5f;
+            color: #93c5fd;
+            border: 1px solid #2563eb33;
+        }
+
+        .module-pill.dimmed {
+            background: #1a1a2e;
+            color: #555;
+            border-color: #333;
+        }
+
+        .module-pill .module-cat {
+            color: #8b949e;
+            margin-right: 4px;
+        }
+
+        .mutation-tag {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            margin: 2px 4px 2px 0;
+            background: #2d1b4e;
+            color: #c084fc;
+            border: 1px solid #7c3aed33;
+            font-family: 'Consolas', monospace;
+        }
+
+        .collapsible-section {
+            margin-top: 8px;
+            border: 1px solid #21262d;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .collapsible-section-header {
+            cursor: pointer;
+            padding: 8px 12px;
+            background: #161b22;
+            color: #58a6ff;
+            font-size: 0.85rem;
+            font-weight: 500;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .collapsible-section-header:hover {
+            background: #1c2333;
+        }
+
+        .collapsible-section-header .arrow {
+            transition: transform 0.2s;
+            font-size: 0.7rem;
+        }
+
+        .collapsible-section-header .arrow.open {
+            transform: rotate(90deg);
+        }
+
+        .collapsible-section-body {
+            display: none;
+            padding: 8px 12px;
+        }
+
+        .collapsible-section-body.open {
+            display: block;
+        }
+
+        .round-link {
+            color: #58a6ff;
+            cursor: pointer;
+            text-decoration: none;
+        }
+
+        .round-link:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
@@ -680,6 +826,38 @@
             return `<span class="badge badge-${cls}">${escapeHtml(label)}</span>`;
         }
 
+        function coverageColor(pct) {
+            if (pct > 60) return '#4caf50';
+            if (pct > 30) return '#ff9800';
+            return '#f44336';
+        }
+
+        function coverageMiniBar(pct) {
+            if (pct === undefined || pct === null || pct === 0) return '<span class="muted">-</span>';
+            const color = coverageColor(pct);
+            return `<span class="coverage-mini">` +
+                `<span class="coverage-mini-bar"><span class="coverage-mini-bar-fill" style="width:${pct.toFixed(0)}%;background:${color};"></span></span>` +
+                `<span class="coverage-mini-label" style="color:${color};">${pct.toFixed(0)}%</span>` +
+                `</span>`;
+        }
+
+        function collapsibleSection(id, title, contentHtml, startOpen) {
+            const arrowCls = startOpen ? 'arrow open' : 'arrow';
+            const bodyCls = startOpen ? 'collapsible-section-body open' : 'collapsible-section-body';
+            return `<div class="collapsible-section">` +
+                `<div class="collapsible-section-header" onclick="toggleSection('${id}')">` +
+                `<span class="${arrowCls}" id="${id}-arrow">&#9654;</span> ${title}</div>` +
+                `<div class="${bodyCls}" id="${id}-body">${contentHtml}</div>` +
+                `</div>`;
+        }
+
+        function toggleSection(id) {
+            const body = document.getElementById(id + '-body');
+            const arrow = document.getElementById(id + '-arrow');
+            body.classList.toggle('open');
+            arrow.classList.toggle('open');
+        }
+
         function formatRunInfo(label, run) {
             if (!run) return `<div class="run-info"><div class="run-label">${escapeHtml(label)}</div><span class="muted">No data</span></div>`;
             return `<div class="run-info">
@@ -934,6 +1112,17 @@
         }
 
         // ================================================================
+        // Navigate to Round Details from progress table
+        // ================================================================
+
+        function navigateToRound(roundId) {
+            document.getElementById('roundId').value = roundId;
+            getRound();
+            // Scroll to the Round Details card
+            document.getElementById('roundId').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        // ================================================================
         // Job Progress (WI-4: formatted rounds table)
         // ================================================================
 
@@ -964,15 +1153,22 @@
                             <th>#</th>
                             <th>Detected</th>
                             <th>Category</th>
+                            <th>Coverage</th>
+                            <th>Mutations</th>
                             <th>Evasion Score</th>
                             <th>Status</th>
                         </tr></thead><tbody>`;
 
                     d.rounds.forEach(r => {
+                        const mutTags = (r.mutations || []).map(m =>
+                            `<span class="mutation-tag">${escapeHtml(m)}</span>`
+                        ).join('') || '<span class="muted">-</span>';
                         html += `<tr>
-                            <td>${r.round_number}</td>
+                            <td><a class="round-link" onclick="navigateToRound('${escapeHtml(r.round_id)}')">${r.round_number}</a></td>
                             <td>${detectedBadge(r.detected)}</td>
                             <td>${categoryBadge(r.differential_category)}</td>
+                            <td>${coverageMiniBar(r.coverage_percent)}</td>
+                            <td>${mutTags}</td>
                             <td>${r.evasion_score !== undefined ? r.evasion_score.toFixed(2) : '-'}</td>
                             <td>${statusBadge(r.status)}</td>
                         </tr>`;
@@ -1078,6 +1274,54 @@
                         html += `</div>`;
                     }
                     html += `</div>`;
+                }
+
+                // Modules section
+                if (d.modules) {
+                    const cats = ['carrier','decoder','antiemulation','guardrail','virtualprotect','decoy','deconditioner'];
+                    let pillsHtml = '';
+                    cats.forEach(cat => {
+                        const val = d.modules[cat] || '';
+                        const isNone = !val || val === 'none';
+                        const cls = isNone ? 'module-pill dimmed' : 'module-pill';
+                        pillsHtml += `<span class="${cls}"><span class="module-cat">${escapeHtml(cat)}:</span> ${escapeHtml(val || 'none')}</span>`;
+                    });
+                    html += collapsibleSection('sec-modules', 'Modules', pillsHtml, true);
+                }
+
+                // Mutations section
+                if (d.mutations && d.mutations.length > 0) {
+                    let mutHtml = d.mutations.map(m =>
+                        `<span class="mutation-tag">${escapeHtml(m)}</span>`
+                    ).join('');
+                    html += collapsibleSection('sec-mutations', `Mutations (${d.mutations.length})`, mutHtml, true);
+                }
+
+                // Function Coverage section
+                if (d.function_coverage && d.function_coverage.length > 0) {
+                    let fcHtml = '';
+                    // Summary header
+                    if (d.coverage_executable_lines > 0 || d.coverage_total_lines > 0) {
+                        fcHtml += `<div style="margin-bottom: 6px; font-size: 0.8rem; color: #8b949e;">`;
+                        fcHtml += `Executed <strong style="color:#ccc;">${d.coverage_executed_lines || 0}</strong>`;
+                        fcHtml += ` of <strong style="color:#ccc;">${d.coverage_executable_lines || 0}</strong> executable lines`;
+                        fcHtml += ` (${d.coverage_total_lines || 0} total)`;
+                        fcHtml += `</div>`;
+                    }
+                    fcHtml += `<table class="func-cov-table">`;
+                    fcHtml += `<thead><tr><th>Function</th><th>Coverage</th><th>Lines</th></tr></thead><tbody>`;
+                    d.function_coverage.forEach(fc => {
+                        const pct = fc.percent || 0;
+                        const color = coverageColor(pct);
+                        fcHtml += `<tr>`;
+                        fcHtml += `<td style="font-family:'Consolas',monospace;color:#c9d1d9;">${escapeHtml(fc.name)}</td>`;
+                        fcHtml += `<td><span class="func-cov-bar"><span class="func-cov-bar-fill" style="width:${pct.toFixed(0)}%;background:${color};"></span></span>` +
+                            `<span style="color:${color};font-size:0.75rem;font-weight:600;">${pct.toFixed(0)}%</span></td>`;
+                        fcHtml += `<td style="color:#8b949e;font-size:0.75rem;">${fc.executed_lines}/${fc.total_lines}</td>`;
+                        fcHtml += `</tr>`;
+                    });
+                    fcHtml += `</tbody></table>`;
+                    html += collapsibleSection('sec-funccov', `Function Coverage (${d.function_coverage.length})`, fcHtml, false);
                 }
 
                 // Action buttons row
