@@ -162,6 +162,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     info!("Streams: {} ok, {} failed", ok_count, fail_count);
 
+    // Spawn periodic reconnection for offline targets
+    targets.spawn_reconnect_loop(config.scheduler.reconnect_interval_secs);
+
     // Create gRPC service
     let service = SchedulerService::new(
         storage,

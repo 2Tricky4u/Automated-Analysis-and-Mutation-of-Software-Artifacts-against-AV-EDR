@@ -359,6 +359,7 @@ impl TargetManager {
         target.status = TargetStatus::Offline;
         target.current_job = None;
         target.stream_tx = None;
+        target.channel = None;
         debug!("Target {} offline", id);
         Ok(())
     }
@@ -566,6 +567,7 @@ impl TargetManager {
         debug!("Stream closed for target {}", id);
         if let Some(mut target) = targets.get_mut(&id) {
             target.stream_tx = None;
+            target.channel = None;
             target.status = TargetStatus::Offline;
         }
 
@@ -623,6 +625,44 @@ impl TargetManager {
             results.insert(id, result);
         }
         results
+    }
+
+    /// Spawn a background task that periodically attempts to reconnect offline targets.
+    pub fn spawn_reconnect_loop(self: &Arc<Self>, interval_secs: u64) {
+        if interval_secs == 0 {
+            info!("Reconnect loop disabled (interval=0)");
+            return;
+        }
+        let manager = Arc::clone(self);
+        info!("Reconnect loop started (interval={}s)", interval_secs);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+            interval.tick().await; // skip first immediate tick (startup just ran)
+            loop {
+                interval.tick().await;
+                let offline_ids: Vec<TargetId> = manager
+                    .targets
+                    .iter()
+                    .filter(|e| e.value().status == TargetStatus::Offline && e.value().enabled)
+                    .map(|e| e.key().clone())
+                    .collect();
+                if offline_ids.is_empty() {
+                    continue;
+                }
+                info!(
+                    "Reconnect: {} offline target(s): {:?}",
+                    offline_ids.len(),
+                    offline_ids
+                );
+                for id in &offline_ids {
+                    info!("Reconnecting target {}...", id);
+                    match manager.establish_stream(id).await {
+                        Ok(()) => info!("Reconnected target {} successfully", id),
+                        Err(e) => warn!("Reconnection failed for {}: {}", id, e),
+                    }
+                }
+            }
+        });
     }
 
     pub async fn send_command(&self, id: impl AsRef<str>, msg: ControllerMessage) -> Result<()> {
@@ -687,6 +727,7 @@ impl TargetManager {
         // Mark all targets offline
         for mut target in self.targets.iter_mut() {
             target.stream_tx = None;
+            target.channel = None;
             target.status = TargetStatus::Offline;
         }
     }
