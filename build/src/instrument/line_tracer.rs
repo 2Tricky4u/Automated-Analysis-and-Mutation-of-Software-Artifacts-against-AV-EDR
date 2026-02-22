@@ -51,7 +51,7 @@ pub fn inject_line_traces_with_path(
 }
 
 /// Default number of iterations for the instrumentation delay loop
-pub const DEFAULT_DELAY_ITERATIONS: u32 = 10000;
+pub const DEFAULT_DELAY_ITERATIONS: u32 = 0;
 
 /// Inject line tracing statements with all options
 pub fn inject_line_traces_with_opts(
@@ -238,10 +238,14 @@ fn generate_trace_statement(
     format: TraceFormat,
     delay_iterations: u32,
 ) -> String {
-    let delay = format!(
-        "{}volatile long __inst_wait{} = 1; for (; __inst_wait{} < {}; __inst_wait{} += 2) {{}}\n",
-        indent, line, line, delay_iterations, line
-    );
+    let delay = if delay_iterations > 0 {
+        format!(
+            "{}volatile long __inst_wait{} = 1; for (; __inst_wait{} < {}; __inst_wait{} += 2) {{}}\n",
+            indent, line, line, delay_iterations, line
+        )
+    } else {
+        String::new()
+    };
 
     match format {
         TraceFormat::Base64 => {
