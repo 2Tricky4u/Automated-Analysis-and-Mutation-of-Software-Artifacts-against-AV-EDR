@@ -560,16 +560,14 @@ pub async fn get_trace_lines(
             let mut code = String::new();
 
             // Resolve code + fallback func from SourceMap
-            if let Some(ref sm) = source_map {
-                if let Some(resolved) = sm.resolve(line_num as usize) {
+            if let Some(ref sm) = source_map
+                && let Some(resolved) = sm.resolve(line_num as usize) {
                     code = resolved.code;
-                    if func.is_empty() {
-                        if let Some(f) = resolved.func {
+                    if func.is_empty()
+                        && let Some(f) = resolved.func {
                             func = f;
                         }
-                    }
                 }
-            }
 
             TraceLine {
                 seq: u64_field(doc, "payload_seq"),

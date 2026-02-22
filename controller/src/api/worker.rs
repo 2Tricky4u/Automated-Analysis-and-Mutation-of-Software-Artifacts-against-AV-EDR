@@ -404,11 +404,10 @@ pub async fn ping_worker(
             // Successful send proves stream is alive — update health
             let _ = service.targets.update_health(worker_id);
             // Defensive: if somehow Offline with a live stream, reconcile
-            if let Some(t) = service.targets.get(worker_id) {
-                if t.status == crate::vm::TargetStatus::Offline {
+            if let Some(t) = service.targets.get(worker_id)
+                && t.status == crate::vm::TargetStatus::Offline {
                     let _ = service.targets.mark_connected(worker_id);
                 }
-            }
             Ok(Response::new(PingWorkerResponse {
                 success: true,
                 message: format!("Health check sent to {}", worker_id),

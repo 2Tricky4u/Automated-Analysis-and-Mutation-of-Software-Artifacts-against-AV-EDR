@@ -122,11 +122,11 @@ fn classify_outcome(ev: &ClassificationEvidence) -> DetectionVerdict {
             false
         };
 
-        if etw_recent || ev.has_launching_checkpoint {
-            return DetectionVerdict::TimeoutActive;
+        return if etw_recent || ev.has_launching_checkpoint {
+            DetectionVerdict::TimeoutActive
         } else {
-            return DetectionVerdict::TimeoutIdle;
-        }
+            DetectionVerdict::TimeoutIdle
+        };
     }
 
     // Step 2: Clean exit
@@ -149,11 +149,11 @@ fn classify_outcome(ev: &ClassificationEvidence) -> DetectionVerdict {
 
     // Step 5: Known AV NTSTATUS codes
     if AV_NTSTATUS_CODES.contains(&ev.exit_code) {
-        if ev.has_launching_checkpoint {
-            return DetectionVerdict::KilledPostPayload;
+        return if ev.has_launching_checkpoint {
+            DetectionVerdict::KilledPostPayload
         } else {
-            return DetectionVerdict::KilledPrePayload;
-        }
+            DetectionVerdict::KilledPrePayload
+        };
     }
 
     // Step 6: Crash NTSTATUS codes
