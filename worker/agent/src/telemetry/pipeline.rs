@@ -6,13 +6,15 @@
 use std::path::Path;
 use tracing::{error, info, warn};
 
-/// Max payload size that fits in a single gRPC message (slightly under 4MB).
-const MAX_PAYLOAD_SIZE: usize = 4_000_000;
+/// Hard limit for the serialized payload bytes (gRPC default max is 4_194_304).
+/// We stay well under to leave room for the outer TelemetryData proto envelope.
+const MAX_SERIALIZED_PAYLOAD: usize = 3_500_000;
 
 /// Package trace events file into a single `trace_log` telemetry event.
 ///
-/// Always sends raw JSONL. If the file exceeds the gRPC payload limit,
-/// the tail (last complete JSONL lines that fit) is sent.
+/// Always sends raw JSONL. If the serialized JSON payload would exceed the
+/// gRPC limit, the content is trimmed from the front (keeping the tail —
+/// most recent lines) until it fits.
 pub fn package_trace_log(
     trace_events_file: &Path,
     job_id: &str,
@@ -44,56 +46,68 @@ pub fn package_trace_log(
     metadata.insert("event_count".to_string(), total_lines.to_string());
     metadata.insert("original_size_bytes".to_string(), original_size.to_string());
 
-    // Take the tail that fits within the payload limit.
-    // Reserve some bytes for the JSON wrapper {"content":"..."}
-    let max_content_bytes = MAX_PAYLOAD_SIZE.saturating_sub(64);
+    // Try the full content first; if the serialized payload is too large,
+    // progressively take a smaller tail until it fits.
+    // JSON-encoding escapes every \n in the JSONL to \\n, roughly doubling
+    // newline bytes, so raw content size is not a reliable predictor.
+    let mut slice: &str = &contents;
+    let mut truncated = false;
 
-    let (content_to_send, truncated) = if contents.len() <= max_content_bytes {
-        (contents.as_str(), false)
-    } else {
-        // Walk forward from the cut point to the next newline to keep complete lines
-        let start = contents.len() - max_content_bytes;
-        let adjusted = match contents[start..].find('\n') {
-            Some(pos) => start + pos + 1,
-            None => start,
+    loop {
+        let payload_bytes = serde_json::json!({"content": slice})
+            .to_string()
+            .into_bytes();
+
+        if payload_bytes.len() <= MAX_SERIALIZED_PAYLOAD {
+            // Fits — ship it
+            let final_size = payload_bytes.len();
+            let sent_lines = slice.lines().count();
+
+            if truncated {
+                metadata.insert("compression".to_string(), "truncated_tail".to_string());
+                metadata.insert("sent_lines".to_string(), sent_lines.to_string());
+            } else {
+                metadata.insert("compression".to_string(), "none".to_string());
+            }
+            metadata.insert("final_size_bytes".to_string(), final_size.to_string());
+
+            telemetry_events.push(crate::automutate::common::TelemetryData {
+                job_id: job_id.to_string(),
+                event_type: "trace_log".to_string(),
+                timestamp: chrono::Utc::now().timestamp(),
+                payload: payload_bytes,
+                metadata,
+                typed_event: None,
+            });
+
+            info!(
+                "[OK] Collected trace log ({}/{} lines, {} -> {} bytes{})",
+                sent_lines,
+                total_lines,
+                original_size,
+                final_size,
+                if truncated { ", tail only" } else { "" }
+            );
+            return;
+        }
+
+        // Too large — cut roughly in half and take the tail
+        truncated = true;
+        let mid = slice.len() / 2;
+        // Advance to the next newline so we keep complete JSONL lines
+        let adjusted = match slice[mid..].find('\n') {
+            Some(pos) => mid + pos + 1,
+            None => mid,
         };
-        (&contents[adjusted..], true)
-    };
-
-    if truncated {
-        let sent_lines = content_to_send.lines().count();
-        metadata.insert("compression".to_string(), "truncated_tail".to_string());
-        metadata.insert("sent_lines".to_string(), sent_lines.to_string());
-        info!(
-            "Trace too large ({} bytes, {} lines), sending tail ({} lines)",
-            original_size, total_lines, sent_lines
-        );
-    } else {
-        metadata.insert("compression".to_string(), "none".to_string());
+        if adjusted >= slice.len() {
+            // Single line that's too big — give up
+            warn!(
+                "Trace log has a single line exceeding payload limit, skipping trace_log event"
+            );
+            return;
+        }
+        slice = &slice[adjusted..];
     }
-
-    let payload = serde_json::json!({"content": content_to_send})
-        .to_string()
-        .into_bytes();
-    let final_size = payload.len();
-    metadata.insert("final_size_bytes".to_string(), final_size.to_string());
-
-    telemetry_events.push(crate::automutate::common::TelemetryData {
-        job_id: job_id.to_string(),
-        event_type: "trace_log".to_string(),
-        timestamp: chrono::Utc::now().timestamp(),
-        payload,
-        metadata,
-        typed_event: None,
-    });
-
-    info!(
-        "[OK] Collected trace log ({} line traces, {} -> {} bytes{})",
-        total_lines,
-        original_size,
-        final_size,
-        if truncated { ", tail only" } else { "" }
-    );
 }
 
 
