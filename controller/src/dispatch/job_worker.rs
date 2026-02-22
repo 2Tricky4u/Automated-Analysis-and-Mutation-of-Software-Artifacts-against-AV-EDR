@@ -326,9 +326,9 @@ impl JobWorker {
         // Capture assembled source from baseline build (same for both runs in a round)
         let assembled_source = baseline_built.assembled_source.clone();
 
-        // Build instrumented artifact (trace_mode = lines)
+        // Build instrumented artifact (trace_mode from job config)
         let instrumented_built = self
-            .build_artifact(&selected_build_spec, "lines", &spec)
+            .build_artifact(&selected_build_spec, &self.job.trace_mode, &spec)
             .await
             .map_err(|e| {
                 error!(

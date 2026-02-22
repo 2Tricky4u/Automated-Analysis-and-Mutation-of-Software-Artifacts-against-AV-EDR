@@ -110,15 +110,18 @@ pub async fn update_job_field(
 pub async fn query_trace_lines(es: &Elasticsearch, run_id: &str, last_n: u32) -> (Vec<Value>, u64) {
     let size = if last_n == 0 { 50 } else { last_n } as usize;
 
-    // Fetch the trace_log blob for this run
+    // Fetch the trace_log blob for this run.
+    // Use match_phrase instead of term: telemetry indices created before the
+    // template was applied have text (not keyword) mappings for run_id and
+    // event_type. term queries fail on text fields with hyphens/underscores.
     let response = es
         .search(SearchParts::Index(&["telemetry-*"]))
         .body(json!({
             "query": {
                 "bool": {
-                    "must": [
-                        { "term": { "run_id": run_id } },
-                        { "term": { "event_type": "trace_log" } }
+                    "filter": [
+                        { "match_phrase": { "run_id": run_id } },
+                        { "match_phrase": { "event_type": "trace_log" } }
                     ]
                 }
             },
@@ -201,9 +204,9 @@ pub async fn query_trace_content(es: &Elasticsearch, run_id: &str) -> Option<Str
         .body(json!({
             "query": {
                 "bool": {
-                    "must": [
-                        { "term": { "run_id": run_id } },
-                        { "term": { "event_type": "trace_log" } }
+                    "filter": [
+                        { "match_phrase": { "run_id": run_id } },
+                        { "match_phrase": { "event_type": "trace_log" } }
                     ]
                 }
             },

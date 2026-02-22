@@ -103,6 +103,9 @@ pub async fn schedule_job(
     };
     job.required_capabilities = req.required_capabilities.clone();
     job.stop_on_evasion = req.stop_on_evasion;
+    if !req.trace_mode.is_empty() {
+        job.trace_mode = req.trace_mode.clone();
+    }
 
     // Index to ES before submission
     if let Err(e) = service.storage.index_job(&job).await {
