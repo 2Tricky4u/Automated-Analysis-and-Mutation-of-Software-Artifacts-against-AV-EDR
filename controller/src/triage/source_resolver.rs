@@ -117,7 +117,8 @@ impl SourceMap {
             .map(|fr| {
                 let mut func_total = 0usize;
                 let mut func_executed = 0usize;
-                for ln in fr.start_line..=fr.end_line {
+                // Skip signature line (start_line) — it's the return type / name, not executable
+                for ln in (fr.start_line + 1)..=fr.end_line {
                     if ln <= self.lines.len() && is_executable_line(&self.lines[ln - 1]) {
                         func_total += 1;
                         if executed.contains(&ln) {
