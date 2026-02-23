@@ -185,10 +185,14 @@ fn visit_node(
     // Handle preprocessor conditional blocks (#ifdef, #if, #else, #elif)
     // Tree-sitter parses these as separate nodes; statements inside them are NOT
     // children of the enclosing compound_statement, so we must inject here too.
+    // IMPORTANT: Only inject when the preproc block is inside a function body
+    // (has a compound_statement ancestor). Top-level #ifdef blocks contain
+    // declarations/includes — injecting a function call there is invalid C.
     if matches!(
         node.kind(),
         "preproc_ifdef" | "preproc_else" | "preproc_elif" | "preproc_if"
-    ) {
+    ) && has_compound_statement_ancestor(node)
+    {
         for child in node.children(&mut node.walk()) {
             if is_traceable_statement(&child) {
                 let start_line = child.start_position().row + 1;
@@ -214,6 +218,19 @@ fn visit_node(
             injections,
         );
     }
+}
+
+/// Check if a node has a compound_statement (function body) ancestor.
+/// Returns false for top-level nodes (file scope).
+fn has_compound_statement_ancestor(node: &Node) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.kind() == "compound_statement" {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
 }
 
 /// Check if a node is a statement we should trace
@@ -449,6 +466,55 @@ int main() {
         assert!(
             trace_count >= 5,
             "Expected at least 5 trace injections for statements, got {}.\nResult:\n{}",
+            trace_count, result
+        );
+    }
+
+    #[test]
+    fn test_toplevel_ifdef_not_traced() {
+        // Top-level #ifdef blocks (file scope) must NOT get trace injections.
+        // Injecting a function call at file scope is invalid C.
+        let source = r#"
+#include <stdio.h>
+
+#ifdef _WIN32
+typedef unsigned long DWORD;
+#else
+typedef unsigned int DWORD;
+#endif
+
+int main() {
+    DWORD x = 1;
+#ifdef ENABLE_FEATURE
+    x = 2;
+#endif
+    return x;
+}
+"#;
+
+        let result = inject_line_traces(source, SourceLanguage::C).unwrap();
+
+        // The top-level typedef lines should NOT be traced
+        let output_lines: Vec<&str> = result.lines().collect();
+        for (i, line) in output_lines.iter().enumerate() {
+            if line.contains("typedef") {
+                // The line before a typedef must not be a trace call
+                if i > 0 {
+                    assert!(
+                        !output_lines[i - 1].contains("__trace_line_binary("),
+                        "Top-level typedef inside #ifdef should not be traced.\nPreceding line: {}\nTypedef line: {}",
+                        output_lines[i - 1], line
+                    );
+                }
+            }
+        }
+
+        // But the statements inside main()'s #ifdef SHOULD be traced
+        // x=1, x=2, return = 3 statements inside function body
+        let trace_count = result.matches("__trace_line_binary(").count();
+        assert!(
+            trace_count >= 3,
+            "Expected at least 3 trace injections inside main(), got {}.\nResult:\n{}",
             trace_count, result
         );
     }
