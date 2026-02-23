@@ -547,6 +547,9 @@ pub struct RoundAgg {
     pub timeout_ms: u64,
     /// Pre-instrumentation assembled C source for line trace resolution.
     pub assembled_source: Option<String>,
+    /// Controller-side build artifact paths for post-round cleanup.
+    pub baseline_artifact_path: PathBuf,
+    pub instrumented_artifact_path: PathBuf,
 }
 
 impl RoundAgg {
@@ -843,6 +846,8 @@ mod tests {
             started_at: SystemTime::now(),
             timeout_ms: 120_000,
             assembled_source: None,
+            baseline_artifact_path: PathBuf::new(),
+            instrumented_artifact_path: PathBuf::new(),
         };
 
         assert!(!agg.is_complete());
@@ -1091,6 +1096,8 @@ mod tests {
             started_at: SystemTime::now(),
             timeout_ms: 120_000,
             assembled_source: None,
+            baseline_artifact_path: PathBuf::new(),
+            instrumented_artifact_path: PathBuf::new(),
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1142,6 +1149,8 @@ mod tests {
             started_at: SystemTime::now(),
             timeout_ms: 120_000,
             assembled_source: None,
+            baseline_artifact_path: PathBuf::new(),
+            instrumented_artifact_path: PathBuf::new(),
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1202,6 +1211,8 @@ mod tests {
             started_at: SystemTime::now(),
             timeout_ms: 120_000,
             assembled_source: None,
+            baseline_artifact_path: PathBuf::new(),
+            instrumented_artifact_path: PathBuf::new(),
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1422,6 +1433,8 @@ mod tests {
             started_at: SystemTime::now(),
             timeout_ms: 120_000,
             assembled_source: None,
+            baseline_artifact_path: PathBuf::new(),
+            instrumented_artifact_path: PathBuf::new(),
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1475,6 +1488,8 @@ mod tests {
                 started_at: SystemTime::now(),
                 timeout_ms: 120_000,
                 assembled_source: None,
+                baseline_artifact_path: PathBuf::new(),
+                instrumented_artifact_path: PathBuf::new(),
             }
         };
 

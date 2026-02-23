@@ -703,6 +703,12 @@ pub async fn execute_run(
     phase_timings.rededr_reset_ms = reset_start.elapsed().as_millis() as u64;
 
     // ====================================================================
+    // Phase 10: Cleanup artifacts
+    // ====================================================================
+
+    crate::infra::system::cleanup_run_artifacts(&context.artifact_path, &context.telemetry_dir);
+
+    // ====================================================================
     // Build outcome
     // ====================================================================
 
