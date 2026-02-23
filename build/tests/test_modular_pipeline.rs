@@ -446,16 +446,17 @@ fn test_tracing_adds_delay_loops() {
     let modules = ModuleSelection::new();
     let payload = common::payload_small();
 
-    let out = common::run_pipeline_with_tracing(
-        modules,
-        &payload,
-        EncodingType::Xor,
-        &[],
+    let pipeline =
+        common::run_pipeline(modules, &payload, EncodingType::Xor, &[]).unwrap();
+
+    let src = &build::inject_line_traces_with_delay(
+        &pipeline.final_source,
+        build::SourceLanguage::C,
+        "loader.c",
         TraceFormat::Binary,
+        1000,
     )
     .unwrap();
-
-    let src = &out.instrumented_source;
     let trace_count = src.matches("__trace_line_binary(\"").count();
     let delay_count = src.matches("__inst_wait").count();
 

@@ -362,7 +362,7 @@ pub async fn get_orchestrator_status(
         .map(|job| ActiveJobEntry {
             job_id: job.id.0.clone(),
             pool_id: "shared-run-pool".to_string(),
-            current_round: job.current_round,
+            current_round: job.completed_rounds,
             max_rounds: job.max_rounds,
             status: job.status.to_string(),
         })

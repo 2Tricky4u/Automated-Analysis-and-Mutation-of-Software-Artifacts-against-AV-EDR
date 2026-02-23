@@ -1,6 +1,6 @@
 mod common;
 
-use build::{SourceLanguage, TraceFormat, inject_line_traces, inject_line_traces_with_opts};
+use build::{SourceLanguage, TraceFormat, inject_line_traces, inject_line_traces_with_delay, inject_line_traces_with_opts};
 use std::path::Path;
 
 #[test]
@@ -174,7 +174,14 @@ fn test_traceable_statement_types() {
 #[test]
 fn test_delay_loop_injected() {
     let source = common::c_source_minimal();
-    let result = inject_line_traces(source, SourceLanguage::C).unwrap();
+    let result = inject_line_traces_with_delay(
+        source,
+        SourceLanguage::C,
+        "test.c",
+        TraceFormat::default(),
+        1000,
+    )
+    .unwrap();
 
     // Count only actual trace calls (not the declaration) by matching the opening quote
     let trace_count = result.matches("__trace_line_binary(\"").count();

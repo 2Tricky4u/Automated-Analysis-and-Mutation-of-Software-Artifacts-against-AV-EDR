@@ -101,6 +101,7 @@ impl RunPool {
     pub fn update_job_progress(&self, job: &JobSession) {
         if let Some(mut info) = self.job_registry.get_mut(&job.id) {
             info.current_round = job.current_round;
+            info.completed_rounds = job.completed_rounds;
         }
     }
 
