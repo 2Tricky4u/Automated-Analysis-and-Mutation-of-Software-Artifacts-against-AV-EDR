@@ -1,5 +1,33 @@
 /// Advanced trace log compression inspired by CLP, Matrix Profile, and Grammar Induction
-/// NOT WORKING
+///
+/// NOT INTEGRATED — the algorithms work (tests pass) but the module cannot be
+/// wired into the pipeline as-is. Three things must be fixed first:
+///
+/// 1. **Output format**: `to_compressed_string()` emits human-readable text
+///    (`RULE_0 (used 3 times): L10 L11 L12`). The controller parses JSONL via
+///    `serde_json::from_str(line)` → `v["line"].as_u64()`. Either:
+///    - Rewrite the output to emit JSONL (one JSON object per unique pattern +
+///      a `count` and `seq_range` field), OR
+///    - Add a decompression/parsing step on the controller side
+///      (`controller/src/storage/queries.rs` — `query_trace_content` and
+///      `query_trace_lines`).
+///
+/// 2. **Information loss**: The grammar discards `seq`, `ts_us`, and `thread_id`.
+///    The source viewer needs `seq` to find the cutoff line (highest seq = last
+///    executed). Fix: preserve `min_seq`/`max_seq` per grammar rule occurrence
+///    so consumers can reconstruct ordering.
+///
+/// 3. **Performance**: `MatrixProfile::compute()` creates HashMap<Vec<u32>> for
+///    every window size 2..50 — O(n × max_window) entries. And
+///    `Grammar::from_sequence_and_motifs` line 251 does
+///    `motif.occurrences.contains(&i)` which is O(n) per position. Fix:
+///    - Use a HashSet<usize> for occurrence lookups
+///    - Consider capping max events before pattern detection (e.g. 50K)
+///
+/// Current pipeline uses simple per-line deduplication instead (in pipeline.rs).
+/// This module is intended for future structural loop analysis and triage token
+/// extraction from execution patterns.
+///
 /// Three-stage pipeline:
 /// 1. CLP-inspired columnar decomposition (extract line numbers, deduplicate strings)
 /// 2. Matrix Profile pattern detection (find recurring motifs in line sequences)

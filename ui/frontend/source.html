@@ -658,6 +658,15 @@
          * Returns enriched array with { name, startLine, endLine, totalLines, executedLines, percent }.
          * percent is -1 if no trace data.
          */
+        function isExecutableLine(line) {
+            const trimmed = line.trim();
+            if (trimmed.length === 0) return false;
+            if (trimmed.startsWith('#')) return false;
+            if (trimmed === '{' || trimmed === '}') return false;
+            if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) return false;
+            return true;
+        }
+
         function computeFunctionCoverage(funcRanges, traceSet, lines) {
             const hasTrace = traceSet && traceSet.size > 0;
 
@@ -665,10 +674,10 @@
                 let totalLines = 0;
                 let executedLines = 0;
 
-                for (let l = fn.startLine; l <= fn.endLine; l++) {
-                    const text = (lines[l - 1] || '').trim();
-                    // Skip blank lines and lone braces
-                    if (text.length === 0 || text === '{' || text === '}') continue;
+                // Skip signature line (startLine) — matches server-side logic
+                for (let l = fn.startLine + 1; l <= fn.endLine; l++) {
+                    const text = lines[l - 1] || '';
+                    if (!isExecutableLine(text)) continue;
                     totalLines++;
                     if (hasTrace && traceSet.has(l)) executedLines++;
                 }
