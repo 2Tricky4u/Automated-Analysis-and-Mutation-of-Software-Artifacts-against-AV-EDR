@@ -87,30 +87,11 @@ impl SourceMap {
     pub fn compute_coverage(&self, executed: &HashSet<usize>) -> CoverageResult {
         let total_lines = self.lines.len();
 
-        // Count global executable lines
-        let mut total_executable = 0usize;
-        let mut executed_count = 0usize;
-        for (i, line) in self.lines.iter().enumerate() {
-            let line_num = i + 1; // 1-based
-            if is_executable_line(line) {
-                total_executable += 1;
-                if executed.contains(&line_num) {
-                    executed_count += 1;
-                }
-            }
-        }
-
-        let coverage_percent = if total_executable > 0 {
-            (executed_count as f64 / total_executable as f64) * 100.0
-        } else {
-            0.0
-        };
-
         // Cutoff: highest executed line number
         let cutoff_line = executed.iter().copied().max();
         let cutoff_func = cutoff_line.and_then(|l| self.function_at(l));
 
-        // Per-function coverage
+        // Per-function coverage (skip signature line — only body lines are instrumented)
         let functions: Vec<FunctionCoverage> = self
             .func_ranges
             .iter()
@@ -141,6 +122,16 @@ impl SourceMap {
                 }
             })
             .collect();
+
+        // Global coverage = sum of per-function stats (only function body lines
+        // are instrumented, so counting lines outside functions inflates the denominator)
+        let total_executable: usize = functions.iter().map(|f| f.total_lines).sum();
+        let executed_count: usize = functions.iter().map(|f| f.executed_lines).sum();
+        let coverage_percent = if total_executable > 0 {
+            (executed_count as f64 / total_executable as f64) * 100.0
+        } else {
+            0.0
+        };
 
         CoverageResult {
             total_lines,
