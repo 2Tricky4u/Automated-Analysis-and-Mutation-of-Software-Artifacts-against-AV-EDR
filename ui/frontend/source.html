@@ -945,7 +945,7 @@
                 let traceLines = null;
                 if (runId) {
                     try {
-                        const traceResp = await fetch(`${API_BASE}/api/runs/${runId}/trace?last=5000`);
+                        const traceResp = await fetch(`${API_BASE}/api/runs/${runId}/trace?last=16000`);
                         const traceData = await traceResp.json();
                         if (traceData.data && traceData.data.lines) {
                             traceLines = traceData.data.lines;
