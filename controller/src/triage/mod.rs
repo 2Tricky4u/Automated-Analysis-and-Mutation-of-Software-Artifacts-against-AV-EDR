@@ -60,11 +60,48 @@ pub struct SearchSpace {
     /// Module categories to vary (used in Full mode)
     pub variable_categories: Vec<String>,
     /// Optional subset of mutations to explore (empty = full catalog)
-    #[serde(default)]
+    #[serde(default = "default_mutation_pool")]
     pub mutation_pool: Vec<String>,
     /// Which modules mutations apply to (empty = all)
     #[serde(default)]
     pub mutation_targets: Vec<String>,
+    /// Mutations always applied every round (after round 1).
+    /// Default (PoC): all binary.* + llvm.* mutations.
+    #[serde(default = "default_fixed_mutations")]
+    pub fixed_mutations: Vec<String>,
+}
+
+fn default_fixed_mutations() -> Vec<String> {
+    vec![
+        "llvm.nop_insert",
+        "llvm.opaque_predicate",
+        "llvm.junk_block",
+        "binary.rich_header",
+        "binary.import_pad",
+        "binary.resource_inject",
+        "binary.section_rename",
+        "binary.entropy_normalize",
+        "binary.string_inject",
+        "binary.size_pad",
+        "binary.debug_dir",
+        "binary.timestamp",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+fn default_mutation_pool() -> Vec<String> {
+    vec![
+        "ast.decon_rounds",
+        "ast.fill_pattern",
+        "ast.exec_decoy",
+        "ast.timing_pattern",
+        "ast.protection_transition",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
 }
 
 impl Default for SearchSpace {
@@ -72,8 +109,9 @@ impl Default for SearchSpace {
         Self {
             strategy: VariationStrategy::MutationOnly,
             variable_categories: vec!["deconditioner".to_string()],
-            mutation_pool: vec![],
+            mutation_pool: default_mutation_pool(),
             mutation_targets: vec![],
+            fixed_mutations: default_fixed_mutations(),
         }
     }
 }

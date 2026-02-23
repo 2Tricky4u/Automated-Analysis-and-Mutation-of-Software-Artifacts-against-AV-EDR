@@ -50,6 +50,7 @@ pub struct ScheduleJobParams {
     pub variation_strategy: Option<String>,
     pub mutation_pool: Vec<String>,
     pub mutation_targets: Vec<String>,
+    pub fixed_mutations: Vec<String>,
 }
 
 /// gRPC client wrapper with connection management
@@ -155,6 +156,7 @@ impl ControllerGrpcClient {
             variation_strategy: params.variation_strategy.unwrap_or_default(),
             mutation_pool: params.mutation_pool,
             mutation_targets: params.mutation_targets,
+            fixed_mutations: params.fixed_mutations,
             ..Default::default()
         };
 

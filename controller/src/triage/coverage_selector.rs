@@ -192,40 +192,52 @@ impl CoverageSelector {
         (modules, rationale)
     }
 
-    /// Mutation selection logic — fuzzer-like individual exploration then epsilon-greedy.
-    ///
-    /// Algorithm mirrors module selection for consistency:
-    /// 1. Determine pool: `search_space.mutation_pool` if non-empty, else `MUTATION_CATALOG`
-    /// 2. Collect stats: from trustworthy history, key = sorted mutation IDs joined by `,`
-    /// 3. Untried phase: explore individual mutations one-at-a-time
-    /// 4. Epsilon-greedy phase (ε=0.3): exploit best individual mutation or random
-    fn select_mutations(
-        &self,
-        search_space: &SearchSpace,
-        default_modules: &ModuleSelectionSpec,
-        history: &BTreeMap<u32, RoundSummary>,
-    ) -> Selection {
-        // Determine mutation pool
-        let pool: Vec<&str> = if !search_space.mutation_pool.is_empty() {
-            search_space.mutation_pool.iter().map(|s| s.as_str()).collect()
-        } else {
-            MUTATION_CATALOG.to_vec()
-        };
+    /// Build the fixed mutation specs from search_space.fixed_mutations.
+    fn fixed_mutation_specs(search_space: &SearchSpace) -> Vec<MutationSpec> {
+        search_space
+            .fixed_mutations
+            .iter()
+            .map(|id| MutationSpec {
+                id: id.clone(),
+                params: None,
+            })
+            .collect()
+    }
 
-        // Collect stats from trustworthy rounds, keyed by mutation ID
-        // For individual exploration, we key by single mutation ID
+    /// Explore one mutation from the pool using fuzzer-like individual exploration
+    /// then epsilon-greedy. Returns None if pool is empty.
+    ///
+    /// Algorithm:
+    /// 1. Collect stats from trustworthy history keyed by explored mutation ID
+    /// 2. Untried phase: explore individual mutations one-at-a-time
+    /// 3. Epsilon-greedy phase (ε=0.3): exploit best or random
+    fn explore_one(
+        pool: &[&str],
+        history: &BTreeMap<u32, RoundSummary>,
+        fixed_set: &std::collections::HashSet<&str>,
+    ) -> Option<(MutationSpec, String)> {
+        if pool.is_empty() {
+            return None;
+        }
+
+        // Collect stats from trustworthy rounds, keyed by the explored mutation ID.
+        // We identify the explored mutation as the one NOT in the fixed set.
         let mut stats: HashMap<String, VariantStats> = HashMap::new();
         for summary in history.values() {
             if !summary.differential_category.is_trustworthy() {
                 continue;
             }
-            // Key = sorted mutations joined by comma (for single mutations, just the ID)
-            let mut key_parts = summary.mutations.clone();
-            key_parts.sort();
-            let key = key_parts.join(",");
-            if key.is_empty() {
-                continue; // Skip baseline (no mutations)
+            // Find mutations that aren't in the fixed set — those are the explored ones
+            let explored: Vec<&String> = summary
+                .mutations
+                .iter()
+                .filter(|m| !fixed_set.contains(m.as_str()))
+                .collect();
+            // Only track rounds with exactly 1 explored mutation (our exploration pattern)
+            if explored.len() != 1 {
+                continue;
             }
+            let key = explored[0].clone();
             let entry = stats.entry(key).or_insert(VariantStats {
                 count: 0,
                 total_evasion_score: 0.0,
@@ -234,7 +246,7 @@ impl CoverageSelector {
             entry.total_evasion_score += summary.evasion_score;
         }
 
-        // Find untried individual mutations
+        // Find untried individual mutations from pool
         let untried: Vec<&str> = pool
             .iter()
             .filter(|m| !stats.contains_key(**m))
@@ -243,24 +255,20 @@ impl CoverageSelector {
 
         let tried_count = pool.len() - untried.len();
 
-        let (chosen_mutation, rationale) = if !untried.is_empty() {
-            // Explore: try an untried individual mutation
-            let idx = Self::pseudo_random(untried.len());
+        let (chosen, rationale) = if !untried.is_empty() {
+            let idx = CoverageSelector::pseudo_random(untried.len());
             let mutation = untried[idx];
             (
                 mutation.to_string(),
                 format!(
                     "Mutation: exploring untried {} ({}/{} tried)",
-                    mutation,
-                    tried_count,
-                    pool.len()
+                    mutation, tried_count, pool.len()
                 ),
             )
         } else {
-            // All mutations tried — epsilon-greedy
-            let coin = Self::pseudo_random(100) as f64 / 100.0;
+            let coin = CoverageSelector::pseudo_random(100) as f64 / 100.0;
             if coin < EPSILON {
-                let idx = Self::pseudo_random(pool.len());
+                let idx = CoverageSelector::pseudo_random(pool.len());
                 let mutation = pool[idx];
                 (
                     mutation.to_string(),
@@ -270,10 +278,9 @@ impl CoverageSelector {
                     ),
                 )
             } else {
-                // Exploit: best mean_evasion_score among individual mutations
                 let best = stats
                     .iter()
-                    .filter(|(k, _)| !k.contains(',')) // Only individual mutations
+                    .filter(|(k, _)| pool.contains(&k.as_str()))
                     .max_by(|a, b| {
                         a.1.mean_evasion_score()
                             .partial_cmp(&b.1.mean_evasion_score())
@@ -292,12 +299,80 @@ impl CoverageSelector {
             }
         };
 
+        Some((
+            MutationSpec {
+                id: chosen,
+                params: None,
+            },
+            rationale,
+        ))
+    }
+
+    /// Mutation selection logic — combines fixed mutations + fuzzer-explored one from pool.
+    ///
+    /// Two-tier approach:
+    /// 1. Start with fixed_mutations (always applied, e.g. binary.* + llvm.*)
+    /// 2. Explore one mutation from mutation_pool (e.g. AST markers) via epsilon-greedy
+    /// 3. If both are empty, fall back to full-catalog exploration (backward compat)
+    fn select_mutations(
+        &self,
+        search_space: &SearchSpace,
+        default_modules: &ModuleSelectionSpec,
+        history: &BTreeMap<u32, RoundSummary>,
+    ) -> Selection {
+        let has_fixed = !search_space.fixed_mutations.is_empty();
+        let has_pool = !search_space.mutation_pool.is_empty();
+
+        // Backward compat: if both empty, do original full-catalog exploration
+        if !has_fixed && !has_pool {
+            let pool: Vec<&str> = MUTATION_CATALOG.to_vec();
+            let fixed_set = std::collections::HashSet::new();
+            return match Self::explore_one(&pool, history, &fixed_set) {
+                Some((spec, rationale)) => Selection {
+                    modules: default_modules.clone(),
+                    mutations: vec![spec],
+                    rationale,
+                },
+                None => Selection {
+                    modules: default_modules.clone(),
+                    mutations: vec![],
+                    rationale: "No mutations available".to_string(),
+                },
+            };
+        }
+
+        // Two-tier: fixed + explored
+        let mut mutations = Self::fixed_mutation_specs(search_space);
+        let fixed_set: std::collections::HashSet<&str> = search_space
+            .fixed_mutations
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+
+        let pool: Vec<&str> = search_space
+            .mutation_pool
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+
+        let rationale = match Self::explore_one(&pool, history, &fixed_set) {
+            Some((spec, rationale)) => {
+                mutations.push(spec);
+                format!(
+                    "Fixed: {} mutations | {}",
+                    search_space.fixed_mutations.len(),
+                    rationale
+                )
+            }
+            None => format!(
+                "Fixed: {} mutations | No exploration pool",
+                search_space.fixed_mutations.len()
+            ),
+        };
+
         Selection {
             modules: default_modules.clone(),
-            mutations: vec![MutationSpec {
-                id: chosen_mutation,
-                params: None,
-            }],
+            mutations,
             rationale,
         }
     }
@@ -311,8 +386,7 @@ impl CoverageSelector {
     ) -> Selection {
         let (modules, module_rationale) =
             self.select_modules(search_space, default_modules, history);
-        let mutation_selection =
-            self.select_mutations(search_space, default_modules, history);
+        let mutation_selection = self.select_mutations(search_space, default_modules, history);
 
         Selection {
             modules,
@@ -360,6 +434,15 @@ impl Selector for CoverageSelector {
 mod tests {
     use super::*;
     use crate::dispatch::types::{DifferentialCategory, RoundId};
+
+    /// Helper: SearchSpace with no fixed/pool (backward-compat pure exploration).
+    fn empty_search_space() -> SearchSpace {
+        SearchSpace {
+            fixed_mutations: vec![],
+            mutation_pool: vec![],
+            ..Default::default()
+        }
+    }
 
     fn make_summary(
         round_number: u32,
@@ -428,8 +511,18 @@ mod tests {
         assert_eq!(ss.strategy, VariationStrategy::MutationOnly);
     }
 
+    #[tokio::test]
+    async fn test_default_search_space_has_fixed_and_pool() {
+        let ss = SearchSpace::default();
+        assert_eq!(ss.fixed_mutations.len(), 12, "Default: 3 LLVM + 9 binary");
+        assert_eq!(ss.mutation_pool.len(), 5, "Default: 5 AST markers");
+        assert!(ss.fixed_mutations.contains(&"llvm.nop_insert".to_string()));
+        assert!(ss.fixed_mutations.contains(&"binary.timestamp".to_string()));
+        assert!(ss.mutation_pool.contains(&"ast.decon_rounds".to_string()));
+    }
+
     // ==========================================================================
-    // MutationOnly mode tests
+    // MutationOnly mode tests (backward compat — empty fixed/pool)
     // ==========================================================================
 
     #[tokio::test]
@@ -449,39 +542,47 @@ mod tests {
             )
             .await;
 
-        assert!(selection.mutations.is_empty(), "Round 1 should have no mutations");
+        assert!(
+            selection.mutations.is_empty(),
+            "Round 1 should have no mutations"
+        );
         assert_eq!(selection.modules, defaults, "Round 1 modules = defaults");
     }
 
     #[tokio::test]
-    async fn test_mutation_mode_explores_untried() {
+    async fn test_mutation_mode_explores_untried_backward_compat() {
         let selector = CoverageSelector::new();
         let defaults = ModuleSelectionSpec::default();
 
-        // Round 1: baseline (no mutations)
         let mut history = BTreeMap::new();
         history.insert(
             1,
             make_summary(1, "none", 0.2, DifferentialCategory::RealDetection),
         );
 
+        // Empty fixed/pool → full catalog exploration
         let selection = selector
             .select(
                 "job-1",
                 2,
-                &SearchSpace::default(),
+                &empty_search_space(),
                 &defaults,
                 &history,
                 None,
             )
             .await;
 
-        // Should have exactly 1 mutation
-        assert_eq!(selection.mutations.len(), 1, "Should select exactly 1 mutation");
+        assert_eq!(
+            selection.mutations.len(),
+            1,
+            "Should select exactly 1 mutation"
+        );
         assert!(selection.rationale.contains("Mutation:"));
         assert!(selection.rationale.contains("untried"));
-        // Modules should stay fixed
-        assert_eq!(selection.modules, defaults, "MutationOnly: modules stay fixed");
+        assert_eq!(
+            selection.modules, defaults,
+            "MutationOnly: modules stay fixed"
+        );
     }
 
     #[tokio::test]
@@ -490,7 +591,6 @@ mod tests {
         let defaults = ModuleSelectionSpec::default();
         let history = BTreeMap::new();
 
-        // Run multiple rounds — modules should always be defaults
         for round in 2..5 {
             let selection = selector
                 .select(
@@ -512,11 +612,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mutation_mode_exploits_best() {
+    async fn test_mutation_mode_exploits_best_backward_compat() {
         let selector = CoverageSelector::new();
         let defaults = ModuleSelectionSpec::default();
 
-        // Create history where all mutations have been tried
+        // Create history where all mutations have been tried (empty fixed/pool mode)
         let mut history = BTreeMap::new();
         for (i, mutation) in MUTATION_CATALOG.iter().enumerate() {
             let score = if *mutation == "binary.rich_header" {
@@ -541,10 +641,6 @@ mod tests {
             );
         }
 
-        // Verify: all tried → selection always produces exactly 1 mutation from the catalog,
-        // and it's either the best (exploitation) or any from the pool (exploration).
-        // Note: pseudo_random uses subsec_nanos which has limited resolution on Windows,
-        // so in a tight loop all iterations may take the same branch.
         let catalog_set: std::collections::HashSet<&str> =
             MUTATION_CATALOG.iter().copied().collect();
 
@@ -553,20 +649,23 @@ mod tests {
                 .select(
                     "job-1",
                     (MUTATION_CATALOG.len() + 2) as u32,
-                    &SearchSpace::default(),
+                    &empty_search_space(),
                     &defaults,
                     &history,
                     None,
                 )
                 .await;
-            assert_eq!(selection.mutations.len(), 1, "Should select exactly 1 mutation");
+            assert_eq!(
+                selection.mutations.len(),
+                1,
+                "Should select exactly 1 mutation"
+            );
             assert!(
                 catalog_set.contains(selection.mutations[0].id.as_str()),
                 "Selected mutation {} should be from catalog",
                 selection.mutations[0].id
             );
             assert_eq!(selection.modules, defaults, "Modules should stay fixed");
-            // Rationale should indicate exploit or explore (epsilon-greedy)
             assert!(
                 selection.rationale.contains("Mutation:"),
                 "Rationale should describe mutation selection"
@@ -586,17 +685,18 @@ mod tests {
                 "ast.string_xor".to_string(),
                 "binary.rich_header".to_string(),
             ],
+            fixed_mutations: vec![],
             ..Default::default()
         };
 
-        // Run multiple rounds — mutations should only come from the custom pool
+        // Run multiple rounds — explored mutations should only come from the custom pool
         let mut seen = std::collections::HashSet::new();
         for round in 2..20 {
             let selection = selector
                 .select("job-1", round, &search_space, &defaults, &history, None)
                 .await;
-            if !selection.mutations.is_empty() {
-                seen.insert(selection.mutations[0].id.clone());
+            for m in &selection.mutations {
+                seen.insert(m.id.clone());
             }
         }
 
@@ -607,6 +707,107 @@ mod tests {
                 m
             );
         }
+    }
+
+    // ==========================================================================
+    // Fixed + Explored mode tests (new two-tier)
+    // ==========================================================================
+
+    #[tokio::test]
+    async fn test_fixed_plus_explored() {
+        let selector = CoverageSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+        let history = BTreeMap::new();
+
+        // Use defaults: 12 fixed (binary+LLVM) + 5 AST pool
+        let ss = SearchSpace::default();
+        let fixed_count = ss.fixed_mutations.len(); // 12
+        let pool: Vec<String> = ss.mutation_pool.clone();
+
+        let selection = selector
+            .select("job-1", 2, &ss, &defaults, &history, None)
+            .await;
+
+        // Should have fixed_count + 1 (explored) mutations
+        assert_eq!(
+            selection.mutations.len(),
+            fixed_count + 1,
+            "Round 2+: {} fixed + 1 explored = {}",
+            fixed_count,
+            fixed_count + 1
+        );
+
+        // Last mutation should be from the pool
+        let last = &selection.mutations[fixed_count].id;
+        assert!(
+            pool.contains(last),
+            "Explored mutation {} should be in pool {:?}",
+            last,
+            pool
+        );
+
+        // First N should be the fixed mutations
+        for (i, fixed) in ss.fixed_mutations.iter().enumerate() {
+            assert_eq!(
+                &selection.mutations[i].id, fixed,
+                "Position {} should be fixed mutation {}",
+                i, fixed
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fixed_only_no_pool() {
+        let selector = CoverageSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+        let history = BTreeMap::new();
+
+        let ss = SearchSpace {
+            fixed_mutations: vec!["binary.rich_header".to_string(), "llvm.nop_insert".to_string()],
+            mutation_pool: vec![],
+            ..Default::default()
+        };
+
+        let selection = selector
+            .select("job-1", 2, &ss, &defaults, &history, None)
+            .await;
+
+        assert_eq!(
+            selection.mutations.len(),
+            2,
+            "Only fixed mutations, no exploration"
+        );
+        assert_eq!(selection.mutations[0].id, "binary.rich_header");
+        assert_eq!(selection.mutations[1].id, "llvm.nop_insert");
+        assert!(
+            selection.rationale.contains("No exploration pool"),
+            "Rationale should note empty pool. Got: {}",
+            selection.rationale
+        );
+    }
+
+    #[tokio::test]
+    async fn test_round1_still_empty() {
+        let selector = CoverageSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+        let history = BTreeMap::new();
+
+        // Even with fixed_mutations configured, round 1 should be empty (baseline)
+        let selection = selector
+            .select(
+                "job-1",
+                1,
+                &SearchSpace::default(),
+                &defaults,
+                &history,
+                None,
+            )
+            .await;
+
+        assert!(
+            selection.mutations.is_empty(),
+            "Round 1 must have 0 mutations regardless of config"
+        );
     }
 
     // ==========================================================================
@@ -634,13 +835,10 @@ mod tests {
             .select("job-1", 2, &search_space, &defaults, &history, None)
             .await;
 
-        // Should have mutations
         assert!(
             !selection.mutations.is_empty(),
             "Full mode should produce mutations"
         );
-
-        // Rationale should mention both module and mutation
         assert!(
             selection.rationale.contains("Module:"),
             "Full mode rationale should reference module selection"
@@ -676,7 +874,6 @@ mod tests {
             .select("job-1", 2, &search_space, &defaults, &history, None)
             .await;
 
-        // Module part should pick an untried variant
         assert_ne!(
             selection.modules.deconditioner, "none",
             "Should explore untried variant, not repeat 'none'"

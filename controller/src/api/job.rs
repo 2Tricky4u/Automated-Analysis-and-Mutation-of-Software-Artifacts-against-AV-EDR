@@ -117,6 +117,9 @@ pub async fn schedule_job(
     if !req.mutation_targets.is_empty() {
         job.search_space.mutation_targets = req.mutation_targets.clone();
     }
+    if !req.fixed_mutations.is_empty() {
+        job.search_space.fixed_mutations = req.fixed_mutations.clone();
+    }
 
     // Index to ES before submission
     if let Err(e) = service.storage.index_job(&job).await {
