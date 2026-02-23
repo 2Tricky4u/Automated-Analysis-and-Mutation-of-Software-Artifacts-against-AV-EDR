@@ -34,7 +34,12 @@ int carrier() {
 
     ARTIFACT_CHECKPOINT("Launching");
     // @MUTATE:execution_method(direct|callback|fiber|threadpool)
+#ifdef ENABLE_INSTRUMENTATION
+    // Instrumented: pass checkpoint fn ptr so shellcode stub can confirm execution
+    ((void(*)(void(*)(const char*)))(dest))(__artifact_checkpoint);
+#else
     (*(void(*)())(dest))();
+#endif
 
     return 0;
 }
