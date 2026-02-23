@@ -30,6 +30,15 @@ pub async fn establish_stream(
     );
     let handler = Arc::new(handler);
 
+    // Abort previous heartbeat task (prevents orphaned loops after reconnect)
+    {
+        let mut hb_lock = service.heartbeat_handle.write().await;
+        if let Some(old_handle) = hb_lock.take() {
+            old_handle.abort();
+            info!("Aborted previous heartbeat task");
+        }
+    }
+
     // Store handler in service for use by run_sample() (unary RPC path)
     {
         let mut stream_handler_lock = service.stream_handler.write().await;
@@ -58,11 +67,15 @@ pub async fn establish_stream(
         info!("Controller stream handler terminated");
     });
 
-    // Spawn heartbeat task
+    // Spawn heartbeat task and store handle for cleanup on reconnect
     let handler_clone = handler.clone();
-    tokio::spawn(async move {
+    let hb_handle = tokio::spawn(async move {
         session::stream_handler::heartbeat_loop(handler_clone, 30).await;
     });
+    {
+        let mut hb_lock = service.heartbeat_handle.write().await;
+        *hb_lock = Some(hb_handle);
+    }
 
     info!("Bidirectional stream established successfully");
 

@@ -566,7 +566,7 @@ impl JobWorker {
             // Determine if round is ready to finalize:
             // Core runs (baseline+instrumented) must be done.
             // Dryrun is optional — we use a grace period.
-            if agg.baseline.is_some() && agg.instrumented.is_some() {
+            if agg.is_complete() {
                 if agg.dryrun.is_some() {
                     // All 3 done — finalize immediately
                     Some(result.round_id.clone())

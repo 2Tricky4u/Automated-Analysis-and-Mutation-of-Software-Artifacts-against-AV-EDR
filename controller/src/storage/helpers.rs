@@ -6,7 +6,7 @@
 use elasticsearch::{Elasticsearch, UpdateParts};
 use serde_json::Value;
 use std::time::SystemTime;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::queries;
 
@@ -37,6 +37,7 @@ pub fn now_rfc3339() -> String {
 /// `body` must already be wrapped as `{"doc": { ... }}`.
 ///
 /// Uses the actual ES `_id` (which may differ from the field value) for the update.
+/// Retries up to 3 times on version conflict (HTTP 409) to handle concurrent updates.
 pub async fn update_doc_by_id(
     es: &Elasticsearch,
     index_pattern: &str,
@@ -45,27 +46,47 @@ pub async fn update_doc_by_id(
     body: Value,
     entity_label: &str,
 ) -> anyhow::Result<bool> {
-    let found = queries::find_index(es, index_pattern, id_field, doc_id).await;
+    const MAX_RETRIES: u32 = 3;
 
-    if let Some((ref idx, ref es_doc_id)) = found {
-        let response = es
-            .update(UpdateParts::IndexId(idx, es_doc_id))
-            .body(body)
-            .refresh(elasticsearch::params::Refresh::WaitFor)
-            .send()
-            .await?;
+    for attempt in 0..=MAX_RETRIES {
+        let found = queries::find_index(es, index_pattern, id_field, doc_id).await;
 
-        if !response.status_code().is_success() {
+        if let Some((ref idx, ref es_doc_id)) = found {
+            let response = es
+                .update(UpdateParts::IndexId(idx, es_doc_id))
+                .body(body.clone())
+                .refresh(elasticsearch::params::Refresh::WaitFor)
+                .send()
+                .await?;
+
+            let status = response.status_code();
+            if status.is_success() {
+                info!("Updated {} {} successfully", entity_label, doc_id);
+                return Ok(true);
+            }
+
             let err_body = response.text().await.unwrap_or_default();
+
+            // Retry on version conflict (409)
+            if status.as_u16() == 409 && attempt < MAX_RETRIES {
+                debug!(
+                    "Version conflict updating {} {}, retrying ({}/{})",
+                    entity_label, doc_id, attempt + 1, MAX_RETRIES
+                );
+                tokio::time::sleep(tokio::time::Duration::from_millis(50 * (attempt as u64 + 1)))
+                    .await;
+                continue;
+            }
+
             warn!("Failed to update {} {}: {}", entity_label, doc_id, err_body);
+            return Ok(true); // document exists, but update failed
         } else {
-            info!("Updated {} {} successfully", entity_label, doc_id);
+            warn!("{} {} not found in ES for update", entity_label, doc_id);
+            return Ok(false);
         }
-        Ok(true)
-    } else {
-        warn!("{} {} not found in ES for update", entity_label, doc_id);
-        Ok(false)
     }
+
+    Ok(true)
 }
 
 /// Check an ES index response status. Returns `Err` with context on failure.
