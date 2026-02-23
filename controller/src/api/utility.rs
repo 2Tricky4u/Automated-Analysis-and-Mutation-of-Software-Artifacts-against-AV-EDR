@@ -3,7 +3,7 @@ use crate::automutate::controller::{
     PingRequest, PingResponse, QueryRequest, QueryResponse, TriageRequest, TriageResponse,
 };
 use tonic::{Request, Response, Status};
-use tracing::info;
+use tracing::{debug, info};
 
 pub async fn ping(
     _service: &SchedulerService,
@@ -12,7 +12,7 @@ pub async fn ping(
     let req = request.into_inner();
     let timestamp = crate::storage::helpers::now_unix_secs();
 
-    info!("Ping received: {}", req.message);
+    debug!("Ping received: {}", req.message);
 
     Ok(Response::new(PingResponse {
         message: format!("pong: {}", req.message),

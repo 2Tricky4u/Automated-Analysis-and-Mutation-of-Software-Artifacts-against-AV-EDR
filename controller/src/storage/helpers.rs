@@ -51,6 +51,7 @@ pub async fn update_doc_by_id(
         let response = es
             .update(UpdateParts::IndexId(idx, es_doc_id))
             .body(body)
+            .refresh(elasticsearch::params::Refresh::WaitFor)
             .send()
             .await?;
 

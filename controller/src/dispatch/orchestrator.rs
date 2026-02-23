@@ -358,20 +358,16 @@ impl Orchestrator {
 
                     // Compute line coverage from trace data
                     if let Some(ref source) = assembled_source {
-                        // Retry trace query: ES may not have refreshed yet after worker streaming
-                        let mut trace_content = None;
-                        for attempt in 0..3 {
-                            if attempt > 0 {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                            }
-                            if let Some(content) = storage.query_trace_content(&i_run_id).await {
-                                trace_content = Some(content);
-                                break;
-                            }
+                        // Telemetry bulk+refresh should make data immediately visible.
+                        // Single defensive retry in case of edge-case latency.
+                        let mut trace_content = storage.query_trace_content(&i_run_id).await;
+                        if trace_content.is_none() {
                             debug!(
-                                "Round {}/{}: trace content not found (attempt {}/3)",
-                                jid, rid, attempt + 1
+                                "Round {}/{}: trace content not found on first query, retrying in 1s",
+                                jid, rid
                             );
+                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                            trace_content = storage.query_trace_content(&i_run_id).await;
                         }
                         match trace_content {
                             Some(content) => {
@@ -405,7 +401,7 @@ impl Orchestrator {
                                 }
                             }
                             None => {
-                                warn!("Round {}/{}: no trace content found after 3 attempts, skipping coverage", jid, rid);
+                                warn!("Round {}/{}: no trace content found after retry, skipping coverage", jid, rid);
                             }
                         }
                     } else {
