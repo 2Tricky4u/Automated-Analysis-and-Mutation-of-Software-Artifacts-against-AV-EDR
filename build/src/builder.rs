@@ -211,8 +211,9 @@ impl ArtifactBuilder {
             // Keep consistent runtime model: /MT == libcmt (static CRT)
             // (If you prefer /MD, replace libcmt with msvcrt and ensure matching libs everywhere.)
             "-Wl,-defaultlib:libcmt",
-            // Keep the system libs you truly need
+            // System libs needed by various modules
             "-Wl,-defaultlib:kernel32",
+            "-Wl,-defaultlib:advapi32",
         ]);
 
         // Always add instrumentation header path (needed for instrumentation.h)

@@ -71,6 +71,7 @@ pub async fn index_round(es: &Elasticsearch, params: &RoundIndexParams<'_>) -> a
     let response = es
         .index(IndexParts::IndexId(&index_name, &doc_id))
         .body(doc)
+        .refresh(elasticsearch::params::Refresh::WaitFor)
         .send()
         .await?;
 
