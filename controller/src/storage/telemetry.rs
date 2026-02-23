@@ -8,8 +8,9 @@
 use super::TelemetryContext;
 use super::helpers;
 use crate::automutate::common::TelemetryData;
-use elasticsearch::{Elasticsearch, IndexParts};
-use serde_json::json;
+use elasticsearch::{BulkOperation, BulkParts, Elasticsearch};
+use elasticsearch::params::Refresh;
+use serde_json::{json, Value};
 use tracing::{info, warn};
 
 pub async fn index_telemetry_batch(
@@ -22,7 +23,7 @@ pub async fn index_telemetry_batch(
     }
 
     let index_name = helpers::es_index_name_daily("telemetry");
-    let mut indexed = 0;
+    let mut ops: Vec<BulkOperation<Value>> = Vec::with_capacity(batch.len());
 
     for event in batch {
         // Parse payload to extract searchable fields
@@ -132,41 +133,62 @@ pub async fn index_telemetry_batch(
             }
         }
 
-        let doc_str = serde_json::to_string(&doc).unwrap_or_default();
-
-        let response = es
-            .index(IndexParts::Index(&index_name))
-            .body(doc)
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status_code().is_success() => {
-                indexed += 1;
-            }
-            Ok(resp) => {
-                let status = resp.status_code();
-                let body = resp.text().await.unwrap_or_default();
-                warn!(
-                    "Failed to index telemetry event: status {} - {}",
-                    status, body
-                );
-                if indexed == 0 {
-                    warn!("Problematic document: {}", doc_str);
-                }
-            }
-            Err(e) => {
-                warn!("Failed to index telemetry event: {}", e);
-            }
-        }
+        ops.push(BulkOperation::index(doc).into());
     }
 
-    info!(
-        "Indexed {}/{} telemetry events to {}",
-        indexed,
-        batch.len(),
-        index_name
-    );
+    let total = ops.len();
+    let response = es
+        .bulk(BulkParts::Index(&index_name))
+        .body(ops)
+        .refresh(Refresh::WaitFor)
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) if resp.status_code().is_success() => {
+            let body: Value = resp.json().await.unwrap_or_default();
+            let mut indexed = 0usize;
+            let mut failed = 0usize;
+            if let Some(items) = body["items"].as_array() {
+                for item in items {
+                    let status = item["index"]["status"].as_u64().unwrap_or(0);
+                    if (200..300).contains(&status) {
+                        indexed += 1;
+                    } else {
+                        failed += 1;
+                        if failed <= 3 {
+                            warn!(
+                                "Bulk index item error: {}",
+                                item["index"]["error"]
+                            );
+                        }
+                    }
+                }
+            }
+            if failed > 0 {
+                warn!(
+                    "Indexed {}/{} telemetry events to {} ({} failed)",
+                    indexed, total, index_name, failed
+                );
+            } else {
+                info!(
+                    "Indexed {}/{} telemetry events to {}",
+                    indexed, total, index_name
+                );
+            }
+        }
+        Ok(resp) => {
+            let status = resp.status_code();
+            let body = resp.text().await.unwrap_or_default();
+            warn!(
+                "Bulk telemetry index failed: status {} - {}",
+                status, body
+            );
+        }
+        Err(e) => {
+            warn!("Bulk telemetry index failed: {}", e);
+        }
+    }
 
     Ok(())
 }

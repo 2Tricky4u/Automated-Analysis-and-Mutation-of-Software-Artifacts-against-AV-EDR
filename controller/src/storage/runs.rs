@@ -100,6 +100,7 @@ pub async fn index_run_result(
     let response = es
         .index(IndexParts::IndexId(&index_name, params.run_id))
         .body(doc)
+        .refresh(elasticsearch::params::Refresh::WaitFor)
         .send()
         .await?;
 
