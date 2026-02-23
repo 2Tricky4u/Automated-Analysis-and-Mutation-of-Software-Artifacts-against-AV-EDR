@@ -132,6 +132,7 @@ message JobRequest {
   string variation_strategy = 14;             // "mutation" (default) or "full"
   repeated string mutation_pool = 15;         // Mutation IDs to explore (empty = full catalog)
   repeated string mutation_targets = 16;      // Module names to apply mutations to (empty = all)
+  repeated string fixed_mutations = 17;       // Always applied after round 1 (empty in request = keep default)
 }
 
 message JobResponse {

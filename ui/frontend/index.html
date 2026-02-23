@@ -1198,15 +1198,16 @@
                         </tr></thead><tbody>`;
 
                     d.rounds.forEach(r => {
-                        const mutTags = (r.mutations || []).map(m =>
-                            `<span class="mutation-tag">${escapeHtml(m)}</span>`
-                        ).join('') || '<span class="muted">-</span>';
+                        const mutCount = (r.mutations || []).length;
+                        const mutDisplay = mutCount > 0
+                            ? `<span class="mutation-tag">${mutCount}</span>`
+                            : '<span class="muted">-</span>';
                         html += `<tr>
                             <td><a class="round-link" onclick="navigateToRound('${escapeHtml(r.round_id)}')">${r.round_number}</a></td>
                             <td>${detectedBadge(r.detected)}</td>
                             <td>${categoryBadge(r.differential_category)}</td>
                             <td>${coverageMiniBar(r.coverage_percent)}</td>
-                            <td>${mutTags}</td>
+                            <td>${mutDisplay}</td>
                             <td>${r.evasion_score !== undefined ? r.evasion_score.toFixed(2) : '-'}</td>
                             <td>${statusBadge(r.status)}</td>
                         </tr>`;

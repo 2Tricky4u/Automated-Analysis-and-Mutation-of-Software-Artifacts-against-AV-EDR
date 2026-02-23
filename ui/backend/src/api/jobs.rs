@@ -62,6 +62,10 @@ pub struct SubmitJobRequest {
     /// Module names to apply mutations to (empty = all)
     #[serde(default)]
     pub mutation_targets: Vec<String>,
+
+    /// Mutations always applied every round after baseline (empty = keep server default)
+    #[serde(default)]
+    pub fixed_mutations: Vec<String>,
 }
 
 fn default_max_rounds() -> u32 {
@@ -228,6 +232,7 @@ pub async fn submit_job(
             variation_strategy: payload.variation_strategy,
             mutation_pool: payload.mutation_pool,
             mutation_targets: payload.mutation_targets,
+            fixed_mutations: payload.fixed_mutations,
         })
         .await
     {
