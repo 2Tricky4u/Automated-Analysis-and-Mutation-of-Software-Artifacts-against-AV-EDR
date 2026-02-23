@@ -172,6 +172,7 @@ pub struct RunResultInfo {
     pub detected: bool,
     pub exit_code: i32,
     pub outcome: String,
+    pub last_checkpoint: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -361,6 +362,7 @@ pub async fn get_round(
                     detected: r.detected,
                     exit_code: r.exit_code,
                     outcome: r.outcome,
+                    last_checkpoint: r.last_checkpoint,
                 });
 
                 let instrumented_run = round.instrumented_run.map(|r| RunResultInfo {
@@ -368,6 +370,7 @@ pub async fn get_round(
                     detected: r.detected,
                     exit_code: r.exit_code,
                     outcome: r.outcome,
+                    last_checkpoint: r.last_checkpoint,
                 });
 
                 let function_coverage: Vec<FunctionCoverageInfo> = round

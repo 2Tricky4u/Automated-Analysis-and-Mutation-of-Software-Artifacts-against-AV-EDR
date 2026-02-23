@@ -470,6 +470,7 @@ message RunResultProto {
   uint64 elapsed_seconds = 11;
   int64 started_at = 12;
   int64 completed_at = 13;
+  string last_checkpoint = 14;
 }
 
 message BehaviorComparisonProto {

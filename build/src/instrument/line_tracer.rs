@@ -182,6 +182,26 @@ fn visit_node(
         }
     }
 
+    // Handle preprocessor conditional blocks (#ifdef, #if, #else, #elif)
+    // Tree-sitter parses these as separate nodes; statements inside them are NOT
+    // children of the enclosing compound_statement, so we must inject here too.
+    if matches!(
+        node.kind(),
+        "preproc_ifdef" | "preproc_else" | "preproc_elif" | "preproc_if"
+    ) {
+        for child in node.children(&mut node.walk()) {
+            if is_traceable_statement(&child) {
+                let start_line = child.start_position().row + 1;
+                let start_offset = child.start_byte();
+                let indent = calculate_indentation(source, start_offset);
+                let trace_stmt = generate_trace_statement(
+                    start_line, &indent, language, file_path, format, delay_iterations,
+                );
+                injections.push((start_offset, trace_stmt));
+            }
+        }
+    }
+
     // Recursively visit children
     for child in node.children(&mut node.walk()) {
         visit_node(
@@ -353,6 +373,84 @@ int main() {
 
         // At least one printf should be indented
         assert!(printf_lines.iter().any(|l| l.starts_with("    ")));
+    }
+
+    #[test]
+    fn test_ifdef_block_injection() {
+        let source = r#"
+int main() {
+    int x = 1;
+#ifdef ENABLE_INSTRUMENTATION
+    launch_shellcode();
+#else
+    launch_shellcode_alt();
+#endif
+    return 0;
+}
+"#;
+
+        let result = inject_line_traces(source, SourceLanguage::C).unwrap();
+
+        // Statements inside #ifdef and #else should get trace injections
+        // x=1, if_stmt(#ifdef block acts as parent), launch_shellcode, launch_shellcode_alt, return = at least 4
+        let trace_count = result.matches("__trace_line_binary(").count();
+        assert!(
+            trace_count >= 4,
+            "Expected at least 4 trace injections (including inside #ifdef/#else), got {}.\nResult:\n{}",
+            trace_count, result
+        );
+
+        // Specifically check that the line with launch_shellcode gets traced
+        assert!(
+            result.contains("launch_shellcode()"),
+            "launch_shellcode() call should still be present"
+        );
+    }
+
+    #[test]
+    fn test_ifdef_directives_not_traced() {
+        // Preprocessor directive lines (#ifdef, #else, #endif) must NOT get
+        // trace calls — only the statements *inside* those blocks should.
+        let source = r#"
+int main() {
+    int before = 1;
+#ifdef SOME_FLAG
+    int inside_ifdef = 2;
+#else
+    int inside_else = 3;
+#endif
+    int after = 4;
+    return 0;
+}
+"#;
+
+        let result = inject_line_traces(source, SourceLanguage::C).unwrap();
+        let lines: Vec<&str> = result.lines().collect();
+
+        // No trace call should appear on the same line as a directive
+        for line in &lines {
+            let trimmed = line.trim();
+            if trimmed.starts_with("#ifdef")
+                || trimmed.starts_with("#else")
+                || trimmed.starts_with("#endif")
+                || trimmed.starts_with("#if ")
+            {
+                assert!(
+                    !line.contains("__trace_line_binary("),
+                    "Preprocessor directive should not be traced: {}",
+                    line
+                );
+            }
+        }
+
+        // The actual statements inside the blocks should still be traced.
+        // before, inside_ifdef, inside_else, after, return = 5 statements
+        let trace_count = result.matches("__trace_line_binary(").count();
+        assert!(
+            trace_count >= 5,
+            "Expected at least 5 trace injections for statements, got {}.\nResult:\n{}",
+            trace_count, result
+        );
     }
 
     #[test]

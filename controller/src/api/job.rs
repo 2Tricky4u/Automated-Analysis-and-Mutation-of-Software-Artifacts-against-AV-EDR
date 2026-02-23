@@ -639,6 +639,7 @@ fn run_doc_to_proto(source: &Value) -> RunResultProto {
         elapsed_seconds: u64_field(source, "elapsed_seconds"),
         started_at: 0,
         completed_at: 0,
+        last_checkpoint: str_field(source, "last_checkpoint"),
     }
 }
 

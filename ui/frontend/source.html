@@ -358,9 +358,24 @@
             animation: cutoff-badge-pulse 2s ease-in-out infinite;
         }
 
+        .cutoff-marker-label.checkpoint-ok {
+            background: #238636;
+        }
+
         @keyframes cutoff-badge-pulse {
             0%, 100% { opacity: 0.85; }
             50% { opacity: 1; }
+        }
+
+        .checkpoint-tag {
+            display: inline-block;
+            background: #21262d;
+            color: #8b949e;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            padding: 2px 10px;
+            font-size: 0.75rem;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
     </style>
 </head>
@@ -742,7 +757,7 @@
         // Rendering
         // ================================================================
 
-        function renderSource(sourceText, traceLines) {
+        function renderSource(sourceText, traceLines, lastCheckpoint) {
             const lines = sourceText.split('\n');
             const traceSet = new Set();
             let cutoffLine = -1;
@@ -841,9 +856,22 @@
                     const markerAttrs = lineToFunc.has(lineNum)
                         ? ` data-func-body="${lineToFunc.get(lineNum)}"`
                         : (funcStartMap.has(lineNum) ? ` data-func-body="${funcStartMap.get(lineNum).name}"` : '');
+
+                    let cutoffLabel, cutoffClass;
+                    if (lastCheckpoint === 'payload_executed') {
+                        cutoffLabel = 'EXECUTION CONTINUED INTO SHELLCODE';
+                        cutoffClass = 'cutoff-marker-label checkpoint-ok';
+                    } else if (lastCheckpoint === 'Launching') {
+                        cutoffLabel = 'EXECUTION STOPPED AT CARRIER LAUNCH (did not enter shellcode)';
+                        cutoffClass = 'cutoff-marker-label';
+                    } else {
+                        cutoffLabel = 'EXECUTION STOPPED HERE';
+                        cutoffClass = 'cutoff-marker-label';
+                    }
+
                     html += `<tr class="cutoff-marker"${markerAttrs}>`;
                     html += `<td class="gutter"></td>`;
-                    html += `<td class="code"><span class="cutoff-marker-label">EXECUTION STOPPED HERE</span></td>`;
+                    html += `<td class="code"><span class="${cutoffClass}">${cutoffLabel}</span></td>`;
                     html += '</tr>';
                 }
             });
@@ -853,8 +881,11 @@
             document.getElementById('content').innerHTML = html;
 
             // Update toolbar
+            const checkpointTag = lastCheckpoint
+                ? ` &nbsp; <span class="checkpoint-tag">checkpoint: ${escapeHtml(lastCheckpoint)}</span>`
+                : '';
             document.getElementById('toolbarInfo').innerHTML =
-                `<strong>Round:</strong> ${escapeHtml(roundId || '-')} &nbsp; <strong>Lines:</strong> ${lines.length}`;
+                `<strong>Round:</strong> ${escapeHtml(roundId || '-')} &nbsp; <strong>Lines:</strong> ${lines.length}${checkpointTag}`;
 
             // Show trace stats if we have trace data
             if (traceSet.size > 0) {
@@ -964,8 +995,13 @@
                     }
                 }
 
+                // Extract last_checkpoint from the instrumented run (primary trace source)
+                const lastCheckpoint = (round.instrumented_run && round.instrumented_run.last_checkpoint)
+                    || (round.baseline_run && round.baseline_run.last_checkpoint)
+                    || '';
+
                 document.title = `Source: ${roundId} - AutoMutate++`;
-                renderSource(round.assembled_source, traceLines);
+                renderSource(round.assembled_source, traceLines, lastCheckpoint);
 
             } catch (e) {
                 document.getElementById('loadingMsg').className = 'status-msg error';
