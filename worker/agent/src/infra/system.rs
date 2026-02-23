@@ -1,7 +1,7 @@
 //! System-level operations — telemetry directory management.
 
 use std::path::Path;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Read CPU and memory percent from an already-refreshed System.
 ///
@@ -16,6 +16,22 @@ pub fn collect_system_metrics(sys: &sysinfo::System) -> (i32, i32) {
         0
     };
     (cpu_percent, memory_percent)
+}
+
+/// Remove artifact exe and telemetry directory after a completed run.
+pub fn cleanup_run_artifacts(artifact_path: &Path, telemetry_dir: &Path) {
+    if artifact_path.exists() {
+        match std::fs::remove_file(artifact_path) {
+            Ok(_) => info!("Cleaned up artifact: {:?}", artifact_path),
+            Err(e) => warn!("Failed to clean artifact {:?}: {}", artifact_path, e),
+        }
+    }
+    if telemetry_dir.exists() {
+        match std::fs::remove_dir_all(telemetry_dir) {
+            Ok(_) => info!("Cleaned up telemetry dir: {:?}", telemetry_dir),
+            Err(e) => warn!("Failed to clean telemetry dir {:?}: {}", telemetry_dir, e),
+        }
+    }
 }
 
 /// Create (or recreate) a telemetry directory for a run.

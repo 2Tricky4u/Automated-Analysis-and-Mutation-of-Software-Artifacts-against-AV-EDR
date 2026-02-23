@@ -346,6 +346,10 @@ impl JobWorker {
             .unwrap_or_else(|| "windows".to_string());
         let required_caps = self.job.required_capabilities.clone();
 
+        // Save artifact paths for post-round cleanup
+        let baseline_artifact_path = baseline_built.output_path.clone();
+        let instrumented_artifact_path = instrumented_built.output_path.clone();
+
         // Create run envelopes
         let baseline_run = RunEnvelope {
             run_id: RunId(format!("{}-baseline", round_id.0)),
@@ -391,6 +395,8 @@ impl JobWorker {
             started_at: SystemTime::now(),
             timeout_ms: DEFAULT_TIMEOUT_SECONDS as u64 * 1000,
             assembled_source,
+            baseline_artifact_path,
+            instrumented_artifact_path,
         };
         self.round_aggs.insert(round_id.clone(), agg);
 
@@ -531,6 +537,15 @@ impl JobWorker {
             Some(a) => a,
             None => return,
         };
+
+        // Cleanup controller-side build artifacts
+        for path in [&agg.baseline_artifact_path, &agg.instrumented_artifact_path] {
+            if let Err(e) = std::fs::remove_file(path) {
+                warn!("Failed to clean build artifact {:?}: {}", path, e);
+            } else {
+                debug!("Cleaned build artifact: {:?}", path);
+            }
+        }
 
         // Extract all data from agg BEFORE to_summary() consumes it
         let baseline_run_id = agg.baseline_run_id.clone();

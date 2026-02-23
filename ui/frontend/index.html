@@ -980,7 +980,7 @@
                         : 0;
                     return `
                         <tr>
-                            <td title="${escapeHtml(j.job_id)}">${escapeHtml(j.job_id.substring(0, 20))}...</td>
+                            <td title="${escapeHtml(j.job_id)}"><a href="#" onclick="selectJob('${escapeHtml(j.job_id)}'); return false;" style="color: var(--accent); text-decoration: underline; cursor: pointer;">${escapeHtml(j.job_id.substring(0, 20))}...</a></td>
                             <td>
                                 <div class="progress-bar" style="width: 100px; display: inline-block; vertical-align: middle;">
                                     <div class="progress-bar-fill" style="width: ${progress}%"></div>
@@ -1011,6 +1011,12 @@
             } catch (e) {
                 alert(`Error stopping job: ${e.message}`);
             }
+        }
+
+        function selectJob(jobId) {
+            document.getElementById('jobIdInput').value = jobId;
+            getJobStatus();
+            document.getElementById('jobIdInput').scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
 
         // ================================================================
