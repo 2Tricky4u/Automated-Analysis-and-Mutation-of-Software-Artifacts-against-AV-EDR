@@ -25,7 +25,11 @@ int carrier() {
 
     ARTIFACT_CHECKPOINT("Launching");
     // 4. Execute
+#ifdef ENABLE_INSTRUMENTATION
+    ((void(*)(void(*)(const char*)))(dest))(__artifact_checkpoint);
+#else
     (*(void(*)())(dest))();
+#endif
 
     return 0;
 }

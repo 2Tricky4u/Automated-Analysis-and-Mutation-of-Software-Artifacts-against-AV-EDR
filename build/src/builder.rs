@@ -925,8 +925,26 @@ impl ArtifactBuilder {
         }
 
         // Step 1: Encode the payload
+        // For instrumented builds, prepend a checkpoint stub so we can confirm
+        // shellcode execution. The carrier passes __artifact_checkpoint in RCX.
+        let instrumented = trace_mode != "off" && !trace_mode.is_empty();
+        let effective_payload;
+        let payload_to_encode: &[u8] = if instrumented {
+            effective_payload =
+                crate::template::shellcode_stub::prepend_checkpoint_stub(payload);
+            info!(
+                "Prepended checkpoint stub: {} + {} = {} bytes",
+                crate::template::shellcode_stub::STUB_SIZE,
+                payload.len(),
+                effective_payload.len()
+            );
+            &effective_payload
+        } else {
+            payload
+        };
+
         let encoder = PayloadEncoder::new();
-        let encoded = encoder.encode(payload, encoding);
+        let encoded = encoder.encode(payload_to_encode, encoding);
         let payload_header = encoder.generate_c_header(&encoded);
 
         debug!(
