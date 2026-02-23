@@ -522,6 +522,7 @@ impl JobWorker {
                 encoding,
                 mutations,
                 trace_mode: trace_mode.to_string(),
+                mutation_targets: self.job.search_space.mutation_targets.clone(),
             })
             .await?;
 

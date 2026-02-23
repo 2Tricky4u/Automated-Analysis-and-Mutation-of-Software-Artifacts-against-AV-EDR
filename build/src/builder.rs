@@ -102,6 +102,9 @@ pub enum BuildInput {
         mutations: Vec<mutator::MutationSpec>,
         /// Instrumentation mode: "off" | "lines" | "api" | "bb" | "api+bb" | "all"
         trace_mode: String,
+        /// Which modules mutations apply to (empty = all modules + main template)
+        #[allow(dead_code)]
+        mutation_targets: Vec<String>,
     },
 }
 
@@ -142,6 +145,7 @@ impl ArtifactBuilder {
             encoding,
             mutations,
             trace_mode,
+            mutation_targets,
         } = input;
 
         debug!(
@@ -149,7 +153,7 @@ impl ArtifactBuilder {
             modules.carrier, modules.decoder, trace_mode
         );
 
-        self.build_modular_template(modules, &payload, encoding, &mutations, &trace_mode)
+        self.build_modular_template(modules, &payload, encoding, &mutations, &trace_mode, &mutation_targets)
             .await
     }
 
@@ -913,6 +917,7 @@ impl ArtifactBuilder {
         encoding: EncodingType,
         mutations: &[mutator::MutationSpec],
         trace_mode: &str,
+        mutation_targets: &[String],
     ) -> Result<BuiltArtifact> {
         // Step 0: Sync decoder module to match encoding type
         let expected_decoder = encoding.decoder_module();
@@ -983,6 +988,13 @@ impl ArtifactBuilder {
             modules.deconditioner,
             modules.guardrail
         );
+
+        // Step 3b: Scope mutations to targeted modules (strip @MUTATE markers outside targets)
+        let assembled_source = if !mutation_targets.is_empty() {
+            crate::template::assembler::strip_markers_outside_targets(&assembled_source, mutation_targets)
+        } else {
+            assembled_source
+        };
 
         // Step 4: Partition mutations into AST and LLVM, apply AST mutations
         let ast_mutations: Vec<_> = mutations

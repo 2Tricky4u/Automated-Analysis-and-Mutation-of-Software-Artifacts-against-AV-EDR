@@ -47,6 +47,9 @@ pub struct ScheduleJobParams {
     pub stop_on_evasion: bool,
     pub trace_mode: Option<String>,
     pub variable_categories: Vec<String>,
+    pub variation_strategy: Option<String>,
+    pub mutation_pool: Vec<String>,
+    pub mutation_targets: Vec<String>,
 }
 
 /// gRPC client wrapper with connection management
@@ -149,6 +152,9 @@ impl ControllerGrpcClient {
             stop_on_evasion: params.stop_on_evasion,
             trace_mode: params.trace_mode.unwrap_or_default(),
             variable_categories: params.variable_categories,
+            variation_strategy: params.variation_strategy.unwrap_or_default(),
+            mutation_pool: params.mutation_pool,
+            mutation_targets: params.mutation_targets,
             ..Default::default()
         };
 

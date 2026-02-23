@@ -129,6 +129,9 @@ message JobRequest {
   string encoding = 11;               // Payload encoding: "xor" or "english" (default: "xor")
   string trace_mode = 12;             // Instrumented run trace mode (default: "lines"). Valid: "off","api","bb","api+bb","lines","all"
   repeated string variable_categories = 13;  // Which module categories the selector may vary across rounds
+  string variation_strategy = 14;             // "mutation" (default) or "full"
+  repeated string mutation_pool = 15;         // Mutation IDs to explore (empty = full catalog)
+  repeated string mutation_targets = 16;      // Module names to apply mutations to (empty = all)
 }
 
 message JobResponse {

@@ -19,7 +19,6 @@ use crate::automutate::controller::{
 use crate::dispatch::{
     JobControlCommand, JobId as DispatchJobId, JobSession, ModularBuildSpec, ModuleSelectionSpec,
 };
-use crate::triage::SearchSpace;
 use serde_json::Value;
 use std::path::PathBuf;
 use tonic::{Request, Response, Status};
@@ -108,9 +107,15 @@ pub async fn schedule_job(
         job.trace_mode = req.trace_mode.clone();
     }
     if !req.variable_categories.is_empty() {
-        job.search_space = SearchSpace {
-            variable_categories: req.variable_categories.clone(),
-        };
+        job.search_space.variable_categories = req.variable_categories.clone();
+    }
+    job.search_space.strategy =
+        crate::triage::VariationStrategy::from_str_or_default(&req.variation_strategy);
+    if !req.mutation_pool.is_empty() {
+        job.search_space.mutation_pool = req.mutation_pool.clone();
+    }
+    if !req.mutation_targets.is_empty() {
+        job.search_space.mutation_targets = req.mutation_targets.clone();
     }
 
     // Index to ES before submission
