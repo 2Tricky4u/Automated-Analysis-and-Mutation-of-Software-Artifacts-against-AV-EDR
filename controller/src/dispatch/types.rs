@@ -411,6 +411,7 @@ pub struct JobSession {
 
     // Progress
     pub current_round: u32,
+    pub completed_rounds: u32,
     pub max_rounds: u32,
     pub stop_on_evasion: bool,
 
@@ -433,6 +434,7 @@ impl JobSession {
             trace_mode: "lines".to_string(),
             search_space: SearchSpace::default(),
             current_round: 0,
+            completed_rounds: 0,
             max_rounds,
             stop_on_evasion: false,
             rounds: BTreeMap::new(),
@@ -479,6 +481,7 @@ impl JobSession {
     pub fn record_round_summary(&mut self, summary: RoundSummary) {
         self.rounds.insert(summary.round_number, summary.clone());
         self.last_round = Some(summary);
+        self.completed_rounds += 1;
     }
 
     /// Create a lightweight snapshot for external visibility
@@ -487,6 +490,7 @@ impl JobSession {
             id: self.id.clone(),
             status,
             current_round: self.current_round,
+            completed_rounds: self.completed_rounds,
             max_rounds: self.max_rounds,
             target_os: self.target_os.clone(),
             started_at: self.started_at,
@@ -759,6 +763,7 @@ pub struct JobInfo {
     pub id: JobId,
     pub status: JobStatus,
     pub current_round: u32,
+    pub completed_rounds: u32,
     pub max_rounds: u32,
     pub target_os: Option<String>,
     pub started_at: Option<SystemTime>,
