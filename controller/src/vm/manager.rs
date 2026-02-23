@@ -415,8 +415,19 @@ impl TargetManager {
         let id = id.as_ref();
         debug!("Establishing stream with target {}", id);
 
-        let channel = self.get_channel(id).await?;
-        let mut client = WorkerAgentClient::new(channel);
+        // Build a dedicated channel for the long-lived bidi stream — NO request timeout.
+        // get_channel() has a 10s timeout meant for unary RPCs, which would kill this stream
+        // after 10s of idle time between messages.
+        let address = self
+            .targets
+            .get(id)
+            .map(|t| t.address.clone())
+            .ok_or_else(|| anyhow!("Target not found: {}", id))?;
+        let stream_endpoint = Endpoint::try_from(format!("http://{}", address))?
+            .connect_timeout(Duration::from_secs(5))
+            .tcp_keepalive(Some(Duration::from_secs(30)));
+        let stream_channel = stream_endpoint.connect().await?;
+        let mut client = WorkerAgentClient::new(stream_channel);
 
         // Create channel for outgoing messages to remote VM (commands, heartbeats)
         let (stream_tx, stream_rx) = mpsc::channel::<ControllerMessage>(128);
