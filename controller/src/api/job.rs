@@ -371,6 +371,8 @@ pub async fn get_round(
         coverage_total_lines: u32_field(&source, "coverage_total_lines"),
         coverage_executable_lines: u32_field(&source, "coverage_executable_lines"),
         coverage_executed_lines: u32_field(&source, "coverage_executed_lines"),
+        dryrun_run: None, // Populated if dryrun data exists in ES
+        dry_run_exit_code: source["dry_run_exit_code"].as_i64().unwrap_or(0) as i32,
     };
 
     Ok(Response::new(GetRoundResponse { round: Some(round) }))
@@ -603,6 +605,8 @@ fn round_doc_to_proto(source: &Value) -> RoundSummaryProto {
         completed_at: parse_date_to_unix_secs(&source["completed_at"]),
         differential_category: str_field(source, "differential_category"),
         coverage_percent: f64_field(source, "coverage_percent"),
+        dry_run_exit_code: source["dry_run_exit_code"].as_i64().unwrap_or(0) as i32,
+        has_dryrun: bool_field(source, "has_dryrun"),
     }
 }
 

@@ -160,6 +160,14 @@ impl RunPool {
         self.job_registry.get(job_id).map(|r| r.value().clone())
     }
 
+    /// Remove a single pending run by ID.
+    /// Returns true if the run was found and removed.
+    /// Note: no need to remove from the OS VecDeque — take_run() already
+    /// skips entries missing from `pending`.
+    pub fn remove_run(&self, run_id: &RunId) -> bool {
+        self.pending.remove(run_id).is_some()
+    }
+
     /// Remove all pending runs for a specific job.
     /// Returns the number of runs removed.
     pub async fn remove_runs_for_job(&self, job_id: &JobId) -> usize {
@@ -260,6 +268,20 @@ impl RunPool {
                         .iter()
                         .any(|cap| cap.eq_ignore_ascii_case(required))
                 });
+
+                // Bidirectional dryrun guard: dryrun VMs only take dryrun runs,
+                // and non-dryrun VMs never take dryrun runs.
+                let is_dryrun_vm = vm_capabilities
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case("dryrun"));
+                let is_dryrun_run = run_ref
+                    .required_capabilities
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case("dryrun"));
+                if is_dryrun_vm != is_dryrun_run {
+                    q.push_back(run_id);
+                    continue; // dryrun VMs only take dryrun runs, and vice versa
+                }
 
                 if caps_match {
                     // Remove from pending and return

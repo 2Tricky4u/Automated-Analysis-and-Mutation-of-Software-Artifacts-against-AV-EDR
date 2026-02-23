@@ -201,8 +201,12 @@ impl StreamHandler {
             // Build sink from tx channel (no Arc<StreamHandler> needed)
             let sink = crate::dispatch::sink::build_sink(Some(&tx));
 
-            // Execute via engine
-            let result = match engine::execute_run(&run_request, &run_context, sink).await {
+            // Execute via engine — dryrun skips RedEDR/telemetry
+            let result = match if sample_request.is_dryrun {
+                engine::execute_dryrun(&run_request, &run_context).await
+            } else {
+                engine::execute_run(&run_request, &run_context, sink).await
+            } {
                 Ok(outcome) => {
                     let output = crate::api::run::format_output(
                         &outcome,

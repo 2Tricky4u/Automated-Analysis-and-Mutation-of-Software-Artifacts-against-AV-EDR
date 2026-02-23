@@ -285,6 +285,9 @@ impl Orchestrator {
                     instrumented_vm_id,
                     round_started_at,
                     assembled_source,
+                    dryrun_run_id,
+                    dryrun_outcome,
+                    dryrun_vm_id,
                 } = *data;
                 info!(
                     "[Orchestrator] Round {} completed for job {}: detected={}, evasion={:.2}",
@@ -304,6 +307,9 @@ impl Orchestrator {
                 let i_run_id = instrumented_run_id.0.clone();
                 let b_vm_id = baseline_vm_id;
                 let i_vm_id = instrumented_vm_id;
+                let d_run_id = dryrun_run_id.map(|id| id.0.clone());
+                let d_outcome = dryrun_outcome;
+                let d_vm_id = dryrun_vm_id;
                 tokio::spawn(async move {
                     // Update job progress (current_round)
                     if let Err(e) = storage.update_job_progress(&jid, round_number).await {
@@ -320,6 +326,9 @@ impl Orchestrator {
                             started_at: Some(&started_at_str),
                             modules: Some(&modules),
                             assembled_source: assembled_source.as_deref(),
+                            dry_run_exit_code: summary.dry_run_exit_code,
+                            has_dryrun: summary.has_dryrun,
+                            dryrun_run_id: d_run_id.as_deref(),
                         })
                         .await
                     {
@@ -354,6 +363,23 @@ impl Orchestrator {
                         .await
                     {
                         error!("Failed to index instrumented run: {}", e);
+                    }
+                    // Index dryrun run (if present)
+                    if let (Some(dr_run_id), Some(dr_outcome)) = (&d_run_id, &d_outcome) {
+                        if let Err(e) = storage
+                            .index_run_result(&RunIndexParams {
+                                job_id: &jid,
+                                round_id: &rid,
+                                run_id: dr_run_id,
+                                run_type: "dryrun",
+                                outcome: dr_outcome,
+                                mutations: &mutations,
+                                vm_id: &d_vm_id,
+                            })
+                            .await
+                        {
+                            error!("Failed to index dryrun run: {}", e);
+                        }
                     }
 
                     // Compute line coverage from trace data

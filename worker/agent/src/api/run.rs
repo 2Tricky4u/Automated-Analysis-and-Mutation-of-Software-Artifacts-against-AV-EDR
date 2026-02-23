@@ -72,10 +72,16 @@ pub async fn run_sample(
         }
     };
 
-    // Execute via engine
-    let outcome = engine::execute_run(&run_request, &run_context, sink)
-        .await
-        .map_err(|e| e.into_status())?;
+    // Execute via engine — dryrun skips RedEDR/telemetry
+    let outcome = if req.is_dryrun {
+        engine::execute_dryrun(&run_request, &run_context)
+            .await
+            .map_err(|e| e.into_status())?
+    } else {
+        engine::execute_run(&run_request, &run_context, sink)
+            .await
+            .map_err(|e| e.into_status())?
+    };
 
     // Map RunOutcome → SampleResponse
     let output = format_output(&outcome, req.timeout_seconds as u32);

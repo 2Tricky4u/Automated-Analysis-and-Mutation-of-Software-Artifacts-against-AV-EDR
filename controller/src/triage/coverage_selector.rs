@@ -212,6 +212,8 @@ mod tests {
             evasion_score,
             differential_category: category,
             completed_at: SystemTime::now(),
+            dry_run_exit_code: None,
+            has_dryrun: false,
         }
     }
 

@@ -112,6 +112,7 @@ enum RunType {
   RUN_TYPE_UNSPECIFIED = 0;
   RUN_TYPE_BASELINE = 1;       // No instrumentation
   RUN_TYPE_INSTRUMENTED = 2;   // Full tracing
+  RUN_TYPE_DRYRUN = 3;         // Clean-VM exit code only (no AV/telemetry)
 }
 
 // ===== Worker/Tool Metadata (shared between controller and worker) =====
@@ -152,6 +153,7 @@ message SampleRequest {
   int32 timeout_seconds = 3;
   bool enable_etw = 4;
   string trace_mode = 5;   // off, api, lines, all - controls instrumentation level
+  bool is_dryrun = 6;      // If true, worker skips RedEDR/telemetry (exit code only)
 }
 
 // Sample execution response

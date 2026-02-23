@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -42,11 +42,15 @@ use crate::triage::Selector;
 const MAX_IN_FLIGHT_ROUNDS: usize = 5;
 
 /// Maximum pending runs in pool for this job (backpressure)
-/// Each round = 2 runs (baseline + instrumented), so 10 = 5 rounds worth
-const MAX_PENDING_RUNS: usize = 6;
+/// Each round = 3 runs (baseline + instrumented + dryrun), so 9 = 3 rounds worth
+const MAX_PENDING_RUNS: usize = 9;
 
 /// Default timeout for run execution
 const DEFAULT_TIMEOUT_SECONDS: u32 = 10;
+
+/// Grace period (seconds) to wait for dryrun result after baseline+instrumented complete.
+/// If no dryrun worker picks up the run within this window, the round finalizes without it.
+const DRYRUN_GRACE_PERIOD_SECS: u64 = 5;
 
 /// Interval for checking if more rounds can be produced
 const PRODUCTION_CHECK_INTERVAL_MS: u64 = 100;
@@ -173,6 +177,25 @@ impl JobWorker {
 
                 // Periodic check to produce more rounds
                 _ = check_interval.tick() => {
+                    // Check for rounds past dryrun grace deadline
+                    let expired: Vec<RoundId> = self.round_aggs.iter()
+                        .filter(|(_, agg)| {
+                            agg.dryrun_deadline.map_or(false, |d| Instant::now() >= d)
+                        })
+                        .map(|(id, _)| id.clone())
+                        .collect();
+                    for round_id in expired {
+                        // Remove the unclaimed dryrun run from the pool before finalizing
+                        if let Some(agg) = self.round_aggs.get(&round_id) {
+                            self.run_pool.remove_run(&agg.dryrun_run_id);
+                        }
+                        info!(
+                            "[JobWorker:{}] Dryrun grace expired for round {}, finalizing without",
+                            self.job.id, round_id
+                        );
+                        self.finalize_round(&round_id).await;
+                    }
+
                     // Produce more rounds if possible
                     if self.can_produce_round()
                         && let Err(e) = self.produce_round().await {
@@ -358,8 +381,8 @@ impl JobWorker {
             round_number: round_num,
             run_type: RunType::Baseline,
             artifact: ArtifactRef {
-                path: baseline_built.output_path,
-                sha256: Some(baseline_built.sha256),
+                path: baseline_built.output_path.clone(),
+                sha256: Some(baseline_built.sha256.clone()),
             },
             mutations: spec.mutations.iter().map(|m| m.id.clone()).collect(),
             timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
@@ -379,8 +402,27 @@ impl JobWorker {
             },
             mutations: spec.mutations.iter().map(|m| m.id.clone()).collect(),
             timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
-            required_os: target_os,
+            required_os: target_os.clone(),
             required_capabilities: required_caps,
+        };
+
+        // Always create a dryrun envelope — reuses the baseline artifact (same binary).
+        // If no dryrun worker is connected, the run sits in the pool until grace period expires.
+        let dryrun_run_id = RunId(format!("{}-dryrun", round_id.0));
+        let dryrun_run = RunEnvelope {
+            run_id: dryrun_run_id.clone(),
+            job_id: self.job.id.clone(),
+            round_id: round_id.clone(),
+            round_number: round_num,
+            run_type: RunType::DryRun,
+            artifact: ArtifactRef {
+                path: baseline_artifact_path.clone(),
+                sha256: Some(baseline_built.sha256.clone()),
+            },
+            mutations: spec.mutations.iter().map(|m| m.id.clone()).collect(),
+            timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
+            required_os: target_os,
+            required_capabilities: vec!["dryrun".to_string()],
         };
 
         // Create round aggregator
@@ -397,17 +439,21 @@ impl JobWorker {
             assembled_source,
             baseline_artifact_path,
             instrumented_artifact_path,
+            dryrun_run_id: dryrun_run_id.clone(),
+            dryrun: None,
+            dryrun_vm_id: String::new(),
+            dryrun_deadline: None,
         };
         self.round_aggs.insert(round_id.clone(), agg);
 
         info!(
-            "[JobWorker:{}] Built runs for round {} (baseline={}, instrumented={})",
-            self.job.id, round_id, baseline_built.artifact_id, instrumented_built.artifact_id
+            "[JobWorker:{}] Built runs for round {} (baseline={}, instrumented={}, dryrun={})",
+            self.job.id, round_id, baseline_built.artifact_id, instrumented_built.artifact_id, dryrun_run_id
         );
 
-        // Add runs to shared pool
+        // Add all 3 runs to shared pool
         self.run_pool
-            .add_runs(vec![baseline_run, instrumented_run])
+            .add_runs(vec![baseline_run, instrumented_run, dryrun_run])
             .await;
 
         Ok(())
@@ -506,6 +552,9 @@ impl JobWorker {
             } else if agg.instrumented_run_id == result.run_id {
                 agg.instrumented = Some(result.outcome.clone());
                 agg.instrumented_vm_id = result.vm_id.clone();
+            } else if agg.dryrun_run_id == result.run_id {
+                agg.dryrun = Some(result.outcome.clone());
+                agg.dryrun_vm_id = result.vm_id.clone();
             } else {
                 warn!(
                     "[JobWorker:{}] Run {} doesn't match round {} runs",
@@ -513,8 +562,27 @@ impl JobWorker {
                 );
                 return;
             }
-            if agg.is_complete() {
-                Some(result.round_id.clone())
+
+            // Determine if round is ready to finalize:
+            // Core runs (baseline+instrumented) must be done.
+            // Dryrun is optional — we use a grace period.
+            if agg.baseline.is_some() && agg.instrumented.is_some() {
+                if agg.dryrun.is_some() {
+                    // All 3 done — finalize immediately
+                    Some(result.round_id.clone())
+                } else if agg.dryrun_deadline.is_none() {
+                    // Core runs done, dryrun pending — start grace period
+                    agg.dryrun_deadline =
+                        Some(Instant::now() + Duration::from_secs(DRYRUN_GRACE_PERIOD_SECS));
+                    debug!(
+                        "[JobWorker:{}] Round {} core runs done, waiting {}s for dryrun",
+                        self.job.id, result.round_id, DRYRUN_GRACE_PERIOD_SECS
+                    );
+                    None
+                } else {
+                    // Already waiting for dryrun or deadline
+                    None
+                }
             } else {
                 None
             }
@@ -559,6 +627,23 @@ impl JobWorker {
         let instrumented_vm_id = agg.instrumented_vm_id.clone();
         let round_started_at = agg.started_at;
         let assembled_source = agg.assembled_source.clone();
+        let dryrun_run_id = Some(agg.dryrun_run_id.clone());
+        let dryrun_outcome = agg.dryrun.clone();
+        let dryrun_vm_id = agg.dryrun_vm_id.clone();
+
+        if dryrun_outcome.is_some() {
+            info!(
+                "[JobWorker:{}] Round {} has dryrun result (exit={})",
+                self.job.id,
+                round_id,
+                dryrun_outcome.as_ref().unwrap().exit_code
+            );
+        } else {
+            debug!(
+                "[JobWorker:{}] Round {} finalizing without dryrun result",
+                self.job.id, round_id
+            );
+        }
 
         let summary = match agg.to_summary() {
             Some(s) => s,
@@ -572,8 +657,8 @@ impl JobWorker {
         };
 
         info!(
-            "[JobWorker:{}] Round {} complete: detected={}, evasion={:.2}",
-            self.job.id, round_id, summary.detected, summary.evasion_score
+            "[JobWorker:{}] Round {} complete: detected={}, evasion={:.2}, has_dryrun={}",
+            self.job.id, round_id, summary.detected, summary.evasion_score, summary.has_dryrun
         );
 
         // Record in job session (selector reads history from here)
@@ -582,7 +667,7 @@ impl JobWorker {
         // Update job registry for API visibility
         self.run_pool.update_job_progress(&self.job);
 
-        // Emit enriched event for ES indexing (round + both runs)
+        // Emit enriched event for ES indexing (round + both runs + optional dryrun)
         let _ = self
             .event_tx
             .send(JobWorkerEvent::RoundCompleted(Box::new(
@@ -601,6 +686,9 @@ impl JobWorker {
                     instrumented_vm_id,
                     round_started_at,
                     assembled_source,
+                    dryrun_run_id,
+                    dryrun_outcome,
+                    dryrun_vm_id,
                 },
             )))
             .await;

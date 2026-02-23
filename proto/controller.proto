@@ -396,6 +396,8 @@ message RoundSummaryProto {
   int64 completed_at = 8;  // Unix timestamp
   string differential_category = 9;  // "real_detection"|"instrumentation_artifact"|"flaky"|"evasion"
   double coverage_percent = 10;
+  int32 dry_run_exit_code = 11;      // Exit code from dryrun (clean VM) execution
+  bool has_dryrun = 12;              // Whether dryrun result was available for this round
 }
 
 // Stop job
@@ -445,6 +447,9 @@ message RoundProto {
   uint32 coverage_total_lines = 25;
   uint32 coverage_executable_lines = 26;
   uint32 coverage_executed_lines = 27;
+  // Dryrun fields
+  RunResultProto dryrun_run = 30;    // Dryrun run result (if available)
+  int32 dry_run_exit_code = 31;      // Exit code from dryrun execution
 }
 
 message RunResultProto {
