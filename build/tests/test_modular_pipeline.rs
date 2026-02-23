@@ -446,8 +446,7 @@ fn test_tracing_adds_delay_loops() {
     let modules = ModuleSelection::new();
     let payload = common::payload_small();
 
-    let pipeline =
-        common::run_pipeline(modules, &payload, EncodingType::Xor, &[]).unwrap();
+    let pipeline = common::run_pipeline(modules, &payload, EncodingType::Xor, &[]).unwrap();
 
     let src = &build::inject_line_traces_with_delay(
         &pipeline.final_source,

@@ -448,7 +448,11 @@ impl JobWorker {
 
         info!(
             "[JobWorker:{}] Built runs for round {} (baseline={}, instrumented={}, dryrun={})",
-            self.job.id, round_id, baseline_built.artifact_id, instrumented_built.artifact_id, dryrun_run_id
+            self.job.id,
+            round_id,
+            baseline_built.artifact_id,
+            instrumented_built.artifact_id,
+            dryrun_run_id
         );
 
         // Add all 3 runs to shared pool

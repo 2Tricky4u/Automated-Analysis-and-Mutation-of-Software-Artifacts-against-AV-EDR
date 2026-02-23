@@ -423,15 +423,24 @@ impl Orchestrator {
                                         error!("Failed to update round coverage: {}", e);
                                     }
                                 } else {
-                                    warn!("Round {}/{}: trace content found but no line numbers parsed", jid, rid);
+                                    warn!(
+                                        "Round {}/{}: trace content found but no line numbers parsed",
+                                        jid, rid
+                                    );
                                 }
                             }
                             None => {
-                                warn!("Round {}/{}: no trace content found after retry, skipping coverage", jid, rid);
+                                warn!(
+                                    "Round {}/{}: no trace content found after retry, skipping coverage",
+                                    jid, rid
+                                );
                             }
                         }
                     } else {
-                        debug!("Round {}/{}: no assembled source, skipping coverage", jid, rid);
+                        debug!(
+                            "Round {}/{}: no assembled source, skipping coverage",
+                            jid, rid
+                        );
                     }
                 });
             }

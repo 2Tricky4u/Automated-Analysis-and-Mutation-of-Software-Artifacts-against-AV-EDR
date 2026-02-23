@@ -124,9 +124,9 @@ impl VMExecutor {
                 .run_pool
                 .take_run(&self.info.os, &self.info.capabilities)
                 .await
-            {
-                self.dispatch(run).await;
-            }
+        {
+            self.dispatch(run).await;
+        }
 
         loop {
             tokio::select! {

@@ -74,9 +74,14 @@ pub async fn execute_dryrun(
 
     // Phase 2: Spawn process
     let spawn_start = Instant::now();
-    let mut child =
-        crate::infra::process::spawn_artifact(&context.artifact_path, &context.artifact_path.parent().unwrap_or(std::path::Path::new(".")))
-            .map_err(|e| RunError::ProcessSpawnFailed(format!("Failed to spawn process: {}", e)))?;
+    let mut child = crate::infra::process::spawn_artifact(
+        &context.artifact_path,
+        &context
+            .artifact_path
+            .parent()
+            .unwrap_or(std::path::Path::new(".")),
+    )
+    .map_err(|e| RunError::ProcessSpawnFailed(format!("Failed to spawn process: {}", e)))?;
 
     let phase_spawn_ms = spawn_start.elapsed().as_millis() as u64;
 
@@ -96,7 +101,10 @@ pub async fn execute_dryrun(
             (-1, false)
         }
         Err(_) => {
-            warn!("[Dryrun] Timeout after {}s, killing", request.timeout_seconds);
+            warn!(
+                "[Dryrun] Timeout after {}s, killing",
+                request.timeout_seconds
+            );
             let _ = child.kill().await;
             (-1, true)
         }
@@ -110,8 +118,8 @@ pub async fn execute_dryrun(
         exit_code,
         timed_out,
         actual_elapsed.as_secs_f64() * 1000.0,
-        &[],    // no telemetry
-        None,   // no dry_run_exit_code
+        &[],  // no telemetry
+        None, // no dry_run_exit_code
     );
 
     info!("[Dryrun] verdict={:?}, exit_code={}", verdict, exit_code);

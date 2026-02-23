@@ -177,15 +177,12 @@ pub fn package_trace_log(
         };
         if adjusted >= slice.len() {
             // Single line that's too big — give up
-            warn!(
-                "Trace log has a single line exceeding payload limit, skipping trace_log event"
-            );
+            warn!("Trace log has a single line exceeding payload limit, skipping trace_log event");
             return;
         }
         slice = &slice[adjusted..];
     }
 }
-
 
 /// Parse binary protocol trace.log and extract telemetry events
 pub fn collect_trace_log_binary(
