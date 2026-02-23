@@ -24,16 +24,56 @@ pub struct Selection {
     pub rationale: String,
 }
 
-/// Which module categories the selector may vary.
+/// Variation strategy for the selector.
+///
+/// - `MutationOnly` (default): modules stay fixed, mutations vary per round
+/// - `Full`: both modules AND mutations vary per round
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum VariationStrategy {
+    #[default]
+    MutationOnly,
+    Full,
+}
+
+impl VariationStrategy {
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "full" => Self::Full,
+            _ => Self::MutationOnly,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::MutationOnly => "mutation",
+            Self::Full => "full",
+        }
+    }
+}
+
+/// Which module categories the selector may vary + mutation exploration config.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchSpace {
+    /// Variation strategy: MutationOnly (default) or Full
+    #[serde(default)]
+    pub strategy: VariationStrategy,
+    /// Module categories to vary (used in Full mode)
     pub variable_categories: Vec<String>,
+    /// Optional subset of mutations to explore (empty = full catalog)
+    #[serde(default)]
+    pub mutation_pool: Vec<String>,
+    /// Which modules mutations apply to (empty = all)
+    #[serde(default)]
+    pub mutation_targets: Vec<String>,
 }
 
 impl Default for SearchSpace {
     fn default() -> Self {
         Self {
+            strategy: VariationStrategy::MutationOnly,
             variable_categories: vec!["deconditioner".to_string()],
+            mutation_pool: vec![],
+            mutation_targets: vec![],
         }
     }
 }

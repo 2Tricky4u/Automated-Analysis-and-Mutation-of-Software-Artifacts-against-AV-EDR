@@ -18,7 +18,7 @@ use crate::triage::SearchSpace;
 
 /// Module selection for modular template assembly
 /// Uses "none" for disabled optional modules (matches build crate)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModuleSelectionSpec {
     pub carrier: String,
     pub decoder: String,

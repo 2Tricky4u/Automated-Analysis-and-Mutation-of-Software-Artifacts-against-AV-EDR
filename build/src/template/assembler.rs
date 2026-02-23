@@ -131,7 +131,11 @@ impl Assembler {
         })
     }
 
-    /// Assemble a complete source file from the template and selected modules
+    /// Assemble a complete source file from the template and selected modules.
+    ///
+    /// Each module replacement is wrapped with boundary comments:
+    /// `// --- BEGIN MODULE: <category> ---` / `// --- END MODULE: <category> ---`
+    /// These enable `strip_markers_outside_targets()` to scope mutations.
     pub fn assemble(&mut self, modules: &ModuleSelection, payload_code: &str) -> Result<String> {
         // Validate module selection
         modules.validate(&self.template_dir)?;
@@ -152,40 +156,40 @@ impl Assembler {
             "Assembling artifact with modules"
         );
 
-        // Replace @MODULE markers with module content
+        // Replace @MODULE markers with module content wrapped in boundary comments
         let output = template
-            .replace("// @MODULE:payload", payload_code)
+            .replace("// @MODULE:payload", &wrap_module("payload", payload_code))
             .replace(
                 "// @MODULE:definitions",
-                &self.read_module("header/definitions.h")?,
+                &wrap_module("definitions", &self.read_module("header/definitions.h")?),
             )
             .replace(
                 "// @MODULE:decoder",
-                &self.read_module(&format!("decoder/{}.c", modules.decoder))?,
+                &wrap_module("decoder", &self.read_module(&format!("decoder/{}.c", modules.decoder))?),
             )
             .replace(
                 "// @MODULE:virtualprotect",
-                &self.read_module(&format!("virtualprotect/{}.c", modules.virtualprotect))?,
+                &wrap_module("virtualprotect", &self.read_module(&format!("virtualprotect/{}.c", modules.virtualprotect))?),
             )
             .replace(
                 "// @MODULE:antiemulation",
-                &self.read_module(&format!("antiemulation/{}.c", modules.antiemulation))?,
+                &wrap_module("antiemulation", &self.read_module(&format!("antiemulation/{}.c", modules.antiemulation))?),
             )
             .replace(
                 "// @MODULE:deconditioner",
-                &self.read_module(&format!("deconditioner/{}.c", modules.deconditioner))?,
+                &wrap_module("deconditioner", &self.read_module(&format!("deconditioner/{}.c", modules.deconditioner))?),
             )
             .replace(
                 "// @MODULE:guardrail",
-                &self.read_module(&format!("guardrails/{}.c", modules.guardrail))?,
+                &wrap_module("guardrail", &self.read_module(&format!("guardrails/{}.c", modules.guardrail))?),
             )
             .replace(
                 "// @MODULE:decoy",
-                &self.read_module(&format!("decoy/{}.c", modules.decoy))?,
+                &wrap_module("decoy", &self.read_module(&format!("decoy/{}.c", modules.decoy))?),
             )
             .replace(
                 "// @MODULE:carrier",
-                &self.read_module(&format!("carrier/{}.c", modules.carrier))?,
+                &wrap_module("carrier", &self.read_module(&format!("carrier/{}.c", modules.carrier))?),
             );
 
         debug!(output_len = output.len(), "Assembly complete");
@@ -256,6 +260,66 @@ impl Assembler {
     }
 }
 
+/// Wrap module content with boundary comments for scoped mutation targeting.
+fn wrap_module(category: &str, content: &str) -> String {
+    format!(
+        "// --- BEGIN MODULE: {} ---\n{}\n// --- END MODULE: {} ---",
+        category, content, category
+    )
+}
+
+/// Strip `@MUTATE` markers from lines NOT inside targeted module boundaries.
+///
+/// `targets` = module names to keep markers for (e.g., `["deconditioner", "carrier"]`).
+/// Empty targets = keep all markers (no stripping).
+/// Lines outside any module boundary (main template) are kept if `"main"` is in targets
+/// or if targets is empty.
+pub fn strip_markers_outside_targets(source: &str, targets: &[String]) -> String {
+    if targets.is_empty() {
+        return source.to_string();
+    }
+
+    let target_set: std::collections::HashSet<&str> = targets.iter().map(|s| s.as_str()).collect();
+    let keep_main = target_set.contains("main");
+
+    let mut current_module: Option<&str> = None;
+    let mut result = Vec::new();
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+
+        // Track module boundaries
+        if let Some(rest) = trimmed.strip_prefix("// --- BEGIN MODULE: ") {
+            if let Some(name) = rest.strip_suffix(" ---") {
+                current_module = Some(name);
+            }
+            result.push(line.to_string());
+            continue;
+        }
+        if trimmed.starts_with("// --- END MODULE: ") {
+            result.push(line.to_string());
+            current_module = None;
+            continue;
+        }
+
+        // Check if line contains @MUTATE marker
+        if line.contains("// @MUTATE:") {
+            let in_target = match current_module {
+                Some(module) => target_set.contains(module),
+                None => keep_main,
+            };
+            if !in_target {
+                // Strip this marker line
+                continue;
+            }
+        }
+
+        result.push(line.to_string());
+    }
+
+    result.join("\n")
+}
+
 /// Extract @MUTATE markers from source code
 pub fn extract_mutation_markers(source: &str) -> Vec<MutationMarker> {
     let mut markers = Vec::new();
@@ -304,11 +368,15 @@ pub struct MutationMarker {
     pub column: usize,
 }
 
-/// Strip all @MUTATE markers from source code (for final compilation)
+/// Strip all @MUTATE markers and module boundary comments from source code (for final compilation)
 pub fn strip_mutation_markers(source: &str) -> String {
     source
         .lines()
-        .filter(|line| !line.contains("// @MUTATE:"))
+        .filter(|line| {
+            !line.contains("// @MUTATE:")
+                && !line.contains("// --- BEGIN MODULE:")
+                && !line.contains("// --- END MODULE:")
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -361,5 +429,75 @@ int main() {
         assert!(!stripped.contains("@MUTATE"));
         assert!(stripped.contains("do_something()"));
         assert!(stripped.contains("return 0;"));
+    }
+
+    #[test]
+    fn test_strip_mutation_markers_removes_boundary_comments() {
+        let source = r#"// --- BEGIN MODULE: deconditioner ---
+    // @MUTATE:timing_jitter
+    do_something();
+// --- END MODULE: deconditioner ---
+    return 0;"#;
+        let stripped = strip_mutation_markers(source);
+        assert!(!stripped.contains("BEGIN MODULE"));
+        assert!(!stripped.contains("END MODULE"));
+        assert!(!stripped.contains("@MUTATE"));
+        assert!(stripped.contains("do_something()"));
+        assert!(stripped.contains("return 0;"));
+    }
+
+    #[test]
+    fn test_wrap_module() {
+        let content = "void foo() {}";
+        let wrapped = wrap_module("carrier", content);
+        assert!(wrapped.starts_with("// --- BEGIN MODULE: carrier ---"));
+        assert!(wrapped.contains("void foo() {}"));
+        assert!(wrapped.ends_with("// --- END MODULE: carrier ---"));
+    }
+
+    #[test]
+    fn test_strip_markers_outside_targets_empty_targets_keeps_all() {
+        let source = r#"// @MUTATE:main_thing
+// --- BEGIN MODULE: carrier ---
+// @MUTATE:carrier_thing
+// --- END MODULE: carrier ---"#;
+        let result = strip_markers_outside_targets(source, &[]);
+        assert!(result.contains("@MUTATE:main_thing"));
+        assert!(result.contains("@MUTATE:carrier_thing"));
+    }
+
+    #[test]
+    fn test_strip_markers_outside_targets_keeps_targeted_module() {
+        let source = r#"// @MUTATE:main_thing
+// --- BEGIN MODULE: carrier ---
+// @MUTATE:carrier_thing
+code_in_carrier();
+// --- END MODULE: carrier ---
+// --- BEGIN MODULE: decoder ---
+// @MUTATE:decoder_thing
+code_in_decoder();
+// --- END MODULE: decoder ---"#;
+        let result = strip_markers_outside_targets(source, &["carrier".to_string()]);
+        // Main template markers stripped (not in targets, "main" not in targets)
+        assert!(!result.contains("@MUTATE:main_thing"));
+        // Carrier markers kept
+        assert!(result.contains("@MUTATE:carrier_thing"));
+        assert!(result.contains("code_in_carrier()"));
+        // Decoder markers stripped
+        assert!(!result.contains("@MUTATE:decoder_thing"));
+        assert!(result.contains("code_in_decoder()"));
+    }
+
+    #[test]
+    fn test_strip_markers_outside_targets_main_region() {
+        let source = r#"// @MUTATE:main_thing
+// --- BEGIN MODULE: carrier ---
+// @MUTATE:carrier_thing
+// --- END MODULE: carrier ---"#;
+        let result = strip_markers_outside_targets(source, &["main".to_string()]);
+        // Main markers kept
+        assert!(result.contains("@MUTATE:main_thing"));
+        // Carrier markers stripped
+        assert!(!result.contains("@MUTATE:carrier_thing"));
     }
 }

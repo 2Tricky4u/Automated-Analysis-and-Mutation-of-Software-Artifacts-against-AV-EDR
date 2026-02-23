@@ -110,6 +110,7 @@ pub async fn build_artifact(
             encoding,
             mutations,
             trace_mode: trace_mode.clone(),
+            mutation_targets: vec![],
         })
         .await
         .map_err(|e| {

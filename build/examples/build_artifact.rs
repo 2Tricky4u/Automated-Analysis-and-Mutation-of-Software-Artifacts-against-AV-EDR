@@ -93,6 +93,7 @@ fn main() {
         encoding,
         mutations,
         trace_mode: args.trace.clone(),
+        mutation_targets: vec![],
     };
 
     eprintln!(

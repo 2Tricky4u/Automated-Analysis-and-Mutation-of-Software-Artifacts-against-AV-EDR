@@ -50,6 +50,18 @@ pub struct SubmitJobRequest {
     /// Which module categories the selector may vary across rounds
     #[serde(default)]
     pub variable_categories: Vec<String>,
+
+    /// Variation strategy: "mutation" (default) or "full"
+    #[serde(default)]
+    pub variation_strategy: Option<String>,
+
+    /// Mutation IDs to explore (empty = full catalog)
+    #[serde(default)]
+    pub mutation_pool: Vec<String>,
+
+    /// Module names to apply mutations to (empty = all)
+    #[serde(default)]
+    pub mutation_targets: Vec<String>,
 }
 
 fn default_max_rounds() -> u32 {
@@ -213,6 +225,9 @@ pub async fn submit_job(
             stop_on_evasion: payload.stop_on_evasion,
             trace_mode: payload.trace_mode,
             variable_categories: payload.variable_categories,
+            variation_strategy: payload.variation_strategy,
+            mutation_pool: payload.mutation_pool,
+            mutation_targets: payload.mutation_targets,
         })
         .await
     {
