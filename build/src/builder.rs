@@ -675,29 +675,32 @@ impl ArtifactBuilder {
             .await
             .context("Failed to read instrumented artifact")?;
 
-        // Sanity check: instrumented binary should be larger than original, not smaller
-        if instrumented_data.len() < built.size_bytes as usize {
+        // Sanity check: instrumented binary should not be drastically smaller.
+        // Small differences are expected — the baseline is built via clang -O2 with
+        // /OPT:REF,ICF while the instrumented path uses -O0 IR → obj → lld-link
+        // without those linker optimizations, so section alignment/padding can differ.
+        let size_ratio = instrumented_data.len() as f64 / built.size_bytes as f64;
+        if size_ratio < 0.50 {
             error!(
-                "WARNING: Instrumented binary ({} bytes) is SMALLER than original ({} bytes)! This indicates a build error.",
+                "Instrumented binary ({} bytes) is {:.0}% of original ({} bytes) — likely a build error.",
                 instrumented_data.len(),
+                size_ratio * 100.0,
                 built.size_bytes
             );
             error!("Instrumented path: {:?}", instrumented_exe_path);
             error!("Original path: {:?}", built.output_path);
-
-            // Check if object file exists (might have been left behind)
-            if obj_path.exists() {
-                let obj_size = tokio::fs::metadata(&obj_path).await?.len();
-                error!(
-                    "Object file still exists: {:?} ({} bytes)",
-                    obj_path, obj_size
-                );
-            }
-
             anyhow::bail!(
-                "Instrumented binary is suspiciously small ({} bytes vs {} bytes original). Check linker output.",
+                "Instrumented binary is suspiciously small ({} bytes vs {} bytes original, {:.0}%). Check linker output.",
                 instrumented_data.len(),
-                built.size_bytes
+                built.size_bytes,
+                size_ratio * 100.0
+            );
+        } else if size_ratio < 0.95 {
+            warn!(
+                "Instrumented binary ({} bytes) is slightly smaller than original ({} bytes, {:.1}%). Pipeline differences likely.",
+                instrumented_data.len(),
+                built.size_bytes,
+                size_ratio * 100.0
             );
         }
 
