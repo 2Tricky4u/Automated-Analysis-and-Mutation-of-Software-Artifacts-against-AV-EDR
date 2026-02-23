@@ -1,14 +1,78 @@
 //! Telemetry packaging pipeline
 //!
-//! Packages trace log as the tail of raw JSONL (no compression).
+//! Packages trace log as deduplicated JSONL. Duplicate `(file, line, func)`
+//! entries (from loops) are collapsed, keeping the highest `seq` per key.
 //! The controller reads `payload_content` to compute coverage.
 
+use std::collections::HashMap;
 use std::path::Path;
 use tracing::{error, info, warn};
 
 /// Hard limit for the serialized payload bytes (gRPC default max is 4_194_304).
 /// We stay well under to leave room for the outer TelemetryData proto envelope.
 const MAX_SERIALIZED_PAYLOAD: usize = 3_500_000;
+
+/// Deduplicate JSONL trace lines by `(file, line, func)`.
+///
+/// For each unique key, keeps the entry with the highest `seq` value.
+/// Entries seen more than once get an added `"count": N` field.
+/// Returns `(deduplicated_jsonl, raw_count, unique_count)`.
+fn deduplicate_trace_jsonl(raw: &str) -> (String, usize, usize) {
+    // Key: (file, line, func) → (best_seq, json_value, count)
+    let mut seen: HashMap<(String, i64, String), (i64, serde_json::Value, usize)> = HashMap::new();
+    let mut raw_count: usize = 0;
+
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        raw_count += 1;
+
+        let val: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue, // skip malformed lines
+        };
+
+        let file = val["file"].as_str().unwrap_or("").to_string();
+        let line_no = val["line"].as_i64().unwrap_or(0);
+        let func = val["func"].as_str().unwrap_or("").to_string();
+        let seq = val["seq"].as_i64().unwrap_or(0);
+
+        let key = (file, line_no, func);
+        match seen.get_mut(&key) {
+            Some((best_seq, best_val, count)) => {
+                *count += 1;
+                if seq > *best_seq {
+                    *best_seq = seq;
+                    *best_val = val;
+                }
+            }
+            None => {
+                seen.insert(key, (seq, val, 1));
+            }
+        }
+    }
+
+    // Sort by seq ascending
+    let mut entries: Vec<_> = seen.into_values().collect();
+    entries.sort_by_key(|(seq, _, _)| *seq);
+
+    // Build output, adding "count" field where > 1
+    let mut output = String::new();
+    for (_, mut val, count) in entries {
+        if count > 1 {
+            if let Some(obj) = val.as_object_mut() {
+                obj.insert("count".to_string(), serde_json::json!(count));
+            }
+        }
+        output.push_str(&val.to_string());
+        output.push('\n');
+    }
+
+    let unique_count = output.lines().count();
+    (output, raw_count, unique_count)
+}
 
 /// Package trace events file into a single `trace_log` telemetry event.
 ///
@@ -38,13 +102,25 @@ pub fn package_trace_log(
     let original_size = contents.len();
     let total_lines = contents.lines().count();
 
-    let mut metadata = std::collections::HashMap::new();
+    // Deduplicate trace lines by (file, line, func), keeping highest seq per key
+    let (contents, raw_count, unique_count) = deduplicate_trace_jsonl(&contents);
+    if raw_count > 0 {
+        let reduction = 100.0 * (1.0 - unique_count as f64 / raw_count as f64);
+        info!(
+            "Trace dedup: {} raw -> {} unique ({:.0}% reduction)",
+            raw_count, unique_count, reduction
+        );
+    }
+
+    let mut metadata = HashMap::new();
     metadata.insert(
         "trace_file".to_string(),
         trace_events_file.to_string_lossy().to_string(),
     );
     metadata.insert("event_count".to_string(), total_lines.to_string());
     metadata.insert("original_size_bytes".to_string(), original_size.to_string());
+    metadata.insert("raw_event_count".to_string(), raw_count.to_string());
+    metadata.insert("unique_lines".to_string(), unique_count.to_string());
 
     // Try the full content first; if the serialized payload is too large,
     // progressively take a smaller tail until it fits.
