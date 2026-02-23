@@ -46,6 +46,7 @@ fn trace_mode_from_run_type(run_type: &str) -> &str {
     match run_type {
         "baseline" => "off",
         "instrumented" => "lines",
+        "dryrun" => "off",
         _ => "unknown",
     }
 }

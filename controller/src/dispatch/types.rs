@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use crate::triage::SearchSpace;
 
@@ -388,6 +388,12 @@ pub struct RoundSummary {
     pub evasion_score: f64,
     pub differential_category: DifferentialCategory,
     pub completed_at: SystemTime,
+    /// Dryrun exit code (None if no dryrun result available)
+    #[serde(default)]
+    pub dry_run_exit_code: Option<i32>,
+    /// Whether a dryrun result was used for this round
+    #[serde(default)]
+    pub has_dryrun: bool,
 }
 
 /// JobSession is ephemeral runtime state.
@@ -554,6 +560,16 @@ pub struct RoundAgg {
     /// Controller-side build artifact paths for post-round cleanup.
     pub baseline_artifact_path: PathBuf,
     pub instrumented_artifact_path: PathBuf,
+    // --- Dryrun fields ---
+    /// Run ID for the dryrun (always produced; may sit unclaimed in pool)
+    pub dryrun_run_id: RunId,
+    /// Dryrun result (None until dryrun worker returns)
+    pub dryrun: Option<RunOutcome>,
+    /// VM that executed the dryrun
+    pub dryrun_vm_id: String,
+    /// Grace period deadline: set when baseline+instrumented are done, dryrun still pending.
+    /// If the deadline passes before dryrun arrives, the round finalizes without it.
+    pub dryrun_deadline: Option<Instant>,
 }
 
 impl RoundAgg {
@@ -562,17 +578,40 @@ impl RoundAgg {
     }
 
     /// Compute round summary from completed runs using the differential protocol.
+    ///
+    /// If a dryrun result is available and its exit code matches the baseline exit code
+    /// AND baseline was detected, the detection is overridden to InfraError (not detected).
+    /// This handles cases where carrier bugs cause nonzero exit codes that look like AV kills.
     pub fn to_summary(&self) -> Option<RoundSummary> {
         let baseline = self.baseline.as_ref()?;
         let instrumented = self.instrumented.as_ref()?;
 
+        // Extract dryrun exit code if present
+        let dry_run_exit_code = self.dryrun.as_ref().map(|d| d.exit_code);
+        let has_dryrun = self.dryrun.is_some();
+
+        // Check for dryrun override: if dryrun exit code matches baseline exit code
+        // AND baseline was "detected", the detection is a false positive (infra error).
+        let baseline_overridden = if let Some(dr_exit) = dry_run_exit_code {
+            baseline.detected && dr_exit == baseline.exit_code && baseline.exit_code != 0
+        } else {
+            false
+        };
+
+        let effective_baseline_detected = if baseline_overridden {
+            false // Override: same crash on clean VM → not a real detection
+        } else {
+            baseline.detected
+        };
+
         // Differential category from CLAUDE.md Section 5
-        let category = DifferentialCategory::from_runs(baseline.detected, instrumented.detected);
+        let category =
+            DifferentialCategory::from_runs(effective_baseline_detected, instrumented.detected);
         let detected = category.is_detected();
 
         // Behavior match: exit codes agree AND detected status agrees
         let behavior_match = baseline.exit_code == instrumented.exit_code
-            && baseline.detected == instrumented.detected;
+            && effective_baseline_detected == instrumented.detected;
 
         let evasion_score = self.compute_evasion_score(baseline, instrumented, category);
 
@@ -586,6 +625,8 @@ impl RoundAgg {
             evasion_score,
             differential_category: category,
             completed_at: SystemTime::now(),
+            dry_run_exit_code,
+            has_dryrun,
         })
     }
 
@@ -631,6 +672,7 @@ impl RoundAgg {
 pub enum RunType {
     Baseline,
     Instrumented,
+    DryRun,
 }
 
 impl RunType {
@@ -638,6 +680,7 @@ impl RunType {
         match self {
             RunType::Baseline => "baseline",
             RunType::Instrumented => "instrumented",
+            RunType::DryRun => "dryrun",
         }
     }
 
@@ -645,7 +688,12 @@ impl RunType {
         match self {
             RunType::Baseline => "off",
             RunType::Instrumented => "lines",
+            RunType::DryRun => "off",
         }
+    }
+
+    pub fn is_dryrun(&self) -> bool {
+        matches!(self, RunType::DryRun)
     }
 }
 
@@ -825,6 +873,8 @@ mod tests {
             evasion_score: 1.0,
             differential_category: DifferentialCategory::Evasion,
             completed_at: SystemTime::now(),
+            dry_run_exit_code: None,
+            has_dryrun: false,
         });
 
         assert_eq!(job.current_round, 1);
@@ -853,6 +903,10 @@ mod tests {
             assembled_source: None,
             baseline_artifact_path: PathBuf::new(),
             instrumented_artifact_path: PathBuf::new(),
+            dryrun_run_id: RunId("dryrun".into()),
+            dryrun: None,
+            dryrun_vm_id: String::new(),
+            dryrun_deadline: None,
         };
 
         assert!(!agg.is_complete());
@@ -968,6 +1022,8 @@ mod tests {
             evasion_score: 1.0,
             differential_category: DifferentialCategory::Evasion,
             completed_at: SystemTime::now(),
+            dry_run_exit_code: None,
+            has_dryrun: false,
         });
 
         assert!(
@@ -992,6 +1048,8 @@ mod tests {
             evasion_score: 0.0,
             differential_category: DifferentialCategory::RealDetection,
             completed_at: SystemTime::now(),
+            dry_run_exit_code: None,
+            has_dryrun: false,
         });
 
         assert!(
@@ -1015,6 +1073,8 @@ mod tests {
             evasion_score: 0.0,
             differential_category: DifferentialCategory::RealDetection,
             completed_at: SystemTime::now(),
+            dry_run_exit_code: None,
+            has_dryrun: false,
         });
 
         let (_, rid2) = job.start_round();
@@ -1028,6 +1088,8 @@ mod tests {
             evasion_score: 0.0,
             differential_category: DifferentialCategory::RealDetection,
             completed_at: SystemTime::now(),
+            dry_run_exit_code: None,
+            has_dryrun: false,
         });
 
         assert!(
@@ -1103,6 +1165,10 @@ mod tests {
             assembled_source: None,
             baseline_artifact_path: PathBuf::new(),
             instrumented_artifact_path: PathBuf::new(),
+            dryrun_run_id: RunId("dryrun".into()),
+            dryrun: None,
+            dryrun_vm_id: String::new(),
+            dryrun_deadline: None,
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1156,6 +1222,10 @@ mod tests {
             assembled_source: None,
             baseline_artifact_path: PathBuf::new(),
             instrumented_artifact_path: PathBuf::new(),
+            dryrun_run_id: RunId("dryrun".into()),
+            dryrun: None,
+            dryrun_vm_id: String::new(),
+            dryrun_deadline: None,
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1218,6 +1288,10 @@ mod tests {
             assembled_source: None,
             baseline_artifact_path: PathBuf::new(),
             instrumented_artifact_path: PathBuf::new(),
+            dryrun_run_id: RunId("dryrun".into()),
+            dryrun: None,
+            dryrun_vm_id: String::new(),
+            dryrun_deadline: None,
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1440,6 +1514,10 @@ mod tests {
             assembled_source: None,
             baseline_artifact_path: PathBuf::new(),
             instrumented_artifact_path: PathBuf::new(),
+            dryrun_run_id: RunId("dryrun".into()),
+            dryrun: None,
+            dryrun_vm_id: String::new(),
+            dryrun_deadline: None,
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1495,6 +1573,10 @@ mod tests {
                 assembled_source: None,
                 baseline_artifact_path: PathBuf::new(),
                 instrumented_artifact_path: PathBuf::new(),
+                dryrun_run_id: RunId("dryrun".into()),
+                dryrun: None,
+                dryrun_vm_id: String::new(),
+                dryrun_deadline: None,
             }
         };
 
@@ -1531,6 +1613,8 @@ mod tests {
             evasion_score: 0.6,
             differential_category: DifferentialCategory::InstrumentationArtifact,
             completed_at: SystemTime::now(),
+            dry_run_exit_code: None,
+            has_dryrun: false,
         });
 
         assert!(

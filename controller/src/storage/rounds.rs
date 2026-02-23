@@ -21,6 +21,12 @@ pub struct RoundIndexParams<'a> {
     pub modules: Option<&'a ModuleSelectionSpec>,
     /// Pre-instrumentation assembled C source for line trace resolution.
     pub assembled_source: Option<&'a str>,
+    /// Dryrun exit code (None if dryrun was not available)
+    pub dry_run_exit_code: Option<i32>,
+    /// Whether a dryrun result was used for this round
+    pub has_dryrun: bool,
+    /// Dryrun run ID (for cross-referencing)
+    pub dryrun_run_id: Option<&'a str>,
 }
 
 /// Index a completed round summary with mutation recipe and run IDs.
@@ -65,6 +71,9 @@ pub async fn index_round(es: &Elasticsearch, params: &RoundIndexParams<'_>) -> a
         "completed_at": helpers::system_time_to_rfc3339(summary.completed_at),
         "started_at": params.started_at,
         "assembled_source": params.assembled_source,
+        "dry_run_exit_code": params.dry_run_exit_code,
+        "has_dryrun": params.has_dryrun,
+        "dryrun_run_id": params.dryrun_run_id,
     });
 
     let doc_id = format!("{}/{}", params.job_id, summary.round_id.0);

@@ -221,6 +221,7 @@ impl VMExecutor {
                     artifact_id: artifact_id.clone(),
                     trace_mode: envelope.run_type.trace_mode().to_string(),
                     timeout_seconds: envelope.timeout_seconds as i32,
+                    is_dryrun: envelope.run_type.is_dryrun(),
                     ..Default::default()
                 }),
             })),

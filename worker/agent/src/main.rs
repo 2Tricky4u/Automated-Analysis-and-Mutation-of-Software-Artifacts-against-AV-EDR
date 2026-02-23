@@ -62,7 +62,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // === Detect capabilities ===
     info!("Detecting worker capabilities...");
-    let capabilities = capabilities::detect_capabilities().await?;
+    let mut capabilities = capabilities::detect_capabilities().await?;
+
+    // Merge extra_capabilities from config (e.g. "dryrun" for clean-VM workers)
+    for cap in &config.worker.extra_capabilities {
+        if !capabilities.capabilities.iter().any(|c| c.eq_ignore_ascii_case(cap)) {
+            capabilities.capabilities.push(cap.clone());
+        }
+    }
+
     info!("Capabilities: {:?}", capabilities.capabilities);
     info!("Tools: {:?}", capabilities.tools);
 

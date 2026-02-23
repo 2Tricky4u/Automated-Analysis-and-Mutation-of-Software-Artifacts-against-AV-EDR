@@ -82,6 +82,10 @@ pub struct RoundCompletedData {
     pub round_started_at: SystemTime,
     /// Pre-instrumentation assembled C source for line trace resolution.
     pub assembled_source: Option<String>,
+    // --- Dryrun fields ---
+    pub dryrun_run_id: Option<RunId>,
+    pub dryrun_outcome: Option<RunOutcome>,
+    pub dryrun_vm_id: String,
 }
 
 /// Events emitted by JobWorker to Orchestrator for tracking and ES indexing.

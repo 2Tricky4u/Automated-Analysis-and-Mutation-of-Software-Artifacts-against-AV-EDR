@@ -233,6 +233,10 @@ pub struct WorkerIdentityConfig {
     pub os_version: String,
     #[serde(default = "default_listen_port")]
     pub listen_port: u16,
+    /// Extra capabilities to advertise (e.g. ["dryrun"] for a clean-VM worker).
+    /// Merged with auto-detected capabilities at startup.
+    #[serde(default)]
+    pub extra_capabilities: Vec<String>,
 }
 
 fn default_listen_port() -> u16 {
@@ -695,6 +699,7 @@ impl WorkerConfig {
                 ip_address: "10.200.200.100".to_string(),
                 os_version: "windows11".to_string(),
                 listen_port: 50052,
+                extra_capabilities: Vec::new(),
             },
             telemetry: WorkerTelemetryConfig {
                 rededr: RedEdrConfig {

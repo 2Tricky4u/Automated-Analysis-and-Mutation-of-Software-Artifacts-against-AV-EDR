@@ -51,6 +51,95 @@ impl std::fmt::Display for RunError {
 
 impl std::error::Error for RunError {}
 
+/// Execute a dryrun: spawn artifact, collect exit code only.
+///
+/// Skips RedEDR, telemetry, monitoring — used on a clean VM without AV
+/// to disambiguate carrier errors from AV kills.
+pub async fn execute_dryrun(
+    request: &RunRequest,
+    context: &RunContext,
+) -> Result<RunOutcome, RunError> {
+    info!(
+        "[OK] Starting dryrun execution: job_id={}, artifact_id={}",
+        request.job_id, request.artifact_id
+    );
+
+    // Phase 1: Validate artifact
+    if !context.artifact_path.exists() {
+        return Err(RunError::ArtifactNotFound(format!(
+            "Artifact {} not found on worker.",
+            request.artifact_id
+        )));
+    }
+
+    // Phase 2: Spawn process
+    let spawn_start = Instant::now();
+    let mut child =
+        crate::infra::process::spawn_artifact(&context.artifact_path, &context.artifact_path.parent().unwrap_or(std::path::Path::new(".")))
+            .map_err(|e| RunError::ProcessSpawnFailed(format!("Failed to spawn process: {}", e)))?;
+
+    let phase_spawn_ms = spawn_start.elapsed().as_millis() as u64;
+
+    // Phase 3: Wait with timeout
+    let wait_start = Instant::now();
+    let timeout_duration = Duration::from_secs(request.timeout_seconds as u64);
+    let exit_result = tokio::time::timeout(timeout_duration, child.wait()).await;
+
+    let (exit_code, timed_out) = match exit_result {
+        Ok(Ok(status)) => {
+            let code = status.code().unwrap_or(-2);
+            info!("[Dryrun] Process exited with code: {}", code);
+            (code, false)
+        }
+        Ok(Err(e)) => {
+            error!("[Dryrun] Failed to wait for process: {}", e);
+            (-1, false)
+        }
+        Err(_) => {
+            warn!("[Dryrun] Timeout after {}s, killing", request.timeout_seconds);
+            let _ = child.kill().await;
+            (-1, true)
+        }
+    };
+
+    let phase_wait_ms = wait_start.elapsed().as_millis() as u64;
+    let actual_elapsed = Duration::from_millis(phase_spawn_ms + phase_wait_ms);
+
+    // Classify (no telemetry, no dry_run_exit_code override for the dryrun itself)
+    let (verdict, last_checkpoint) = classifier::classify_run(
+        exit_code,
+        timed_out,
+        actual_elapsed.as_secs_f64() * 1000.0,
+        &[],    // no telemetry
+        None,   // no dry_run_exit_code
+    );
+
+    info!("[Dryrun] verdict={:?}, exit_code={}", verdict, exit_code);
+
+    // Cleanup artifact (no telemetry dir for dryrun — pass artifact parent as noop)
+    if context.artifact_path.exists() {
+        if let Err(e) = std::fs::remove_file(&context.artifact_path) {
+            warn!("[Dryrun] Failed to clean artifact: {}", e);
+        }
+    }
+
+    Ok(RunOutcome {
+        exit_code,
+        timed_out,
+        stdout: String::new(),
+        stderr: String::new(),
+        telemetry_events: vec![],
+        elapsed: actual_elapsed,
+        phase_timings: RunPhaseTimings {
+            process_spawn_ms: phase_spawn_ms,
+            process_wait_ms: phase_wait_ms,
+            ..Default::default()
+        },
+        detection_verdict: verdict.as_str().to_string(),
+        last_checkpoint: last_checkpoint.unwrap_or_default(),
+    })
+}
+
 /// Execute an artifact run.
 ///
 /// Core execution pipeline:
