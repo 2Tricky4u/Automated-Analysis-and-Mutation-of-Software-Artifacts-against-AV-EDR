@@ -346,9 +346,6 @@ impl JobWorker {
                 e
             })?;
 
-        // Capture assembled source from baseline build (same for both runs in a round)
-        let assembled_source = baseline_built.assembled_source.clone();
-
         // Build instrumented artifact (trace_mode from job config)
         let instrumented_built = self
             .build_artifact(&selected_build_spec, &self.job.trace_mode, &spec)
@@ -360,6 +357,11 @@ impl JobWorker {
                 );
                 e
             })?;
+
+        // Use instrumented build's assembled source for coverage/source viewer.
+        // The checkpoint stub prepended to the instrumented payload shifts payload.h
+        // line counts; trace events embed line numbers from this source.
+        let assembled_source = instrumented_built.assembled_source.clone();
 
         // Determine target OS and capabilities from job constraints
         let target_os = self
