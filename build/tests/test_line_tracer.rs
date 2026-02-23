@@ -1,6 +1,9 @@
 mod common;
 
-use build::{SourceLanguage, TraceFormat, inject_line_traces, inject_line_traces_with_delay, inject_line_traces_with_opts};
+use build::{
+    SourceLanguage, TraceFormat, inject_line_traces, inject_line_traces_with_delay,
+    inject_line_traces_with_opts,
+};
 use std::path::Path;
 
 #[test]

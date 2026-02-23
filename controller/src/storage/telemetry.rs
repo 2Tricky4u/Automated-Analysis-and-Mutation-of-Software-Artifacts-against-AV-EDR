@@ -8,9 +8,9 @@
 use super::TelemetryContext;
 use super::helpers;
 use crate::automutate::common::TelemetryData;
-use elasticsearch::{BulkOperation, BulkParts, Elasticsearch};
 use elasticsearch::params::Refresh;
-use serde_json::{json, Value};
+use elasticsearch::{BulkOperation, BulkParts, Elasticsearch};
+use serde_json::{Value, json};
 use tracing::{info, warn};
 
 pub async fn index_telemetry_batch(
@@ -157,10 +157,7 @@ pub async fn index_telemetry_batch(
                     } else {
                         failed += 1;
                         if failed <= 3 {
-                            warn!(
-                                "Bulk index item error: {}",
-                                item["index"]["error"]
-                            );
+                            warn!("Bulk index item error: {}", item["index"]["error"]);
                         }
                     }
                 }
@@ -180,10 +177,7 @@ pub async fn index_telemetry_batch(
         Ok(resp) => {
             let status = resp.status_code();
             let body = resp.text().await.unwrap_or_default();
-            warn!(
-                "Bulk telemetry index failed: status {} - {}",
-                status, body
-            );
+            warn!("Bulk telemetry index failed: status {} - {}", status, body);
         }
         Err(e) => {
             warn!("Bulk telemetry index failed: {}", e);

@@ -71,10 +71,15 @@ pub async fn update_doc_by_id(
             if status.as_u16() == 409 && attempt < MAX_RETRIES {
                 debug!(
                     "Version conflict updating {} {}, retrying ({}/{})",
-                    entity_label, doc_id, attempt + 1, MAX_RETRIES
+                    entity_label,
+                    doc_id,
+                    attempt + 1,
+                    MAX_RETRIES
                 );
-                tokio::time::sleep(tokio::time::Duration::from_millis(50 * (attempt as u64 + 1)))
-                    .await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(
+                    50 * (attempt as u64 + 1),
+                ))
+                .await;
                 continue;
             }
 

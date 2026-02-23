@@ -66,7 +66,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Merge extra_capabilities from config (e.g. "dryrun" for clean-VM workers)
     for cap in &config.worker.extra_capabilities {
-        if !capabilities.capabilities.iter().any(|c| c.eq_ignore_ascii_case(cap)) {
+        if !capabilities
+            .capabilities
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(cap))
+        {
             capabilities.capabilities.push(cap.clone());
         }
     }
