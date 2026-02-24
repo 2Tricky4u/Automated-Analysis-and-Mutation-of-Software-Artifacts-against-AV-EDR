@@ -262,7 +262,9 @@ impl CoverageSelector {
                 mutation.to_string(),
                 format!(
                     "Mutation: exploring untried {} ({}/{} tried)",
-                    mutation, tried_count, pool.len()
+                    mutation,
+                    tried_count,
+                    pool.len()
                 ),
             )
         } else {
@@ -423,9 +425,7 @@ impl Selector for CoverageSelector {
             VariationStrategy::MutationOnly => {
                 self.select_mutations(search_space, default_modules, history)
             }
-            VariationStrategy::Full => {
-                self.select_full(search_space, default_modules, history)
-            }
+            VariationStrategy::Full => self.select_full(search_space, default_modules, history),
         }
     }
 }
@@ -562,14 +562,7 @@ mod tests {
 
         // Empty fixed/pool → full catalog exploration
         let selection = selector
-            .select(
-                "job-1",
-                2,
-                &empty_search_space(),
-                &defaults,
-                &history,
-                None,
-            )
+            .select("job-1", 2, &empty_search_space(), &defaults, &history, None)
             .await;
 
         assert_eq!(
@@ -763,7 +756,10 @@ mod tests {
         let history = BTreeMap::new();
 
         let ss = SearchSpace {
-            fixed_mutations: vec!["binary.rich_header".to_string(), "llvm.nop_insert".to_string()],
+            fixed_mutations: vec![
+                "binary.rich_header".to_string(),
+                "llvm.nop_insert".to_string(),
+            ],
             mutation_pool: vec![],
             ..Default::default()
         };

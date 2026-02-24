@@ -862,7 +862,8 @@ fn test_baseline_noninstrumented_path_has_no_veh() {
                 !out.final_source.contains(sym),
                 "Carrier '{}': raw VEH call '{}' found in assembled source — \
                  should be encapsulated in EXECUTE_SHELLCODE macro",
-                carrier, sym
+                carrier,
+                sym
             );
         }
     }
@@ -914,7 +915,8 @@ fn test_carriers_use_execute_shellcode_macro() {
 
         // No raw #ifdef ENABLE_INSTRUMENTATION blocks should remain in the carrier
         // section for VEH wrapping (they're now inside the macro in sc_checkpoint.h)
-        let carrier_section = out.final_source
+        let carrier_section = out
+            .final_source
             .find("int carrier()")
             .map(|start| &out.final_source[start..])
             .unwrap_or("");
@@ -1048,7 +1050,10 @@ fn test_no_patching_when_count_is_none() {
             (payload.clone(), None)
         };
 
-    assert_eq!(final_payload, payload, "Payload must be unmodified when count=None");
+    assert_eq!(
+        final_payload, payload,
+        "Payload must be unmodified when count=None"
+    );
     assert!(sc_header.is_none(), "No header when count=None");
 }
 
@@ -1070,7 +1075,10 @@ fn test_no_patching_when_count_is_zero() {
             (payload.clone(), None)
         };
 
-    assert_eq!(final_payload, payload, "Payload must be unmodified when count=0");
+    assert_eq!(
+        final_payload, payload,
+        "Payload must be unmodified when count=0"
+    );
     assert!(sc_header.is_none(), "No header when count=0");
 }
 
@@ -1082,10 +1090,12 @@ fn test_enabled_path_produces_int3_and_header() {
     let mut payload = vec![0x90u8; 64]; // 64 NOPs — plenty of instruction boundaries
     let original = payload.clone();
 
-    let patched =
-        sc_checkpoints::patch_shellcode(&mut payload, 3, stub_size).unwrap();
+    let patched = sc_checkpoints::patch_shellcode(&mut payload, 3, stub_size).unwrap();
 
-    assert!(!patched.table.is_empty(), "Enabled patching must insert checkpoints");
+    assert!(
+        !patched.table.is_empty(),
+        "Enabled patching must insert checkpoints"
+    );
     assert_ne!(
         patched.bytes, original,
         "Enabled patching must modify the payload (INT3 insertion)"

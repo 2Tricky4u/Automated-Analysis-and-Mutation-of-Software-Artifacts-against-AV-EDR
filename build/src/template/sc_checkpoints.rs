@@ -284,14 +284,7 @@ mod tests {
         // 0x48 0x31 0xC0 = xor rax, rax (3 bytes)
         // 0x90       = NOP
         // 0xC3       = RET
-        let mut buf = vec![
-            0x90,
-            0x48, 0x89, 0xC0,
-            0x90,
-            0x48, 0x31, 0xC0,
-            0x90,
-            0xC3,
-        ];
+        let mut buf = vec![0x90, 0x48, 0x89, 0xC0, 0x90, 0x48, 0x31, 0xC0, 0x90, 0xC3];
         // Instruction boundaries: 0, 1, 4, 5, 8, 9
         // Usable (skip first): 1, 4, 5, 8, 9
 
@@ -324,7 +317,11 @@ mod tests {
 
         assert_eq!(patched.table.len(), 3);
         let offsets: Vec<usize> = patched.table.iter().map(|e| e.offset).collect();
-        assert_eq!(offsets, vec![10, 20, 30], "Checkpoints should be evenly spaced at interval=10");
+        assert_eq!(
+            offsets,
+            vec![10, 20, 30],
+            "Checkpoints should be evenly spaced at interval=10"
+        );
     }
 
     /// Even spacing with 1 checkpoint should land near the midpoint.
@@ -356,12 +353,24 @@ mod tests {
         // boundary_idx 6 → offset 4+6=10, boundary_idx 12 → offset 4+12=16
         // (indices into body boundaries, then add stub_size)
         for entry in &patched.table {
-            assert!(entry.offset >= 4, "Checkpoint offset {} is inside stub region", entry.offset);
-            assert!(entry.offset < 24, "Checkpoint offset {} is past end", entry.offset);
+            assert!(
+                entry.offset >= 4,
+                "Checkpoint offset {} is inside stub region",
+                entry.offset
+            );
+            assert!(
+                entry.offset < 24,
+                "Checkpoint offset {} is past end",
+                entry.offset
+            );
         }
         // Verify spacing between checkpoints is roughly equal
         let gap = patched.table[1].offset - patched.table[0].offset;
-        assert!(gap >= 4 && gap <= 8, "Gap between checkpoints should be ~6, got {}", gap);
+        assert!(
+            gap >= 4 && gap <= 8,
+            "Gap between checkpoints should be ~6, got {}",
+            gap
+        );
     }
 
     // ======================================================================
@@ -377,7 +386,11 @@ mod tests {
 
         assert_eq!(patched.table.len(), 3);
         for entry in &patched.table {
-            assert!(entry.progress_pct <= 100, "progress_pct {} > 100", entry.progress_pct);
+            assert!(
+                entry.progress_pct <= 100,
+                "progress_pct {} > 100",
+                entry.progress_pct
+            );
         }
         // First checkpoint should be in ~20-30% range
         assert!(

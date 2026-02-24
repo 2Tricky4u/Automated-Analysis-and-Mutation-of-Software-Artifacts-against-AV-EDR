@@ -158,7 +158,12 @@ impl ArtifactBuilder {
         );
 
         self.build_modular_template(
-            modules, &payload, encoding, &mutations, &trace_mode, &mutation_targets,
+            modules,
+            &payload,
+            encoding,
+            &mutations,
+            &trace_mode,
+            &mutation_targets,
             sc_checkpoint_count,
         )
         .await
@@ -190,10 +195,7 @@ impl ArtifactBuilder {
             .join("sc_checkpoint_runtime.c");
 
         if !src.exists() {
-            anyhow::bail!(
-                "SC checkpoint runtime source not found at {:?}",
-                src
-            );
+            anyhow::bail!("SC checkpoint runtime source not found at {:?}", src);
         }
 
         debug!("Compiling sc_checkpoint_runtime.o (with generated table header)...");
@@ -690,10 +692,13 @@ impl ArtifactBuilder {
         };
 
         self.compile_source_to_ir_with_extra(
-            &source_for_compilation, &ir_path, true, &sc_extra_flags,
+            &source_for_compilation,
+            &ir_path,
+            true,
+            &sc_extra_flags,
         )
-            .await
-            .context("Failed to compile source to IR for instrumentation")?;
+        .await
+        .context("Failed to compile source to IR for instrumentation")?;
 
         // Step 3: Instrument the IR
         let instrumented_ir_path = built.source_path.with_extension("instrumented_final.ll");
@@ -1049,8 +1054,7 @@ impl ArtifactBuilder {
         let instrumented = trace_mode != "off" && !trace_mode.is_empty();
         let effective_payload;
         let payload_to_encode: &[u8] = if instrumented {
-            effective_payload =
-                crate::template::shellcode_stub::prepend_checkpoint_stub(payload);
+            effective_payload = crate::template::shellcode_stub::prepend_checkpoint_stub(payload);
             info!(
                 "Prepended checkpoint stub: {} + {} = {} bytes",
                 crate::template::shellcode_stub::STUB_SIZE,
@@ -1131,7 +1135,10 @@ impl ArtifactBuilder {
 
         // Step 3b: Scope mutations to targeted modules (strip @MUTATE markers outside targets)
         let assembled_source = if !mutation_targets.is_empty() {
-            crate::template::assembler::strip_markers_outside_targets(&assembled_source, mutation_targets)
+            crate::template::assembler::strip_markers_outside_targets(
+                &assembled_source,
+                mutation_targets,
+            )
         } else {
             assembled_source
         };
@@ -1192,7 +1199,8 @@ impl ArtifactBuilder {
         let needs_runtime = trace_mode != "off" && !trace_mode.is_empty();
 
         // Write sc_checkpoints_table.h and compile sc_checkpoint_runtime.o when active
-        let sc_checkpoint_runtime_obj: Option<PathBuf> = if let Some(ref header_content) = sc_header {
+        let sc_checkpoint_runtime_obj: Option<PathBuf> = if let Some(ref header_content) = sc_header
+        {
             let table_header_path = self.config.output_dir.join("sc_checkpoints_table.h");
             tokio::fs::write(&table_header_path, header_content)
                 .await

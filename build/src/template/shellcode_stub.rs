@@ -34,14 +34,14 @@ const STUB_MSG: &[u8] = b"payload_executed\0";
 /// 0x29  ... original shellcode
 /// ```
 const STUB_CODE: &[u8] = &[
-    0x53,                               // push rbx
-    0x48, 0x89, 0xCB,                   // mov rbx, rcx
-    0x48, 0x83, 0xEC, 0x20,             // sub rsp, 0x20
+    0x53, // push rbx
+    0x48, 0x89, 0xCB, // mov rbx, rcx
+    0x48, 0x83, 0xEC, 0x20, // sub rsp, 0x20
     0x48, 0x8D, 0x0D, 0x09, 0x00, 0x00, 0x00, // lea rcx, [rip+9]
-    0xFF, 0xD3,                         // call rbx
-    0x48, 0x83, 0xC4, 0x20,             // add rsp, 0x20
-    0x5B,                               // pop rbx
-    0xEB, 0x11,                         // jmp short +17
+    0xFF, 0xD3, // call rbx
+    0x48, 0x83, 0xC4, 0x20, // add rsp, 0x20
+    0x5B, // pop rbx
+    0xEB, 0x11, // jmp short +17
 ];
 
 /// Prepend the checkpoint stub to raw shellcode.
@@ -64,8 +64,8 @@ mod tests {
     fn test_stub_size_constant() {
         assert_eq!(STUB_SIZE, STUB_CODE.len() + STUB_MSG.len());
         assert_eq!(STUB_CODE.len(), 24); // 0x18 bytes of code
-        assert_eq!(STUB_MSG.len(), 17);  // "payload_executed\0"
-        assert_eq!(STUB_SIZE, 41);       // total stub
+        assert_eq!(STUB_MSG.len(), 17); // "payload_executed\0"
+        assert_eq!(STUB_SIZE, 41); // total stub
     }
 
     #[test]
