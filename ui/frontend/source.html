@@ -858,7 +858,7 @@
                         : (funcStartMap.has(lineNum) ? ` data-func-body="${funcStartMap.get(lineNum).name}"` : '');
 
                     let cutoffLabel, cutoffClass;
-                    if (lastCheckpoint === 'payload_executed') {
+                    if (lastCheckpoint === 'payload_executed' || lastCheckpoint.startsWith('sc_checkpoint')) {
                         cutoffLabel = 'EXECUTION CONTINUED INTO SHELLCODE';
                         cutoffClass = 'cutoff-marker-label checkpoint-ok';
                     } else if (lastCheckpoint === 'Launching') {
