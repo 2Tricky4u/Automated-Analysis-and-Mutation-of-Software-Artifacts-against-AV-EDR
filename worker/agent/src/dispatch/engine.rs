@@ -116,13 +116,11 @@ pub async fn execute_dryrun(
     let phase_wait_ms = wait_start.elapsed().as_millis() as u64;
     let actual_elapsed = Duration::from_millis(phase_spawn_ms + phase_wait_ms);
 
-    // Classify (no telemetry, no dry_run_exit_code override for the dryrun itself)
+    // Classify (no telemetry for dryrun)
     let (verdict, last_checkpoint) = classifier::classify_run(
         exit_code,
         timed_out,
-        actual_elapsed.as_secs_f64() * 1000.0,
-        &[],  // no telemetry
-        None, // no dry_run_exit_code
+        &[], // no telemetry
     );
 
     info!("[Dryrun] verdict={:?}, exit_code={}", verdict, exit_code);
@@ -716,9 +714,7 @@ pub async fn execute_run(
     let (verdict, last_checkpoint) = classifier::classify_run(
         exit_code,
         timed_out,
-        actual_elapsed.as_secs_f64() * 1000.0,
         &telemetry_events,
-        None, // dry_run_exit_code: future dry-run integration
     );
 
     info!(

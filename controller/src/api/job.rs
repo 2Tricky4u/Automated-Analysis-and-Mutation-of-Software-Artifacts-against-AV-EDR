@@ -322,6 +322,9 @@ pub async fn get_round(
         }
     }
 
+    // Apply dryrun correction: override baseline detected using round doc's stored category
+    apply_round_correction(&source, &mut baseline_run, &mut instrumented_run);
+
     // Build behavior comparison
     let behavior_match = if source["behavior_match"].is_boolean() {
         Some(build_behavior_comparison(
@@ -421,6 +424,28 @@ pub async fn compare_runs(
         }
     }
 
+    // Look up the round doc to get corrected values (one extra ES query, but user-triggered)
+    let round_source = 'round: {
+        // Extract job_id + round_id from whichever run doc we have
+        let (job_id, round_id) = baseline
+            .as_ref()
+            .or(instrumented.as_ref())
+            .map(|r| (r.job_id.clone(), r.round_id.clone()))
+            .unwrap_or_default();
+
+        if !job_id.is_empty() && !round_id.is_empty() {
+            if let Some(doc) = service.storage.query_round(&job_id, &round_id).await {
+                break 'round Some(doc);
+            }
+        }
+        None
+    };
+
+    // Apply dryrun correction if round doc is available
+    if let Some(ref round_doc) = round_source {
+        apply_round_correction(round_doc, &mut baseline, &mut instrumented);
+    }
+
     let b = baseline.as_ref();
     let i = instrumented.as_ref();
     let b_detected = b.map(|r| r.detected).unwrap_or(false);
@@ -445,8 +470,16 @@ pub async fn compare_runs(
     let outcome_match = b_detected == i_detected && b_exit == i_exit;
     let confidence = if outcome_match { 1.0 } else { 0.5 };
 
-    let differential_category =
-        crate::dispatch::types::DifferentialCategory::from_runs(b_detected, i_detected);
+    // Read canonical category from round doc if available, otherwise recompute
+    let differential_category = round_source
+        .as_ref()
+        .map(|doc| str_field(doc, "differential_category"))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            crate::dispatch::types::DifferentialCategory::from_runs(b_detected, i_detected)
+                .as_str()
+                .to_string()
+        });
 
     Ok(Response::new(CompareRunsResponse {
         comparison: Some(BehaviorComparisonProto {
@@ -457,7 +490,7 @@ pub async fn compare_runs(
             instrumented_exit_code: i_exit,
             differences,
             confidence,
-            differential_category: differential_category.as_str().to_string(),
+            differential_category,
         }),
     }))
 }
@@ -624,6 +657,7 @@ fn round_doc_to_proto(source: &Value) -> RoundSummaryProto {
 }
 
 fn run_doc_to_proto(source: &Value) -> RunResultProto {
+    let detected = bool_field(source, "detected");
     RunResultProto {
         run_id: str_field(source, "run_id"),
         job_id: str_field(source, "job_id"),
@@ -636,13 +670,44 @@ fn run_doc_to_proto(source: &Value) -> RunResultProto {
         artifact_id: String::new(),
         mutations: string_array_field(source, "mutations"),
         outcome: str_field(source, "detection_outcome"),
-        detected: bool_field(source, "detected"),
+        detected,
         exit_code: i32_field(source, "exit_code"),
         telemetry_events_count: u64_field(source, "telemetry_events_count"),
         elapsed_seconds: u64_field(source, "elapsed_seconds"),
         started_at: 0,
         completed_at: 0,
         last_checkpoint: str_field(source, "last_checkpoint"),
+        raw_detected: detected, // same initially; apply_round_correction may diverge
+    }
+}
+
+/// Apply dryrun correction to run protos using the already-stored round doc values.
+///
+/// The round doc's `differential_category` was computed by `RoundAgg::to_summary()` which
+/// accounts for dryrun overrides.  We recover the corrected baseline `detected` from it:
+///   - `real_detection` / `flaky` → baseline detected = true
+///   - `evasion` / `instrumentation_artifact` → baseline detected = false
+///
+/// Instrumented `detected` is never overridden by dryrun — stays as-is.
+/// `raw_detected` preserves the original per-run value for debugging.
+fn apply_round_correction(
+    round_source: &Value,
+    baseline: &mut Option<RunResultProto>,
+    instrumented: &mut Option<RunResultProto>,
+) {
+    // Save raw values (already set by run_doc_to_proto, but be explicit)
+    if let Some(b) = baseline {
+        b.raw_detected = b.detected;
+    }
+    if let Some(i) = instrumented {
+        i.raw_detected = i.detected;
+    }
+
+    if bool_field(round_source, "has_dryrun") {
+        if let Some(b) = baseline {
+            let category = str_field(round_source, "differential_category");
+            b.detected = matches!(category.as_str(), "real_detection" | "flaky");
+        }
     }
 }
 
@@ -657,9 +722,17 @@ fn build_behavior_comparison(
     let i_exit = instrumented.as_ref().map(|r| r.exit_code).unwrap_or(0);
     let outcome_match = bool_field(source, "behavior_match");
 
-    // Derive category from per-run detected booleans
-    let differential_category =
-        crate::dispatch::types::DifferentialCategory::from_runs(b_detected, i_detected);
+    // Read canonical corrected category from round doc (set by RoundAgg::to_summary)
+    let differential_category = str_field(source, "differential_category");
+
+    // Fallback: if round doc doesn't have it, recompute from (now-corrected) per-run data
+    let differential_category = if differential_category.is_empty() {
+        crate::dispatch::types::DifferentialCategory::from_runs(b_detected, i_detected)
+            .as_str()
+            .to_string()
+    } else {
+        differential_category
+    };
 
     BehaviorComparisonProto {
         outcome_match,
@@ -669,6 +742,6 @@ fn build_behavior_comparison(
         instrumented_exit_code: i_exit,
         differences: vec![],
         confidence: if outcome_match { 1.0 } else { 0.5 },
-        differential_category: differential_category.as_str().to_string(),
+        differential_category,
     }
 }
