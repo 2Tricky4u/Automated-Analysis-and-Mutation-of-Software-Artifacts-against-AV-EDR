@@ -308,4 +308,270 @@ mod tests {
             assert_ne!(entry.offset, 0, "First instruction should not be patched");
         }
     }
+
+    // ======================================================================
+    // Even spacing verification
+    // ======================================================================
+
+    /// Core promise: checkpoints are evenly spaced, not clustered at the start.
+    #[test]
+    fn test_even_spacing_nop_sled() {
+        // 40 NOPs → boundaries 0..39, usable 1..39 (39 usable)
+        // 3 checkpoints → interval = (39+1)/(3+1) = 10
+        // Expected indices into boundaries: 10, 20, 30
+        let mut buf = vec![0x90u8; 40];
+        let patched = patch_shellcode(&mut buf, 3, 0).unwrap();
+
+        assert_eq!(patched.table.len(), 3);
+        let offsets: Vec<usize> = patched.table.iter().map(|e| e.offset).collect();
+        assert_eq!(offsets, vec![10, 20, 30], "Checkpoints should be evenly spaced at interval=10");
+    }
+
+    /// Even spacing with 1 checkpoint should land near the midpoint.
+    #[test]
+    fn test_single_checkpoint_midpoint() {
+        // 20 NOPs → 19 usable → interval = (19+1)/(1+1) = 10
+        // Expected: boundary index 10 → offset 10
+        let mut buf = vec![0x90u8; 20];
+        let patched = patch_shellcode(&mut buf, 1, 0).unwrap();
+
+        assert_eq!(patched.table.len(), 1);
+        let offset = patched.table[0].offset;
+        // Should be roughly in the middle (10 out of 0..19)
+        assert_eq!(offset, 10, "Single checkpoint should land at midpoint");
+    }
+
+    /// Even spacing with stub: offsets are relative to full shellcode, not body.
+    #[test]
+    fn test_even_spacing_with_stub() {
+        let stub = vec![0x53u8, 0x48, 0x89, 0xCB]; // 4-byte stub
+        let body = vec![0x90u8; 20]; // 20 NOPs
+        let mut buf = [stub, body].concat();
+
+        let patched = patch_shellcode(&mut buf, 2, 4).unwrap();
+
+        assert_eq!(patched.table.len(), 2);
+        // Body boundaries at offsets 4..23 (20 boundaries), usable 5..23 (19 usable)
+        // interval = (19+1)/(2+1) = 6 (rounded)
+        // boundary_idx 6 → offset 4+6=10, boundary_idx 12 → offset 4+12=16
+        // (indices into body boundaries, then add stub_size)
+        for entry in &patched.table {
+            assert!(entry.offset >= 4, "Checkpoint offset {} is inside stub region", entry.offset);
+            assert!(entry.offset < 24, "Checkpoint offset {} is past end", entry.offset);
+        }
+        // Verify spacing between checkpoints is roughly equal
+        let gap = patched.table[1].offset - patched.table[0].offset;
+        assert!(gap >= 4 && gap <= 8, "Gap between checkpoints should be ~6, got {}", gap);
+    }
+
+    // ======================================================================
+    // progress_pct correctness
+    // ======================================================================
+
+    /// progress_pct should reflect position within the body (0–100).
+    #[test]
+    fn test_progress_pct_values() {
+        // 100 NOPs, 3 checkpoints → should be ~25%, ~50%, ~75%
+        let mut buf = vec![0x90u8; 100];
+        let patched = patch_shellcode(&mut buf, 3, 0).unwrap();
+
+        assert_eq!(patched.table.len(), 3);
+        for entry in &patched.table {
+            assert!(entry.progress_pct <= 100, "progress_pct {} > 100", entry.progress_pct);
+        }
+        // First checkpoint should be in ~20-30% range
+        assert!(
+            patched.table[0].progress_pct >= 15 && patched.table[0].progress_pct <= 35,
+            "First checkpoint progress_pct should be ~25%, got {}",
+            patched.table[0].progress_pct
+        );
+        // Last checkpoint should be in ~65-85% range
+        assert!(
+            patched.table[2].progress_pct >= 60 && patched.table[2].progress_pct <= 85,
+            "Last checkpoint progress_pct should be ~75%, got {}",
+            patched.table[2].progress_pct
+        );
+        // Progress should be monotonically increasing
+        for i in 1..patched.table.len() {
+            assert!(
+                patched.table[i].progress_pct >= patched.table[i - 1].progress_pct,
+                "progress_pct not monotonic: {} then {}",
+                patched.table[i - 1].progress_pct,
+                patched.table[i].progress_pct
+            );
+        }
+    }
+
+    /// progress_pct with stub should be relative to body, not total shellcode.
+    #[test]
+    fn test_progress_pct_with_stub() {
+        let stub = vec![0x53u8; 10]; // 10-byte stub
+        let body = vec![0x90u8; 100]; // 100 NOPs
+        let mut buf = [stub, body].concat();
+
+        let patched = patch_shellcode(&mut buf, 1, 10).unwrap();
+
+        assert_eq!(patched.table.len(), 1);
+        // Single checkpoint near midpoint of body → ~50%
+        let pct = patched.table[0].progress_pct;
+        assert!(
+            pct >= 40 && pct <= 60,
+            "Single checkpoint with stub: progress_pct should be ~50%, got {}",
+            pct
+        );
+    }
+
+    // ======================================================================
+    // No duplicate offsets
+    // ======================================================================
+
+    /// No two checkpoints should land on the same offset.
+    #[test]
+    fn test_no_duplicate_offsets() {
+        // Request many checkpoints on a small body to stress the dedup
+        let mut buf = vec![0x90u8; 10]; // 10 NOPs → 9 usable
+        let patched = patch_shellcode(&mut buf, 8, 0).unwrap();
+
+        let mut seen = std::collections::HashSet::new();
+        for entry in &patched.table {
+            assert!(
+                seen.insert(entry.offset),
+                "Duplicate checkpoint offset: {}",
+                entry.offset
+            );
+        }
+    }
+
+    /// Offsets must be strictly increasing (implies no duplicates + ordered).
+    #[test]
+    fn test_offsets_strictly_increasing() {
+        let mut buf = vec![0x90u8; 50];
+        let patched = patch_shellcode(&mut buf, 5, 0).unwrap();
+
+        for i in 1..patched.table.len() {
+            assert!(
+                patched.table[i].offset > patched.table[i - 1].offset,
+                "Offsets not strictly increasing: {} then {}",
+                patched.table[i - 1].offset,
+                patched.table[i].offset
+            );
+        }
+    }
+
+    // ======================================================================
+    // count = usable (max saturation)
+    // ======================================================================
+
+    /// When count equals usable boundaries, every usable slot is patched.
+    #[test]
+    fn test_max_count_equals_usable() {
+        // 6 NOPs → boundaries [0,1,2,3,4,5], usable = 5
+        // Request exactly 5 → should patch all usable boundaries
+        let mut buf = vec![0x90u8; 6];
+        let patched = patch_shellcode(&mut buf, 5, 0).unwrap();
+
+        // interval = (5+1)/(5+1) = 1 → every usable boundary patched
+        assert_eq!(patched.table.len(), 5);
+        let offsets: Vec<usize> = patched.table.iter().map(|e| e.offset).collect();
+        assert_eq!(offsets, vec![1, 2, 3, 4, 5]);
+        // Entry point (0) still untouched
+        assert_eq!(patched.bytes[0], 0x90);
+    }
+
+    // ======================================================================
+    // Realistic multi-byte instruction mix
+    // ======================================================================
+
+    /// Realistic x64 prologue + body: variable-length instructions with
+    /// RIP-relative LEA, branches, and multi-byte MOV.
+    #[test]
+    fn test_realistic_instruction_mix() {
+        #[rustfmt::skip]
+        let mut buf: Vec<u8> = vec![
+            // Typical function prologue
+            0x55,                               // push rbp           (1 byte)  off=0
+            0x48, 0x89, 0xE5,                   // mov rbp, rsp       (3 bytes) off=1
+            0x48, 0x83, 0xEC, 0x20,             // sub rsp, 0x20      (4 bytes) off=4
+            // Body
+            0x48, 0x31, 0xC0,                   // xor rax, rax       (3 bytes) off=8
+            0x48, 0x89, 0x45, 0xF8,             // mov [rbp-8], rax   (4 bytes) off=11
+            0x48, 0x8D, 0x0D, 0x10, 0x00, 0x00, 0x00, // lea rcx,[rip+0x10] (7 bytes) off=15
+            0xB8, 0x01, 0x00, 0x00, 0x00,       // mov eax, 1         (5 bytes) off=22
+            0x90,                               // nop                (1 byte)  off=27
+            0x48, 0x83, 0xC4, 0x20,             // add rsp, 0x20      (4 bytes) off=28
+            0x5D,                               // pop rbp            (1 byte)  off=32
+            0xC3,                               // ret                (1 byte)  off=33
+        ];
+        // Boundaries: 0, 1, 4, 8, 11, 15, 22, 27, 28, 32, 33  (11 total)
+        // Usable (skip 0): 1, 4, 8, 11, 15, 22, 27, 28, 32, 33  (10 usable)
+
+        let original = buf.clone();
+        let patched = patch_shellcode(&mut buf, 3, 0).unwrap();
+
+        assert_eq!(patched.table.len(), 3);
+
+        let valid_boundaries: Vec<usize> = vec![0, 1, 4, 8, 11, 15, 22, 27, 28, 32, 33];
+
+        for entry in &patched.table {
+            // Must be a valid instruction boundary
+            assert!(
+                valid_boundaries.contains(&entry.offset),
+                "Offset {} is not a valid instruction boundary (valid: {:?})",
+                entry.offset,
+                valid_boundaries
+            );
+            // Must not be the entry point
+            assert_ne!(entry.offset, 0, "Entry point should never be patched");
+            // Original byte must match what was there before patching
+            assert_eq!(
+                entry.original_byte, original[entry.offset],
+                "original_byte at offset {} doesn't match: expected 0x{:02X}, got 0x{:02X}",
+                entry.offset, original[entry.offset], entry.original_byte
+            );
+            // Patched byte must be INT3
+            assert_eq!(
+                patched.bytes[entry.offset], 0xCC,
+                "Patched byte at offset {} should be 0xCC",
+                entry.offset
+            );
+        }
+
+        // Verify even spacing: checkpoints should span the full body, not cluster
+        let first_off = patched.table[0].offset;
+        let last_off = patched.table[2].offset;
+        assert!(
+            last_off - first_off >= 15,
+            "3 checkpoints across 34-byte body should span at least 15 bytes, got {}",
+            last_off - first_off
+        );
+
+        // Bytes NOT in the table should be unmodified
+        let patched_offsets: std::collections::HashSet<usize> =
+            patched.table.iter().map(|e| e.offset).collect();
+        for (i, &byte) in patched.bytes.iter().enumerate() {
+            if !patched_offsets.contains(&i) {
+                assert_eq!(
+                    byte, original[i],
+                    "Byte at offset {} was modified but is not a checkpoint",
+                    i
+                );
+            }
+        }
+    }
+
+    /// Names follow the expected "sc_checkpoint_N" pattern with correct indices.
+    #[test]
+    fn test_checkpoint_naming() {
+        let mut buf = vec![0x90u8; 30];
+        let patched = patch_shellcode(&mut buf, 4, 0).unwrap();
+
+        for (i, entry) in patched.table.iter().enumerate() {
+            assert_eq!(
+                entry.name,
+                format!("sc_checkpoint_{}", i),
+                "Checkpoint {} has wrong name",
+                i
+            );
+        }
+    }
 }
