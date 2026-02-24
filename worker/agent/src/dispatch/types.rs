@@ -125,11 +125,11 @@ pub fn sample_response_ok(
     let detected = if !outcome.detection_verdict.is_empty() {
         automutate_common::DetectionVerdict::from_verdict_str(&outcome.detection_verdict)
             .map(|v| v.is_detected())
-            .unwrap_or(outcome.exit_code != 0 && outcome.exit_code != EXIT_WAIT_FAILED)
+            .unwrap_or(outcome.exit_code != 0 && outcome.exit_code > 0)
     } else {
         match outcome.exit_code {
             EXIT_NO_CODE => true,
-            0 | EXIT_WAIT_FAILED | EXIT_INFRA => false,
+            0 | EXIT_WAIT_FAILED | EXIT_INFRA | EXIT_TIMEOUT => false,
             _ => true,
         }
     };

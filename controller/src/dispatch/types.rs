@@ -5,6 +5,7 @@
 //! RoundAgg: ephemeral join state until both runs complete
 //! RunEnvelope: dispatch envelope for the per-worker pool
 
+use automutate_common::{DetectionVerdict, has_launched};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -394,6 +395,9 @@ pub struct RoundSummary {
     /// Whether a dryrun result was used for this round
     #[serde(default)]
     pub has_dryrun: bool,
+    /// Authoritative detection verdict (e.g. "detected", "mutation_failed")
+    #[serde(default)]
+    pub detection_verdict: String,
 }
 
 /// JobSession is ephemeral runtime state.
@@ -583,30 +587,32 @@ impl RoundAgg {
 
     /// Compute round summary from completed runs using the differential protocol.
     ///
-    /// If a dryrun result is available and its exit code matches the baseline exit code
-    /// AND baseline was detected, the detection is overridden to InfraError (not detected).
-    /// This handles cases where carrier bugs cause nonzero exit codes that look like AV kills.
+    /// If a dryrun result is available, `override_with_dryrun()` produces the
+    /// authoritative verdict. Otherwise the worker's provisional verdict is used.
     pub fn to_summary(&self) -> Option<RoundSummary> {
         let baseline = self.baseline.as_ref()?;
         let instrumented = self.instrumented.as_ref()?;
 
-        // Extract dryrun exit code if present
         let dry_run_exit_code = self.dryrun.as_ref().map(|d| d.exit_code);
         let has_dryrun = self.dryrun.is_some();
 
-        // Check for dryrun override: if dryrun exit code matches baseline exit code
-        // AND baseline was "detected", the detection is a false positive (infra error).
-        let baseline_overridden = if let Some(dr_exit) = dry_run_exit_code {
-            baseline.detected && dr_exit == baseline.exit_code && baseline.exit_code != 0
+        // Compute authoritative verdict using dry-run if available
+        let effective_verdict = if let Some(dryrun) = &self.dryrun {
+            override_with_dryrun(dryrun, baseline)
+        } else if !baseline.detection_verdict.is_empty() {
+            // No dry-run: use worker's provisional verdict string
+            DetectionVerdict::from_verdict_str(&baseline.detection_verdict)
+                .unwrap_or(DetectionVerdict::Ambiguous)
         } else {
-            false
+            // Legacy: no verdict string, fall back to worker's detected boolean
+            if baseline.detected {
+                DetectionVerdict::Detected
+            } else {
+                DetectionVerdict::Evasion
+            }
         };
 
-        let effective_baseline_detected = if baseline_overridden {
-            false // Override: same crash on clean VM → not a real detection
-        } else {
-            baseline.detected
-        };
+        let effective_baseline_detected = effective_verdict.is_detected();
 
         // Differential category from CLAUDE.md Section 5
         let category =
@@ -631,6 +637,7 @@ impl RoundAgg {
             completed_at: SystemTime::now(),
             dry_run_exit_code,
             has_dryrun,
+            detection_verdict: effective_verdict.as_str().to_string(),
         })
     }
 
@@ -666,6 +673,81 @@ impl RoundAgg {
             DifferentialCategory::Evasion => 0.6 + 0.2 * payload_reached + 0.2 * behavior_match_val,
         }
     }
+}
+
+/// Resolve detection verdict using dryrun (clean VM) and baseline (AV VM) outcomes.
+///
+/// This tree never returns `Ambiguous` — dry-run always resolves ambiguity.
+///
+/// Decision tree:
+///  1. Dryrun nonzero AND not timeout           → MutationFailed
+///  2. Dryrun timeout AND !has_launched(dryrun)  → MutationFailed
+///  3. Dryrun clean AND baseline clean           → Evasion
+///  4. Dryrun clean AND baseline nonzero         → Detected
+///  5. Both timeout AND has_launched(baseline)   → Evasion
+///  6. Both timeout AND !has_launched(baseline)  → MutationFailed
+///  7. Dryrun timeout+launched AND baseline !timeout:
+///    baseline == 0                              → Anomaly
+///    baseline != 0                              → Detected
+///  8. Same nonzero exit code                    → InfraError
+///  9. Different nonzero exit codes              → Detected
+fn override_with_dryrun(dryrun: &RunOutcome, baseline: &RunOutcome) -> DetectionVerdict {
+    let dr_timeout = dryrun.exit_code == -3; // EXIT_TIMEOUT
+    let bl_timeout = baseline.exit_code == -3;
+    let dr_clean = dryrun.exit_code == 0;
+    let bl_clean = baseline.exit_code == 0;
+    let dr_launched = has_launched(&dryrun.last_checkpoint);
+    let bl_launched = has_launched(&baseline.last_checkpoint);
+
+    // 1. Dryrun nonzero AND not timeout → artifact broken on clean VM
+    if !dr_clean && !dr_timeout {
+        return DetectionVerdict::MutationFailed;
+    }
+
+    // 2. Dryrun timeout AND didn't reach Launching → stalled loader = broken artifact
+    if dr_timeout && !dr_launched {
+        return DetectionVerdict::MutationFailed;
+    }
+
+    // 3. Both clean → evasion
+    if dr_clean && bl_clean {
+        return DetectionVerdict::Evasion;
+    }
+
+    // 4. Dryrun clean AND baseline nonzero → AV was the differentiator
+    if dr_clean && !bl_clean {
+        return DetectionVerdict::Detected;
+    }
+
+    // 5-6. Both timeout
+    if dr_timeout && bl_timeout {
+        return if bl_launched {
+            // 5. Payload runs forever with or without AV
+            DetectionVerdict::Evasion
+        } else {
+            // 6. Stalled identically → loader/artifact bug
+            DetectionVerdict::MutationFailed
+        };
+    }
+
+    // 7. Dryrun timeout+launched AND baseline not timeout
+    if dr_timeout && dr_launched && !bl_timeout {
+        return if bl_clean {
+            // Finishes with AV but stalls without? Contradictory.
+            DetectionVerdict::Anomaly
+        } else {
+            // AV killed what would have kept running
+            DetectionVerdict::Detected
+        };
+    }
+
+    // 8. Same nonzero exit code (both != 0, both not timeout at this point)
+    if dryrun.exit_code == baseline.exit_code {
+        return DetectionVerdict::InfraError;
+    }
+
+    // 9. Different nonzero exit codes → AV changed the failure mode
+    DetectionVerdict::Detected
 }
 
 // ============================================================================
@@ -879,6 +961,7 @@ mod tests {
             completed_at: SystemTime::now(),
             dry_run_exit_code: None,
             has_dryrun: false,
+            detection_verdict: String::new(),
         });
 
         assert_eq!(job.current_round, 1);
@@ -1028,6 +1111,7 @@ mod tests {
             completed_at: SystemTime::now(),
             dry_run_exit_code: None,
             has_dryrun: false,
+            detection_verdict: String::new(),
         });
 
         assert!(
@@ -1054,6 +1138,7 @@ mod tests {
             completed_at: SystemTime::now(),
             dry_run_exit_code: None,
             has_dryrun: false,
+            detection_verdict: String::new(),
         });
 
         assert!(
@@ -1079,6 +1164,7 @@ mod tests {
             completed_at: SystemTime::now(),
             dry_run_exit_code: None,
             has_dryrun: false,
+            detection_verdict: String::new(),
         });
 
         let (_, rid2) = job.start_round();
@@ -1094,6 +1180,7 @@ mod tests {
             completed_at: SystemTime::now(),
             dry_run_exit_code: None,
             has_dryrun: false,
+            detection_verdict: String::new(),
         });
 
         assert!(
@@ -1619,6 +1706,7 @@ mod tests {
             completed_at: SystemTime::now(),
             dry_run_exit_code: None,
             has_dryrun: false,
+            detection_verdict: String::new(),
         });
 
         assert!(

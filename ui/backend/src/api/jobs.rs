@@ -174,6 +174,7 @@ pub struct RoundDetailResponse {
 pub struct RunResultInfo {
     pub run_id: String,
     pub detected: bool,
+    pub raw_detected: bool,
     pub exit_code: i32,
     pub outcome: String,
     pub last_checkpoint: String,
@@ -365,6 +366,7 @@ pub async fn get_round(
                 let baseline_run = round.baseline_run.map(|r| RunResultInfo {
                     run_id: r.run_id,
                     detected: r.detected,
+                    raw_detected: r.raw_detected,
                     exit_code: r.exit_code,
                     outcome: r.outcome,
                     last_checkpoint: r.last_checkpoint,
@@ -373,6 +375,7 @@ pub async fn get_round(
                 let instrumented_run = round.instrumented_run.map(|r| RunResultInfo {
                     run_id: r.run_id,
                     detected: r.detected,
+                    raw_detected: r.raw_detected,
                     exit_code: r.exit_code,
                     outcome: r.outcome,
                     last_checkpoint: r.last_checkpoint,

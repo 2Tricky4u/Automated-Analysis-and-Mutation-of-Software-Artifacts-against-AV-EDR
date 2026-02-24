@@ -476,6 +476,7 @@ mod tests {
             completed_at: SystemTime::now(),
             dry_run_exit_code: None,
             has_dryrun: false,
+            detection_verdict: String::new(),
         }
     }
 

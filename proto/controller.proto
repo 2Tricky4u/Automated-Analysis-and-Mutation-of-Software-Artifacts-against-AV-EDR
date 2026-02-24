@@ -472,6 +472,7 @@ message RunResultProto {
   int64 started_at = 12;
   int64 completed_at = 13;
   string last_checkpoint = 14;
+  bool raw_detected = 15;  // original per-run detected before dryrun correction
 }
 
 message BehaviorComparisonProto {

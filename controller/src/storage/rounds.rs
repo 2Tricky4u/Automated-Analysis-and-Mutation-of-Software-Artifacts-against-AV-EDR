@@ -74,6 +74,7 @@ pub async fn index_round(es: &Elasticsearch, params: &RoundIndexParams<'_>) -> a
         "dry_run_exit_code": params.dry_run_exit_code,
         "has_dryrun": params.has_dryrun,
         "dryrun_run_id": params.dryrun_run_id,
+        "detection_verdict": params.summary.detection_verdict,
     });
 
     let doc_id = format!("{}/{}", params.job_id, summary.round_id.0);
