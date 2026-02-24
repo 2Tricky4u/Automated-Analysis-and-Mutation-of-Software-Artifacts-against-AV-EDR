@@ -8,7 +8,8 @@
 //! `sc-checkpoints` Cargo feature is enabled.
 
 use anyhow::Result;
-use iced_x86::{Decoder, DecoderOptions};
+use iced_x86::{Decoder, DecoderOptions, FlowControl};
+use std::collections::{HashSet, VecDeque};
 
 /// A single INT3 breakpoint inserted into the shellcode.
 #[derive(Debug, Clone)]
@@ -32,10 +33,83 @@ pub struct PatchedShellcode {
     pub table: Vec<BreakpointEntry>,
 }
 
+/// Collect instruction boundaries reachable via control flow (recursive descent).
+///
+/// Starting from offset 0 in `body`, follows branches and fall-throughs to
+/// discover all reachable instruction offsets. Returns sorted, deduplicated
+/// offsets relative to the full shellcode (i.e. each offset has `stub_size` added).
+fn collect_reachable_boundaries(body: &[u8], stub_size: usize) -> Vec<usize> {
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+    let mut boundaries = Vec::new();
+
+    queue.push_back(0usize); // entry point into body
+
+    while let Some(start) = queue.pop_front() {
+        if start >= body.len() || visited.contains(&start) {
+            continue;
+        }
+
+        let mut decoder =
+            Decoder::with_ip(64, &body[start..], start as u64, DecoderOptions::NONE);
+
+        for instr in &mut decoder {
+            let ip = instr.ip() as usize;
+
+            if visited.contains(&ip) || instr.is_invalid() {
+                break;
+            }
+
+            visited.insert(ip);
+            boundaries.push(stub_size + ip);
+
+            match instr.flow_control() {
+                FlowControl::Next => { /* continue linear decode */ }
+                FlowControl::UnconditionalBranch => {
+                    let target = instr.near_branch_target() as usize;
+                    if target < body.len() {
+                        queue.push_back(target);
+                    }
+                    break; // stop linear decode on this path
+                }
+                FlowControl::ConditionalBranch => {
+                    let target = instr.near_branch_target() as usize;
+                    if target < body.len() {
+                        queue.push_back(target);
+                    }
+                    // fall-through is also reachable — continue linear decode
+                }
+                FlowControl::Call => {
+                    let target = instr.near_branch_target() as usize;
+                    if target < body.len() {
+                        queue.push_back(target);
+                    }
+                    // fall-through = return address — continue linear decode
+                }
+                FlowControl::Return | FlowControl::IndirectBranch | FlowControl::IndirectCall => {
+                    break; // can't follow statically
+                }
+                FlowControl::Interrupt => { /* continue — INT3 etc. */ }
+                _ => {
+                    break; // XbeginXabortXend, Exception, etc.
+                }
+            }
+        }
+    }
+
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    boundaries
+}
+
 /// Disassemble shellcode after `stub_size` bytes and insert `checkpoint_count`
 /// evenly-spaced INT3 breakpoints at instruction boundaries.
 ///
 /// The stub region (`0..stub_size`) is never modified.
+///
+/// Uses recursive descent disassembly to follow control flow and avoid placing
+/// INT3 bytes on inline data (hashes, strings, config blobs) that would be
+/// misidentified as instructions by linear decoding.
 ///
 /// # Errors
 /// Returns an error if the shellcode body (after stub) is too small to decode
@@ -57,17 +131,10 @@ pub fn patch_shellcode(
         anyhow::bail!("Shellcode body (after stub) is empty — nothing to checkpoint");
     }
 
-    // Linear disassembly from after the stub to collect instruction boundaries.
-    let mut decoder = Decoder::with_ip(64, body, 0, DecoderOptions::NONE);
-    let mut boundaries: Vec<usize> = Vec::new();
-
-    for instr in &mut decoder {
-        if instr.is_invalid() {
-            break;
-        }
-        // Record the offset relative to the start of shellcode (not body).
-        boundaries.push(stub_size + instr.ip() as usize);
-    }
+    // Recursive descent disassembly: follow control flow to find only reachable
+    // instruction boundaries, avoiding inline data that linear decode would
+    // misidentify as instructions.
+    let boundaries = collect_reachable_boundaries(body, stub_size);
 
     if boundaries.is_empty() {
         anyhow::bail!("No valid x86-64 instructions found in shellcode body");
@@ -586,5 +653,139 @@ mod tests {
                 i
             );
         }
+    }
+
+    // ======================================================================
+    // Recursive descent behavior
+    // ======================================================================
+
+    /// Inline data after an unconditional jump is NOT treated as instructions.
+    #[test]
+    fn test_recursive_descent_skips_inline_data() {
+        // nop           ; off=0, reachable
+        // jmp short +2  ; off=1, reachable, target=5 (skip 2 data bytes)
+        // db 0xAA, 0xBB ; off=3,4 — inline DATA, NOT reachable
+        // nop           ; off=5, reachable (jump target)
+        // ret           ; off=6, reachable
+        #[rustfmt::skip]
+        let code: Vec<u8> = vec![
+            0x90,             // nop
+            0xEB, 0x02,       // jmp short +2 (target = 1+2+2 = 5)
+            0xAA, 0xBB,       // inline data
+            0x90,             // nop
+            0xC3,             // ret
+        ];
+
+        let boundaries = collect_reachable_boundaries(&code, 0);
+
+        // Offsets 0, 1, 5, 6 are reachable; 3, 4 are data
+        assert!(
+            boundaries.contains(&0),
+            "Entry point should be a boundary"
+        );
+        assert!(
+            boundaries.contains(&1),
+            "jmp instruction should be a boundary"
+        );
+        assert!(
+            boundaries.contains(&5),
+            "Jump target (nop) should be a boundary"
+        );
+        assert!(
+            boundaries.contains(&6),
+            "ret should be a boundary"
+        );
+        assert!(
+            !boundaries.contains(&3),
+            "Inline data byte 0xAA should NOT be a boundary"
+        );
+        assert!(
+            !boundaries.contains(&4),
+            "Inline data byte 0xBB should NOT be a boundary"
+        );
+        assert_eq!(boundaries.len(), 4, "Should have exactly 4 reachable boundaries");
+
+        // Also verify via patch_shellcode that INT3 never lands on data bytes
+        let mut buf = code;
+        let patched = patch_shellcode(&mut buf, 10, 0).unwrap();
+        for entry in &patched.table {
+            assert!(
+                entry.offset != 3 && entry.offset != 4,
+                "INT3 must not land on inline data at offset {}",
+                entry.offset
+            );
+        }
+    }
+
+    /// Conditional branches explore both fall-through and branch target paths.
+    #[test]
+    fn test_recursive_descent_conditional_branch_both_paths() {
+        // xor eax,eax   ; off=0 (2 bytes), reachable
+        // je +2          ; off=2 (2 bytes), target=6, fall-through=4
+        // nop            ; off=4, reachable (fall-through)
+        // nop            ; off=5, reachable
+        // nop            ; off=6, reachable (branch target)
+        // ret            ; off=7, reachable
+        #[rustfmt::skip]
+        let code: Vec<u8> = vec![
+            0x31, 0xC0,       // xor eax, eax
+            0x74, 0x02,       // je +2 (target = 2+2+2 = 6)
+            0x90,             // nop (fall-through)
+            0x90,             // nop
+            0x90,             // nop (branch target)
+            0xC3,             // ret
+        ];
+
+        let boundaries = collect_reachable_boundaries(&code, 0);
+
+        // All 6 instruction offsets should be reachable: {0, 2, 4, 5, 6, 7}
+        let expected = vec![0usize, 2, 4, 5, 6, 7];
+        for &off in &expected {
+            assert!(
+                boundaries.contains(&off),
+                "Offset {} should be reachable",
+                off
+            );
+        }
+        assert_eq!(
+            boundaries.len(),
+            expected.len(),
+            "Should have exactly {} reachable boundaries",
+            expected.len()
+        );
+    }
+
+    /// Indirect jump stops analysis — code after it is NOT reachable.
+    #[test]
+    fn test_recursive_descent_indirect_jump_stops() {
+        // nop           ; off=0, reachable
+        // mov rax,rcx   ; off=1 (3 bytes), reachable
+        // jmp rax       ; off=4 (2 bytes), reachable, INDIRECT → stop
+        // nop           ; off=6, NOT reachable
+        // ret           ; off=7, NOT reachable
+        #[rustfmt::skip]
+        let code: Vec<u8> = vec![
+            0x90,                   // nop
+            0x48, 0x89, 0xC8,       // mov rax, rcx
+            0xFF, 0xE0,             // jmp rax (indirect)
+            0x90,                   // nop (unreachable)
+            0xC3,                   // ret (unreachable)
+        ];
+
+        let boundaries = collect_reachable_boundaries(&code, 0);
+
+        // Only offsets 0, 1, 4 are reachable
+        assert!(boundaries.contains(&0), "Entry point should be reachable");
+        assert!(boundaries.contains(&1), "mov rax,rcx should be reachable");
+        assert!(boundaries.contains(&4), "jmp rax should be reachable");
+        assert!(
+            !boundaries.contains(&6),
+            "nop after indirect jmp should NOT be reachable"
+        );
+        assert!(
+            !boundaries.contains(&7),
+            "ret after indirect jmp should NOT be reachable"
+        );
+        assert_eq!(boundaries.len(), 3, "Should have exactly 3 reachable boundaries");
     }
 }

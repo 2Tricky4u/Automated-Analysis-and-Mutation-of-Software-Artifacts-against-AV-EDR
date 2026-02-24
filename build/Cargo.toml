@@ -39,4 +39,4 @@ base64 = "0.22"
 goblin = "0.9"
 
 # For x86-64 instruction-boundary-aware shellcode patching (INT3 checkpoints)
-iced-x86 = { version = "1.21", default-features = false, features = ["decoder", "std"] }
+iced-x86 = { version = "1.21", default-features = false, features = ["decoder", "instr_info", "std"] }
