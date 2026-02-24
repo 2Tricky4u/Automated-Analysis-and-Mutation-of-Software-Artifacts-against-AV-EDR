@@ -8,7 +8,8 @@
 //! - `CarrierBlocked` removed: without dry-run, carrier failures are
 //!   indistinguishable from AV kills → `KilledPrePayload`. With dry-run
 //!   confirming same error → `InfraError`.
-//! - `exit_code == -1` maps to `KilledPrePayload` (conservative), not `InfraError`.
+//! - Synthetic exit codes are namespaced constants (EXIT_WAIT_FAILED, EXIT_NO_CODE,
+//!   EXIT_TIMEOUT, EXIT_INFRA) defined in `types.rs`.
 //! - `dry_run_exit_code` parameter added for future dry-run integration.
 //! - `extract_evidence()` matches `event_type` against all checkpoint variants.
 //! - `detection_outcome()` strings: `KILLED_PRE_PAYLOAD`, `KILLED_POST_PAYLOAD`.
@@ -16,6 +17,7 @@
 pub use automutate_common::DetectionVerdict;
 
 use crate::automutate::common::TelemetryData;
+use crate::dispatch::types::{EXIT_INFRA, EXIT_NO_CODE, EXIT_TIMEOUT, EXIT_WAIT_FAILED};
 use chrono::NaiveDateTime;
 
 /// Window (seconds) for considering ETW events "recent" relative to process end.
@@ -107,12 +109,15 @@ fn parse_rededr_date(payload: &[u8]) -> Option<f64> {
 ///
 /// Decision order:
 /// 1. Timeout → TimeoutActive / TimeoutIdle
-/// 2. exit_code == 0 → CleanExit
-/// 3. dry_run_exit_code matches exit_code (non-zero) → InfraError
-/// 4. exit_code == -1 → KilledPrePayload (conservative)
-/// 5. AV NTSTATUS → KilledPrePayload / KilledPostPayload
-/// 6. Crash NTSTATUS → Crashed
-/// 7. Otherwise → KilledPrePayload / KilledPostPayload (based on checkpoint)
+/// 2. EXIT_INFRA → InfraError
+/// 3. exit_code == 0 → CleanExit
+/// 4. dry_run_exit_code matches exit_code (non-zero) → InfraError
+/// 5. EXIT_WAIT_FAILED → KilledPrePayload (conservative)
+/// 6. EXIT_NO_CODE → KilledPrePayload / KilledPostPayload (checkpoint-based)
+/// 7. EXIT_TIMEOUT (without timed_out) → TimeoutActive / TimeoutIdle (defensive)
+/// 8. AV NTSTATUS → KilledPrePayload / KilledPostPayload
+/// 9. Crash NTSTATUS → Crashed
+/// 10. Otherwise → KilledPrePayload / KilledPostPayload (based on checkpoint)
 fn classify_outcome(ev: &ClassificationEvidence) -> DetectionVerdict {
     // Step 1: Timeout
     if ev.timed_out {
@@ -129,25 +134,49 @@ fn classify_outcome(ev: &ClassificationEvidence) -> DetectionVerdict {
         };
     }
 
-    // Step 2: Clean exit
+    // Step 2: Infrastructure error (never executed)
+    if ev.exit_code == EXIT_INFRA {
+        return DetectionVerdict::InfraError;
+    }
+
+    // Step 3: Clean exit
     if ev.exit_code == 0 {
         return DetectionVerdict::CleanExit;
     }
 
-    // Step 3: Dry-run gate — matching non-zero exit code → confirmed non-AV failure
+    // Step 4: Dry-run gate — matching non-zero exit code → confirmed non-AV failure
     if let Some(dry_run_code) = ev.dry_run_exit_code
         && dry_run_code == ev.exit_code
     {
         return DetectionVerdict::InfraError;
     }
 
-    // Step 4: exit_code == -1 (wait() failed / spawn failed)
+    // Step 5: exit_code == EXIT_WAIT_FAILED (wait() failed)
     // Conservative: could be static detection (file quarantined before spawn)
-    if ev.exit_code == -1 {
+    if ev.exit_code == EXIT_WAIT_FAILED {
         return DetectionVerdict::KilledPrePayload;
     }
 
-    // Step 5: Known AV NTSTATUS codes
+    // Step 5b: EXIT_NO_CODE — process was externally terminated (no exit code)
+    // Use checkpoint to distinguish pre/post payload
+    if ev.exit_code == EXIT_NO_CODE {
+        return if ev.has_launching_checkpoint {
+            DetectionVerdict::KilledPostPayload
+        } else {
+            DetectionVerdict::KilledPrePayload
+        };
+    }
+
+    // Step 5c: EXIT_TIMEOUT without timed_out flag (defensive — shouldn't happen)
+    if ev.exit_code == EXIT_TIMEOUT {
+        return if ev.has_launching_checkpoint {
+            DetectionVerdict::TimeoutActive
+        } else {
+            DetectionVerdict::TimeoutIdle
+        };
+    }
+
+    // Step 6: Known AV NTSTATUS codes
     if AV_NTSTATUS_CODES.contains(&ev.exit_code) {
         return if ev.has_launching_checkpoint {
             DetectionVerdict::KilledPostPayload
@@ -156,12 +185,12 @@ fn classify_outcome(ev: &ClassificationEvidence) -> DetectionVerdict {
         };
     }
 
-    // Step 6: Crash NTSTATUS codes
+    // Step 7: Crash NTSTATUS codes
     if CRASH_NTSTATUS_CODES.contains(&ev.exit_code) {
         return DetectionVerdict::Crashed;
     }
 
-    // Step 7: Unknown nonzero exit code (includes exit codes 1-4)
+    // Step 8: Unknown nonzero exit code
     if ev.has_launching_checkpoint {
         DetectionVerdict::KilledPostPayload
     } else {
@@ -293,23 +322,58 @@ mod tests {
     }
 
     #[test]
-    fn test_dry_run_matching_minus1_is_infra_error() {
-        // Both dry-run and AV run fail with -1 → InfraError (spawn always fails)
-        let ev = evidence(-1, false, false, Some(-1), None, 1000.0);
+    fn test_dry_run_matching_wait_failed_is_infra_error() {
+        // Both dry-run and AV run fail with EXIT_WAIT_FAILED → InfraError (spawn always fails)
+        let ev = evidence(EXIT_WAIT_FAILED, false, false, Some(EXIT_WAIT_FAILED), None, 1000.0);
         assert_eq!(classify_outcome(&ev), DetectionVerdict::InfraError);
     }
 
-    // ── Step 4: exit_code == -1 (conservative) ────────────────────────────
+    // ── Step 2: EXIT_INFRA ────────────────────────────────────────────────
 
     #[test]
-    fn test_exit_code_minus1_without_dry_run_is_killed_pre() {
-        // exit_code == -1, no dry-run → conservative: KilledPrePayload
-        let ev = evidence(-1, false, false, None, None, 1000.0);
+    fn test_exit_infra_is_infra_error() {
+        let ev = evidence(EXIT_INFRA, false, false, None, None, 1000.0);
+        assert_eq!(classify_outcome(&ev), DetectionVerdict::InfraError);
+    }
+
+    // ── Step 5: EXIT_WAIT_FAILED (conservative) ─────────────────────────
+
+    #[test]
+    fn test_exit_code_wait_failed_without_dry_run_is_killed_pre() {
+        let ev = evidence(EXIT_WAIT_FAILED, false, false, None, None, 1000.0);
         assert_eq!(classify_outcome(&ev), DetectionVerdict::KilledPrePayload);
         assert!(DetectionVerdict::KilledPrePayload.is_detected());
     }
 
-    // ── Step 5: AV NTSTATUS codes ─────────────────────────────────────────
+    // ── Step 5b: EXIT_NO_CODE ───────────────────────────────────────────
+
+    #[test]
+    fn test_exit_no_code_without_launching_is_killed_pre() {
+        let ev = evidence(EXIT_NO_CODE, false, false, None, None, 1000.0);
+        assert_eq!(classify_outcome(&ev), DetectionVerdict::KilledPrePayload);
+    }
+
+    #[test]
+    fn test_exit_no_code_with_launching_is_killed_post() {
+        let ev = evidence(EXIT_NO_CODE, false, true, None, None, 1000.0);
+        assert_eq!(classify_outcome(&ev), DetectionVerdict::KilledPostPayload);
+    }
+
+    // ── Step 5c: EXIT_TIMEOUT (defensive) ───────────────────────────────
+
+    #[test]
+    fn test_exit_timeout_without_timed_out_flag() {
+        let ev = evidence(EXIT_TIMEOUT, false, false, None, None, 1000.0);
+        assert_eq!(classify_outcome(&ev), DetectionVerdict::TimeoutIdle);
+    }
+
+    #[test]
+    fn test_exit_timeout_with_launching() {
+        let ev = evidence(EXIT_TIMEOUT, false, true, None, None, 1000.0);
+        assert_eq!(classify_outcome(&ev), DetectionVerdict::TimeoutActive);
+    }
+
+    // ── Step 6: AV NTSTATUS codes ─────────────────────────────────────────
 
     #[test]
     fn test_av_ntstatus_pre_payload() {
@@ -325,7 +389,7 @@ mod tests {
         assert!(DetectionVerdict::KilledPostPayload.is_detected());
     }
 
-    // ── Step 6: Crash NTSTATUS ────────────────────────────────────────────
+    // ── Step 7: Crash NTSTATUS ────────────────────────────────────────────
 
     #[test]
     fn test_crash_ntstatus() {
@@ -334,7 +398,7 @@ mod tests {
         assert!(DetectionVerdict::Crashed.is_detected());
     }
 
-    // ── Step 7: Unknown nonzero exit code ─────────────────────────────────
+    // ── Step 8: Unknown nonzero exit code ─────────────────────────────────
 
     #[test]
     fn test_unknown_exit_code_no_launching() {
@@ -350,8 +414,8 @@ mod tests {
 
     #[test]
     fn test_carrier_exit_codes_without_dry_run_are_killed_pre() {
-        // Exit codes 1-4 without dry-run fall through to step 7 → KilledPrePayload
-        for &code in &[1, 2, 3, 4] {
+        // Namespaced carrier exit codes (30-33) without dry-run fall through to step 8 → KilledPrePayload
+        for &code in &[30, 31, 32, 33] {
             let ev = evidence(code, false, false, None, None, 1000.0);
             assert_eq!(
                 classify_outcome(&ev),
@@ -364,15 +428,15 @@ mod tests {
 
     #[test]
     fn test_carrier_exit_code_with_launching_is_killed_post() {
-        // exit_code=1 but launching checkpoint present → killed post payload
-        let ev = evidence(1, false, true, None, None, 1000.0);
+        // exit_code=30 but launching checkpoint present → killed post payload
+        let ev = evidence(30, false, true, None, None, 1000.0);
         assert_eq!(classify_outcome(&ev), DetectionVerdict::KilledPostPayload);
     }
 
     #[test]
     fn test_carrier_exit_code_with_dry_run_match_is_infra() {
-        // exit_code=2, dry-run also 2 → InfraError (artifact broken, not AV)
-        let ev = evidence(2, false, false, Some(2), None, 1000.0);
+        // exit_code=31, dry-run also 31 → InfraError (artifact broken, not AV)
+        let ev = evidence(31, false, false, Some(31), None, 1000.0);
         assert_eq!(classify_outcome(&ev), DetectionVerdict::InfraError);
     }
 

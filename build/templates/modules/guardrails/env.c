@@ -52,11 +52,11 @@ int guardrail() {
     
     DWORD result = GetEnvironmentVariableA(envVarName, buffer, 1024);
     if (result == 0) {
-        return 6;
+        return 10;
     }
-    
+
     if (!contains_case_insensitive(buffer, tocheck)) {
-        return 6;
+        return 10;
     }
     
     return 0; // Success

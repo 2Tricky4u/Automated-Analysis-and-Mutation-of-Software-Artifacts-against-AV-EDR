@@ -19,7 +19,7 @@ int carrier() {
 
     // @MUTATE:opaque_predicate
     // @MUTATE:dead_code_insertion
-    if (!dest) return 1;
+    if (!dest) return 30;
 
     // @MUTATE:timing_jitter
     decode_payload(dest, PAYLOAD_LEN);
@@ -29,7 +29,7 @@ int carrier() {
     // @MUTATE:api_wrapper_injection(VirtualProtect)
     // @MUTATE:getprocaddress_indirection(VirtualProtect)
     if (!MyVirtualProtect(dest, PAYLOAD_LEN, p_RX, &result)) {
-        return 2;
+        return 31;
     }
     // @MUTATE:timing_jitter
 
