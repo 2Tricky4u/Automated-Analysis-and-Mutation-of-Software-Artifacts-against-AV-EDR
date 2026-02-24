@@ -13,9 +13,9 @@
 
 pub use automutate_common::DetectionVerdict;
 
-use automutate_common::has_launched;
 use crate::automutate::common::TelemetryData;
 use crate::dispatch::types::{EXIT_INFRA, EXIT_NO_CODE, EXIT_TIMEOUT, EXIT_WAIT_FAILED};
+use automutate_common::has_launched;
 
 /// Known AV/EDR NTSTATUS termination codes.
 const AV_NTSTATUS_CODES: &[i32] = &[
@@ -373,7 +373,10 @@ mod tests {
 
     #[test]
     fn test_detection_outcome_strings() {
-        assert_eq!(DetectionVerdict::Evasion.detection_outcome(), "FULL_EVASION");
+        assert_eq!(
+            DetectionVerdict::Evasion.detection_outcome(),
+            "FULL_EVASION"
+        );
         assert_eq!(DetectionVerdict::Detected.detection_outcome(), "DETECTED");
         assert_eq!(DetectionVerdict::Ambiguous.detection_outcome(), "AMBIGUOUS");
         assert_eq!(DetectionVerdict::Stalled.detection_outcome(), "STALLED");

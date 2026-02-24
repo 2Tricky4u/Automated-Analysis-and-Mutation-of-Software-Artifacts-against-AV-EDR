@@ -50,8 +50,7 @@ fn collect_reachable_boundaries(body: &[u8], stub_size: usize) -> Vec<usize> {
             continue;
         }
 
-        let mut decoder =
-            Decoder::with_ip(64, &body[start..], start as u64, DecoderOptions::NONE);
+        let mut decoder = Decoder::with_ip(64, &body[start..], start as u64, DecoderOptions::NONE);
 
         for instr in &mut decoder {
             let ip = instr.ip() as usize;
@@ -679,10 +678,7 @@ mod tests {
         let boundaries = collect_reachable_boundaries(&code, 0);
 
         // Offsets 0, 1, 5, 6 are reachable; 3, 4 are data
-        assert!(
-            boundaries.contains(&0),
-            "Entry point should be a boundary"
-        );
+        assert!(boundaries.contains(&0), "Entry point should be a boundary");
         assert!(
             boundaries.contains(&1),
             "jmp instruction should be a boundary"
@@ -691,10 +687,7 @@ mod tests {
             boundaries.contains(&5),
             "Jump target (nop) should be a boundary"
         );
-        assert!(
-            boundaries.contains(&6),
-            "ret should be a boundary"
-        );
+        assert!(boundaries.contains(&6), "ret should be a boundary");
         assert!(
             !boundaries.contains(&3),
             "Inline data byte 0xAA should NOT be a boundary"
@@ -703,7 +696,11 @@ mod tests {
             !boundaries.contains(&4),
             "Inline data byte 0xBB should NOT be a boundary"
         );
-        assert_eq!(boundaries.len(), 4, "Should have exactly 4 reachable boundaries");
+        assert_eq!(
+            boundaries.len(),
+            4,
+            "Should have exactly 4 reachable boundaries"
+        );
 
         // Also verify via patch_shellcode that INT3 never lands on data bytes
         let mut buf = code;
@@ -786,6 +783,10 @@ mod tests {
             !boundaries.contains(&7),
             "ret after indirect jmp should NOT be reachable"
         );
-        assert_eq!(boundaries.len(), 3, "Should have exactly 3 reachable boundaries");
+        assert_eq!(
+            boundaries.len(),
+            3,
+            "Should have exactly 3 reachable boundaries"
+        );
     }
 }

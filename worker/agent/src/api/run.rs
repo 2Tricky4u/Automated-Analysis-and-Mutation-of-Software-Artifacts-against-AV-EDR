@@ -3,8 +3,8 @@ use crate::automutate::common::{SampleRequest, SampleResponse};
 use crate::dispatch::engine;
 use crate::dispatch::state::ExecutionLockGuard;
 use crate::dispatch::types::{
-    RunContext, RunRequest, resolve_run_id, sample_response_ok, EXIT_INFRA, EXIT_NO_CODE,
-    EXIT_TIMEOUT, EXIT_WAIT_FAILED,
+    EXIT_INFRA, EXIT_NO_CODE, EXIT_TIMEOUT, EXIT_WAIT_FAILED, RunContext, RunRequest,
+    resolve_run_id, sample_response_ok,
 };
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
