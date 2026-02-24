@@ -120,6 +120,9 @@ pub async fn schedule_job(
     if !req.fixed_mutations.is_empty() {
         job.search_space.fixed_mutations = req.fixed_mutations.clone();
     }
+    if req.sc_checkpoint_count > 0 {
+        job.sc_checkpoint_count = Some(req.sc_checkpoint_count);
+    }
 
     // Index to ES before submission
     if let Err(e) = service.storage.index_job(&job).await {
