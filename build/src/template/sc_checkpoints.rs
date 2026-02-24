@@ -114,13 +114,13 @@ fn collect_reachable_boundaries(body: &[u8], stub_size: usize) -> Vec<usize> {
 /// Returns an error if the shellcode body (after stub) is too small to decode
 /// any instructions.
 pub fn patch_shellcode(
-    shellcode: &mut Vec<u8>,
+    shellcode: &mut [u8],
     checkpoint_count: u32,
     stub_size: usize,
 ) -> Result<PatchedShellcode> {
     if checkpoint_count == 0 {
         return Ok(PatchedShellcode {
-            bytes: shellcode.clone(),
+            bytes: shellcode.to_owned(),
             table: Vec::new(),
         });
     }
@@ -150,7 +150,7 @@ pub fn patch_shellcode(
     if usable == 0 {
         // Only one instruction — nothing to checkpoint inside.
         return Ok(PatchedShellcode {
-            bytes: shellcode.clone(),
+            bytes: shellcode.to_owned(),
             table: Vec::new(),
         });
     }
@@ -182,7 +182,7 @@ pub fn patch_shellcode(
     }
 
     Ok(PatchedShellcode {
-        bytes: shellcode.clone(),
+        bytes: shellcode.to_owned(),
         table,
     })
 }

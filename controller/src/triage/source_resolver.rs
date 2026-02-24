@@ -74,11 +74,13 @@ impl SourceMap {
     }
 
     /// Batch-resolve multiple line numbers. Skips invalid lines.
+    #[allow(dead_code)]
     pub fn resolve_many(&self, lines: &[usize]) -> Vec<ResolvedLine> {
         lines.iter().filter_map(|&l| self.resolve(l)).collect()
     }
 
     /// Total line count.
+    #[allow(dead_code)]
     pub fn line_count(&self) -> usize {
         self.lines.len()
     }
@@ -176,6 +178,7 @@ fn is_executable_line(line: &str) -> bool {
 
 /// Convenience: resolve one line without building a full SourceMap.
 /// Returns the raw (untrimmed) source line.
+#[allow(dead_code)]
 pub fn resolve_line(source: &str, line: usize) -> Option<&str> {
     if line == 0 {
         return None;
@@ -213,8 +216,8 @@ fn detect_functions(lines: &[String]) -> Vec<FuncRange> {
 
             if !found_open {
                 // Look ahead a few lines for the opening brace
-                for j in (i + 1)..std::cmp::min(i + 4, lines.len()) {
-                    if lines[j].contains('{') {
+                for (j, line) in lines.iter().enumerate().skip(i + 1).take(3) {
+                    if line.contains('{') {
                         brace_line = j;
                         found_open = true;
                         break;
@@ -228,8 +231,8 @@ fn detect_functions(lines: &[String]) -> Vec<FuncRange> {
                 let mut depth = 0i32;
                 let mut end_line = brace_line + 1; // 1-based, default
 
-                for k in brace_line..lines.len() {
-                    for ch in lines[k].chars() {
+                for (k, line) in lines.iter().enumerate().skip(brace_line) {
+                    for ch in line.chars() {
                         match ch {
                             '{' => depth += 1,
                             '}' => {
