@@ -11,8 +11,8 @@ use crate::dispatch::classifier;
 use crate::dispatch::guards::{DELAY, MonitorGuard, ProcessGuard, RedEdrGuard};
 use crate::dispatch::sink::ControlPlaneSink;
 use crate::dispatch::types::{
-    RunContext, RunOutcome, RunPhaseTimings, RunRequest, EXIT_NO_CODE, EXIT_TIMEOUT,
-    EXIT_WAIT_FAILED,
+    EXIT_NO_CODE, EXIT_TIMEOUT, EXIT_WAIT_FAILED, RunContext, RunOutcome, RunPhaseTimings,
+    RunRequest,
 };
 use crate::infra::helpers;
 use crate::telemetry;
@@ -127,9 +127,10 @@ pub async fn execute_dryrun(
 
     // Cleanup artifact (no telemetry dir for dryrun — pass artifact parent as noop)
     if context.artifact_path.exists()
-        && let Err(e) = std::fs::remove_file(&context.artifact_path) {
-            warn!("[Dryrun] Failed to clean artifact: {}", e);
-        }
+        && let Err(e) = std::fs::remove_file(&context.artifact_path)
+    {
+        warn!("[Dryrun] Failed to clean artifact: {}", e);
+    }
 
     Ok(RunOutcome {
         exit_code,
@@ -711,11 +712,8 @@ pub async fn execute_run(
     let actual_elapsed =
         Duration::from_millis(phase_timings.process_spawn_ms + phase_timings.process_wait_ms);
 
-    let (verdict, last_checkpoint) = classifier::classify_run(
-        exit_code,
-        timed_out,
-        &telemetry_events,
-    );
+    let (verdict, last_checkpoint) =
+        classifier::classify_run(exit_code, timed_out, &telemetry_events);
 
     info!(
         "Detection verdict: {:?} (detected={}), last_checkpoint={:?}",

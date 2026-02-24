@@ -377,9 +377,9 @@ impl Orchestrator {
                                 vm_id: &d_vm_id,
                             })
                             .await
-                        {
-                            error!("Failed to index dryrun run: {}", e);
-                        }
+                    {
+                        error!("Failed to index dryrun run: {}", e);
+                    }
 
                     // Compute line coverage from trace data
                     if let Some(ref source) = assembled_source {
