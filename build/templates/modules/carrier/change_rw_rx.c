@@ -4,6 +4,7 @@
  * CONST: Requires payload to be in a writable/changeable section.
  */
 #include "../header/definitions.h"
+#include "sc_checkpoint.h"
 #include <stdio.h>
 
 int carrier() {
@@ -25,11 +26,7 @@ int carrier() {
 
     ARTIFACT_CHECKPOINT("Launching");
     // 4. Execute
-#ifdef ENABLE_INSTRUMENTATION
-    ((void(*)(void(*)(const char*)))(dest))(__artifact_checkpoint);
-#else
-    (*(void(*)())(dest))();
-#endif
+    EXECUTE_SHELLCODE(dest);
 
     return 0;
 }

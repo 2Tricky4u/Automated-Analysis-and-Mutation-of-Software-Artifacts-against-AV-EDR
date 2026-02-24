@@ -105,6 +105,9 @@ pub enum BuildInput {
         /// Which modules mutations apply to (empty = all modules + main template)
         #[allow(dead_code)]
         mutation_targets: Vec<String>,
+        /// Number of INT3 shellcode checkpoints to insert (None or 0 = disabled).
+        /// Only active for instrumented builds.
+        sc_checkpoint_count: Option<u32>,
     },
 }
 
@@ -146,6 +149,7 @@ impl ArtifactBuilder {
             mutations,
             trace_mode,
             mutation_targets,
+            sc_checkpoint_count,
         } = input;
 
         debug!(
@@ -153,8 +157,11 @@ impl ArtifactBuilder {
             modules.carrier, modules.decoder, trace_mode
         );
 
-        self.build_modular_template(modules, &payload, encoding, &mutations, &trace_mode, &mutation_targets)
-            .await
+        self.build_modular_template(
+            modules, &payload, encoding, &mutations, &trace_mode, &mutation_targets,
+            sc_checkpoint_count,
+        )
+        .await
     }
 
     /// Compile minimal_runtime.o if it doesn't already exist. Returns the object path.
@@ -166,6 +173,76 @@ impl ArtifactBuilder {
                 .await
                 .context("Failed to compile minimal runtime")?;
         }
+        Ok(obj)
+    }
+
+    /// Compile sc_checkpoint_runtime.o (VEH handler for INT3 checkpoints).
+    ///
+    /// Always recompiled because the generated `sc_checkpoints_table.h` changes
+    /// per shellcode. The table header directory is `output_dir`.
+    async fn ensure_sc_checkpoint_runtime(&self) -> Result<PathBuf> {
+        let obj = self.config.output_dir.join("sc_checkpoint_runtime.o");
+        let src = self
+            .config
+            .runtime_src
+            .parent()
+            .context("Invalid runtime source path")?
+            .join("sc_checkpoint_runtime.c");
+
+        if !src.exists() {
+            anyhow::bail!(
+                "SC checkpoint runtime source not found at {:?}",
+                src
+            );
+        }
+
+        debug!("Compiling sc_checkpoint_runtime.o (with generated table header)...");
+
+        let mut cmd = tokio::process::Command::new("clang");
+        cmd.arg("-c")
+            .arg(&src)
+            .arg("-o")
+            .arg(&obj)
+            .arg("-target")
+            .arg("x86_64-pc-windows-msvc")
+            .arg("-fms-compatibility")
+            .arg("-fms-extensions")
+            .arg("-D_CRT_SECURE_NO_WARNINGS")
+            .arg("-DENABLE_SC_CHECKPOINTS")
+            .arg("-O2")
+            .arg(format!("--sysroot={}", self.config.xwin_dir.display()))
+            .arg(format!("-I{}/crt/include", self.config.xwin_dir.display()))
+            .arg(format!(
+                "-I{}/sdk/include/ucrt",
+                self.config.xwin_dir.display()
+            ))
+            .arg(format!(
+                "-I{}/sdk/include/um",
+                self.config.xwin_dir.display()
+            ))
+            .arg(format!(
+                "-I{}/sdk/include/shared",
+                self.config.xwin_dir.display()
+            ))
+            // Include output_dir for sc_checkpoints_table.h
+            .arg(format!("-I{}", self.config.output_dir.display()));
+
+        let output = cmd
+            .output()
+            .await
+            .context("Failed to run clang for sc_checkpoint_runtime compilation")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            anyhow::bail!(
+                "SC checkpoint runtime compilation failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
+                stdout,
+                stderr
+            );
+        }
+
+        debug!("SC checkpoint runtime compiled: {:?}", obj);
         Ok(obj)
     }
 
@@ -337,6 +414,18 @@ impl ArtifactBuilder {
         ir_path: &Path,
         enable_instrumentation: bool,
     ) -> Result<()> {
+        self.compile_source_to_ir_with_extra(source_path, ir_path, enable_instrumentation, &[])
+            .await
+    }
+
+    /// Compile C source to LLVM IR with extra compiler flags.
+    async fn compile_source_to_ir_with_extra(
+        &self,
+        source_path: &Path,
+        ir_path: &Path,
+        enable_instrumentation: bool,
+        extra_flags: &[&str],
+    ) -> Result<()> {
         let xwin = &self.xwin;
 
         // Get runtime include path for instrumentation.h
@@ -357,6 +446,7 @@ impl ArtifactBuilder {
         if enable_instrumentation {
             args.push("-DENABLE_INSTRUMENTATION");
         }
+        args.extend_from_slice(extra_flags);
         args.extend_from_slice(&[
             "-S",         // Emit assembly (LLVM IR in this case)
             "-emit-llvm", // Output LLVM IR instead of native assembly
@@ -494,10 +584,14 @@ impl ArtifactBuilder {
     /// 3. Instrumenting the IR with the emitter
     /// 4. Compiling instrumented IR to object file
     /// 5. Linking with instrumentation runtime
+    ///
+    /// `sc_checkpoint_runtime_obj`: optional path to the compiled sc_checkpoint_runtime.o
+    /// When present, `-DENABLE_SC_CHECKPOINTS` is added and the .o is linked.
     async fn apply_instrumentation(
         &self,
         built: BuiltArtifact,
         trace_mode_str: &str,
+        sc_checkpoint_runtime_obj: Option<&Path>,
     ) -> Result<BuiltArtifact> {
         debug!("Applying instrumentation: trace_mode={}", trace_mode_str);
 
@@ -587,7 +681,17 @@ impl ArtifactBuilder {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        self.compile_source_to_ir(&source_for_compilation, &ir_path, true)
+        // Build extra flags for SC checkpoints when active
+        let output_dir_include = format!("-I{}", self.config.output_dir.display());
+        let sc_extra_flags: Vec<&str> = if sc_checkpoint_runtime_obj.is_some() {
+            vec!["-DENABLE_SC_CHECKPOINTS", &output_dir_include]
+        } else {
+            vec![]
+        };
+
+        self.compile_source_to_ir_with_extra(
+            &source_for_compilation, &ir_path, true, &sc_extra_flags,
+        )
             .await
             .context("Failed to compile source to IR for instrumentation")?;
 
@@ -655,11 +759,13 @@ impl ArtifactBuilder {
         let instrumented_exe_path = built.source_path.with_extension("instrumented.exe");
 
         debug!("Linking instrumented binary with runtime...");
+        let extra_link_objs: Vec<&Path> = sc_checkpoint_runtime_obj.into_iter().collect();
         self.link_instrumented_exe(
             &obj_path,
             &runtime_obj,
             &instrumented_exe_path,
             template_name,
+            &extra_link_objs,
         )
         .await
         .context("Failed to link instrumented executable")?;
@@ -799,13 +905,16 @@ impl ArtifactBuilder {
         Ok(())
     }
 
-    /// Link instrumented object file with runtime to create final executable
+    /// Link instrumented object file with runtime to create final executable.
+    ///
+    /// `extra_objs`: additional object files to link (e.g. sc_checkpoint_runtime.o).
     async fn link_instrumented_exe(
         &self,
         obj_path: &Path,
         runtime_obj: &Path,
         output_exe: &Path,
         template_name: &str,
+        extra_objs: &[&Path],
     ) -> Result<()> {
         let template_libs = get_template_libs(template_name);
 
@@ -826,6 +935,10 @@ impl ArtifactBuilder {
             .arg("/out:".to_owned() + output_exe.to_str().unwrap())
             .arg("/subsystem:console")
             .arg("/machine:x64");
+        // Link extra object files (e.g. sc_checkpoint_runtime.o)
+        for extra in extra_objs {
+            cmd.arg(extra);
+        }
         // Add xwin library paths (CRT and Windows SDK)
         for arg in self.xwin.lld_lib_args() {
             cmd.arg(arg);
@@ -918,6 +1031,7 @@ impl ArtifactBuilder {
         mutations: &[mutator::MutationSpec],
         trace_mode: &str,
         mutation_targets: &[String],
+        sc_checkpoint_count: Option<u32>,
     ) -> Result<BuiltArtifact> {
         // Step 0: Sync decoder module to match encoding type
         let expected_decoder = encoding.decoder_module();
@@ -948,8 +1062,34 @@ impl ArtifactBuilder {
             payload
         };
 
+        // --- SC checkpoint INT3 patching (after stub, before encoding) ---
+        let (final_payload_buf, sc_header) = {
+            if let Some(count) = sc_checkpoint_count {
+                if count > 0 && instrumented {
+                    let stub_size = crate::template::shellcode_stub::STUB_SIZE;
+                    let mut buf = payload_to_encode.to_vec();
+                    let patched = crate::template::sc_checkpoints::patch_shellcode(
+                        &mut buf, count, stub_size,
+                    )
+                    .context("Failed to patch shellcode with INT3 checkpoints")?;
+                    let header = crate::template::sc_checkpoints::generate_c_header(&patched);
+                    info!(
+                        "Inserted {} INT3 shellcode checkpoints (stub_size={}, body={})",
+                        patched.table.len(),
+                        stub_size,
+                        buf.len() - stub_size
+                    );
+                    (patched.bytes, Some(header))
+                } else {
+                    (payload_to_encode.to_vec(), None)
+                }
+            } else {
+                (payload_to_encode.to_vec(), None)
+            }
+        };
+
         let encoder = PayloadEncoder::new();
-        let encoded = encoder.encode(payload_to_encode, encoding);
+        let encoded = encoder.encode(&final_payload_buf, encoding);
         let payload_header = encoder.generate_c_header(&encoded);
 
         debug!(
@@ -1050,6 +1190,20 @@ impl ArtifactBuilder {
         );
 
         let needs_runtime = trace_mode != "off" && !trace_mode.is_empty();
+
+        // Write sc_checkpoints_table.h and compile sc_checkpoint_runtime.o when active
+        let sc_checkpoint_runtime_obj: Option<PathBuf> = if let Some(ref header_content) = sc_header {
+            let table_header_path = self.config.output_dir.join("sc_checkpoints_table.h");
+            tokio::fs::write(&table_header_path, header_content)
+                .await
+                .context("Failed to write sc_checkpoints_table.h")?;
+            debug!("Wrote sc_checkpoints_table.h to {:?}", table_header_path);
+
+            let obj = self.ensure_sc_checkpoint_runtime().await?;
+            Some(obj)
+        } else {
+            None
+        };
 
         let unique_id = Uuid::new_v4();
         let temp_output = self
@@ -1173,7 +1327,11 @@ impl ArtifactBuilder {
             built_with_source.source_path = temp_source;
 
             let instrumented = self
-                .apply_instrumentation(built_with_source, trace_mode)
+                .apply_instrumentation(
+                    built_with_source,
+                    trace_mode,
+                    sc_checkpoint_runtime_obj.as_deref(),
+                )
                 .await?;
 
             let _ = tokio::fs::remove_file(&instrumented.source_path).await;

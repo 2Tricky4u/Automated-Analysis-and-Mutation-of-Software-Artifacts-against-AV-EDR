@@ -37,3 +37,6 @@ base64 = "0.22"
 
 # For PE parsing/validation in binary mutations
 goblin = "0.9"
+
+# For x86-64 instruction-boundary-aware shellcode patching (INT3 checkpoints)
+iced-x86 = { version = "1.21", default-features = false, features = ["decoder", "std"] }
