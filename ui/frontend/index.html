@@ -218,14 +218,14 @@
             background: #161b22;
             border: 1px solid #21262d;
             border-radius: 4px;
-            padding: 8px 12px;
-            margin: 6px 0;
+            padding: 4px 10px;
+            margin: 3px 0;
         }
 
         .response-box .run-info .run-label {
             font-weight: bold;
             color: #8b949e;
-            margin-bottom: 4px;
+            margin-bottom: 2px;
         }
 
         .response-box .muted {
@@ -234,7 +234,7 @@
         }
 
         .response-box .stat-line {
-            margin: 4px 0;
+            margin: 2px 0;
         }
 
         .collapsible-header {
@@ -892,9 +892,13 @@
 
         function formatRunInfo(label, run) {
             if (!run) return `<div class="run-info"><div class="run-label">${escapeHtml(label)}</div><span class="muted">No data</span></div>`;
+            const cp = run.last_checkpoint;
+            const cpHtml = cp
+                ? ` &nbsp; Checkpoint: <strong>${escapeHtml(cp)}</strong>`
+                : '';
             return `<div class="run-info">
     <div class="run-label">${escapeHtml(label)}</div>
-    <div class="stat-line">${detectedBadge(run.detected)} &nbsp; Outcome: <strong>${escapeHtml(run.outcome || '-')}</strong> &nbsp; Exit: <strong>${run.exit_code}</strong></div>
+    <div class="stat-line">${detectedBadge(run.detected)} &nbsp; Outcome: <strong>${escapeHtml(run.outcome || '-')}</strong> &nbsp; Exit: <strong>${run.exit_code}</strong>${cpHtml}</div>
     <div class="muted">${escapeHtml(run.run_id)}</div>
 </div>`;
         }
