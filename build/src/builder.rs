@@ -1028,6 +1028,7 @@ impl ArtifactBuilder {
     ///
     /// # Returns
     /// Metadata about the built artifact
+    #[allow(clippy::too_many_arguments)]
     async fn build_modular_template(
         &self,
         mut modules: ModuleSelection,
@@ -1482,6 +1483,7 @@ impl XwinPaths {
 /// Build `BuiltArtifact` metadata from raw artifact data and context.
 ///
 /// This is the common pattern extracted from 5 finalization sites.
+#[allow(clippy::too_many_arguments)]
 fn build_artifact_metadata(
     artifact_id: String,
     source_path: PathBuf,

@@ -433,10 +433,11 @@ pub async fn compare_runs(
             .map(|r| (r.job_id.clone(), r.round_id.clone()))
             .unwrap_or_default();
 
-        if !job_id.is_empty() && !round_id.is_empty() {
-            if let Some(doc) = service.storage.query_round(&job_id, &round_id).await {
-                break 'round Some(doc);
-            }
+        if !job_id.is_empty()
+            && !round_id.is_empty()
+            && let Some(doc) = service.storage.query_round(&job_id, &round_id).await
+        {
+            break 'round Some(doc);
         }
         None
     };
@@ -703,11 +704,11 @@ fn apply_round_correction(
         i.raw_detected = i.detected;
     }
 
-    if bool_field(round_source, "has_dryrun") {
-        if let Some(b) = baseline {
-            let category = str_field(round_source, "differential_category");
-            b.detected = matches!(category.as_str(), "real_detection" | "flaky");
-        }
+    if bool_field(round_source, "has_dryrun")
+        && let Some(b) = baseline
+    {
+        let category = str_field(round_source, "differential_category");
+        b.detected = matches!(category.as_str(), "real_detection" | "flaky");
     }
 }
 

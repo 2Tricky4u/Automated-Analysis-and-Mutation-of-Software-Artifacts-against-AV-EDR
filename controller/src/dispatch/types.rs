@@ -687,8 +687,8 @@ impl RoundAgg {
 ///  5. Both timeout AND has_launched(baseline)   → Evasion
 ///  6. Both timeout AND !has_launched(baseline)  → MutationFailed
 ///  7. Dryrun timeout+launched AND baseline !timeout:
-///    baseline == 0                              → Anomaly
-///    baseline != 0                              → Detected
+///     baseline == 0                              → Anomaly
+///     baseline != 0                              → Detected
 ///  8. Same nonzero exit code                    → InfraError
 ///  9. Different nonzero exit codes              → Detected
 fn override_with_dryrun(dryrun: &RunOutcome, baseline: &RunOutcome) -> DetectionVerdict {
