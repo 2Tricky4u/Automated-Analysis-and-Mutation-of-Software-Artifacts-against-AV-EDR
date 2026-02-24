@@ -10,7 +10,10 @@ use tracing::{debug, error, info, warn};
 use crate::dispatch::classifier;
 use crate::dispatch::guards::{DELAY, MonitorGuard, ProcessGuard, RedEdrGuard};
 use crate::dispatch::sink::ControlPlaneSink;
-use crate::dispatch::types::{RunContext, RunOutcome, RunPhaseTimings, RunRequest};
+use crate::dispatch::types::{
+    RunContext, RunOutcome, RunPhaseTimings, RunRequest, EXIT_NO_CODE, EXIT_TIMEOUT,
+    EXIT_WAIT_FAILED,
+};
 use crate::infra::helpers;
 use crate::telemetry;
 
@@ -92,13 +95,13 @@ pub async fn execute_dryrun(
 
     let (exit_code, timed_out) = match exit_result {
         Ok(Ok(status)) => {
-            let code = status.code().unwrap_or(-2);
+            let code = status.code().unwrap_or(EXIT_NO_CODE);
             info!("[Dryrun] Process exited with code: {}", code);
             (code, false)
         }
         Ok(Err(e)) => {
             error!("[Dryrun] Failed to wait for process: {}", e);
-            (-1, false)
+            (EXIT_WAIT_FAILED, false)
         }
         Err(_) => {
             warn!(
@@ -106,7 +109,7 @@ pub async fn execute_dryrun(
                 request.timeout_seconds
             );
             let _ = child.kill().await;
-            (-1, true)
+            (EXIT_TIMEOUT, true)
         }
     };
 
@@ -499,7 +502,7 @@ pub async fn execute_run(
                 warn!(
                     "Process was terminated externally (likely by AV/EDR) - no exit code available"
                 );
-                (-2, false)
+                (EXIT_NO_CODE, false)
             }
         },
         Ok(Err(e)) => {
@@ -507,7 +510,7 @@ pub async fn execute_run(
             if let Some(guard) = monitor_guard.take() {
                 guard.stop().await;
             }
-            (-1, false)
+            (EXIT_WAIT_FAILED, false)
         }
         Err(_) => {
             // Timeout triggered, but check if process already exited naturally
@@ -531,7 +534,7 @@ pub async fn execute_run(
                             if let Some(guard) = monitor_guard.take() {
                                 guard.stop().await;
                             }
-                            (-2, false)
+                            (EXIT_NO_CODE, false)
                         }
                     }
                 }
@@ -553,7 +556,7 @@ pub async fn execute_run(
                         guard.stop().await;
                     }
 
-                    (-1, true)
+                    (EXIT_TIMEOUT, true)
                 }
             }
         }

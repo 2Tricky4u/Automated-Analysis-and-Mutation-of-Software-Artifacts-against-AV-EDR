@@ -5,6 +5,20 @@ use std::time::Duration;
 use crate::automutate::common::{SampleResponse, TelemetryData};
 use automutate_config::WorkerConfig;
 
+// ============================================================================
+// Synthetic exit codes assigned by the engine (never from Windows).
+// Real Windows exit codes are >= 0 and passed through verbatim.
+// ============================================================================
+
+/// OS error on child.wait()
+pub const EXIT_WAIT_FAILED: i32 = -1;
+/// Process exited but status.code() == None (externally terminated)
+pub const EXIT_NO_CODE: i32 = -2;
+/// Timeout expired, process killed
+pub const EXIT_TIMEOUT: i32 = -3;
+/// Never reached execution (spawn/setup failure)
+pub const EXIT_INFRA: i32 = -4;
+
 /// Typed request for executing an artifact run
 pub struct RunRequest {
     pub job_id: String,
@@ -88,7 +102,7 @@ pub fn sample_response_error(
     SampleResponse {
         job_id: job_id.to_string(),
         success: false,
-        exit_code: -1,
+        exit_code: EXIT_INFRA,
         output: format!("Execution error: {}", error),
         telemetry_ids: vec![],
         run_id: run_id.to_string(),
@@ -111,11 +125,11 @@ pub fn sample_response_ok(
     let detected = if !outcome.detection_verdict.is_empty() {
         automutate_common::DetectionVerdict::from_verdict_str(&outcome.detection_verdict)
             .map(|v| v.is_detected())
-            .unwrap_or(outcome.exit_code != 0 && outcome.exit_code != -1)
+            .unwrap_or(outcome.exit_code != 0 && outcome.exit_code != EXIT_WAIT_FAILED)
     } else {
         match outcome.exit_code {
-            -2 => true,
-            0 | -1 => false,
+            EXIT_NO_CODE => true,
+            0 | EXIT_WAIT_FAILED | EXIT_INFRA => false,
             _ => true,
         }
     };

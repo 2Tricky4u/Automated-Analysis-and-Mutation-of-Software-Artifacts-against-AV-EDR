@@ -2,7 +2,10 @@ use crate::WorkerAgentService;
 use crate::automutate::common::{SampleRequest, SampleResponse};
 use crate::dispatch::engine;
 use crate::dispatch::state::ExecutionLockGuard;
-use crate::dispatch::types::{RunContext, RunRequest, resolve_run_id, sample_response_ok};
+use crate::dispatch::types::{
+    RunContext, RunRequest, resolve_run_id, sample_response_ok, EXIT_INFRA, EXIT_NO_CODE,
+    EXIT_TIMEOUT, EXIT_WAIT_FAILED,
+};
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
@@ -149,9 +152,12 @@ pub fn format_output(outcome: &crate::dispatch::types::RunOutcome, timeout_secon
 // ============================================================================
 
 fn describe_exit(exit_code: i32) -> String {
+    // Synthetic engine exit codes (negative)
     match exit_code {
-        -2 => return "Externally terminated (heuristic)".to_string(),
-        -1 => return "wait() failed".to_string(),
+        EXIT_NO_CODE => return "Externally terminated (no exit code)".to_string(),
+        EXIT_WAIT_FAILED => return "wait() failed".to_string(),
+        EXIT_TIMEOUT => return "Timeout (process killed)".to_string(),
+        EXIT_INFRA => return "Infrastructure error (never executed)".to_string(),
         _ => {}
     }
 
@@ -159,6 +165,17 @@ fn describe_exit(exit_code: i32) -> String {
 
     if code_u32 == 0 {
         return "Success".to_string();
+    }
+
+    // Loader namespaced ranges
+    match exit_code {
+        10..=19 => return "Guardrail failed".to_string(),
+        30 => return "Carrier: VirtualAlloc failed".to_string(),
+        31 => return "Carrier: VirtualProtect failed".to_string(),
+        32 => return "Carrier: PEB module resolution failed".to_string(),
+        33 => return "Carrier: PEB export resolution failed".to_string(),
+        34..=39 => return "Carrier: unknown error".to_string(),
+        _ => {}
     }
 
     if looks_like_ntstatus(code_u32) {

@@ -83,9 +83,10 @@ int main(void) {
     // @MUTATE:timing_jitter
 
     // @MUTATE:opaque_predicate
-    if (guardrail() != 0) {
+    int gr = guardrail();
+    if (gr != 0) {
         // @MUTATE:dead_code_insertion
-        return 1;
+        return gr;
     }
     ARTIFACT_CHECKPOINT("guardrails_passed");
 
