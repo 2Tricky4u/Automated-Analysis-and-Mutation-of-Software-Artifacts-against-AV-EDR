@@ -4,6 +4,7 @@
 
 pub mod assembler;
 pub mod payload;
+pub mod sc_checkpoints;
 pub mod shellcode_stub;
 
 // Re-exports

