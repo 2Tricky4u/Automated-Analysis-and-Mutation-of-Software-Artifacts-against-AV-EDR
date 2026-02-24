@@ -199,7 +199,12 @@ fn visit_node(
                 let start_offset = child.start_byte();
                 let indent = calculate_indentation(source, start_offset);
                 let trace_stmt = generate_trace_statement(
-                    start_line, &indent, language, file_path, format, delay_iterations,
+                    start_line,
+                    &indent,
+                    language,
+                    file_path,
+                    format,
+                    delay_iterations,
                 );
                 injections.push((start_offset, trace_stmt));
             }
@@ -414,7 +419,8 @@ int main() {
         assert!(
             trace_count >= 4,
             "Expected at least 4 trace injections (including inside #ifdef/#else), got {}.\nResult:\n{}",
-            trace_count, result
+            trace_count,
+            result
         );
 
         // Specifically check that the line with launch_shellcode gets traced
@@ -466,7 +472,8 @@ int main() {
         assert!(
             trace_count >= 5,
             "Expected at least 5 trace injections for statements, got {}.\nResult:\n{}",
-            trace_count, result
+            trace_count,
+            result
         );
     }
 
@@ -503,7 +510,8 @@ int main() {
                     assert!(
                         !output_lines[i - 1].contains("__trace_line_binary("),
                         "Top-level typedef inside #ifdef should not be traced.\nPreceding line: {}\nTypedef line: {}",
-                        output_lines[i - 1], line
+                        output_lines[i - 1],
+                        line
                     );
                 }
             }
@@ -515,7 +523,8 @@ int main() {
         assert!(
             trace_count >= 3,
             "Expected at least 3 trace injections inside main(), got {}.\nResult:\n{}",
-            trace_count, result
+            trace_count,
+            result
         );
     }
 

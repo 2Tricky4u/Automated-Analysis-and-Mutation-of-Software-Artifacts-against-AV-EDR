@@ -165,31 +165,52 @@ impl Assembler {
             )
             .replace(
                 "// @MODULE:decoder",
-                &wrap_module("decoder", &self.read_module(&format!("decoder/{}.c", modules.decoder))?),
+                &wrap_module(
+                    "decoder",
+                    &self.read_module(&format!("decoder/{}.c", modules.decoder))?,
+                ),
             )
             .replace(
                 "// @MODULE:virtualprotect",
-                &wrap_module("virtualprotect", &self.read_module(&format!("virtualprotect/{}.c", modules.virtualprotect))?),
+                &wrap_module(
+                    "virtualprotect",
+                    &self.read_module(&format!("virtualprotect/{}.c", modules.virtualprotect))?,
+                ),
             )
             .replace(
                 "// @MODULE:antiemulation",
-                &wrap_module("antiemulation", &self.read_module(&format!("antiemulation/{}.c", modules.antiemulation))?),
+                &wrap_module(
+                    "antiemulation",
+                    &self.read_module(&format!("antiemulation/{}.c", modules.antiemulation))?,
+                ),
             )
             .replace(
                 "// @MODULE:deconditioner",
-                &wrap_module("deconditioner", &self.read_module(&format!("deconditioner/{}.c", modules.deconditioner))?),
+                &wrap_module(
+                    "deconditioner",
+                    &self.read_module(&format!("deconditioner/{}.c", modules.deconditioner))?,
+                ),
             )
             .replace(
                 "// @MODULE:guardrail",
-                &wrap_module("guardrail", &self.read_module(&format!("guardrails/{}.c", modules.guardrail))?),
+                &wrap_module(
+                    "guardrail",
+                    &self.read_module(&format!("guardrails/{}.c", modules.guardrail))?,
+                ),
             )
             .replace(
                 "// @MODULE:decoy",
-                &wrap_module("decoy", &self.read_module(&format!("decoy/{}.c", modules.decoy))?),
+                &wrap_module(
+                    "decoy",
+                    &self.read_module(&format!("decoy/{}.c", modules.decoy))?,
+                ),
             )
             .replace(
                 "// @MODULE:carrier",
-                &wrap_module("carrier", &self.read_module(&format!("carrier/{}.c", modules.carrier))?),
+                &wrap_module(
+                    "carrier",
+                    &self.read_module(&format!("carrier/{}.c", modules.carrier))?,
+                ),
             );
 
         debug!(output_len = output.len(), "Assembly complete");
