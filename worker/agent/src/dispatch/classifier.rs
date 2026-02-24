@@ -20,8 +20,14 @@ use crate::automutate::common::TelemetryData;
 use crate::dispatch::types::{EXIT_INFRA, EXIT_NO_CODE, EXIT_TIMEOUT, EXIT_WAIT_FAILED};
 use chrono::NaiveDateTime;
 
-/// Window (seconds) for considering ETW events "recent" relative to process end.
-const ETW_RECENCY_WINDOW_SECS: f64 = 5.0;
+/// Fraction of total execution time: if the last ETW event falls within the
+/// final `ETW_RECENCY_TAIL_FRACTION` of the execution window, the process was
+/// "active" at timeout. E.g., 0.10 = last 10% of wall time.
+const ETW_RECENCY_TAIL_FRACTION: f64 = 0.10;
+
+/// Absolute floor (seconds) for the recency window, so very short runs
+/// (< 5s) don't classify as idle just because the fraction is tiny.
+const ETW_RECENCY_FLOOR_SECS: f64 = 0.5;
 
 /// Known AV/EDR NTSTATUS termination codes.
 const AV_NTSTATUS_CODES: &[i32] = &[
@@ -46,19 +52,26 @@ struct ClassificationEvidence {
     dry_run_exit_code: Option<i32>,
     has_launching_checkpoint: bool,
     last_checkpoint: Option<String>,
+    /// Earliest ETW event timestamp (unix seconds) from RedEDR payload `date` field.
+    first_etw_ts: Option<f64>,
     /// Latest ETW event timestamp (unix seconds) from RedEDR payload `date` field.
     last_etw_ts: Option<f64>,
-    /// Process end time (unix seconds), derived from elapsed_ms.
-    process_end_ts: f64,
+    /// Process wall time in seconds.
+    elapsed_secs: f64,
 }
 
 /// Extract classification evidence from telemetry events.
 ///
 /// Matches `event_type` against `"checkpoint"`, `"artifact_success"`, and
 /// `"artifact_failure"` — all three carry a `CheckpointEvent` typed_event.
-fn extract_evidence(telemetry_events: &[TelemetryData]) -> (bool, Option<String>, Option<f64>) {
+///
+/// Returns `(has_launching, last_checkpoint, first_etw_ts, last_etw_ts)`.
+fn extract_evidence(
+    telemetry_events: &[TelemetryData],
+) -> (bool, Option<String>, Option<f64>, Option<f64>) {
     let mut has_launching = false;
     let mut last_checkpoint: Option<String> = None;
+    let mut min_etw_ts: Option<f64> = None;
     let mut max_etw_ts: Option<f64> = None;
 
     for event in telemetry_events {
@@ -83,6 +96,10 @@ fn extract_evidence(telemetry_events: &[TelemetryData]) -> (bool, Option<String>
                     && source == "rededr"
                     && let Some(ts) = parse_rededr_date(&event.payload)
                 {
+                    min_etw_ts = Some(match min_etw_ts {
+                        Some(prev) => prev.min(ts),
+                        None => ts,
+                    });
                     max_etw_ts = Some(match max_etw_ts {
                         Some(prev) => prev.max(ts),
                         None => ts,
@@ -93,7 +110,7 @@ fn extract_evidence(telemetry_events: &[TelemetryData]) -> (bool, Option<String>
         }
     }
 
-    (has_launching, last_checkpoint, max_etw_ts)
+    (has_launching, last_checkpoint, min_etw_ts, max_etw_ts)
 }
 
 /// Parse the `date` field from a RedEDR event payload JSON.
@@ -121,10 +138,21 @@ fn parse_rededr_date(payload: &[u8]) -> Option<f64> {
 fn classify_outcome(ev: &ClassificationEvidence) -> DetectionVerdict {
     // Step 1: Timeout
     if ev.timed_out {
-        let etw_recent = if let Some(last_etw) = ev.last_etw_ts {
-            (ev.process_end_ts - last_etw).abs() < ETW_RECENCY_WINDOW_SECS
-        } else {
-            false
+        // Determine if the process was still generating ETW activity near the end.
+        // Use the ETW event span (first..last) relative to elapsed wall time:
+        // if the last event falls within the final TAIL_FRACTION of execution, it's active.
+        let etw_recent = match (ev.first_etw_ts, ev.last_etw_ts) {
+            (Some(first), Some(last)) if ev.elapsed_secs > 0.0 => {
+                let etw_span = last - first;
+                let tail_window =
+                    (ev.elapsed_secs * ETW_RECENCY_TAIL_FRACTION).max(ETW_RECENCY_FLOOR_SECS);
+                // Active if the last ETW event is within tail_window of the end of the ETW span
+                // relative to total execution time. Simplified: was there ETW activity in the
+                // final fraction of wall time?
+                (ev.elapsed_secs - etw_span) < tail_window
+            }
+            (Some(_), Some(_)) => true, // zero elapsed but had ETW → active
+            _ => false,                 // no ETW events at all → idle
         };
 
         return if etw_recent || ev.has_launching_checkpoint {
@@ -212,12 +240,8 @@ pub fn classify_run(
     telemetry_events: &[TelemetryData],
     dry_run_exit_code: Option<i32>,
 ) -> (DetectionVerdict, Option<String>) {
-    let now_secs = chrono::Utc::now().timestamp() as f64;
-    let process_end_ts = now_secs; // approximate; actual time is "now" at classification
-
-    let (has_launching, last_checkpoint, last_etw_ts) = extract_evidence(telemetry_events);
-
-    let _ = elapsed_ms; // reserved for future use
+    let (has_launching, last_checkpoint, first_etw_ts, last_etw_ts) =
+        extract_evidence(telemetry_events);
 
     let evidence = ClassificationEvidence {
         exit_code,
@@ -225,8 +249,9 @@ pub fn classify_run(
         dry_run_exit_code,
         has_launching_checkpoint: has_launching,
         last_checkpoint: last_checkpoint.clone(),
+        first_etw_ts,
         last_etw_ts,
-        process_end_ts,
+        elapsed_secs: elapsed_ms / 1000.0,
     };
 
     let verdict = classify_outcome(&evidence);
@@ -238,13 +263,16 @@ mod tests {
     use super::*;
 
     /// Helper to build a ClassificationEvidence for testing the decision tree directly.
+    ///
+    /// `first_etw_ts` and `last_etw_ts` are absolute timestamps (seconds).
+    /// `elapsed_secs` is total wall time.
     fn evidence(
         exit_code: i32,
         timed_out: bool,
         has_launching: bool,
         dry_run_exit_code: Option<i32>,
-        last_etw_ts: Option<f64>,
-        process_end_ts: f64,
+        etw_range: Option<(f64, f64)>,
+        elapsed_secs: f64,
     ) -> ClassificationEvidence {
         ClassificationEvidence {
             exit_code,
@@ -252,40 +280,55 @@ mod tests {
             dry_run_exit_code,
             has_launching_checkpoint: has_launching,
             last_checkpoint: None,
-            last_etw_ts,
-            process_end_ts,
+            first_etw_ts: etw_range.map(|(f, _)| f),
+            last_etw_ts: etw_range.map(|(_, l)| l),
+            elapsed_secs,
         }
     }
 
     // ── Step 1: Timeout paths ─────────────────────────────────────────────
 
     #[test]
-    fn test_timeout_active_with_recent_etw() {
-        // ETW event 2 seconds before process end → active
-        let ev = evidence(-1, true, false, None, Some(998.0), 1000.0);
+    fn test_timeout_active_etw_spans_full_execution() {
+        // ETW events span 0..30s out of 30s execution → last 10% (3s) has activity → active
+        let ev = evidence(EXIT_TIMEOUT, true, false, None, Some((0.0, 30.0)), 30.0);
         assert_eq!(classify_outcome(&ev), DetectionVerdict::TimeoutActive);
         assert!(!DetectionVerdict::TimeoutActive.is_detected());
     }
 
     #[test]
-    fn test_timeout_active_with_launching_checkpoint() {
-        // No ETW but launching checkpoint → active (payload ran)
-        let ev = evidence(-1, true, true, None, None, 1000.0);
+    fn test_timeout_active_etw_near_end() {
+        // ETW events span 0..29s out of 30s → gap=1s, tail_window=3s → active
+        let ev = evidence(EXIT_TIMEOUT, true, false, None, Some((0.0, 29.0)), 30.0);
         assert_eq!(classify_outcome(&ev), DetectionVerdict::TimeoutActive);
     }
 
     #[test]
-    fn test_timeout_idle_no_recent_etw() {
-        // ETW event 30 seconds before process end → idle
-        let ev = evidence(-1, true, false, None, Some(970.0), 1000.0);
+    fn test_timeout_active_with_launching_checkpoint() {
+        // No ETW but launching checkpoint → active (payload ran)
+        let ev = evidence(EXIT_TIMEOUT, true, true, None, None, 30.0);
+        assert_eq!(classify_outcome(&ev), DetectionVerdict::TimeoutActive);
+    }
+
+    #[test]
+    fn test_timeout_idle_etw_stopped_early() {
+        // ETW events span 0..5s out of 30s → gap=25s, tail_window=3s → idle
+        let ev = evidence(EXIT_TIMEOUT, true, false, None, Some((0.0, 5.0)), 30.0);
         assert_eq!(classify_outcome(&ev), DetectionVerdict::TimeoutIdle);
         assert!(!DetectionVerdict::TimeoutIdle.is_detected());
     }
 
     #[test]
     fn test_timeout_idle_no_etw_at_all() {
-        let ev = evidence(-1, true, false, None, None, 1000.0);
+        let ev = evidence(EXIT_TIMEOUT, true, false, None, None, 30.0);
         assert_eq!(classify_outcome(&ev), DetectionVerdict::TimeoutIdle);
+    }
+
+    #[test]
+    fn test_timeout_short_run_uses_floor() {
+        // 2s execution, ETW spans 0..1.8s → gap=0.2s, floor=0.5s → active
+        let ev = evidence(EXIT_TIMEOUT, true, false, None, Some((0.0, 1.8)), 2.0);
+        assert_eq!(classify_outcome(&ev), DetectionVerdict::TimeoutActive);
     }
 
     // ── Step 2: CleanExit ─────────────────────────────────────────────────
