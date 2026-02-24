@@ -365,8 +365,8 @@ impl Orchestrator {
                         error!("Failed to index instrumented run: {}", e);
                     }
                     // Index dryrun run (if present)
-                    if let (Some(dr_run_id), Some(dr_outcome)) = (&d_run_id, &d_outcome) {
-                        if let Err(e) = storage
+                    if let (Some(dr_run_id), Some(dr_outcome)) = (&d_run_id, &d_outcome)
+                        && let Err(e) = storage
                             .index_run_result(&RunIndexParams {
                                 job_id: &jid,
                                 round_id: &rid,
@@ -380,7 +380,6 @@ impl Orchestrator {
                         {
                             error!("Failed to index dryrun run: {}", e);
                         }
-                    }
 
                     // Compute line coverage from trace data
                     if let Some(ref source) = assembled_source {

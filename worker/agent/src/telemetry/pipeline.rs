@@ -61,11 +61,10 @@ fn deduplicate_trace_jsonl(raw: &str) -> (String, usize, usize) {
     // Build output, adding "count" field where > 1
     let mut output = String::new();
     for (_, mut val, count) in entries {
-        if count > 1 {
-            if let Some(obj) = val.as_object_mut() {
+        if count > 1
+            && let Some(obj) = val.as_object_mut() {
                 obj.insert("count".to_string(), serde_json::json!(count));
             }
-        }
         output.push_str(&val.to_string());
         output.push('\n');
     }

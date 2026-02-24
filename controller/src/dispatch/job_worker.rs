@@ -180,7 +180,7 @@ impl JobWorker {
                     // Check for rounds past dryrun grace deadline
                     let expired: Vec<RoundId> = self.round_aggs.iter()
                         .filter(|(_, agg)| {
-                            agg.dryrun_deadline.map_or(false, |d| Instant::now() >= d)
+                            agg.dryrun_deadline.is_some_and(|d| Instant::now() >= d)
                         })
                         .map(|(id, _)| id.clone())
                         .collect();

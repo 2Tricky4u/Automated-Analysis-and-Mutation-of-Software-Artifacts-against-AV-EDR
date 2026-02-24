@@ -76,7 +76,7 @@ pub async fn execute_dryrun(
     let spawn_start = Instant::now();
     let mut child = crate::infra::process::spawn_artifact(
         &context.artifact_path,
-        &context
+        context
             .artifact_path
             .parent()
             .unwrap_or(std::path::Path::new(".")),
@@ -125,11 +125,10 @@ pub async fn execute_dryrun(
     info!("[Dryrun] verdict={:?}, exit_code={}", verdict, exit_code);
 
     // Cleanup artifact (no telemetry dir for dryrun — pass artifact parent as noop)
-    if context.artifact_path.exists() {
-        if let Err(e) = std::fs::remove_file(&context.artifact_path) {
+    if context.artifact_path.exists()
+        && let Err(e) = std::fs::remove_file(&context.artifact_path) {
             warn!("[Dryrun] Failed to clean artifact: {}", e);
         }
-    }
 
     Ok(RunOutcome {
         exit_code,
