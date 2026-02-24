@@ -672,6 +672,10 @@
                                 <option value="english">english</option>
                             </select>
                         </div>
+                        <div class="form-group flex-grow">
+                            <label>SC Checkpoints</label>
+                            <input type="number" id="jobScCheckpoints" value="0" min="0" max="50">
+                        </div>
                     </div>
                     <div class="form-group">
                         <label style="margin-bottom: 8px;">Variation Strategy</label>
@@ -1079,6 +1083,7 @@
                 variation_strategy: strategy,
                 variable_categories: strategy === 'full' ? varCategories : [],
                 mutation_targets: mutTargets,
+                sc_checkpoint_count: parseInt(document.getElementById('jobScCheckpoints').value) || 0,
             };
 
             try {

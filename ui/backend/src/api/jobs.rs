@@ -66,6 +66,10 @@ pub struct SubmitJobRequest {
     /// Mutations always applied every round after baseline (empty = keep server default)
     #[serde(default)]
     pub fixed_mutations: Vec<String>,
+
+    /// INT3 shellcode checkpoints (0 = disabled)
+    #[serde(default)]
+    pub sc_checkpoint_count: u32,
 }
 
 fn default_max_rounds() -> u32 {
@@ -234,6 +238,7 @@ pub async fn submit_job(
             mutation_pool: payload.mutation_pool,
             mutation_targets: payload.mutation_targets,
             fixed_mutations: payload.fixed_mutations,
+            sc_checkpoint_count: payload.sc_checkpoint_count,
         })
         .await
     {

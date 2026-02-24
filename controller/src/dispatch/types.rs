@@ -421,6 +421,9 @@ pub struct JobSession {
     pub max_rounds: u32,
     pub stop_on_evasion: bool,
 
+    // Shellcode checkpoints (INT3 breakpoints; None = disabled)
+    pub sc_checkpoint_count: Option<u32>,
+
     // Completed round summaries
     pub rounds: BTreeMap<u32, RoundSummary>,
     pub last_round: Option<RoundSummary>,
@@ -439,6 +442,7 @@ impl JobSession {
             build_spec,
             trace_mode: "lines".to_string(),
             search_space: SearchSpace::default(),
+            sc_checkpoint_count: None,
             current_round: 0,
             completed_rounds: 0,
             max_rounds,
