@@ -675,23 +675,25 @@ mod tests {
             for m in &selection.mutations {
                 if let Some(params) = &m.params {
                     if m.id == "llvm.nop_insert"
-                        && let Some(d) = params.get("density").and_then(|v| v.as_str()) {
-                            let val: f64 = d.parse().unwrap_or(0.0);
-                            assert!(
-                                (0.0..=1.0).contains(&val),
-                                "nop_insert density {} out of [0.0, 1.0]",
-                                val
-                            );
-                        }
+                        && let Some(d) = params.get("density").and_then(|v| v.as_str())
+                    {
+                        let val: f64 = d.parse().unwrap_or(0.0);
+                        assert!(
+                            (0.0..=1.0).contains(&val),
+                            "nop_insert density {} out of [0.0, 1.0]",
+                            val
+                        );
+                    }
                     if m.id == "ast.decon_rounds"
-                        && let Some(c) = params.get("count").and_then(|v| v.as_str()) {
-                            let val: i64 = c.parse().unwrap_or(0);
-                            assert!(
-                                (5..=500).contains(&val),
-                                "decon_rounds count {} out of [5, 500]",
-                                val
-                            );
-                        }
+                        && let Some(c) = params.get("count").and_then(|v| v.as_str())
+                    {
+                        let val: i64 = c.parse().unwrap_or(0);
+                        assert!(
+                            (5..=500).contains(&val),
+                            "decon_rounds count {} out of [5, 500]",
+                            val
+                        );
+                    }
                 }
             }
         }
@@ -786,12 +788,13 @@ mod tests {
             for m in &selection.mutations {
                 if m.id == "llvm.nop_insert"
                     && let Some(params) = &m.params
-                        && let Some(d) = params.get("density").and_then(|v| v.as_str()) {
-                            let val: f64 = d.parse().unwrap_or(0.0);
-                            if val > 0.7 {
-                                found_elite_trait += 1;
-                            }
-                        }
+                    && let Some(d) = params.get("density").and_then(|v| v.as_str())
+                {
+                    let val: f64 = d.parse().unwrap_or(0.0);
+                    if val > 0.7 {
+                        found_elite_trait += 1;
+                    }
+                }
             }
         }
         // Tournament selection heavily favors the 1.0-fitness recipe
