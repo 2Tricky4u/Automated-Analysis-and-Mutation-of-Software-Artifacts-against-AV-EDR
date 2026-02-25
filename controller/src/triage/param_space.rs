@@ -74,9 +74,7 @@ impl ParamDef {
     /// - Numeric: ±(intensity * range) perturbation, clamped to bounds
     pub fn perturb(&self, current: &str, rng: &mut SeededRng, intensity: f64) -> String {
         match self {
-            ParamDef::Categorical {
-                options, ..
-            } => {
+            ParamDef::Categorical { options, .. } => {
                 // Pick a different option
                 if options.len() <= 1 {
                     return current.to_string();
@@ -432,7 +430,11 @@ mod tests {
         };
         for _ in 0..100 {
             let val: i64 = int_param.sample(&mut rng).parse().unwrap();
-            assert!(val >= 5 && val <= 500, "IntRange sample out of bounds: {}", val);
+            assert!(
+                (5..=500).contains(&val),
+                "IntRange sample out of bounds: {}",
+                val
+            );
         }
 
         let float_param = ParamDef::FloatRange {
@@ -443,7 +445,11 @@ mod tests {
         };
         for _ in 0..100 {
             let val: f64 = float_param.sample(&mut rng).parse().unwrap();
-            assert!(val >= 0.0 && val <= 1.0, "FloatRange sample out of bounds: {}", val);
+            assert!(
+                (0.0..=1.0).contains(&val),
+                "FloatRange sample out of bounds: {}",
+                val
+            );
         }
     }
 
@@ -464,7 +470,10 @@ mod tests {
                 break;
             }
         }
-        assert!(changed, "Categorical perturb should eventually change the option");
+        assert!(
+            changed,
+            "Categorical perturb should eventually change the option"
+        );
     }
 
     #[test]
@@ -479,7 +488,7 @@ mod tests {
         for _ in 0..50 {
             let result: i64 = param.perturb("250", &mut rng, 0.1).parse().unwrap();
             assert!(
-                result >= 5 && result <= 500,
+                (5..=500).contains(&result),
                 "Perturbed value out of bounds: {}",
                 result
             );
