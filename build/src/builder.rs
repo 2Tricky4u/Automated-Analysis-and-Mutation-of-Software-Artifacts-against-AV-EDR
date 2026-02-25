@@ -452,7 +452,7 @@ impl ArtifactBuilder {
         args.extend_from_slice(&[
             "-S",         // Emit assembly (LLVM IR in this case)
             "-emit-llvm", // Output LLVM IR instead of native assembly
-            "-O0",        // No optimization to preserve all instructions for mutation
+            "-O2",        // TODO check if we loose some mutation here????
             "-o",
             ir_path.to_str().unwrap(),
             source_path.to_str().unwrap(),
