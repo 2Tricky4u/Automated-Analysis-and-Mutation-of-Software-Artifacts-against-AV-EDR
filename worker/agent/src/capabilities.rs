@@ -191,6 +191,7 @@ fn is_cortex_xdr_installed() -> bool {
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 fn is_cortex_xdr_installed() -> bool {
     false
 }
@@ -209,6 +210,7 @@ fn is_cortex_xdr_footprint_present() -> bool {
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 fn is_cortex_xdr_footprint_present() -> bool {
     false
 }
