@@ -1748,8 +1748,8 @@ mod tests {
         // Fill .text section with high-entropy data so the transform actually triggers
         let mut pe = create_test_pe();
         let text_start = 0x200usize; // PointerToRawData for .text
-        for i in text_start..pe.len() {
-            pe[i] = ((i * 137 + 97) % 251) as u8; // pseudo-random, high entropy
+        for (i, byte) in pe[text_start..].iter_mut().enumerate() {
+            *byte = (((text_start + i) * 137 + 97) % 251) as u8; // pseudo-random, high entropy
         }
         let initial_entropy = compute_entropy(&pe);
         assert!(
@@ -1962,7 +1962,7 @@ mod tests {
         let pe = create_test_pe();
         let mutator = BinaryMutator::new(pe);
 
-        let specs = vec![
+        let specs = [
             MutationSpec {
                 id: "binary.string_inject".to_string(),
                 params: [("count".to_string(), "5".to_string())]
@@ -2005,14 +2005,14 @@ mod tests {
     fn test_consolidated_padding_entropy_reduced() {
         let mut pe = create_test_pe();
         let text_start = 0x200usize;
-        for i in text_start..pe.len() {
-            pe[i] = ((i * 137 + 97) % 251) as u8;
+        for (i, byte) in pe[text_start..].iter_mut().enumerate() {
+            *byte = (((text_start + i) * 137 + 97) % 251) as u8;
         }
         let initial_entropy = compute_entropy(&pe);
 
         let mutator = BinaryMutator::new(pe);
 
-        let specs = vec![
+        let specs = [
             MutationSpec {
                 id: "binary.entropy_normalize".to_string(),
                 params: [("target".to_string(), "4.0".to_string())]
@@ -2073,7 +2073,7 @@ mod tests {
         let mutator = BinaryMutator::new(pe);
 
         // Apply debug_dir first, then timestamp
-        let specs = vec![
+        let specs = [
             MutationSpec {
                 id: "binary.debug_dir".to_string(),
                 params: HashMap::new(),

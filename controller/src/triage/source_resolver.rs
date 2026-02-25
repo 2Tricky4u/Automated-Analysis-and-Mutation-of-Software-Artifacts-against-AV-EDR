@@ -299,8 +299,7 @@ fn try_parse_func_signature(line: &str) -> Option<String> {
     let before_paren = &line[..paren_pos];
     let name = before_paren
         .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .filter(|s| !s.is_empty())
-        .next_back()?;
+        .rfind(|s| !s.is_empty())?;
 
     // Must have at least one token before the name (the return type)
     let name_start = before_paren.rfind(name)?;

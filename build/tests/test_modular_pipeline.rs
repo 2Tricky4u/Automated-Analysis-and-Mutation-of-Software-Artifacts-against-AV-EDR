@@ -1006,7 +1006,7 @@ fn test_sc_checkpoint_header_noop_macros() {
 fn test_baseline_no_patching_when_not_instrumented() {
     let payload = common::payload_typical(); // 256 bytes
     let trace_mode = "off";
-    let instrumented = trace_mode != "off" && !trace_mode.is_empty();
+    let instrumented = !matches!(trace_mode, "off" | "");
     let sc_checkpoint_count: Option<u32> = Some(5); // request 5 checkpoints
 
     // Mirror builder.rs decision block
