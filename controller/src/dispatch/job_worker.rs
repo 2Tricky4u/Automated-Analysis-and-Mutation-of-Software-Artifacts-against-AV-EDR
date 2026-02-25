@@ -639,12 +639,10 @@ impl JobWorker {
         let dryrun_outcome = agg.dryrun.clone();
         let dryrun_vm_id = agg.dryrun_vm_id.clone();
 
-        if dryrun_outcome.is_some() {
+        if let Some(ref dr) = dryrun_outcome {
             info!(
                 "[JobWorker:{}] Round {} has dryrun result (exit={})",
-                self.job.id,
-                round_id,
-                dryrun_outcome.as_ref().unwrap().exit_code
+                self.job.id, round_id, dr.exit_code
             );
         } else {
             debug!(

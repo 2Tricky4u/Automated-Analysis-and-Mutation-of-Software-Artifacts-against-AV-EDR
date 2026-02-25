@@ -464,10 +464,9 @@ mod tests {
             round_id: RoundId(format!("r-{}", round_number)),
             round_number,
             mutations,
-            modules: {
-                let mut m = ModuleSelectionSpec::default();
-                m.deconditioner = deconditioner.to_string();
-                m
+            modules: ModuleSelectionSpec {
+                deconditioner: deconditioner.to_string(),
+                ..ModuleSelectionSpec::default()
             },
             detected: category.is_detected(),
             behavior_match: true,

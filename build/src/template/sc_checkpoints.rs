@@ -433,7 +433,7 @@ mod tests {
         // Verify spacing between checkpoints is roughly equal
         let gap = patched.table[1].offset - patched.table[0].offset;
         assert!(
-            gap >= 4 && gap <= 8,
+            (4..=8).contains(&gap),
             "Gap between checkpoints should be ~6, got {}",
             gap
         );
@@ -494,7 +494,7 @@ mod tests {
         // Single checkpoint near midpoint of body → ~50%
         let pct = patched.table[0].progress_pct;
         assert!(
-            pct >= 40 && pct <= 60,
+            (40..=60).contains(&pct),
             "Single checkpoint with stub: progress_pct should be ~50%, got {}",
             pct
         );
