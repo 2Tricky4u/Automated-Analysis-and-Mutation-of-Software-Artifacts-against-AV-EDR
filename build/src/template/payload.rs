@@ -373,14 +373,8 @@ mod tests {
             EncodingType::from_str("english").unwrap(),
             EncodingType::English
         );
-        assert_eq!(
-            EncodingType::from_str("none").unwrap(),
-            EncodingType::None
-        );
-        assert_eq!(
-            EncodingType::from_str("None").unwrap(),
-            EncodingType::None
-        );
+        assert_eq!(EncodingType::from_str("none").unwrap(), EncodingType::None);
+        assert_eq!(EncodingType::from_str("None").unwrap(), EncodingType::None);
         assert!(EncodingType::from_str("unknown").is_err());
     }
 
