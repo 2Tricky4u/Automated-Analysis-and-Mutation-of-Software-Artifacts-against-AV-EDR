@@ -11,7 +11,9 @@ use super::job_worker::JobWorker;
 use super::run_pool::RunPool;
 use super::types::{JobId, JobOutcome, JobSession, WorkerId, WorkerInfo};
 use crate::storage::{EsStorage, RoundIndexParams, RunIndexParams, TelemetryContext};
+use crate::triage::VariationStrategy;
 use crate::triage::coverage_selector::CoverageSelector;
+use crate::triage::fuzzer_selector::FuzzerSelector;
 use crate::triage::source_resolver::SourceMap;
 use crate::vm::{TargetEvent, TargetManager};
 use std::collections::HashMap;
@@ -166,7 +168,10 @@ impl Orchestrator {
             job_id, job.max_rounds, job.target_os, job.required_capabilities
         );
 
-        let selector = Arc::new(CoverageSelector::new());
+        let selector: Arc<dyn crate::triage::Selector> = match job.search_space.strategy {
+            VariationStrategy::Fuzzer => Arc::new(FuzzerSelector::new()),
+            _ => Arc::new(CoverageSelector::new()),
+        };
         let worker = JobWorker::new(
             job,
             Arc::clone(&self.run_pool),
