@@ -599,13 +599,6 @@
                             </select>
                         </div>
                         <div class="form-group flex-grow">
-                            <label>Decoder</label>
-                            <select id="moduleDecoder">
-                                <option value="xor">xor</option>
-                                <option value="english">english</option>
-                            </select>
-                        </div>
-                        <div class="form-group flex-grow">
                             <label>Anti-Emulation</label>
                             <select id="moduleAntiemulation">
                                 <option value="none">none</option>
@@ -670,6 +663,7 @@
                             <select id="jobEncoding">
                                 <option value="xor">xor</option>
                                 <option value="english">english</option>
+                                <option value="none">none</option>
                             </select>
                         </div>
                         <div class="form-group flex-grow">
@@ -700,7 +694,6 @@
                         <label style="margin-bottom: 8px;">Mutation Targets (apply mutations only to these modules; empty = all)</label>
                         <div class="flex-row" style="flex-wrap: wrap; gap: 12px;">
                             <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="carrier"> carrier</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="decoder"> decoder</label>
                             <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="antiemulation"> antiemulation</label>
                             <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="deconditioner"> deconditioner</label>
                             <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="guardrail"> guardrail</label>
@@ -1067,6 +1060,7 @@
             const strategy = document.querySelector('input[name="variationStrategy"]:checked').value;
             const varCategories = [...document.querySelectorAll('.varCategory:checked')].map(cb => cb.value);
             const mutTargets = [...document.querySelectorAll('.mutTarget:checked')].map(cb => cb.value);
+            const encoding = document.getElementById('jobEncoding').value;
             const payload = {
                 source: document.getElementById('jobSource').value,
                 max_rounds: parseInt(document.getElementById('jobMaxRounds').value),
@@ -1074,14 +1068,14 @@
                 required_capabilities: caps ? caps.split(',').map(c => c.trim()) : [],
                 modules: {
                     carrier: document.getElementById('moduleCarrier').value,
-                    decoder: document.getElementById('moduleDecoder').value,
+                    decoder: encoding,
                     antiemulation: document.getElementById('moduleAntiemulation').value,
                     deconditioner: document.getElementById('moduleDeconditioner').value,
                     guardrail: document.getElementById('moduleGuardrail').value,
                     virtualprotect: document.getElementById('moduleVirtualprotect').value,
                     decoy: document.getElementById('moduleDecoy').value,
                 },
-                encoding: document.getElementById('jobEncoding').value || null,
+                encoding: encoding || null,
                 trace_mode: document.getElementById('jobTraceMode').value || null,
                 stop_on_evasion: document.getElementById('jobStopOnEvasion').checked,
                 variation_strategy: strategy,
@@ -1326,7 +1320,7 @@
 
                 // Modules section
                 if (d.modules) {
-                    const cats = ['carrier','decoder','antiemulation','guardrail','virtualprotect','decoy','deconditioner'];
+                    const cats = ['carrier','antiemulation','guardrail','virtualprotect','decoy','deconditioner'];
                     let pillsHtml = '';
                     cats.forEach(cat => {
                         const val = d.modules[cat] || '';

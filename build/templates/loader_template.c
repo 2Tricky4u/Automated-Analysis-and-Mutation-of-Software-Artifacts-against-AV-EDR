@@ -11,7 +11,7 @@
  * Module Categories:
  *   - payload:          Generated encoded payload data
  *   - definitions:      Type definitions and function prototypes
- *   - decoder:          xor, english
+ *   - decoder:          none, xor, english
  *   - virtualprotect:   standard, undersized
  *   - antiemulation:    none, sirallocalot, timeraw, cpuburn, heapstress, fsenum, sleepaccel
  *   - deconditioner:    none, alloc_loop, alloc_exec, thread_alloc, mixed_apis, entropy_flood
