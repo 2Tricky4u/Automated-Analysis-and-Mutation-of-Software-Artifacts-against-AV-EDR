@@ -2,6 +2,7 @@
 //!
 //! Encodes raw shellcode/payloads into C header format compatible with decoder modules.
 //! Supports multiple encoding schemes:
+//!   - None: Raw bytes, no encoding (direct copy)
 //!   - XOR: Rolling 2-byte XOR key
 //!   - English: Dictionary-based word mapping (low entropy)
 
@@ -16,6 +17,8 @@ pub enum EncodingType {
     Xor,
     /// Dictionary-based English word encoding
     English,
+    /// No encoding — raw payload bytes
+    None,
 }
 
 impl std::str::FromStr for EncodingType {
@@ -25,7 +28,11 @@ impl std::str::FromStr for EncodingType {
         match s.to_lowercase().as_str() {
             "xor" => Ok(Self::Xor),
             "english" => Ok(Self::English),
-            other => bail!("Unknown encoding type: '{}'. Valid: xor, english", other),
+            "none" => Ok(Self::None),
+            other => bail!(
+                "Unknown encoding type: '{}'. Valid: xor, english, none",
+                other
+            ),
         }
     }
 }
@@ -36,6 +43,7 @@ impl EncodingType {
         match self {
             Self::Xor => "xor",
             Self::English => "english",
+            Self::None => "none",
         }
     }
 }
@@ -92,6 +100,7 @@ impl PayloadEncoder {
         match encoding {
             EncodingType::Xor => self.encode_xor(payload),
             EncodingType::English => self.encode_english(payload),
+            EncodingType::None => Self::encode_none(payload),
         }
     }
 
@@ -135,11 +144,21 @@ impl PayloadEncoder {
         }
     }
 
+    /// No-op encode — raw bytes unchanged
+    fn encode_none(payload: &[u8]) -> EncodedPayload {
+        EncodedPayload {
+            encoding: EncodingType::None,
+            data: payload.to_vec(),
+            metadata: HashMap::new(),
+        }
+    }
+
     /// Generate C header code for the encoded payload
     pub fn generate_c_header(&self, encoded: &EncodedPayload) -> String {
         match encoded.encoding {
             EncodingType::Xor => self.generate_xor_header(encoded),
             EncodingType::English => self.generate_english_header(encoded),
+            EncodingType::None => Self::generate_none_header(encoded),
         }
     }
 
@@ -167,6 +186,28 @@ unsigned char supermega_payload[PAYLOAD_LEN] = {{
             len = encoded.data.len(),
             key_0 = key_0,
             key_1 = key_1,
+            array = array
+        )
+    }
+
+    /// Generate C header for raw (no encoding) payload
+    fn generate_none_header(encoded: &EncodedPayload) -> String {
+        let array = format_c_byte_array(&encoded.data);
+
+        format!(
+            r#"/* Auto-generated payload header - no encoding */
+#ifndef PAYLOAD_H
+#define PAYLOAD_H
+
+#define PAYLOAD_LEN {len}
+
+unsigned char supermega_payload[PAYLOAD_LEN] = {{
+{array}
+}};
+
+#endif /* PAYLOAD_H */
+"#,
+            len = encoded.data.len(),
             array = array
         )
     }
@@ -298,12 +339,47 @@ mod tests {
     }
 
     #[test]
+    fn test_none_encoding_roundtrip() {
+        let encoder = PayloadEncoder::new();
+        let original = vec![0x41, 0x42, 0x43, 0x44];
+
+        let encoded = encoder.encode(&original, EncodingType::None);
+
+        // None encoding: data is unchanged
+        assert_eq!(original, encoded.data);
+        assert_eq!(encoded.encoding, EncodingType::None);
+    }
+
+    #[test]
+    fn test_none_c_header_generation() {
+        let encoder = PayloadEncoder::new();
+        let payload = vec![0x90, 0x90, 0xCC];
+
+        let encoded = encoder.encode(&payload, EncodingType::None);
+        let header = encoder.generate_c_header(&encoded);
+
+        assert!(header.contains("#define PAYLOAD_LEN 3"));
+        assert!(header.contains("supermega_payload"));
+        assert!(!header.contains("XOR_KEY"));
+        assert!(!header.contains("ENGLISH_ENCODING"));
+        assert!(header.contains("no encoding"));
+    }
+
+    #[test]
     fn test_encoding_type_parsing() {
         assert_eq!(EncodingType::from_str("xor").unwrap(), EncodingType::Xor);
         assert_eq!(EncodingType::from_str("XOR").unwrap(), EncodingType::Xor);
         assert_eq!(
             EncodingType::from_str("english").unwrap(),
             EncodingType::English
+        );
+        assert_eq!(
+            EncodingType::from_str("none").unwrap(),
+            EncodingType::None
+        );
+        assert_eq!(
+            EncodingType::from_str("None").unwrap(),
+            EncodingType::None
         );
         assert!(EncodingType::from_str("unknown").is_err());
     }

@@ -1104,6 +1104,7 @@ impl ArtifactBuilder {
             match encoding {
                 EncodingType::Xor => "XOR",
                 EncodingType::English => "English",
+                EncodingType::None => "None",
             }
         );
 
