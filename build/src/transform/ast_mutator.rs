@@ -771,7 +771,7 @@ void deconditioner() {
     fn test_combined_mutations() {
         let mut ast = AstMutator::new().unwrap();
 
-        let specs = vec![
+        let specs = [
             make_spec("ast.decon_rounds", &[("count", "50"), ("method", "fixed")]),
             make_spec("ast.fill_pattern", &[("pattern", "nop_sled")]),
             make_spec("ast.exec_decoy", &[("method", "direct")]),
