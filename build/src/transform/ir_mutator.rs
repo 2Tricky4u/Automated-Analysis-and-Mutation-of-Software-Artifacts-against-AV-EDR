@@ -96,15 +96,26 @@ impl IrMutator {
 
     /// Convert unconditional `br label %target` to always-true conditional.
     ///
-    /// Before: `  br label %done`
-    /// After:  `  %__op_N = icmp eq i32 0, 0`
-    ///         `  br i1 %__op_N, label %done, label %done`
+    /// **Robust mode** (default, survives `-O2`):
+    /// ```llvm
+    ///   %__op_0 = call i32 asm sideeffect "xor $0, $0", "=r"()
+    ///   %__op_cmp_0 = icmp eq i32 %__op_0, 0
+    ///   br i1 %__op_cmp_0, label %done, label %done
+    /// ```
+    /// The inline asm is opaque to LLVM — it cannot constant-fold, DCE, or
+    /// hoist it. `xor reg, reg` always produces 0. Cost: ~1 cycle per predicate.
+    ///
+    /// **Trivial mode** (folds away at `-O2`, useful for `-O0` builds):
+    /// ```llvm
+    ///   %__op_0 = icmp eq i32 0, 0
+    ///   br i1 %__op_0, label %done, label %done
+    /// ```
     ///
     /// Skips conditional branches (`br i1 ...`). Both branch targets are
     /// identical so semantics are preserved. Phi nodes stay valid because
     /// predecessor block labels don't change.
     ///
-    /// Params: `density` (0.0–1.0, default 0.3)
+    /// Params: `density` (0.0–1.0, default 0.3), `mode` ("robust" | "trivial", default "robust")
     fn insert_opaque_predicates(&mut self, ir_text: &str, spec: &MutationSpec) -> Result<String> {
         let density: f32 = spec
             .params
@@ -112,7 +123,15 @@ impl IrMutator {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.3);
 
-        info!("Opaque predicate density: {}", density);
+        let mode = spec
+            .params
+            .get("mode")
+            .map(|s| s.as_str())
+            .unwrap_or("robust");
+
+        info!("Opaque predicate density: {}, mode: {}", density, mode);
+
+        let robust = mode != "trivial";
 
         let mut output = String::new();
         let mut counter = 0u32;
@@ -131,11 +150,30 @@ impl IrMutator {
                         (rest.trim(), "")
                     };
                     let indent = &line[..line.len() - trimmed.len()];
-                    output.push_str(&format!("{}%__op_{} = icmp eq i32 0, 0\n", indent, counter));
-                    output.push_str(&format!(
-                        "{}br i1 %__op_{}, label {}, label {}{}\n",
-                        indent, counter, label, label, metadata
-                    ));
+
+                    if robust {
+                        // Inline asm black box: xor reg, reg → always 0
+                        output.push_str(&format!(
+                            "{}%__op_{} = call i32 asm sideeffect \"xor $0, $0\", \"=r\"()\n",
+                            indent, counter
+                        ));
+                        output.push_str(&format!(
+                            "{}%__op_cmp_{} = icmp eq i32 %__op_{}, 0\n",
+                            indent, counter, counter
+                        ));
+                        output.push_str(&format!(
+                            "{}br i1 %__op_cmp_{}, label {}, label {}{}\n",
+                            indent, counter, label, label, metadata
+                        ));
+                    } else {
+                        // Trivial: constant-foldable at -O2
+                        output
+                            .push_str(&format!("{}%__op_{} = icmp eq i32 0, 0\n", indent, counter));
+                        output.push_str(&format!(
+                            "{}br i1 %__op_{}, label {}, label {}{}\n",
+                            indent, counter, label, label, metadata
+                        ));
+                    }
                     counter += 1;
                     continue;
                 }
@@ -303,14 +341,38 @@ done:
 
     #[test]
     fn opaque_density_1_converts_all_unconditional() {
+        // Default mode is "robust" — uses inline asm
         let spec = make_spec("llvm.opaque_predicate", &[("density", "1.0")]);
         let mut m = IrMutator::new().unwrap();
         let (out, applied) = m.apply(ir_with_blocks(), &[&spec]).unwrap();
 
         assert!(applied.contains(&"llvm.opaque_predicate".to_string()));
         // ir_with_blocks has 2 unconditional branches (positive→done, negative→done)
+        let asm_count = out.matches("asm sideeffect \"xor $0, $0\"").count();
+        assert_eq!(asm_count, 2, "Expected 2 robust opaque predicates");
+        // Each asm call should have a corresponding icmp
+        let cmp_count = out.matches("icmp eq i32 %__op_").count();
+        assert_eq!(cmp_count, 2, "Expected 2 icmp comparisons for asm results");
+    }
+
+    #[test]
+    fn opaque_trivial_density_1_converts_all_unconditional() {
+        let spec = make_spec(
+            "llvm.opaque_predicate",
+            &[("density", "1.0"), ("mode", "trivial")],
+        );
+        let mut m = IrMutator::new().unwrap();
+        let (out, applied) = m.apply(ir_with_blocks(), &[&spec]).unwrap();
+
+        assert!(applied.contains(&"llvm.opaque_predicate".to_string()));
         let pred_count = out.matches("icmp eq i32 0, 0").count();
-        assert_eq!(pred_count, 2, "Expected 2 opaque predicates");
+        assert_eq!(pred_count, 2, "Expected 2 trivial opaque predicates");
+        // Should NOT contain asm sideeffect
+        assert_eq!(
+            out.matches("asm sideeffect \"xor").count(),
+            0,
+            "Trivial mode should not use inline asm"
+        );
     }
 
     #[test]
@@ -319,6 +381,7 @@ done:
         let mut m = IrMutator::new().unwrap();
         let (out, _) = m.apply(ir_with_blocks(), &[&spec]).unwrap();
 
+        assert_eq!(out.matches("asm sideeffect \"xor").count(), 0);
         assert_eq!(out.matches("icmp eq i32 0, 0").count(), 0);
     }
 
@@ -351,6 +414,7 @@ b:
         let mut m = IrMutator::new().unwrap();
         let (out, _) = m.apply(ir, &[&spec]).unwrap();
 
+        assert_eq!(out.matches("asm sideeffect \"xor").count(), 0);
         assert_eq!(out.matches("icmp eq i32 0, 0").count(), 0);
     }
 
@@ -395,6 +459,115 @@ exit:
         assert!(
             out.contains("phi i32 [ %r1, %positive ], [ %r2, %negative ]"),
             "Phi node must be preserved"
+        );
+    }
+
+    // ── -O2 survival tests ─────────────────────────────────────────────────
+
+    /// Helper: wrap bare IR in a valid `.ll` module for `opt`.
+    fn wrap_in_module(body_ir: &str) -> String {
+        format!(
+            r#"target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+
+{}
+"#,
+            body_ir
+        )
+    }
+
+    /// Check if `opt` (LLVM optimizer) is available on PATH.
+    fn opt_available() -> bool {
+        std::process::Command::new("opt")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// Run `opt -O2 -S` on the given IR text and return the optimized output.
+    fn run_opt_o2(ir: &str) -> String {
+        let mut child = std::process::Command::new("opt")
+            .args(["-O2", "-S"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("failed to spawn opt");
+
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(ir.as_bytes())
+            .expect("failed to write IR to opt stdin");
+
+        let output = child.wait_with_output().expect("failed to wait on opt");
+        assert!(
+            output.status.success(),
+            "opt -O2 failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("opt output was not UTF-8")
+    }
+
+    #[test]
+    fn opaque_robust_survives_o2() {
+        if !opt_available() {
+            eprintln!("SKIP: `opt` not found on PATH");
+            return;
+        }
+
+        // Generate IR with robust opaque predicates (density=1.0)
+        let spec = make_spec(
+            "llvm.opaque_predicate",
+            &[("density", "1.0"), ("mode", "robust")],
+        );
+        let mut m = IrMutator::new().unwrap();
+        let (mutated, _) = m.apply(ir_with_blocks(), &[&spec]).unwrap();
+        let module = wrap_in_module(&mutated);
+
+        let optimized = run_opt_o2(&module);
+
+        // Robust predicates must survive: asm sideeffect and conditional branch
+        assert!(
+            optimized.contains("asm sideeffect \"xor"),
+            "Robust asm predicate was eliminated by -O2!\nOptimized IR:\n{}",
+            optimized
+        );
+        assert!(
+            optimized.contains("br i1"),
+            "Conditional branch was eliminated by -O2!\nOptimized IR:\n{}",
+            optimized
+        );
+    }
+
+    #[test]
+    fn opaque_trivial_folded_by_o2() {
+        if !opt_available() {
+            eprintln!("SKIP: `opt` not found on PATH");
+            return;
+        }
+
+        // Negative control: trivial predicates should be folded away
+        let spec = make_spec(
+            "llvm.opaque_predicate",
+            &[("density", "1.0"), ("mode", "trivial")],
+        );
+        let mut m = IrMutator::new().unwrap();
+        let (mutated, _) = m.apply(ir_with_blocks(), &[&spec]).unwrap();
+        let module = wrap_in_module(&mutated);
+
+        let optimized = run_opt_o2(&module);
+
+        // Trivial `icmp eq i32 0, 0` should be constant-folded away
+        assert!(
+            !optimized.contains("icmp eq i32 0, 0"),
+            "Trivial predicate should have been folded by -O2!\nOptimized IR:\n{}",
+            optimized
         );
     }
 
@@ -464,8 +637,10 @@ exit:
         let (out, applied) = m.apply(ir_with_blocks(), &refs).unwrap();
 
         assert_eq!(applied.len(), 3);
-        assert!(out.contains("asm sideeffect"));
-        assert!(out.contains("icmp eq i32 0, 0"));
+        // NOP asm sideeffect (from nop_insert)
+        assert!(out.contains("asm sideeffect \"nop\""));
+        // Robust opaque predicate asm sideeffect (from opaque_predicate, default robust)
+        assert!(out.contains("asm sideeffect \"xor $0, $0\""));
         assert!(out.contains("unreachable"));
     }
 
