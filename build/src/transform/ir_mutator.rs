@@ -454,7 +454,7 @@ exit:
 
     #[test]
     fn all_three_together() {
-        let specs = vec![
+        let specs = [
             make_spec("llvm.nop_insert", &[("density", "1.0")]),
             make_spec("llvm.opaque_predicate", &[("density", "1.0")]),
             make_spec("llvm.junk_block", &[("count", "3")]),

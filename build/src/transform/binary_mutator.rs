@@ -1565,7 +1565,7 @@ mod tests {
         let pe = create_test_pe();
         let mutator = BinaryMutator::new(pe);
 
-        let specs = vec![
+        let specs = [
             MutationSpec {
                 id: "binary.rich_header".to_string(),
                 params: HashMap::new(),
@@ -1910,7 +1910,7 @@ mod tests {
         let pe = create_test_pe();
         let mutator = BinaryMutator::new(pe);
 
-        let specs = vec![
+        let specs = [
             MutationSpec {
                 id: "binary.string_inject".to_string(),
                 params: [("count".to_string(), "5".to_string())]
