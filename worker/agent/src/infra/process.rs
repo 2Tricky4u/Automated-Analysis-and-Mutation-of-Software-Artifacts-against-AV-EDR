@@ -3,6 +3,7 @@
 use std::path::Path;
 use tokio::io::AsyncRead;
 use tokio::task::JoinHandle;
+#[cfg(target_os = "windows")]
 use tracing::{error, info};
 
 /// Spawn an artifact process in the given working directory.
@@ -20,9 +21,9 @@ pub fn spawn_artifact(
 }
 
 /// Kill a process tree (Windows: taskkill /F /T, then child.kill()).
-pub async fn kill_process_tree(child: &mut tokio::process::Child, pid: Option<u32>) {
+pub async fn kill_process_tree(child: &mut tokio::process::Child, _pid: Option<u32>) {
     #[cfg(target_os = "windows")]
-    if let Some(pid) = pid {
+    if let Some(pid) = _pid {
         info!("Forcefully killing process tree for PID {}", pid);
         let kill_result = std::process::Command::new("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])

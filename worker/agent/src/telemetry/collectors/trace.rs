@@ -1,16 +1,24 @@
+#[cfg(any(windows, test))]
+use anyhow::Context;
 /// Line-level trace collector via named pipe (Lepori 2023-inspired)
 ///
 /// Listens on \\.\pipe\rededr_trace for trace events from instrumented artifacts.
 /// Supports both Base64 text format and binary protocol (auto-detection).
 ///
 /// **Async Implementation**: Uses tokio::net::windows::named_pipe for fully async I/O
-use anyhow::{Context, Result};
+use anyhow::Result;
+#[cfg(any(windows, test))]
 use base64::{Engine as _, engine::general_purpose};
+#[cfg(any(windows, test))]
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+#[cfg(any(windows, test))]
+use tracing::{debug, warn};
+#[cfg(windows)]
+use tracing::{error, info};
 
 /// Binary protocol header (matches C runtime InstRecordHeader with #pragma pack(1))
+#[cfg(windows)]
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone)]
 struct InstRecordHeader {
@@ -23,7 +31,9 @@ struct InstRecordHeader {
     payload_len: u32,
 }
 
+#[cfg(windows)]
 const MAGIC_BINARY: u32 = 0x49535452; // 'ISTR'
+#[cfg(windows)]
 const HEADER_SIZE: usize = std::mem::size_of::<InstRecordHeader>();
 
 /// Parsed line trace event from artifact
@@ -39,8 +49,11 @@ pub struct TraceEvent {
 
 /// Named pipe trace collector (async)
 pub struct TraceCollector {
+    #[cfg_attr(not(windows), allow(dead_code))]
     pipe_name: String,
+    #[cfg_attr(not(windows), allow(dead_code))]
     event_tx: mpsc::Sender<TraceEvent>,
+    #[cfg_attr(not(windows), allow(dead_code))]
     sequence_counter: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
@@ -304,6 +317,7 @@ impl TraceCollector {
         Ok(())
     }
 
+    #[cfg(windows)]
     fn parse_on_event_type(&self, hdr: &InstRecordHeader, event_type: u16, payload: &mut [u8]) {
         match event_type {
             1 => {
@@ -381,6 +395,7 @@ impl TraceCollector {
     }
 
     /// Handle binary line trace (event_type=1)
+    #[cfg(windows)]
     fn handle_binary_line_trace(&self, hdr: &InstRecordHeader, payload: &[u8]) -> Result<()> {
         // Parse payload: "file:line:func"
         let payload_str =
@@ -419,6 +434,7 @@ impl TraceCollector {
     }
 
     /// Handle a single trace line: "b64line:<base64>" or "YjY0<base64>" (new AST format)
+    #[cfg(any(windows, test))]
     fn handle_trace_line(&self, line: &str) -> Result<()> {
         // Support both formats:
         // 1. Old IR format: "b64line:<base64_data>"
