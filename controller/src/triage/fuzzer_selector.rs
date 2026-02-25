@@ -40,13 +40,27 @@ pub struct FuzzerConfig {
     pub vary_fixed_params: bool,
 }
 
-fn default_population_size() -> usize { 10 }
-fn default_elitism() -> usize { 2 }
-fn default_param_mutation_rate() -> f64 { 0.3 }
-fn default_structural_mutation_rate() -> f64 { 0.2 }
-fn default_min_pool() -> usize { 1 }
-fn default_max_pool() -> usize { 5 }
-fn default_vary_fixed() -> bool { true }
+fn default_population_size() -> usize {
+    10
+}
+fn default_elitism() -> usize {
+    2
+}
+fn default_param_mutation_rate() -> f64 {
+    0.3
+}
+fn default_structural_mutation_rate() -> f64 {
+    0.2
+}
+fn default_min_pool() -> usize {
+    1
+}
+fn default_max_pool() -> usize {
+    5
+}
+fn default_vary_fixed() -> bool {
+    true
+}
 
 impl Default for FuzzerConfig {
     fn default() -> Self {
@@ -129,8 +143,7 @@ impl FuzzerSelector {
 
             for &idx in indices.iter().take(count) {
                 let id = &pool[idx];
-                let params =
-                    find_param_space(&registry, id).and_then(|ps| ps.sample_params(rng));
+                let params = find_param_space(&registry, id).and_then(|ps| ps.sample_params(rng));
                 mutations.push(MutationSpec {
                     id: id.clone(),
                     params,
@@ -143,7 +156,11 @@ impl FuzzerSelector {
             mutations,
             fitness: None,
             generation: 0,
-            rationale: format!("random seed ({}+{} pool mutations)", search_space.fixed_mutations.len(), pool_count),
+            rationale: format!(
+                "random seed ({}+{} pool mutations)",
+                search_space.fixed_mutations.len(),
+                pool_count
+            ),
         }
     }
 
@@ -219,7 +236,8 @@ impl FuzzerSelector {
                 offspring.mutations.retain(|m| m.id != *remove_id);
             } else if pool_count < config.max_pool_mutations {
                 // Add a random pool mutation not already present
-                let present: Vec<&str> = offspring.mutations.iter().map(|m| m.id.as_str()).collect();
+                let present: Vec<&str> =
+                    offspring.mutations.iter().map(|m| m.id.as_str()).collect();
                 let candidates: Vec<&String> = search_space
                     .mutation_pool
                     .iter()
@@ -238,8 +256,14 @@ impl FuzzerSelector {
             }
         }
 
-        let pa_fitness = parent_a.fitness.map(|f| format!("{:.2}", f)).unwrap_or("?".into());
-        let pb_fitness = parent_b.fitness.map(|f| format!("{:.2}", f)).unwrap_or("?".into());
+        let pa_fitness = parent_a
+            .fitness
+            .map(|f| format!("{:.2}", f))
+            .unwrap_or("?".into());
+        let pb_fitness = parent_b
+            .fitness
+            .map(|f| format!("{:.2}", f))
+            .unwrap_or("?".into());
         offspring.generation = generation;
         offspring.rationale = format!(
             "evolved gen={} (parents: {}, {})",
@@ -379,15 +403,22 @@ impl Selector for FuzzerSelector {
         // Module selection (reuse shared epsilon-greedy logic)
         let (modules, mod_rationale) = match search_space.strategy {
             VariationStrategy::Full | VariationStrategy::Fuzzer => {
-                select_modules(search_space, default_modules, history, &mut |n| rng.next_usize(n))
+                select_modules(search_space, default_modules, history, &mut |n| {
+                    rng.next_usize(n)
+                })
             }
-            VariationStrategy::MutationOnly => (default_modules.clone(), "modules fixed".to_string()),
+            VariationStrategy::MutationOnly => {
+                (default_modules.clone(), "modules fixed".to_string())
+            }
         };
 
         Selection {
             modules,
             mutations: recipe.mutations,
-            rationale: format!("Fuzzer {}: {} | {}", recipe.generation, recipe.rationale, mod_rationale),
+            rationale: format!(
+                "Fuzzer {}: {} | {}",
+                recipe.generation, recipe.rationale, mod_rationale
+            ),
         }
     }
 }
@@ -547,20 +578,41 @@ mod tests {
 
         // Create history with varied fitness
         let good_specs = vec![
-            MutationSpec { id: "llvm.nop_insert".to_string(), params: None },
-            MutationSpec { id: "ast.decon_rounds".to_string(), params: None },
+            MutationSpec {
+                id: "llvm.nop_insert".to_string(),
+                params: None,
+            },
+            MutationSpec {
+                id: "ast.decon_rounds".to_string(),
+                params: None,
+            },
         ];
         let bad_specs = vec![
-            MutationSpec { id: "llvm.nop_insert".to_string(), params: None },
-            MutationSpec { id: "ast.exec_decoy".to_string(), params: None },
+            MutationSpec {
+                id: "llvm.nop_insert".to_string(),
+                params: None,
+            },
+            MutationSpec {
+                id: "ast.exec_decoy".to_string(),
+                params: None,
+            },
         ];
 
         let mut history = BTreeMap::new();
         // High fitness recipes
-        history.insert(2, make_fuzzer_summary(2, 0.9, DifferentialCategory::Evasion, good_specs.clone()));
-        history.insert(3, make_fuzzer_summary(3, 0.85, DifferentialCategory::Evasion, good_specs.clone()));
+        history.insert(
+            2,
+            make_fuzzer_summary(2, 0.9, DifferentialCategory::Evasion, good_specs.clone()),
+        );
+        history.insert(
+            3,
+            make_fuzzer_summary(3, 0.85, DifferentialCategory::Evasion, good_specs.clone()),
+        );
         // Low fitness recipe
-        history.insert(4, make_fuzzer_summary(4, 0.1, DifferentialCategory::RealDetection, bad_specs));
+        history.insert(
+            4,
+            make_fuzzer_summary(4, 0.1, DifferentialCategory::RealDetection, bad_specs),
+        );
 
         // Evolution rounds should tend to inherit from high-fitness parents
         let mut inherited_good = 0;
@@ -607,8 +659,14 @@ mod tests {
         ];
 
         let mut history = BTreeMap::new();
-        history.insert(2, make_fuzzer_summary(2, 0.8, DifferentialCategory::Evasion, specs.clone()));
-        history.insert(3, make_fuzzer_summary(3, 0.7, DifferentialCategory::Evasion, specs));
+        history.insert(
+            2,
+            make_fuzzer_summary(2, 0.8, DifferentialCategory::Evasion, specs.clone()),
+        );
+        history.insert(
+            3,
+            make_fuzzer_summary(3, 0.7, DifferentialCategory::Evasion, specs),
+        );
 
         for round in 4..=20 {
             let selection = selector
@@ -616,8 +674,8 @@ mod tests {
                 .await;
             for m in &selection.mutations {
                 if let Some(params) = &m.params {
-                    if m.id == "llvm.nop_insert" {
-                        if let Some(d) = params.get("density").and_then(|v| v.as_str()) {
+                    if m.id == "llvm.nop_insert"
+                        && let Some(d) = params.get("density").and_then(|v| v.as_str()) {
                             let val: f64 = d.parse().unwrap_or(0.0);
                             assert!(
                                 (0.0..=1.0).contains(&val),
@@ -625,9 +683,8 @@ mod tests {
                                 val
                             );
                         }
-                    }
-                    if m.id == "ast.decon_rounds" {
-                        if let Some(c) = params.get("count").and_then(|v| v.as_str()) {
+                    if m.id == "ast.decon_rounds"
+                        && let Some(c) = params.get("count").and_then(|v| v.as_str()) {
                             let val: i64 = c.parse().unwrap_or(0);
                             assert!(
                                 (5..=500).contains(&val),
@@ -635,7 +692,6 @@ mod tests {
                                 val
                             );
                         }
-                    }
                 }
             }
         }
@@ -649,8 +705,14 @@ mod tests {
 
         let parent_a = Recipe {
             mutations: vec![
-                MutationSpec { id: "llvm.nop_insert".to_string(), params: None },
-                MutationSpec { id: "ast.decon_rounds".to_string(), params: None },
+                MutationSpec {
+                    id: "llvm.nop_insert".to_string(),
+                    params: None,
+                },
+                MutationSpec {
+                    id: "ast.decon_rounds".to_string(),
+                    params: None,
+                },
             ],
             fitness: Some(0.8),
             generation: 0,
@@ -658,8 +720,14 @@ mod tests {
         };
         let parent_b = Recipe {
             mutations: vec![
-                MutationSpec { id: "llvm.nop_insert".to_string(), params: None },
-                MutationSpec { id: "ast.exec_decoy".to_string(), params: None },
+                MutationSpec {
+                    id: "llvm.nop_insert".to_string(),
+                    params: None,
+                },
+                MutationSpec {
+                    id: "ast.exec_decoy".to_string(),
+                    params: None,
+                },
             ],
             fitness: Some(0.7),
             generation: 0,
@@ -670,7 +738,10 @@ mod tests {
         let ids: Vec<&str> = offspring.mutations.iter().map(|m| m.id.as_str()).collect();
 
         // Should contain fixed mutations + union of pool mutations
-        assert!(ids.contains(&"llvm.nop_insert"), "Should contain shared fixed mutation");
+        assert!(
+            ids.contains(&"llvm.nop_insert"),
+            "Should contain shared fixed mutation"
+        );
     }
 
     #[tokio::test]
@@ -687,14 +758,24 @@ mod tests {
         };
 
         // Create a history where one recipe has very high fitness
-        let elite_specs = vec![
-            MutationSpec { id: "llvm.nop_insert".to_string(), params: Some(serde_json::json!({"density": "0.99"})) },
-        ];
+        let elite_specs = vec![MutationSpec {
+            id: "llvm.nop_insert".to_string(),
+            params: Some(serde_json::json!({"density": "0.99"})),
+        }];
 
         let mut history = BTreeMap::new();
-        history.insert(2, make_fuzzer_summary(2, 1.0, DifferentialCategory::Evasion, elite_specs));
-        history.insert(3, make_fuzzer_summary(3, 0.1, DifferentialCategory::RealDetection, vec![]));
-        history.insert(4, make_fuzzer_summary(4, 0.1, DifferentialCategory::RealDetection, vec![]));
+        history.insert(
+            2,
+            make_fuzzer_summary(2, 1.0, DifferentialCategory::Evasion, elite_specs),
+        );
+        history.insert(
+            3,
+            make_fuzzer_summary(3, 0.1, DifferentialCategory::RealDetection, vec![]),
+        );
+        history.insert(
+            4,
+            make_fuzzer_summary(4, 0.1, DifferentialCategory::RealDetection, vec![]),
+        );
 
         // The elite recipe's traits should appear in evolved offspring
         let mut found_elite_trait = 0;
@@ -703,16 +784,14 @@ mod tests {
                 .select("job-1", round, &ss, &defaults, &history, None)
                 .await;
             for m in &selection.mutations {
-                if m.id == "llvm.nop_insert" {
-                    if let Some(params) = &m.params {
-                        if let Some(d) = params.get("density").and_then(|v| v.as_str()) {
+                if m.id == "llvm.nop_insert"
+                    && let Some(params) = &m.params
+                        && let Some(d) = params.get("density").and_then(|v| v.as_str()) {
                             let val: f64 = d.parse().unwrap_or(0.0);
                             if val > 0.7 {
                                 found_elite_trait += 1;
                             }
                         }
-                    }
-                }
             }
         }
         // Tournament selection heavily favors the 1.0-fitness recipe
@@ -759,14 +838,29 @@ mod tests {
         };
 
         let specs = vec![
-            MutationSpec { id: "llvm.nop_insert".to_string(), params: None },
-            MutationSpec { id: "ast.decon_rounds".to_string(), params: None },
-            MutationSpec { id: "ast.exec_decoy".to_string(), params: None },
+            MutationSpec {
+                id: "llvm.nop_insert".to_string(),
+                params: None,
+            },
+            MutationSpec {
+                id: "ast.decon_rounds".to_string(),
+                params: None,
+            },
+            MutationSpec {
+                id: "ast.exec_decoy".to_string(),
+                params: None,
+            },
         ];
 
         let mut history = BTreeMap::new();
-        history.insert(2, make_fuzzer_summary(2, 0.5, DifferentialCategory::RealDetection, specs.clone()));
-        history.insert(3, make_fuzzer_summary(3, 0.5, DifferentialCategory::RealDetection, specs));
+        history.insert(
+            2,
+            make_fuzzer_summary(2, 0.5, DifferentialCategory::RealDetection, specs.clone()),
+        );
+        history.insert(
+            3,
+            make_fuzzer_summary(3, 0.5, DifferentialCategory::RealDetection, specs),
+        );
 
         let mut mutation_counts = std::collections::HashSet::new();
         for round in 4..=20 {

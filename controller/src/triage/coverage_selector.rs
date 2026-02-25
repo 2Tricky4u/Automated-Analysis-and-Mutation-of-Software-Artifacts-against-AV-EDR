@@ -389,7 +389,9 @@ impl CoverageSelector {
         history: &BTreeMap<u32, RoundSummary>,
     ) -> Selection {
         let (modules, module_rationale) =
-            select_modules(search_space, default_modules, history, &mut |n| Self::pseudo_random(n));
+            select_modules(search_space, default_modules, history, &mut |n| {
+                Self::pseudo_random(n)
+            });
         let mutation_selection = self.select_mutations(search_space, default_modules, history);
 
         Selection {
@@ -465,7 +467,13 @@ mod tests {
         RoundSummary {
             round_id: RoundId(format!("r-{}", round_number)),
             round_number,
-            mutation_specs: mutations.iter().map(|id| MutationSpec { id: id.clone(), params: None }).collect(),
+            mutation_specs: mutations
+                .iter()
+                .map(|id| MutationSpec {
+                    id: id.clone(),
+                    params: None,
+                })
+                .collect(),
             mutations,
             modules: ModuleSelectionSpec {
                 deconditioner: deconditioner.to_string(),
