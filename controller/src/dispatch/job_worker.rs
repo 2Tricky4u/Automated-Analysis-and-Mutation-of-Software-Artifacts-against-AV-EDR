@@ -14,6 +14,7 @@
 //! - Emit events for ES indexing
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::mpsc;
@@ -87,6 +88,11 @@ pub struct JobWorker {
 
     /// Shutdown token
     shutdown_token: CancellationToken,
+
+    /// Artifact paths to clean up when the job finishes.
+    /// Deferred from per-round cleanup to avoid deleting files still referenced
+    /// by other rounds (content-addressed paths can collide across rounds).
+    artifact_cleanup: Vec<PathBuf>,
 }
 
 impl JobWorker {
@@ -107,6 +113,7 @@ impl JobWorker {
             event_tx,
             selector,
             shutdown_token: CancellationToken::new(),
+            artifact_cleanup: Vec::new(),
         }
     }
 
@@ -214,6 +221,17 @@ impl JobWorker {
 
         // Cleanup
         self.run_pool.unregister_job(&self.job.id).await;
+
+        // Clean up build artifacts now that all rounds are done
+        self.artifact_cleanup.sort();
+        self.artifact_cleanup.dedup();
+        for path in &self.artifact_cleanup {
+            match std::fs::remove_file(path) {
+                Ok(()) => debug!("Cleaned build artifact: {:?}", path),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => warn!("Failed to clean build artifact {:?}: {}", path, e),
+            }
+        }
 
         // Emit appropriate outcome based on exit reason
         let outcome = match exit_reason {
@@ -614,14 +632,13 @@ impl JobWorker {
             None => return,
         };
 
-        // Cleanup controller-side build artifacts
-        for path in [&agg.baseline_artifact_path, &agg.instrumented_artifact_path] {
-            if let Err(e) = std::fs::remove_file(path) {
-                warn!("Failed to clean build artifact {:?}: {}", path, e);
-            } else {
-                debug!("Cleaned build artifact: {:?}", path);
-            }
-        }
+        // Defer artifact cleanup until job finishes — content-addressed paths
+        // (sha256.exe) can collide across rounds, so deleting here would break
+        // later rounds that reference the same file.
+        self.artifact_cleanup
+            .push(agg.baseline_artifact_path.clone());
+        self.artifact_cleanup
+            .push(agg.instrumented_artifact_path.clone());
 
         // Extract all data from agg BEFORE to_summary() consumes it
         let baseline_run_id = agg.baseline_run_id.clone();

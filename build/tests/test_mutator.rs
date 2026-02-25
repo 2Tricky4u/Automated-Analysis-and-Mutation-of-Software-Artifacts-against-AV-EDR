@@ -452,11 +452,12 @@ fn test_opaque_predicate_density_1() {
     let output_str = String::from_utf8(output).unwrap();
 
     assert!(applied.contains(&"llvm.opaque_predicate".to_string()));
-    let pred_count = output_str.matches("icmp eq i32 0, 0").count();
+    // Default mode is "robust" — uses inline asm, not trivial `icmp eq i32 0, 0`
+    let asm_count = output_str.matches("asm sideeffect \"xor $0, $0\"").count();
     assert_eq!(
-        pred_count, 2,
-        "Expected 2 opaque predicates, got {}",
-        pred_count
+        asm_count, 2,
+        "Expected 2 robust opaque predicates, got {}",
+        asm_count
     );
 }
 
@@ -628,10 +629,13 @@ fn test_all_three_ir_mutations_combined() {
     let output_str = String::from_utf8(output).unwrap();
 
     assert_eq!(applied.len(), 3, "All 3 IR mutations should apply");
-    assert!(output_str.contains("asm sideeffect"), "NOPs present");
     assert!(
-        output_str.contains("icmp eq i32 0, 0"),
-        "Opaque predicates present"
+        output_str.contains("asm sideeffect \"nop\""),
+        "NOPs present"
+    );
+    assert!(
+        output_str.contains("asm sideeffect \"xor $0, $0\""),
+        "Robust opaque predicates present"
     );
     assert!(output_str.contains("unreachable"), "Junk blocks present");
 }
