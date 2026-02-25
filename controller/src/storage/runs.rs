@@ -44,9 +44,9 @@ pub async fn index_run_result(
     let index_name = helpers::es_index_name("runs");
 
     // Derive detected from verdict, falling back to exit code for legacy workers
-    let detected = if let Some(v) = automutate_common::DetectionVerdict::from_verdict_str(
-        &params.outcome.detection_verdict,
-    ) {
+    let detected = if let Some(v) =
+        automutate_common::DetectionVerdict::from_verdict_str(&params.outcome.detection_verdict)
+    {
         v.is_detected()
     } else {
         // Legacy fallback: use worker's detected boolean or exit code
