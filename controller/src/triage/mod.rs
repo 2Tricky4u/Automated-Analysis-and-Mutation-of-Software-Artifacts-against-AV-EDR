@@ -10,9 +10,12 @@
 //!   queries ES for token-level data.
 
 pub mod coverage_selector;
+pub mod fuzzer_selector;
+pub mod param_space;
 pub mod source_resolver;
 
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
+use crate::triage::fuzzer_selector::FuzzerConfig;
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 
@@ -33,12 +36,15 @@ pub enum VariationStrategy {
     #[default]
     MutationOnly,
     Full,
+    /// Evolutionary mutation exploration with parameter variation.
+    Fuzzer,
 }
 
 impl VariationStrategy {
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "full" => Self::Full,
+            "fuzzer" => Self::Fuzzer,
             _ => Self::MutationOnly,
         }
     }
@@ -48,6 +54,7 @@ impl VariationStrategy {
         match self {
             Self::MutationOnly => "mutation",
             Self::Full => "full",
+            Self::Fuzzer => "fuzzer",
         }
     }
 }
@@ -55,7 +62,7 @@ impl VariationStrategy {
 /// Which module categories the selector may vary + mutation exploration config.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchSpace {
-    /// Variation strategy: MutationOnly (default) or Full
+    /// Variation strategy: MutationOnly (default), Full, or Fuzzer
     #[serde(default)]
     pub strategy: VariationStrategy,
     /// Module categories to vary (used in Full mode)
@@ -70,6 +77,9 @@ pub struct SearchSpace {
     /// Default (PoC): all binary.* + llvm.* mutations.
     #[serde(default = "default_fixed_mutations")]
     pub fixed_mutations: Vec<String>,
+    /// Config for FuzzerSelector (only used when strategy=Fuzzer).
+    #[serde(default)]
+    pub fuzzer_config: Option<FuzzerConfig>,
 }
 
 fn default_fixed_mutations() -> Vec<String> {
@@ -113,6 +123,7 @@ impl Default for SearchSpace {
             mutation_pool: default_mutation_pool(),
             mutation_targets: vec![],
             fixed_mutations: default_fixed_mutations(),
+            fuzzer_config: None,
         }
     }
 }

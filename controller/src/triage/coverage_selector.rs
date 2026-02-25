@@ -31,7 +31,7 @@ const DECONDITIONER_VARIANTS: &[&str] = &[
 ];
 
 /// Full mutation catalog — all implemented mutations across AST, LLVM IR, and Binary layers.
-const MUTATION_CATALOG: &[&str] = &[
+pub(crate) const MUTATION_CATALOG: &[&str] = &[
     // AST – global
     "ast.string_xor",
     // AST – marker-based
@@ -73,6 +73,99 @@ impl VariantStats {
     }
 }
 
+/// Epsilon-greedy module selection over deconditioner variants.
+///
+/// Shared by both CoverageSelector and FuzzerSelector.
+/// `random_fn` provides random selection: `random_fn(n)` returns a value in `[0, n)`.
+pub fn select_modules(
+    search_space: &SearchSpace,
+    default_modules: &ModuleSelectionSpec,
+    history: &BTreeMap<u32, RoundSummary>,
+    random_fn: &mut dyn FnMut(usize) -> usize,
+) -> (ModuleSelectionSpec, String) {
+    // Only vary deconditioner for now
+    if !search_space
+        .variable_categories
+        .iter()
+        .any(|c| c == "deconditioner")
+    {
+        return (
+            default_modules.clone(),
+            "No variable categories include deconditioner".to_string(),
+        );
+    }
+
+    // Collect stats from trustworthy rounds only
+    let mut stats: HashMap<String, VariantStats> = HashMap::new();
+    for summary in history.values() {
+        if !summary.differential_category.is_trustworthy() {
+            continue;
+        }
+        let variant = summary.modules.deconditioner.clone();
+        let entry = stats.entry(variant).or_insert(VariantStats {
+            count: 0,
+            total_evasion_score: 0.0,
+        });
+        entry.count += 1;
+        entry.total_evasion_score += summary.evasion_score;
+    }
+
+    // Find untried variants
+    let untried: Vec<&str> = DECONDITIONER_VARIANTS
+        .iter()
+        .filter(|v| !stats.contains_key(**v))
+        .copied()
+        .collect();
+
+    let tried_count = DECONDITIONER_VARIANTS.len() - untried.len();
+
+    let (chosen_variant, rationale) = if !untried.is_empty() {
+        let idx = random_fn(untried.len());
+        let variant = untried[idx];
+        (
+            variant.to_string(),
+            format!(
+                "Exploring untried variant: {} ({}/{} tried)",
+                variant,
+                tried_count,
+                DECONDITIONER_VARIANTS.len()
+            ),
+        )
+    } else {
+        let coin = random_fn(100) as f64 / 100.0;
+        if coin < EPSILON {
+            let idx = random_fn(DECONDITIONER_VARIANTS.len());
+            let variant = DECONDITIONER_VARIANTS[idx];
+            (
+                variant.to_string(),
+                format!("Exploring random: {} (epsilon={:.1})", variant, EPSILON),
+            )
+        } else {
+            let best = stats
+                .iter()
+                .max_by(|a, b| {
+                    a.1.mean_evasion_score()
+                        .partial_cmp(&b.1.mean_evasion_score())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(k, v)| (k.clone(), v.mean_evasion_score(), v.count))
+                .unwrap_or_else(|| ("none".to_string(), 0.0, 0));
+
+            (
+                best.0.clone(),
+                format!(
+                    "Exploiting best: {} (mean_evasion={:.2}, n={})",
+                    best.0, best.1, best.2
+                ),
+            )
+        }
+    };
+
+    let mut modules = default_modules.clone();
+    modules.deconditioner = chosen_variant;
+    (modules, rationale)
+}
+
 /// Stateless coverage-driven selector.
 ///
 /// All state comes via `select()` arguments — cheap to construct, easy to test.
@@ -99,97 +192,6 @@ impl CoverageSelector {
             .unwrap_or_default()
             .subsec_nanos();
         nanos as usize % n
-    }
-
-    /// Module selection logic (epsilon-greedy over deconditioner variants).
-    /// Extracted from the original `select()` — zero logic changes.
-    fn select_modules(
-        &self,
-        search_space: &SearchSpace,
-        default_modules: &ModuleSelectionSpec,
-        history: &BTreeMap<u32, RoundSummary>,
-    ) -> (ModuleSelectionSpec, String) {
-        // Only vary deconditioner for now
-        if !search_space
-            .variable_categories
-            .iter()
-            .any(|c| c == "deconditioner")
-        {
-            return (
-                default_modules.clone(),
-                "No variable categories include deconditioner".to_string(),
-            );
-        }
-
-        // Collect stats from trustworthy rounds only
-        let mut stats: HashMap<String, VariantStats> = HashMap::new();
-        for summary in history.values() {
-            if !summary.differential_category.is_trustworthy() {
-                continue;
-            }
-            let variant = summary.modules.deconditioner.clone();
-            let entry = stats.entry(variant).or_insert(VariantStats {
-                count: 0,
-                total_evasion_score: 0.0,
-            });
-            entry.count += 1;
-            entry.total_evasion_score += summary.evasion_score;
-        }
-
-        // Find untried variants
-        let untried: Vec<&str> = DECONDITIONER_VARIANTS
-            .iter()
-            .filter(|v| !stats.contains_key(**v))
-            .copied()
-            .collect();
-
-        let tried_count = DECONDITIONER_VARIANTS.len() - untried.len();
-
-        let (chosen_variant, rationale) = if !untried.is_empty() {
-            let idx = Self::pseudo_random(untried.len());
-            let variant = untried[idx];
-            (
-                variant.to_string(),
-                format!(
-                    "Exploring untried variant: {} ({}/{} tried)",
-                    variant,
-                    tried_count,
-                    DECONDITIONER_VARIANTS.len()
-                ),
-            )
-        } else {
-            let coin = Self::pseudo_random(100) as f64 / 100.0;
-            if coin < EPSILON {
-                let idx = Self::pseudo_random(DECONDITIONER_VARIANTS.len());
-                let variant = DECONDITIONER_VARIANTS[idx];
-                (
-                    variant.to_string(),
-                    format!("Exploring random: {} (epsilon={:.1})", variant, EPSILON),
-                )
-            } else {
-                let best = stats
-                    .iter()
-                    .max_by(|a, b| {
-                        a.1.mean_evasion_score()
-                            .partial_cmp(&b.1.mean_evasion_score())
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .map(|(k, v)| (k.clone(), v.mean_evasion_score(), v.count))
-                    .unwrap_or_else(|| ("none".to_string(), 0.0, 0));
-
-                (
-                    best.0.clone(),
-                    format!(
-                        "Exploiting best: {} (mean_evasion={:.2}, n={})",
-                        best.0, best.1, best.2
-                    ),
-                )
-            }
-        };
-
-        let mut modules = default_modules.clone();
-        modules.deconditioner = chosen_variant;
-        (modules, rationale)
     }
 
     /// Build the fixed mutation specs from search_space.fixed_mutations.
@@ -387,7 +389,7 @@ impl CoverageSelector {
         history: &BTreeMap<u32, RoundSummary>,
     ) -> Selection {
         let (modules, module_rationale) =
-            self.select_modules(search_space, default_modules, history);
+            select_modules(search_space, default_modules, history, &mut |n| Self::pseudo_random(n));
         let mutation_selection = self.select_mutations(search_space, default_modules, history);
 
         Selection {
@@ -422,7 +424,7 @@ impl Selector for CoverageSelector {
         }
 
         match search_space.strategy {
-            VariationStrategy::MutationOnly => {
+            VariationStrategy::MutationOnly | VariationStrategy::Fuzzer => {
                 self.select_mutations(search_space, default_modules, history)
             }
             VariationStrategy::Full => self.select_full(search_space, default_modules, history),
@@ -463,6 +465,7 @@ mod tests {
         RoundSummary {
             round_id: RoundId(format!("r-{}", round_number)),
             round_number,
+            mutation_specs: mutations.iter().map(|id| MutationSpec { id: id.clone(), params: None }).collect(),
             mutations,
             modules: ModuleSelectionSpec {
                 deconditioner: deconditioner.to_string(),
