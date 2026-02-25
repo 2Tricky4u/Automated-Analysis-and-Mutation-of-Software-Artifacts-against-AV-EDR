@@ -403,6 +403,7 @@ message RoundSummaryProto {
   double coverage_percent = 10;
   int32 dry_run_exit_code = 11;      // Exit code from dryrun (clean VM) execution
   bool has_dryrun = 12;              // Whether dryrun result was available for this round
+  string detection_verdict = 13;    // verdict string: "detected", "evasion", "ambiguous", etc.
 }
 
 // Stop job
@@ -455,6 +456,7 @@ message RoundProto {
   // Dryrun fields
   RunResultProto dryrun_run = 30;    // Dryrun run result (if available)
   int32 dry_run_exit_code = 31;      // Exit code from dryrun execution
+  string detection_verdict = 32;    // verdict string: "detected", "evasion", "ambiguous", etc.
 }
 
 message RunResultProto {
@@ -473,6 +475,7 @@ message RunResultProto {
   int64 completed_at = 13;
   string last_checkpoint = 14;
   bool raw_detected = 15;  // original per-run detected before dryrun correction
+  string detection_verdict = 16;  // verdict string: "detected", "evasion", "ambiguous", etc.
 }
 
 message BehaviorComparisonProto {

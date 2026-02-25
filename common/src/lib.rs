@@ -32,19 +32,6 @@ impl DetectionVerdict {
         matches!(self, Self::Detected | Self::Ambiguous)
     }
 
-    /// Map to ES `detection_outcome` string.
-    pub fn detection_outcome(self) -> &'static str {
-        match self {
-            Self::Evasion => "FULL_EVASION",
-            Self::Detected => "DETECTED",
-            Self::Ambiguous => "AMBIGUOUS",
-            Self::Stalled => "STALLED",
-            Self::InfraError => "INFRA_ERROR",
-            Self::MutationFailed => "MUTATION_FAILED",
-            Self::Anomaly => "ANOMALY",
-        }
-    }
-
     /// Short string identifier for this verdict (used in proto/ES fields).
     pub fn as_str(self) -> &'static str {
         match self {

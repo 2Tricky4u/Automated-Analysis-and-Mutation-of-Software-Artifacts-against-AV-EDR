@@ -387,6 +387,7 @@ pub async fn get_round(
         coverage_executed_lines: u32_field(&source, "coverage_executed_lines"),
         dryrun_run: None, // Populated if dryrun data exists in ES
         dry_run_exit_code: source["dry_run_exit_code"].as_i64().unwrap_or(0) as i32,
+        detection_verdict: str_field(&source, "detection_verdict"),
     };
 
     Ok(Response::new(GetRoundResponse { round: Some(round) }))
@@ -654,11 +655,13 @@ fn round_doc_to_proto(source: &Value) -> RoundSummaryProto {
         coverage_percent: f64_field(source, "coverage_percent"),
         dry_run_exit_code: source["dry_run_exit_code"].as_i64().unwrap_or(0) as i32,
         has_dryrun: bool_field(source, "has_dryrun"),
+        detection_verdict: str_field(source, "detection_verdict"),
     }
 }
 
 fn run_doc_to_proto(source: &Value) -> RunResultProto {
     let detected = bool_field(source, "detected");
+    let verdict = str_field(source, "detection_verdict");
     RunResultProto {
         run_id: str_field(source, "run_id"),
         job_id: str_field(source, "job_id"),
@@ -670,7 +673,15 @@ fn run_doc_to_proto(source: &Value) -> RunResultProto {
         },
         artifact_id: String::new(),
         mutations: string_array_field(source, "mutations"),
-        outcome: str_field(source, "detection_outcome"),
+        // Backward compat: populate outcome from detection_verdict, fall back to old detection_outcome
+        outcome: {
+            let v = str_field(source, "detection_verdict");
+            if v.is_empty() {
+                str_field(source, "detection_outcome")
+            } else {
+                v
+            }
+        },
         detected,
         exit_code: i32_field(source, "exit_code"),
         telemetry_events_count: u64_field(source, "telemetry_events_count"),
@@ -679,6 +690,7 @@ fn run_doc_to_proto(source: &Value) -> RunResultProto {
         completed_at: 0,
         last_checkpoint: str_field(source, "last_checkpoint"),
         raw_detected: detected, // same initially; apply_round_correction may diverge
+        detection_verdict: verdict,
     }
 }
 
