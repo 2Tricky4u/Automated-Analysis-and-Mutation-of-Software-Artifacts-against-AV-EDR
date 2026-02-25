@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tonic::Request;
 use tonic::transport::{Channel, Endpoint};
 use tracing::{debug, error, info, warn};
@@ -28,8 +28,7 @@ use crate::automutate::worker::{
     WorkerInfoRequest, WorkerInfoResponse, worker_agent_client::WorkerAgentClient,
 };
 use crate::dispatch::{
-    ArtifactSender, JobId, RemoteRunResult, RunId, RunPool, TargetId, VMExecutor, VMInfo, WorkerId,
-    WorkerInfo,
+    ArtifactSender, JobId, RemoteRunResult, RunId, RunPool, TargetId, VMExecutor, VMInfo,
 };
 
 // ============================================================================
@@ -449,29 +448,25 @@ impl TargetManager {
         // Create channel for results from VM (run completions)
         let (result_tx, result_rx) = mpsc::channel::<RemoteRunResult>(128);
 
-        // Get worker/VM info
-        let worker_info = {
-            let target = self
-                .targets
-                .get(id)
-                .ok_or_else(|| anyhow!("Target not found"))?;
-            WorkerInfo {
-                id: WorkerId(id.to_string()),
-                os: target.os_version.clone(),
-                capabilities: target.capabilities.clone(),
-            }
-        };
+        // Oneshot channel: stream_handler sends VMInfo once registration arrives
+        let (reg_tx, reg_rx) = oneshot::channel::<VMInfo>();
 
-        let vm_info = VMInfo::from(&worker_info);
-
-        // Spawn stream handler
+        // Spawn stream handler (passes reg_tx for registration signal)
         let target_id = TargetId::from(id);
         let events_tx = self.events_tx.clone();
         let targets = self.targets.clone();
         let result_tx_clone = result_tx.clone();
 
         tokio::spawn(async move {
-            Self::stream_handler(target_id, incoming, events_tx, targets, result_tx_clone).await;
+            Self::stream_handler(
+                target_id,
+                incoming,
+                events_tx,
+                targets,
+                result_tx_clone,
+                Some(reg_tx),
+            )
+            .await;
         });
 
         // Create artifact sender
@@ -480,22 +475,44 @@ impl TargetManager {
                 manager: Arc::clone(self),
             });
 
-        // Spawn VMExecutor task (uses shared run pool)
-        debug!(
-            "VM {} starting executor (os={}, caps={:?})",
-            id, vm_info.os, vm_info.capabilities
-        );
+        // Spawn deferred VMExecutor: waits for registration, then starts
+        let vm_id = id.to_string();
+        let manager_ref = Arc::clone(self);
+        let run_pool = Arc::clone(&self.run_pool);
+        let stream_tx_exec = stream_tx.clone();
 
-        let executor = VMExecutor::new(
-            id.to_string(),
-            vm_info,
-            Arc::clone(self),
-            Arc::clone(&self.run_pool),
-            stream_tx.clone(),
-            result_rx,
-            artifact_sender,
-        );
-        tokio::spawn(executor.run());
+        tokio::spawn(async move {
+            match tokio::time::timeout(Duration::from_secs(15), reg_rx).await {
+                Ok(Ok(vm_info)) => {
+                    debug!(
+                        "VM {} registration received (os={}, caps={:?}), starting executor",
+                        vm_id, vm_info.os, vm_info.capabilities
+                    );
+                    let executor = VMExecutor::new(
+                        vm_id,
+                        vm_info,
+                        manager_ref,
+                        run_pool,
+                        stream_tx_exec,
+                        result_rx,
+                        artifact_sender,
+                    );
+                    executor.run().await;
+                }
+                Ok(Err(_)) => {
+                    warn!(
+                        "VM {} stream closed before registration, executor not started",
+                        vm_id
+                    );
+                }
+                Err(_) => {
+                    warn!(
+                        "VM {} registration timeout (15s), executor not started",
+                        vm_id
+                    );
+                }
+            }
+        });
 
         // Spawn heartbeat
         self.spawn_heartbeat(id, stream_tx);
@@ -509,6 +526,7 @@ impl TargetManager {
         events_tx: mpsc::Sender<TargetEvent>,
         targets: DashMap<TargetId, Target>,
         result_tx: mpsc::Sender<RemoteRunResult>,
+        mut reg_tx: Option<oneshot::Sender<VMInfo>>,
     ) {
         debug!("Stream handler started for target {}", id);
         let mut registration_received = false;
@@ -528,6 +546,15 @@ impl TargetManager {
                             t.capabilities = reg.capabilities.clone();
                             t.os_version = reg.os_version.clone();
                             registration_received = true;
+
+                            // Signal VMExecutor spawn with live capabilities
+                            if let Some(tx) = reg_tx.take() {
+                                let _ = tx.send(VMInfo {
+                                    id: id.as_str().to_string(),
+                                    os: reg.os_version.clone(),
+                                    capabilities: reg.capabilities.clone(),
+                                });
+                            }
 
                             let _ = events_tx
                                 .send(TargetEvent::Connected {
