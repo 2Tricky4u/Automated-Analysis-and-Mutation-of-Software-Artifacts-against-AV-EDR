@@ -6,13 +6,12 @@
 /// 3. Events are sent via mpsc channel
 ///
 /// This test does NOT require full gRPC/Elasticsearch setup.
-use std::time::Duration;
-use tokio::sync::mpsc;
-
 #[cfg(windows)]
 #[tokio::test]
 async fn test_named_pipe_trace_collection() {
     use base64::{Engine as _, engine::general_purpose};
+    use std::time::Duration;
+    use tokio::sync::mpsc;
     use worker_agent::telemetry::collectors::trace::TraceCollector;
 
     println!("🧪 Testing named pipe trace collection...");
