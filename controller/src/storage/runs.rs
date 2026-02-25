@@ -25,22 +25,6 @@ pub struct RunIndexParams<'a> {
     pub vm_id: &'a str,
 }
 
-/// Derive detection outcome from verdict (preferred) or exit code (legacy fallback).
-///
-/// Uses `automutate_common::DetectionVerdict` as the single source of truth for
-/// verdict → (detection_outcome, detected) mapping.
-fn derive_detection_outcome(exit_code: i32, verdict: &str) -> (&'static str, bool) {
-    if let Some(v) = automutate_common::DetectionVerdict::from_verdict_str(verdict) {
-        return (v.detection_outcome(), v.is_detected());
-    }
-    // Legacy exit-code-only fallback (old workers without classifier)
-    match exit_code {
-        0 => ("FULL_EVASION", false),
-        -1 => ("KILLED_PRE_PAYLOAD", true), // conservative
-        _ => ("KILLED_PRE_PAYLOAD", true),  // no checkpoint info available
-    }
-}
-
 /// Derive trace_mode from run_type string.
 fn trace_mode_from_run_type(run_type: &str) -> &str {
     match run_type {
@@ -59,10 +43,15 @@ pub async fn index_run_result(
 ) -> anyhow::Result<()> {
     let index_name = helpers::es_index_name("runs");
 
-    let (detection_outcome, derived_detected) =
-        derive_detection_outcome(params.outcome.exit_code, &params.outcome.detection_verdict);
-    // Use the RunOutcome.detected if available, otherwise use derived
-    let detected = params.outcome.detected || derived_detected;
+    // Derive detected from verdict, falling back to exit code for legacy workers
+    let detected = if let Some(v) = automutate_common::DetectionVerdict::from_verdict_str(
+        &params.outcome.detection_verdict,
+    ) {
+        v.is_detected()
+    } else {
+        // Legacy fallback: use worker's detected boolean or exit code
+        params.outcome.detected || (params.outcome.exit_code != 0 && params.outcome.exit_code > 0)
+    };
 
     let now = helpers::now_rfc3339();
     let mut doc = json!({
@@ -79,7 +68,6 @@ pub async fn index_run_result(
         "exit_code": params.outcome.exit_code,
         "success": params.outcome.success,
         "elapsed_ms": params.outcome.elapsed_ms,
-        "detection_outcome": detection_outcome,
         "detection_verdict": params.outcome.detection_verdict,
         "last_checkpoint": params.outcome.last_checkpoint,
         "trace_mode": trace_mode_from_run_type(params.run_type),
@@ -108,8 +96,8 @@ pub async fn index_run_result(
     helpers::check_index_response(response, "run", params.run_id).await?;
 
     info!(
-        "Indexed run result {} (detected={}, outcome={})",
-        params.run_id, detected, detection_outcome
+        "Indexed run result {} (detected={}, verdict={})",
+        params.run_id, detected, params.outcome.detection_verdict
     );
     Ok(())
 }

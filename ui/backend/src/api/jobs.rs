@@ -123,6 +123,7 @@ pub struct RoundSummaryInfo {
     pub status: String,
     pub coverage_percent: f64,
     pub mutations: Vec<String>,
+    pub detection_verdict: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,6 +169,7 @@ pub struct RoundDetailResponse {
     pub coverage_total_lines: u32,
     pub coverage_executable_lines: u32,
     pub coverage_executed_lines: u32,
+    pub detection_verdict: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -178,6 +180,7 @@ pub struct RunResultInfo {
     pub exit_code: i32,
     pub outcome: String,
     pub last_checkpoint: String,
+    pub detection_verdict: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -309,6 +312,7 @@ pub async fn get_job_progress(
                     status: r.status,
                     coverage_percent: r.coverage_percent,
                     mutations: r.mutations,
+                    detection_verdict: r.detection_verdict,
                 })
                 .collect();
 
@@ -370,6 +374,7 @@ pub async fn get_round(
                     exit_code: r.exit_code,
                     outcome: r.outcome,
                     last_checkpoint: r.last_checkpoint,
+                    detection_verdict: r.detection_verdict,
                 });
 
                 let instrumented_run = round.instrumented_run.map(|r| RunResultInfo {
@@ -379,6 +384,7 @@ pub async fn get_round(
                     exit_code: r.exit_code,
                     outcome: r.outcome,
                     last_checkpoint: r.last_checkpoint,
+                    detection_verdict: r.detection_verdict,
                 });
 
                 let function_coverage: Vec<FunctionCoverageInfo> = round
@@ -425,6 +431,7 @@ pub async fn get_round(
                     coverage_total_lines: round.coverage_total_lines,
                     coverage_executable_lines: round.coverage_executable_lines,
                     coverage_executed_lines: round.coverage_executed_lines,
+                    detection_verdict: round.detection_verdict,
                 })))
             } else {
                 Err(ApiError::not_found(format!("Round {} not found", round_id)))

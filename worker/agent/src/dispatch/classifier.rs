@@ -372,26 +372,6 @@ mod tests {
     }
 
     #[test]
-    fn test_detection_outcome_strings() {
-        assert_eq!(
-            DetectionVerdict::Evasion.detection_outcome(),
-            "FULL_EVASION"
-        );
-        assert_eq!(DetectionVerdict::Detected.detection_outcome(), "DETECTED");
-        assert_eq!(DetectionVerdict::Ambiguous.detection_outcome(), "AMBIGUOUS");
-        assert_eq!(DetectionVerdict::Stalled.detection_outcome(), "STALLED");
-        assert_eq!(
-            DetectionVerdict::InfraError.detection_outcome(),
-            "INFRA_ERROR"
-        );
-        assert_eq!(
-            DetectionVerdict::MutationFailed.detection_outcome(),
-            "MUTATION_FAILED"
-        );
-        assert_eq!(DetectionVerdict::Anomaly.detection_outcome(), "ANOMALY");
-    }
-
-    #[test]
     fn test_is_detected_semantics() {
         assert!(!DetectionVerdict::Evasion.is_detected());
         assert!(DetectionVerdict::Detected.is_detected());
