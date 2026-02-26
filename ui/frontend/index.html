@@ -233,6 +233,19 @@
             font-size: 0.75rem;
         }
 
+        .form-section {
+            margin-top: 18px;
+            padding-top: 14px;
+            border-top: 1px solid #0f3460;
+        }
+        .form-section-label {
+            font-size: 0.7rem;
+            color: #667;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+        }
+
         .response-box .stat-line {
             margin: 2px 0;
         }
@@ -671,41 +684,66 @@
                             <input type="number" id="jobScCheckpoints" value="0" min="0" max="50">
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label style="margin-bottom: 8px;">Variation Strategy</label>
-                        <div class="flex-row" style="gap: 16px;">
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="radio" name="variationStrategy" value="mutation" checked onchange="toggleVariationUI()"> Mutation only</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="radio" name="variationStrategy" value="full" onchange="toggleVariationUI()"> Full (mutation + module)</label>
-                        </div>
-                        <div class="muted" style="font-size: 0.75rem; margin-top: 4px;">Mutation only: modules fixed, mutations vary. Full: both vary per round.</div>
-                    </div>
-                    <div class="form-group" id="varCategoriesGroup" style="display: none;">
-                        <label style="margin-bottom: 8px;">Variable Categories (selector varies these modules across rounds)</label>
-                        <div class="flex-row" style="flex-wrap: wrap; gap: 12px;">
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="deconditioner" checked> deconditioner</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="antiemulation"> antiemulation</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="carrier"> carrier</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="guardrail"> guardrail</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="virtualprotect"> virtualprotect</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="decoy"> decoy</label>
+                    <!-- Section: Selector Algorithm -->
+                    <div class="form-section">
+                        <div class="form-section-label">Selector Algorithm</div>
+                        <div class="form-group">
+                            <div class="flex-row" style="gap: 16px;">
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="radio" name="selectorType" value="coverage" checked> Coverage (default)</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="radio" name="selectorType" value="fuzzer"> Fuzzer (genetic)</label>
+                            </div>
+                            <div class="muted" style="font-size: 0.75rem; margin-top: 4px;">Coverage: epsilon-greedy exploration. Fuzzer: evolutionary parameter search.</div>
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label style="margin-bottom: 8px;">Mutation Targets (apply mutations only to these modules; empty = all)</label>
-                        <div class="flex-row" style="flex-wrap: wrap; gap: 12px;">
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="carrier"> carrier</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="antiemulation"> antiemulation</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="deconditioner"> deconditioner</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="guardrail"> guardrail</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="virtualprotect"> virtualprotect</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="decoy"> decoy</label>
-                            <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="main"> main</label>
+
+                    <!-- Section: Variation Strategy -->
+                    <div class="form-section">
+                        <div class="form-section-label">Variation Strategy</div>
+                        <div class="form-group">
+                            <div class="flex-row" style="gap: 16px;">
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="radio" name="variationStrategy" value="mutation" checked onchange="toggleVariationUI()"> Mutation only</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="radio" name="variationStrategy" value="full" onchange="toggleVariationUI()"> Full (mutation + module)</label>
+                            </div>
+                            <div class="muted" style="font-size: 0.75rem; margin-top: 4px;">Mutation only: modules fixed, mutations vary. Full: both vary per round.</div>
+                        </div>
+                        <div class="form-group" id="varCategoriesGroup" style="display: none;">
+                            <label style="margin-bottom: 8px;">Variable Categories (selector varies these modules across rounds)</label>
+                            <div class="flex-row" style="flex-wrap: wrap; gap: 12px;">
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="deconditioner" checked> deconditioner</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="antiemulation"> antiemulation</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="carrier"> carrier</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="guardrail"> guardrail</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="virtualprotect"> virtualprotect</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="varCategory" value="decoy"> decoy</label>
+                            </div>
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label>
-                            <input type="checkbox" id="jobStopOnEvasion"> Stop on first evasion
-                        </label>
+
+                    <!-- Section: Mutation Scope -->
+                    <div class="form-section">
+                        <div class="form-section-label">Mutation Scope</div>
+                        <div class="form-group">
+                            <label style="margin-bottom: 8px;">Mutation Targets (apply mutations only to these modules; empty = all)</label>
+                            <div class="flex-row" style="flex-wrap: wrap; gap: 12px;">
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="carrier"> carrier</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="antiemulation"> antiemulation</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="deconditioner"> deconditioner</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="guardrail"> guardrail</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="virtualprotect"> virtualprotect</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="decoy"> decoy</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="checkbox" class="mutTarget" value="main"> main</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section: Run Options -->
+                    <div class="form-section">
+                        <div class="form-section-label">Run Options</div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="jobStopOnEvasion"> Stop on first evasion
+                            </label>
+                        </div>
                     </div>
                     <button type="submit" class="btn-primary">Submit Job</button>
                 </form>
@@ -1057,6 +1095,7 @@
             responseBox.textContent = 'Submitting...';
 
             const caps = document.getElementById('jobCapabilities').value;
+            const selectorType = document.querySelector('input[name="selectorType"]:checked').value;
             const strategy = document.querySelector('input[name="variationStrategy"]:checked').value;
             const varCategories = [...document.querySelectorAll('.varCategory:checked')].map(cb => cb.value);
             const mutTargets = [...document.querySelectorAll('.mutTarget:checked')].map(cb => cb.value);
@@ -1078,6 +1117,7 @@
                 encoding: encoding || null,
                 trace_mode: document.getElementById('jobTraceMode').value || null,
                 stop_on_evasion: document.getElementById('jobStopOnEvasion').checked,
+                selector_type: selectorType,
                 variation_strategy: strategy,
                 variable_categories: strategy === 'full' ? varCategories : [],
                 mutation_targets: mutTargets,

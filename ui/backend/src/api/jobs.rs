@@ -51,6 +51,10 @@ pub struct SubmitJobRequest {
     #[serde(default)]
     pub variable_categories: Vec<String>,
 
+    /// Selector algorithm: "coverage" (default) or "fuzzer"
+    #[serde(default)]
+    pub selector_type: Option<String>,
+
     /// Variation strategy: "mutation" (default) or "full"
     #[serde(default)]
     pub variation_strategy: Option<String>,
@@ -237,6 +241,7 @@ pub async fn submit_job(
             encoding: payload.encoding,
             stop_on_evasion: payload.stop_on_evasion,
             trace_mode: payload.trace_mode,
+            selector_type: payload.selector_type,
             variable_categories: payload.variable_categories,
             variation_strategy: payload.variation_strategy,
             mutation_pool: payload.mutation_pool,
