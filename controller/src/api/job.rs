@@ -718,11 +718,20 @@ fn apply_round_correction(
         i.raw_detected = i.detected;
     }
 
-    if bool_field(round_source, "has_dryrun")
-        && let Some(b) = baseline
-    {
+    if bool_field(round_source, "has_dryrun") {
         let category = str_field(round_source, "differential_category");
-        b.detected = matches!(category.as_str(), "real_detection" | "flaky");
+
+        if matches!(category.as_str(), "mutation_failed" | "payload_failed") {
+            // Broken artifact: both runs should show not-detected
+            if let Some(b) = baseline {
+                b.detected = false;
+            }
+            if let Some(i) = instrumented {
+                i.detected = false;
+            }
+        } else if let Some(b) = baseline {
+            b.detected = matches!(category.as_str(), "real_detection" | "flaky");
+        }
     }
 }
 

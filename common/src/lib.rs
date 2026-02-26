@@ -21,6 +21,8 @@ pub enum DetectionVerdict {
     InfraError,
     /// Dry-run proved artifact broken on clean VM
     MutationFailed,
+    /// Dry-run proved the .bin payload crashed (no mutations, reached payload execution)
+    PayloadFailed,
     /// Contradictory signals (e.g. works better with AV)
     Anomaly,
 }
@@ -32,6 +34,11 @@ impl DetectionVerdict {
         matches!(self, Self::Detected | Self::Ambiguous)
     }
 
+    /// Whether this verdict represents a broken/failed artifact (not a detection).
+    pub fn is_broken(self) -> bool {
+        matches!(self, Self::MutationFailed | Self::PayloadFailed)
+    }
+
     /// Short string identifier for this verdict (used in proto/ES fields).
     pub fn as_str(self) -> &'static str {
         match self {
@@ -41,6 +48,7 @@ impl DetectionVerdict {
             Self::Stalled => "stalled",
             Self::InfraError => "infra_error",
             Self::MutationFailed => "mutation_failed",
+            Self::PayloadFailed => "payload_failed",
             Self::Anomaly => "anomaly",
         }
     }
@@ -55,6 +63,7 @@ impl DetectionVerdict {
             "stalled" => Some(Self::Stalled),
             "infra_error" => Some(Self::InfraError),
             "mutation_failed" => Some(Self::MutationFailed),
+            "payload_failed" => Some(Self::PayloadFailed),
             "anomaly" => Some(Self::Anomaly),
             // Backward compat: old strings → new variants
             "killed_pre_payload" | "killed_post_payload" => Some(Self::Detected),
@@ -70,4 +79,47 @@ impl DetectionVerdict {
 pub fn has_launched(last_checkpoint: &str) -> bool {
     let lc = last_checkpoint.to_ascii_lowercase();
     lc == "launching" || lc == "payload_executed" || lc.starts_with("sc_checkpoint")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_verdict_roundtrip() {
+        let all = [
+            DetectionVerdict::Evasion,
+            DetectionVerdict::Detected,
+            DetectionVerdict::Ambiguous,
+            DetectionVerdict::Stalled,
+            DetectionVerdict::InfraError,
+            DetectionVerdict::MutationFailed,
+            DetectionVerdict::PayloadFailed,
+            DetectionVerdict::Anomaly,
+        ];
+        for v in all {
+            let s = v.as_str();
+            let parsed = DetectionVerdict::from_verdict_str(s)
+                .unwrap_or_else(|| panic!("Failed to parse verdict string: {}", s));
+            assert_eq!(parsed, v, "Roundtrip failed for {:?} (string: {})", v, s);
+        }
+    }
+
+    #[test]
+    fn test_payload_failed_is_not_detected() {
+        assert!(!DetectionVerdict::PayloadFailed.is_detected());
+        assert!(DetectionVerdict::PayloadFailed.is_broken());
+    }
+
+    #[test]
+    fn test_mutation_failed_is_broken() {
+        assert!(!DetectionVerdict::MutationFailed.is_detected());
+        assert!(DetectionVerdict::MutationFailed.is_broken());
+    }
+
+    #[test]
+    fn test_detected_is_not_broken() {
+        assert!(DetectionVerdict::Detected.is_detected());
+        assert!(!DetectionVerdict::Detected.is_broken());
+    }
 }
