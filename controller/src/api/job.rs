@@ -109,6 +109,8 @@ pub async fn schedule_job(
     if !req.variable_categories.is_empty() {
         job.search_space.variable_categories = req.variable_categories.clone();
     }
+    job.search_space.selector =
+        crate::triage::SelectorType::from_str_or_default(&req.selector_type);
     job.search_space.strategy =
         crate::triage::VariationStrategy::from_str_or_default(&req.variation_strategy);
     if !req.mutation_pool.is_empty() {

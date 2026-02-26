@@ -402,7 +402,7 @@ impl Selector for FuzzerSelector {
 
         // Module selection (reuse shared epsilon-greedy logic)
         let (modules, mod_rationale) = match search_space.strategy {
-            VariationStrategy::Full | VariationStrategy::Fuzzer => {
+            VariationStrategy::Full => {
                 select_modules(search_space, default_modules, history, &mut |n| {
                     rng.next_usize(n)
                 })
@@ -454,7 +454,7 @@ mod tests {
 
     fn default_fuzzer_search_space() -> SearchSpace {
         SearchSpace {
-            strategy: VariationStrategy::Fuzzer,
+            strategy: VariationStrategy::Full,
             fuzzer_config: Some(FuzzerConfig {
                 population_size: 5,
                 ..Default::default()
@@ -568,7 +568,7 @@ mod tests {
         let selector = FuzzerSelector::new();
         let defaults = ModuleSelectionSpec::default();
         let ss = SearchSpace {
-            strategy: VariationStrategy::Fuzzer,
+            strategy: VariationStrategy::Full,
             fuzzer_config: Some(FuzzerConfig {
                 population_size: 3,
                 ..Default::default()
@@ -638,7 +638,7 @@ mod tests {
         let selector = FuzzerSelector::new();
         let defaults = ModuleSelectionSpec::default();
         let ss = SearchSpace {
-            strategy: VariationStrategy::Fuzzer,
+            strategy: VariationStrategy::Full,
             fuzzer_config: Some(FuzzerConfig {
                 population_size: 2,
                 param_mutation_rate: 1.0, // Always mutate params
@@ -751,7 +751,7 @@ mod tests {
         let selector = FuzzerSelector::new();
         let defaults = ModuleSelectionSpec::default();
         let ss = SearchSpace {
-            strategy: VariationStrategy::Fuzzer,
+            strategy: VariationStrategy::Full,
             fuzzer_config: Some(FuzzerConfig {
                 population_size: 3,
                 ..Default::default()
@@ -831,7 +831,7 @@ mod tests {
         let selector = FuzzerSelector::new();
         let defaults = ModuleSelectionSpec::default();
         let ss = SearchSpace {
-            strategy: VariationStrategy::Fuzzer,
+            strategy: VariationStrategy::Full,
             fuzzer_config: Some(FuzzerConfig {
                 population_size: 2,
                 structural_mutation_rate: 1.0, // Always mutate structure
