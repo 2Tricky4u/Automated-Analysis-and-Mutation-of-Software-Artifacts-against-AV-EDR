@@ -426,7 +426,7 @@ impl Selector for CoverageSelector {
         }
 
         match search_space.strategy {
-            VariationStrategy::MutationOnly | VariationStrategy::Fuzzer => {
+            VariationStrategy::MutationOnly => {
                 self.select_mutations(search_space, default_modules, history)
             }
             VariationStrategy::Full => self.select_full(search_space, default_modules, history),

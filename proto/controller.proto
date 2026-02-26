@@ -134,6 +134,7 @@ message JobRequest {
   repeated string mutation_targets = 16;      // Module names to apply mutations to (empty = all)
   repeated string fixed_mutations = 17;       // Always applied after round 1 (empty in request = keep default)
   uint32 sc_checkpoint_count = 18;             // INT3 shellcode checkpoints (0 = disabled, default)
+  string selector_type = 19;                   // "coverage" (default) or "fuzzer"
 }
 
 message JobResponse {

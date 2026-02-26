@@ -27,6 +27,34 @@ pub struct Selection {
     pub rationale: String,
 }
 
+/// Which selector algorithm picks mutations.
+///
+/// - `Coverage` (default): epsilon-greedy over variants using evasion scores
+/// - `Fuzzer`: evolutionary/genetic algorithm with parameter variation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum SelectorType {
+    #[default]
+    Coverage,
+    Fuzzer,
+}
+
+impl SelectorType {
+    pub fn from_str_or_default(s: &str) -> Self {
+        match s {
+            "fuzzer" => Self::Fuzzer,
+            _ => Self::Coverage,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Coverage => "coverage",
+            Self::Fuzzer => "fuzzer",
+        }
+    }
+}
+
 /// Variation strategy for the selector.
 ///
 /// - `MutationOnly` (default): modules stay fixed, mutations vary per round
@@ -36,15 +64,12 @@ pub enum VariationStrategy {
     #[default]
     MutationOnly,
     Full,
-    /// Evolutionary mutation exploration with parameter variation.
-    Fuzzer,
 }
 
 impl VariationStrategy {
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "full" => Self::Full,
-            "fuzzer" => Self::Fuzzer,
             _ => Self::MutationOnly,
         }
     }
@@ -54,7 +79,6 @@ impl VariationStrategy {
         match self {
             Self::MutationOnly => "mutation",
             Self::Full => "full",
-            Self::Fuzzer => "fuzzer",
         }
     }
 }
@@ -62,7 +86,10 @@ impl VariationStrategy {
 /// Which module categories the selector may vary + mutation exploration config.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchSpace {
-    /// Variation strategy: MutationOnly (default), Full, or Fuzzer
+    /// Which selector algorithm to use: Coverage (default) or Fuzzer.
+    #[serde(default)]
+    pub selector: SelectorType,
+    /// Variation strategy: MutationOnly (default) or Full.
     #[serde(default)]
     pub strategy: VariationStrategy,
     /// Module categories to vary (used in Full mode)
@@ -118,6 +145,7 @@ fn default_mutation_pool() -> Vec<String> {
 impl Default for SearchSpace {
     fn default() -> Self {
         Self {
+            selector: SelectorType::Coverage,
             strategy: VariationStrategy::MutationOnly,
             variable_categories: vec!["deconditioner".to_string()],
             mutation_pool: default_mutation_pool(),
