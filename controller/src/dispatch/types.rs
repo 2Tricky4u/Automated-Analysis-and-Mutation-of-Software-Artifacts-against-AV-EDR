@@ -337,6 +337,10 @@ pub enum DifferentialCategory {
     InstrumentationArtifact,
     Flaky,
     Evasion,
+    /// Dryrun crash — artifact broken (has mutations, or no mutations + didn't launch)
+    MutationFailed,
+    /// Dryrun crash — .bin payload broken (no mutations, reached payload execution)
+    PayloadFailed,
 }
 
 impl DifferentialCategory {
@@ -367,6 +371,8 @@ impl DifferentialCategory {
             Self::InstrumentationArtifact => "instrumentation_artifact",
             Self::Flaky => "flaky",
             Self::Evasion => "evasion",
+            Self::MutationFailed => "mutation_failed",
+            Self::PayloadFailed => "payload_failed",
         }
     }
 }
@@ -600,8 +606,9 @@ impl RoundAgg {
         let has_dryrun = self.dryrun.is_some();
 
         // Compute authoritative verdict using dry-run if available
+        let has_mutations = !self.spec.mutations.is_empty();
         let effective_verdict = if let Some(dryrun) = &self.dryrun {
-            override_with_dryrun(dryrun, baseline)
+            override_with_dryrun(dryrun, baseline, has_mutations)
         } else if !baseline.detection_verdict.is_empty() {
             // No dry-run: use worker's provisional verdict string
             DetectionVerdict::from_verdict_str(&baseline.detection_verdict)
@@ -615,18 +622,28 @@ impl RoundAgg {
             }
         };
 
-        let effective_baseline_detected = effective_verdict.is_detected();
+        // Short-circuit for broken artifacts: skip differential computation entirely
+        let (category, detected, behavior_match, evasion_score) = if effective_verdict.is_broken() {
+            let cat = match effective_verdict {
+                DetectionVerdict::PayloadFailed => DifferentialCategory::PayloadFailed,
+                _ => DifferentialCategory::MutationFailed,
+            };
+            (cat, false, false, 0.0)
+        } else {
+            let effective_baseline_detected = effective_verdict.is_detected();
 
-        // Differential category from CLAUDE.md Section 5
-        let category =
-            DifferentialCategory::from_runs(effective_baseline_detected, instrumented.detected);
-        let detected = category.is_detected();
+            // Differential category from CLAUDE.md Section 5
+            let cat =
+                DifferentialCategory::from_runs(effective_baseline_detected, instrumented.detected);
+            let det = cat.is_detected();
 
-        // Behavior match: exit codes agree AND detected status agrees
-        let behavior_match = baseline.exit_code == instrumented.exit_code
-            && effective_baseline_detected == instrumented.detected;
+            // Behavior match: exit codes agree AND detected status agrees
+            let bm = baseline.exit_code == instrumented.exit_code
+                && effective_baseline_detected == instrumented.detected;
 
-        let evasion_score = self.compute_evasion_score(baseline, instrumented, category);
+            let es = self.compute_evasion_score(baseline, instrumented, cat);
+            (cat, det, bm, es)
+        };
 
         Some(RoundSummary {
             round_id: self.spec.id.clone(),
@@ -675,6 +692,7 @@ impl RoundAgg {
             DifferentialCategory::InstrumentationArtifact => 0.5 + 0.2 * survival_ratio,
             DifferentialCategory::Flaky => 0.3 * survival_ratio,
             DifferentialCategory::Evasion => 0.6 + 0.2 * payload_reached + 0.2 * behavior_match_val,
+            DifferentialCategory::MutationFailed | DifferentialCategory::PayloadFailed => 0.0,
         }
     }
 }
@@ -684,7 +702,9 @@ impl RoundAgg {
 /// This tree never returns `Ambiguous` — dry-run always resolves ambiguity.
 ///
 /// Decision tree:
-///  1. Dryrun nonzero AND not timeout           → MutationFailed
+///  1. Dryrun nonzero AND not timeout:
+///     - no mutations AND has_launched(dryrun)    → PayloadFailed
+///     - otherwise                                → MutationFailed
 ///  2. Dryrun timeout AND !has_launched(dryrun)  → MutationFailed
 ///  3. Dryrun clean AND baseline clean           → Evasion
 ///  4. Dryrun clean AND baseline nonzero         → Detected
@@ -695,7 +715,11 @@ impl RoundAgg {
 ///     baseline != 0                              → Detected
 ///  8. Same nonzero exit code                    → InfraError
 ///  9. Different nonzero exit codes              → Detected
-fn override_with_dryrun(dryrun: &RunOutcome, baseline: &RunOutcome) -> DetectionVerdict {
+fn override_with_dryrun(
+    dryrun: &RunOutcome,
+    baseline: &RunOutcome,
+    has_mutations: bool,
+) -> DetectionVerdict {
     let dr_timeout = dryrun.exit_code == -3; // EXIT_TIMEOUT
     let bl_timeout = baseline.exit_code == -3;
     let dr_clean = dryrun.exit_code == 0;
@@ -705,6 +729,10 @@ fn override_with_dryrun(dryrun: &RunOutcome, baseline: &RunOutcome) -> Detection
 
     // 1. Dryrun nonzero AND not timeout → artifact broken on clean VM
     if !dr_clean && !dr_timeout {
+        // No mutations + reached payload execution → the .bin payload itself is bad
+        if !has_mutations && dr_launched {
+            return DetectionVerdict::PayloadFailed;
+        }
         return DetectionVerdict::MutationFailed;
     }
 
@@ -1552,6 +1580,8 @@ mod tests {
         assert!(!DifferentialCategory::InstrumentationArtifact.is_detected());
         assert!(!DifferentialCategory::Flaky.is_detected());
         assert!(!DifferentialCategory::Evasion.is_detected());
+        assert!(!DifferentialCategory::MutationFailed.is_detected());
+        assert!(!DifferentialCategory::PayloadFailed.is_detected());
     }
 
     #[test]
@@ -1560,6 +1590,8 @@ mod tests {
         assert!(!DifferentialCategory::InstrumentationArtifact.is_trustworthy());
         assert!(!DifferentialCategory::Flaky.is_trustworthy());
         assert!(DifferentialCategory::Evasion.is_trustworthy());
+        assert!(!DifferentialCategory::MutationFailed.is_trustworthy());
+        assert!(!DifferentialCategory::PayloadFailed.is_trustworthy());
     }
 
     #[test]
@@ -1574,6 +1606,14 @@ mod tests {
         );
         assert_eq!(DifferentialCategory::Flaky.as_str(), "flaky");
         assert_eq!(DifferentialCategory::Evasion.as_str(), "evasion");
+        assert_eq!(
+            DifferentialCategory::MutationFailed.as_str(),
+            "mutation_failed"
+        );
+        assert_eq!(
+            DifferentialCategory::PayloadFailed.as_str(),
+            "payload_failed"
+        );
     }
 
     #[test]
@@ -1694,6 +1734,127 @@ mod tests {
         assert!(quick_kill.evasion_score < 0.05);
         // Slow kill: 0.4 * (100000/120000) ≈ 0.333
         assert!(slow_kill.evasion_score > 0.3);
+    }
+
+    // ── Dryrun crash / PayloadFailed tests ─────────────────────────────────
+
+    /// Helper to build a RoundAgg with dryrun for testing broken-artifact paths.
+    fn make_dryrun_crash_agg(
+        mutations: Vec<MutationSpec>,
+        dryrun_exit_code: i32,
+        dryrun_last_checkpoint: &str,
+    ) -> RoundAgg {
+        RoundAgg {
+            spec: RoundSpec {
+                id: RoundId("r-dr".into()),
+                job_id: JobId("j1".into()),
+                round_number: 1,
+                mutations,
+                modules: ModuleSelectionSpec::default(),
+            },
+            baseline_run_id: RunId("b".into()),
+            instrumented_run_id: RunId("i".into()),
+            baseline: Some(RunOutcome {
+                detected: false,
+                exit_code: -2,
+                error: None,
+                success: false,
+                elapsed_ms: 5_000.0,
+                detection_verdict: String::new(),
+                last_checkpoint: String::new(),
+            }),
+            instrumented: Some(RunOutcome {
+                detected: true,
+                exit_code: -2,
+                error: None,
+                success: false,
+                elapsed_ms: 5_000.0,
+                detection_verdict: String::new(),
+                last_checkpoint: String::new(),
+            }),
+            baseline_vm_id: String::new(),
+            instrumented_vm_id: String::new(),
+            started_at: SystemTime::now(),
+            timeout_ms: 120_000,
+            assembled_source: None,
+            baseline_artifact_path: PathBuf::new(),
+            instrumented_artifact_path: PathBuf::new(),
+            dryrun_run_id: RunId("dryrun".into()),
+            dryrun: Some(RunOutcome {
+                detected: false,
+                exit_code: dryrun_exit_code,
+                error: None,
+                success: false,
+                elapsed_ms: 3_000.0,
+                detection_verdict: String::new(),
+                last_checkpoint: dryrun_last_checkpoint.to_string(),
+            }),
+            dryrun_vm_id: String::new(),
+            dryrun_deadline: None,
+        }
+    }
+
+    #[test]
+    fn test_dryrun_crash_with_mutations_gives_mutation_failed() {
+        // Dryrun exits with access violation, has mutations → MutationFailed
+        let agg = make_dryrun_crash_agg(
+            vec![MutationSpec {
+                id: "ast.string_xor".into(),
+                params: None,
+            }],
+            -1073741819, // 0xC0000005 ACCESS_VIOLATION
+            "",
+        );
+
+        let summary = agg.to_summary().unwrap();
+        assert_eq!(
+            summary.differential_category,
+            DifferentialCategory::MutationFailed,
+        );
+        assert!(!summary.detected);
+        assert!(!summary.behavior_match);
+        assert_eq!(summary.evasion_score, 0.0);
+        assert_eq!(summary.detection_verdict, "mutation_failed");
+    }
+
+    #[test]
+    fn test_dryrun_crash_no_mutations_launched_gives_payload_failed() {
+        // Dryrun exits with access violation, NO mutations, reached payload_executed → PayloadFailed
+        let agg = make_dryrun_crash_agg(
+            vec![], // no mutations
+            -1073741819,
+            "payload_executed",
+        );
+
+        let summary = agg.to_summary().unwrap();
+        assert_eq!(
+            summary.differential_category,
+            DifferentialCategory::PayloadFailed,
+        );
+        assert!(!summary.detected);
+        assert!(!summary.behavior_match);
+        assert_eq!(summary.evasion_score, 0.0);
+        assert_eq!(summary.detection_verdict, "payload_failed");
+    }
+
+    #[test]
+    fn test_dryrun_crash_no_mutations_not_launched_gives_mutation_failed() {
+        // Dryrun exits with access violation, NO mutations, empty checkpoint → MutationFailed
+        // (loader itself is broken, not the payload)
+        let agg = make_dryrun_crash_agg(
+            vec![], // no mutations
+            -1073741819,
+            "", // didn't reach launch
+        );
+
+        let summary = agg.to_summary().unwrap();
+        assert_eq!(
+            summary.differential_category,
+            DifferentialCategory::MutationFailed,
+        );
+        assert!(!summary.detected);
+        assert_eq!(summary.evasion_score, 0.0);
+        assert_eq!(summary.detection_verdict, "mutation_failed");
     }
 
     #[test]
