@@ -1350,7 +1350,7 @@ impl ArtifactBuilder {
             let mut built_with_source = built;
             built_with_source.source_path = temp_source;
 
-            let instrumented = self
+            let mut instrumented = self
                 .apply_instrumentation(
                     built_with_source,
                     trace_mode,
@@ -1359,6 +1359,34 @@ impl ArtifactBuilder {
                 .await?;
 
             let _ = tokio::fs::remove_file(&instrumented.source_path).await;
+
+            // Re-apply binary mutations to the instrumented binary.
+            // apply_instrumentation() re-compiles from source, producing a
+            // fresh PE without the binary-level transforms (size_pad,
+            // resource_inject, timestamp, etc.) that were applied to the
+            // baseline in Step 5b.
+            if !binary_mutations.is_empty() {
+                let pe_bytes = tokio::fs::read(&instrumented.output_path)
+                    .await
+                    .context("Failed to read instrumented PE for binary mutations")?;
+
+                let mutator = BinaryMutator::new(pe_bytes);
+                let (mutated_pe, binary_applied) = mutator
+                    .apply(&binary_mutations)
+                    .context("Binary mutations on instrumented artifact failed")?;
+
+                debug!(
+                    "Re-applied {} binary mutations to instrumented artifact: {:?}",
+                    binary_applied.len(),
+                    binary_applied
+                );
+
+                tokio::fs::write(&instrumented.output_path, &mutated_pe)
+                    .await
+                    .context("Failed to write binary-mutated instrumented PE")?;
+
+                instrumented.size_bytes = mutated_pe.len() as u64;
+            }
 
             Ok(instrumented)
         } else {
