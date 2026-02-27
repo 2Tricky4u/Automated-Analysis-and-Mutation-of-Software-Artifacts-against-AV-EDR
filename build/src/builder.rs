@@ -1420,10 +1420,22 @@ impl ArtifactBuilder {
                     binary_applied
                 );
 
-                tokio::fs::write(&instrumented.output_path, &mutated_pe)
+                // Recompute SHA256 and rename file to match new content
+                let new_id = self.compute_sha256(&mutated_pe);
+                let new_path = self.config.output_dir.join(format!("{}.exe", new_id));
+
+                tokio::fs::write(&new_path, &mutated_pe)
                     .await
                     .context("Failed to write binary-mutated instrumented PE")?;
 
+                // Remove the old file (pre-binary-mutation hash name)
+                if new_path != instrumented.output_path {
+                    let _ = tokio::fs::remove_file(&instrumented.output_path).await;
+                }
+
+                instrumented.output_path = new_path;
+                instrumented.artifact_id = new_id.clone();
+                instrumented.sha256 = new_id;
                 instrumented.size_bytes = mutated_pe.len() as u64;
             }
 
