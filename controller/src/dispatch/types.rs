@@ -608,7 +608,12 @@ impl RoundAgg {
         // Compute authoritative verdict using dry-run if available
         let has_mutations = !self.spec.mutations.is_empty();
         let effective_verdict = if let Some(dryrun) = &self.dryrun {
-            override_with_dryrun(dryrun, baseline, has_mutations)
+            override_with_dryrun(
+                dryrun,
+                baseline,
+                has_mutations,
+                &instrumented.last_checkpoint,
+            )
         } else if !baseline.detection_verdict.is_empty() {
             // No dry-run: use worker's provisional verdict string
             DetectionVerdict::from_verdict_str(&baseline.detection_verdict)
@@ -701,15 +706,20 @@ impl RoundAgg {
 ///
 /// This tree never returns `Ambiguous` — dry-run always resolves ambiguity.
 ///
+/// `instrumented_checkpoint`: the instrumented run's `last_checkpoint` — the
+/// authoritative source for how far the artifact progressed. The dryrun is a
+/// bare process (no telemetry, no RedEDR) so it only provides an exit code.
+/// The baseline may lack checkpoint telemetry too if AV kills early.
+///
 /// Decision tree:
 ///  1. Dryrun nonzero AND not timeout:
-///     - no mutations AND has_launched(dryrun)    → PayloadFailed
+///     - no mutations AND launched                → PayloadFailed
 ///     - otherwise                                → MutationFailed
-///  2. Dryrun timeout AND !has_launched(dryrun)  → MutationFailed
-///  3. Dryrun clean AND baseline clean           → Evasion
-///  4. Dryrun clean AND baseline nonzero         → Detected
-///  5. Both timeout AND has_launched(baseline)   → Evasion
-///  6. Both timeout AND !has_launched(baseline)  → MutationFailed
+///  2. Dryrun timeout AND !launched               → MutationFailed
+///  3. Dryrun clean AND baseline clean            → Evasion
+///  4. Dryrun clean AND baseline nonzero          → Detected
+///  5. Both timeout AND launched                  → Evasion
+///  6. Both timeout AND !launched                 → MutationFailed
 ///  7. Dryrun timeout+launched AND baseline !timeout:
 ///     baseline == 0                              → Anomaly
 ///     baseline != 0                              → Detected
@@ -719,25 +729,28 @@ fn override_with_dryrun(
     dryrun: &RunOutcome,
     baseline: &RunOutcome,
     has_mutations: bool,
+    instrumented_checkpoint: &str,
 ) -> DetectionVerdict {
     let dr_timeout = dryrun.exit_code == -3; // EXIT_TIMEOUT
     let bl_timeout = baseline.exit_code == -3;
     let dr_clean = dryrun.exit_code == 0;
     let bl_clean = baseline.exit_code == 0;
-    let dr_launched = has_launched(&dryrun.last_checkpoint);
-    let bl_launched = has_launched(&baseline.last_checkpoint);
+
+    // The instrumented run is the single source of truth for checkpoint progress.
+    // Dryrun has no telemetry; baseline may lack it if AV kills early.
+    let launched = has_launched(instrumented_checkpoint);
 
     // 1. Dryrun nonzero AND not timeout → artifact broken on clean VM
     if !dr_clean && !dr_timeout {
         // No mutations + reached payload execution → the .bin payload itself is bad
-        if !has_mutations && dr_launched {
+        if !has_mutations && launched {
             return DetectionVerdict::PayloadFailed;
         }
         return DetectionVerdict::MutationFailed;
     }
 
     // 2. Dryrun timeout AND didn't reach Launching → stalled loader = broken artifact
-    if dr_timeout && !dr_launched {
+    if dr_timeout && !launched {
         return DetectionVerdict::MutationFailed;
     }
 
@@ -753,7 +766,7 @@ fn override_with_dryrun(
 
     // 5-6. Both timeout
     if dr_timeout && bl_timeout {
-        return if bl_launched {
+        return if launched {
             // 5. Payload runs forever with or without AV
             DetectionVerdict::Evasion
         } else {
@@ -763,7 +776,7 @@ fn override_with_dryrun(
     }
 
     // 7. Dryrun timeout+launched AND baseline not timeout
-    if dr_timeout && dr_launched && !bl_timeout {
+    if dr_timeout && launched && !bl_timeout {
         return if bl_clean {
             // Finishes with AV but stalls without? Contradictory.
             DetectionVerdict::Anomaly
@@ -1739,10 +1752,14 @@ mod tests {
     // ── Dryrun crash / PayloadFailed tests ─────────────────────────────────
 
     /// Helper to build a RoundAgg with dryrun for testing broken-artifact paths.
+    ///
+    /// `instrumented_last_checkpoint`: checkpoint from the instrumented run (the
+    /// authoritative source for how far the artifact progressed). Dryrun has no
+    /// telemetry — it only provides an exit code.
     fn make_dryrun_crash_agg(
         mutations: Vec<MutationSpec>,
         dryrun_exit_code: i32,
-        dryrun_last_checkpoint: &str,
+        instrumented_last_checkpoint: &str,
     ) -> RoundAgg {
         RoundAgg {
             spec: RoundSpec {
@@ -1770,7 +1787,7 @@ mod tests {
                 success: false,
                 elapsed_ms: 5_000.0,
                 detection_verdict: String::new(),
-                last_checkpoint: String::new(),
+                last_checkpoint: instrumented_last_checkpoint.to_string(),
             }),
             baseline_vm_id: String::new(),
             instrumented_vm_id: String::new(),
@@ -1787,7 +1804,7 @@ mod tests {
                 success: false,
                 elapsed_ms: 3_000.0,
                 detection_verdict: String::new(),
-                last_checkpoint: dryrun_last_checkpoint.to_string(),
+                last_checkpoint: String::new(), // dryrun has no telemetry
             }),
             dryrun_vm_id: String::new(),
             dryrun_deadline: None,
