@@ -111,9 +111,9 @@ pub struct SearchSpace {
 
 fn default_fixed_mutations() -> Vec<String> {
     vec![
-        "llvm.nop_insert",
+        //"llvm.nop_insert",
         "llvm.opaque_predicate",
-        "llvm.junk_block",
+        //"llvm.junk_block",
         "binary.rich_header",
         "binary.import_pad",
         "binary.resource_inject",
