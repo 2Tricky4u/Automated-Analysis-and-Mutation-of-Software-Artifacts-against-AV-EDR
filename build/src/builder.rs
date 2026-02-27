@@ -800,33 +800,49 @@ impl ArtifactBuilder {
             .await
             .context("Failed to read instrumented artifact")?;
 
-        // Sanity check: instrumented binary should not be drastically smaller.
-        // Small differences are expected — the baseline is built via clang -O2 with
-        // /OPT:REF,ICF while the instrumented path uses -O0 IR → obj → lld-link
-        // without those linker optimizations, so section alignment/padding can differ.
-        let size_ratio = instrumented_data.len() as f64 / built.size_bytes as f64;
-        if size_ratio < 0.50 {
-            error!(
-                "Instrumented binary ({} bytes) is {:.0}% of original ({} bytes) — likely a build error.",
-                instrumented_data.len(),
-                size_ratio * 100.0,
-                built.size_bytes
+        // Sanity check: instrumented binary should not be drastically smaller
+        // than the reference (same source, same mutations, no instrumentation).
+        // built.size_bytes is set by the caller to a fair reference:
+        //   - 0          → LLVM mutations in baseline make ratio meaningless; skip
+        //   - >0         → pre-binary-mutation size (same source, no IR/binary mutations)
+        if built.size_bytes == 0 {
+            // LLVM mutations inflate baseline; only verify minimum viable size
+            if instrumented_data.len() < 10_000 {
+                anyhow::bail!(
+                    "Instrumented binary is suspiciously small ({} bytes). Check linker output.",
+                    instrumented_data.len()
+                );
+            }
+            debug!(
+                "Instrumented binary: {} bytes (ratio check skipped — \
+                 LLVM mutations make baseline comparison invalid)",
+                instrumented_data.len()
             );
-            error!("Instrumented path: {:?}", instrumented_exe_path);
-            error!("Original path: {:?}", built.output_path);
-            anyhow::bail!(
-                "Instrumented binary is suspiciously small ({} bytes vs {} bytes original, {:.0}%). Check linker output.",
-                instrumented_data.len(),
-                built.size_bytes,
-                size_ratio * 100.0
-            );
-        } else if size_ratio < 0.95 {
-            warn!(
-                "Instrumented binary ({} bytes) is slightly smaller than original ({} bytes, {:.1}%). Pipeline differences likely.",
-                instrumented_data.len(),
-                built.size_bytes,
-                size_ratio * 100.0
-            );
+        } else {
+            let size_ratio = instrumented_data.len() as f64 / built.size_bytes as f64;
+            if size_ratio < 0.50 {
+                error!(
+                    "Instrumented binary ({} bytes) is {:.0}% of reference ({} bytes) — likely a build error.",
+                    instrumented_data.len(),
+                    size_ratio * 100.0,
+                    built.size_bytes
+                );
+                error!("Instrumented path: {:?}", instrumented_exe_path);
+                anyhow::bail!(
+                    "Instrumented binary is suspiciously small ({} bytes vs {} bytes reference, {:.0}%). Check linker output.",
+                    instrumented_data.len(),
+                    built.size_bytes,
+                    size_ratio * 100.0
+                );
+            } else if size_ratio < 0.95 {
+                warn!(
+                    "Instrumented binary ({} bytes) vs reference ({} bytes, {:.1}%). \
+                     Pipeline differences likely (clang -O2 vs IR path).",
+                    instrumented_data.len(),
+                    built.size_bytes,
+                    size_ratio * 100.0
+                );
+            }
         }
 
         // Finalize: hash, rename, metadata
@@ -842,7 +858,7 @@ impl ArtifactBuilder {
             .context("Failed to move instrumented artifact to output directory")?;
 
         info!(
-            "Instrumented artifact built: {} ({} bytes, original was {} bytes) -> {:?}",
+            "Instrumented artifact built: {} ({} bytes, reference {} bytes) -> {:?}",
             instrumented_id,
             instrumented_data.len(),
             built.size_bytes,
@@ -1280,6 +1296,14 @@ impl ArtifactBuilder {
             let _ = tokio::fs::remove_file(&temp_source).await;
         }
 
+        // Save pre-binary-mutation size (for instrumentation sanity check below).
+        // This is the size of the binary with AST mutations (and possibly IR mutations)
+        // but BEFORE binary-level transforms (size_pad, import_pad, etc.).
+        let pre_binary_mutation_size = tokio::fs::metadata(&temp_output)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+
         // Step 5b: Apply binary mutations (post-link PE transforms)
         let binary_mutations: Vec<&mutator::MutationSpec> = mutations
             .iter()
@@ -1349,6 +1373,21 @@ impl ArtifactBuilder {
 
             let mut built_with_source = built;
             built_with_source.source_path = temp_source;
+
+            // Set a fair reference size for the instrumentation sanity check.
+            // The instrumented binary has AST mutations only (no IR mutations,
+            // no binary mutations at check time). The reference must match.
+            if has_llvm_mutations {
+                // IR mutations inflate the baseline size; the instrumented binary
+                // intentionally omits them (differential protocol). No fair
+                // comparison possible without an extra build — use 0 to signal
+                // "skip ratio check, verify minimum viable size only".
+                built_with_source.size_bytes = 0;
+            } else {
+                // Same source, no IR mutations in either path.
+                // Pre-binary-mutation size is the correct reference.
+                built_with_source.size_bytes = pre_binary_mutation_size;
+            }
 
             let mut instrumented = self
                 .apply_instrumentation(
