@@ -4,7 +4,7 @@
  */
 #include "../header/definitions.h"
 
-void decoy() {
+FORCE_INLINE void decoy() {
     // use CreateProcess for stealth or stealthier launch methods?
     WinExec("C:\\windows\\system32\\notepad.exe", SW_SHOW);
 }

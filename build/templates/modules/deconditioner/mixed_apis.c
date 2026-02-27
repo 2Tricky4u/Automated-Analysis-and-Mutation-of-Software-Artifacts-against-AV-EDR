@@ -21,7 +21,7 @@
 #endif
 
 // Read a few bytes from a legitimate system file to inject benign file I/O tokens
-static void do_benign_file_io(void) {
+FORCE_INLINE static void do_benign_file_io(void) {
     char read_buf[64];
     DWORD bytes_read = 0;
 
@@ -42,7 +42,7 @@ static void do_benign_file_io(void) {
 }
 
 // Query a common registry key to inject benign registry tokens
-static void do_benign_registry_io(void) {
+FORCE_INLINE static void do_benign_registry_io(void) {
     HKEY hKey;
     // @MUTATE:string_splitting
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
@@ -55,7 +55,7 @@ static void do_benign_registry_io(void) {
     }
 }
 
-void deconditioner() {
+FORCE_INLINE void deconditioner() {
     DWORD old_prot;
 
     // @MUTATE:loop_mutation(fixed->GetTickCount_modulo)

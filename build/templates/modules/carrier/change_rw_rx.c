@@ -7,7 +7,7 @@
 #include "sc_checkpoint.h"
 #include <stdio.h>
 
-int carrier() {
+FORCE_INLINE int carrier() {
     DWORD result;
     char *dest = (char*)supermega_payload; // defined in payload.h
 

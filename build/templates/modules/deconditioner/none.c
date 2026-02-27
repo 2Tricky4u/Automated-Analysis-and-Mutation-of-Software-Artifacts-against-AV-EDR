@@ -4,6 +4,6 @@
  */
 #include "../header/definitions.h"
 
-void deconditioner() {
+FORCE_INLINE void deconditioner() {
     return;
 }
