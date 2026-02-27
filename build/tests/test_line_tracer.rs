@@ -412,3 +412,284 @@ fn test_trace_preserves_code_semantics() {
         }
     }
 }
+
+// ── Deferred loop tracing tests ─────────────────────────────────────────────
+
+#[test]
+fn test_deferred_for_loop() {
+    let source = r#"int main() {
+    for (int i = 0; i < 1000; i++) {
+        do_work();
+        int x = i;
+    }
+    return 0;
+}
+"#;
+
+    let result = inject_line_traces(source, SourceLanguage::C).unwrap();
+
+    // Loop body statements should use flag-sets, not direct trace calls
+    assert!(
+        result.contains("__seen_L"),
+        "Loop body should use deferred flag-sets"
+    );
+
+    // Deferred conditional traces should appear after the loop
+    assert!(
+        result.contains("if (__seen_L"),
+        "Deferred conditional traces should appear after loop"
+    );
+
+    // The for statement itself should still get an eager trace
+    // for, do_work (deferred), int x (deferred), return = 2 eager + 2 deferred = 4
+    let trace_count = result.matches("__trace_line_binary(\"").count();
+    assert_eq!(
+        trace_count, 4,
+        "Expected 4 trace calls (2 eager + 2 deferred conditional), got {}.\nResult:\n{}",
+        trace_count, result
+    );
+}
+
+#[test]
+fn test_deferred_while_loop() {
+    let source = r#"int main() {
+    while (1) {
+        int x = 0;
+        x++;
+    }
+    return 0;
+}
+"#;
+
+    let result = inject_line_traces(source, SourceLanguage::C).unwrap();
+
+    assert!(
+        result.contains("__seen_L"),
+        "While loop body should use deferred flag-sets"
+    );
+    assert!(
+        result.contains("if (__seen_L"),
+        "Deferred conditional traces should appear after while loop"
+    );
+
+    // while, x=0 (deferred), x++ (deferred), return = 2 eager + 2 deferred = 4
+    let trace_count = result.matches("__trace_line_binary(\"").count();
+    assert_eq!(
+        trace_count, 4,
+        "Expected 4 trace calls, got {}.\nResult:\n{}",
+        trace_count, result
+    );
+}
+
+#[test]
+fn test_deferred_do_while() {
+    let source = r#"int main() {
+    do {
+        int x = 1;
+    } while (1);
+    return 0;
+}
+"#;
+
+    let result = inject_line_traces(source, SourceLanguage::C).unwrap();
+
+    // do_statement should be traced (bug fix: was missing from is_traceable_statement)
+    // and its body should be deferred
+    assert!(
+        result.contains("__seen_L"),
+        "do-while body should use deferred flag-sets"
+    );
+    assert!(
+        result.contains("if (__seen_L"),
+        "Deferred conditional trace should appear after do-while"
+    );
+
+    // do, x=1 (deferred), return = 2 eager + 1 deferred = 3
+    let trace_count = result.matches("__trace_line_binary(\"").count();
+    assert_eq!(
+        trace_count, 3,
+        "Expected 3 trace calls, got {}.\nResult:\n{}",
+        trace_count, result
+    );
+}
+
+#[test]
+fn test_return_inside_loop_stays_eager() {
+    let source = r#"int main() {
+    for (int i = 0; i < 10; i++) {
+        int x = i;
+        if (x > 5) {
+            return 1;
+        }
+    }
+    return 0;
+}
+"#;
+
+    let result = inject_line_traces(source, SourceLanguage::C).unwrap();
+
+    // Count eager __trace_line_binary before return statements
+    // The return inside the loop should have a direct trace (not deferred)
+    let lines: Vec<&str> = result.lines().collect();
+    let mut found_eager_return_trace = false;
+    for (i, line) in lines.iter().enumerate() {
+        if line.contains("return 1;") && i > 0 {
+            // The line before return should be an eager trace call (not a flag-set)
+            if lines[i - 1].contains("__trace_line_binary(\"") {
+                found_eager_return_trace = true;
+            }
+        }
+    }
+    assert!(
+        found_eager_return_trace,
+        "return statement inside loop should have eager trace, not deferred.\nResult:\n{}",
+        result
+    );
+
+    // x = i should be deferred (flag-set, not eager trace)
+    let mut found_deferred_flag = false;
+    for (i, line) in lines.iter().enumerate() {
+        if line.contains("int x = i;") && i > 0 {
+            if lines[i - 1].contains("__seen_L") {
+                found_deferred_flag = true;
+            }
+        }
+    }
+    assert!(
+        found_deferred_flag,
+        "declaration inside loop should use deferred flag-set.\nResult:\n{}",
+        result
+    );
+}
+
+#[test]
+fn test_nested_loops_deferred() {
+    let source = r#"int main() {
+    for (int i = 0; i < 10; i++) {
+        for (int j = 0; j < 10; j++) {
+            int x = i + j;
+        }
+        int y = i;
+    }
+    return 0;
+}
+"#;
+
+    let result = inject_line_traces(source, SourceLanguage::C).unwrap();
+
+    // Both loops' bodies should use deferred tracing
+    // Inner for's body: x = i + j → deferred at inner loop end
+    // Outer for's body: inner for (deferred), y = i (deferred) → at outer loop end
+    assert!(
+        result.contains("__seen_L"),
+        "Nested loop bodies should use deferred flag-sets"
+    );
+
+    // Count deferred conditional traces
+    let deferred_count = result.matches("if (__seen_L").count();
+    assert!(
+        deferred_count >= 3,
+        "Expected at least 3 deferred traces (inner for, x, y), got {}.\nResult:\n{}",
+        deferred_count,
+        result
+    );
+
+    // outer for, inner for (deferred), x (deferred), y (deferred), return
+    let trace_count = result.matches("__trace_line_binary(\"").count();
+    assert_eq!(
+        trace_count, 5,
+        "Expected 5 trace calls (2 eager + 3 deferred), got {}.\nResult:\n{}",
+        trace_count, result
+    );
+}
+
+#[test]
+fn test_non_loop_compound_unchanged() {
+    // if/switch bodies (without an enclosing loop) should stay eager
+    let source = r#"int main() {
+    if (1) {
+        int x = 1;
+        int y = 2;
+    }
+    return 0;
+}
+"#;
+
+    let result = inject_line_traces(source, SourceLanguage::C).unwrap();
+
+    // No deferred tracing — if is not a loop
+    assert!(
+        !result.contains("__seen_L"),
+        "if body (not in a loop) should not use deferred tracing.\nResult:\n{}",
+        result
+    );
+
+    // if, x=1, y=2, return = 4 eager traces
+    let trace_count = result.matches("__trace_line_binary(\"").count();
+    assert_eq!(
+        trace_count, 4,
+        "Expected 4 eager trace calls, got {}.\nResult:\n{}",
+        trace_count, result
+    );
+}
+
+#[test]
+fn test_empty_loop_body() {
+    let source = r#"int main() {
+    for (int i = 0; i < 10; i++) {}
+    return 0;
+}
+"#;
+
+    let result = inject_line_traces(source, SourceLanguage::C).unwrap();
+
+    // No deferred flags — empty body has no traceable children
+    assert!(
+        !result.contains("__seen_L"),
+        "Empty loop body should not produce deferred flags.\nResult:\n{}",
+        result
+    );
+
+    // for, return = 2 eager traces
+    let trace_count = result.matches("__trace_line_binary(\"").count();
+    assert_eq!(
+        trace_count, 2,
+        "Expected 2 trace calls (for + return), got {}.\nResult:\n{}",
+        trace_count, result
+    );
+}
+
+#[test]
+fn test_deferred_same_line_no_redefinition() {
+    // Multiple statements on the same source line inside a loop must produce
+    // exactly one flag declaration (`static int __seen_L2 = 0;`) and one
+    // deferred trace (`if (__seen_L2) ...`), not duplicates that would cause
+    // a "redefinition of '__seen_L2'" compile error.
+    let source = "int main() {\n    for (int i = 0; i < 10; i++) { int a = 1; int b = 2; }\n    return 0;\n}\n";
+
+    let result = inject_line_traces(source, SourceLanguage::C).unwrap();
+
+    // Both `int a = 1;` and `int b = 2;` are on line 2 → one unique deferred line
+    let decl_count = result.matches("static int __seen_L2 = 0;").count();
+    assert_eq!(
+        decl_count, 1,
+        "Expected exactly 1 flag declaration for line 2, got {} (duplicate would cause compile error).\nResult:\n{}",
+        decl_count, result
+    );
+
+    let deferred_trace_count = result.matches("if (__seen_L2)").count();
+    assert_eq!(
+        deferred_trace_count, 1,
+        "Expected exactly 1 deferred trace for line 2, got {}.\nResult:\n{}",
+        deferred_trace_count, result
+    );
+
+    // The flag-set assignments inside the loop body can remain duplicated (harmless)
+    let flag_set_count = result.matches("__seen_L2 = 1;").count();
+    assert!(
+        flag_set_count >= 2,
+        "Expected at least 2 flag-set assignments inside loop body, got {}.\nResult:\n{}",
+        flag_set_count,
+        result
+    );
+}

@@ -158,6 +158,9 @@ fn visit_node(
 ) {
     // Check if this is a compound statement (block)
     if node.kind() == "compound_statement" {
+        let parent_is_loop = node.parent().map_or(false, |p| is_loop_kind(p.kind()));
+        let mut deferred_lines: Vec<usize> = Vec::new();
+
         // Iterate through child statements and inject before each
         for child in node.children(&mut node.walk()) {
             if is_traceable_statement(&child) {
@@ -167,18 +170,54 @@ fn visit_node(
                 // Calculate indentation
                 let indent = calculate_indentation(source, start_offset);
 
-                // Generate trace statement with file path and line number
-                let trace_stmt = generate_trace_statement(
-                    start_line,
-                    &indent,
+                if parent_is_loop && !is_eager_in_loop(child.kind()) {
+                    // Deferred: set a flag instead of tracing; trace after loop
+                    let flag_stmt = generate_flag_set(start_line, &indent);
+                    injections.push((start_offset, flag_stmt));
+                    deferred_lines.push(start_line);
+                } else {
+                    // Eager: trace immediately
+                    let trace_stmt = generate_trace_statement(
+                        start_line,
+                        &indent,
+                        language,
+                        file_path,
+                        format,
+                        delay_iterations,
+                    );
+                    injections.push((start_offset, trace_stmt));
+                }
+            }
+        }
+
+        // Emit flag declarations BEFORE the loop and deferred traces AFTER it.
+        // Declarations must be outside the loop's compound_statement so the
+        // names are visible at the deferred trace site after the loop.
+        if parent_is_loop && !deferred_lines.is_empty() {
+            deferred_lines.dedup(); // Remove consecutive duplicate line numbers (same-line statements)
+            let loop_node = node.parent().unwrap();
+            let loop_indent = calculate_indentation(source, loop_node.start_byte());
+
+            // Flag declarations before the loop
+            let mut declarations = String::new();
+            for line in &deferred_lines {
+                declarations.push_str(&generate_flag_declaration(*line, &loop_indent));
+            }
+            injections.push((loop_node.start_byte(), declarations));
+
+            // Deferred conditional traces after the loop
+            let mut deferred_block = String::from("\n");
+            for line in &deferred_lines {
+                deferred_block.push_str(&generate_deferred_trace(
+                    *line,
+                    &loop_indent,
                     language,
                     file_path,
                     format,
                     delay_iterations,
-                );
-
-                injections.push((start_offset, trace_stmt));
+                ));
             }
+            injections.push((loop_node.end_byte(), deferred_block));
         }
     }
 
@@ -193,20 +232,58 @@ fn visit_node(
         "preproc_ifdef" | "preproc_else" | "preproc_elif" | "preproc_if"
     ) && has_compound_statement_ancestor(node)
     {
+        let enclosing_loop = find_enclosing_loop(node);
+        let mut deferred_lines: Vec<usize> = Vec::new();
+
         for child in node.children(&mut node.walk()) {
             if is_traceable_statement(&child) {
                 let start_line = child.start_position().row + 1;
                 let start_offset = child.start_byte();
                 let indent = calculate_indentation(source, start_offset);
-                let trace_stmt = generate_trace_statement(
-                    start_line,
-                    &indent,
-                    language,
-                    file_path,
-                    format,
-                    delay_iterations,
-                );
-                injections.push((start_offset, trace_stmt));
+
+                if enclosing_loop.is_some() && !is_eager_in_loop(child.kind()) {
+                    let flag_stmt = generate_flag_set(start_line, &indent);
+                    injections.push((start_offset, flag_stmt));
+                    deferred_lines.push(start_line);
+                } else {
+                    let trace_stmt = generate_trace_statement(
+                        start_line,
+                        &indent,
+                        language,
+                        file_path,
+                        format,
+                        delay_iterations,
+                    );
+                    injections.push((start_offset, trace_stmt));
+                }
+            }
+        }
+
+        if let Some(loop_node) = enclosing_loop {
+            if !deferred_lines.is_empty() {
+                deferred_lines.dedup(); // Remove consecutive duplicate line numbers (same-line statements)
+                let loop_indent = calculate_indentation(source, loop_node.start_byte());
+
+                // Flag declarations before the loop
+                let mut declarations = String::new();
+                for line in &deferred_lines {
+                    declarations.push_str(&generate_flag_declaration(*line, &loop_indent));
+                }
+                injections.push((loop_node.start_byte(), declarations));
+
+                // Deferred conditional traces after the loop
+                let mut deferred_block = String::from("\n");
+                for line in &deferred_lines {
+                    deferred_block.push_str(&generate_deferred_trace(
+                        *line,
+                        &loop_indent,
+                        language,
+                        file_path,
+                        format,
+                        delay_iterations,
+                    ));
+                }
+                injections.push((loop_node.end_byte(), deferred_block));
             }
         }
     }
@@ -248,6 +325,7 @@ fn is_traceable_statement(node: &Node) -> bool {
             | "while_statement"
             | "for_statement"
             | "for_range_loop" // C++ range-based for
+            | "do_statement"   // do { } while(...)
             | "return_statement"
             | "break_statement"
             | "continue_statement"
@@ -258,6 +336,38 @@ fn is_traceable_statement(node: &Node) -> bool {
             | "try_statement" // C++ try-catch
             | "throw_statement" // C++ throw
     )
+}
+
+/// Check if a node kind is a loop construct
+fn is_loop_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "for_statement" | "while_statement" | "do_statement" | "for_range_loop"
+    )
+}
+
+/// Statements that must keep eager tracing even inside loops.
+/// These can transfer control past the deferred block after the loop.
+fn is_eager_in_loop(kind: &str) -> bool {
+    matches!(kind, "return_statement" | "goto_statement")
+}
+
+/// Walk up the tree from `node` to find the nearest enclosing loop.
+/// Returns the loop node if this node is inside a loop body (compound_statement
+/// whose parent is a loop kind).
+fn find_enclosing_loop<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.kind() == "compound_statement" {
+            if let Some(grandparent) = parent.parent() {
+                if is_loop_kind(grandparent.kind()) {
+                    return Some(grandparent);
+                }
+            }
+        }
+        current = parent.parent();
+    }
+    None
 }
 
 /// Calculate indentation by looking at the beginning of the line
@@ -314,6 +424,61 @@ fn generate_trace_statement(
             format!(
                 "{}__trace_line_binary(\"{}\", {}, __func__);\n{}",
                 indent, file_path, line, delay
+            )
+        }
+    }
+}
+
+/// Generate a flag declaration for deferred loop tracing.
+/// Emits `static int __seen_L{line} = 0;` — must be placed BEFORE the loop
+/// so the name is visible both inside the loop body and at the deferred
+/// trace site after the loop.
+fn generate_flag_declaration(line: usize, indent: &str) -> String {
+    format!("{}static int __seen_L{} = 0;\n", indent, line)
+}
+
+/// Generate a flag assignment for inside a loop body.
+/// Emits `__seen_L{line} = 1;` to record that the line was reached.
+fn generate_flag_set(line: usize, indent: &str) -> String {
+    format!("{}__seen_L{} = 1;\n", indent, line)
+}
+
+/// Generate a deferred conditional trace call for after a loop.
+/// Emits `if (__seen_L{line}) __trace_line_binary/b64(...)` so the trace
+/// fires at most once, regardless of how many loop iterations executed.
+fn generate_deferred_trace(
+    line: usize,
+    indent: &str,
+    _language: SourceLanguage,
+    file_path: &str,
+    format: TraceFormat,
+    delay_iterations: u32,
+) -> String {
+    let delay = if delay_iterations > 0 {
+        format!(
+            "{}volatile long __inst_wait{} = 1; for (; __inst_wait{} < {}; __inst_wait{} += 2) {{}}\n",
+            indent, line, line, delay_iterations, line
+        )
+    } else {
+        String::new()
+    };
+
+    match format {
+        TraceFormat::Base64 => {
+            let line_marker = format!("line:{}:{}:", file_path, line);
+            let encoded = base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                line_marker.as_bytes(),
+            );
+            format!(
+                "{}if (__seen_L{}) __trace_line_b64(\"YjY0{}\");\n{}",
+                indent, line, encoded, delay
+            )
+        }
+        TraceFormat::Binary => {
+            format!(
+                "{}if (__seen_L{}) __trace_line_binary(\"{}\", {}, __func__);\n{}",
+                indent, line, file_path, line, delay
             )
         }
     }
