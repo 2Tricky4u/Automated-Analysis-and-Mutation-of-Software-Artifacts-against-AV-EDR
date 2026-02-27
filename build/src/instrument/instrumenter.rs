@@ -17,7 +17,6 @@
 //!   - Efficient: ~3-5% overhead
 use anyhow::{Context, Result};
 use std::path::Path;
-use std::process::Command;
 use tracing::debug;
 
 pub struct Instrumenter {
@@ -63,17 +62,34 @@ impl Instrumenter {
             crate::TraceMode::Api | crate::TraceMode::ApiPlusBB | crate::TraceMode::All
         );
 
-        // Apply SanitizerCoverage for BB instrumentation (if needed)
-        let ir_after_bb = if needs_bb {
-            let temp_bb = output_path.with_extension("bb.ll");
-            self.inject_bb_coverage_sancov(ir_path, &temp_bb).await?;
-            temp_bb
-        } else {
-            ir_path.to_path_buf()
-        };
+        // BB instrumentation: Clang now handles SanitizerCoverage natively via
+        // -fsanitize-coverage=trace-pc (added in builder.rs). The IR already contains
+        // __sanitizer_cov_trace_pc() callbacks. No separate opt pass needed.
+        //
+        // Previous approach (opt -passes=sancov-module) broke in LLVM 17+ because the
+        // pass requires sanitize_coverage function attributes that only Clang adds.
+        if needs_bb {
+            // Count BB callbacks injected by Clang for logging
+            let ir_text = tokio::fs::read_to_string(ir_path)
+                .await
+                .context("Failed to read IR for BB callback count")?;
+            self.bb_counter = ir_text
+                .matches("call void @__sanitizer_cov_trace_pc()")
+                .count() as u32;
+            eprintln!(
+                "[INSTRUMENTER] Clang SanitizerCoverage: {} BB callbacks in IR",
+                self.bb_counter
+            );
+            if self.bb_counter == 0 {
+                tracing::warn!(
+                    "BB coverage requested but 0 callbacks found in IR. \
+                     Check that clang was invoked with -fsanitize-coverage=trace-pc"
+                );
+            }
+        }
 
-        // Read IR (either original or post-SanitizerCoverage)
-        let ir_content = tokio::fs::read_to_string(&ir_after_bb)
+        // Read IR (with BB callbacks already present if needs_bb)
+        let ir_content = tokio::fs::read_to_string(ir_path)
             .await
             .context("Failed to read IR file")?;
 
@@ -92,74 +108,9 @@ impl Instrumenter {
             .await
             .context("Failed to write instrumented IR")?;
 
-        // Clean up temporary BB IR file
-        if needs_bb {
-            let _ = tokio::fs::remove_file(&ir_after_bb).await;
-        }
-
         debug!(
             "IR-level instrumentation complete: {} BBs (via SanitizerCoverage), {} API checkpoints",
             self.bb_counter, self.line_counter
-        );
-
-        Ok(())
-    }
-
-    /// Inject BB coverage using LLVM SanitizerCoverage (industry-standard)
-    async fn inject_bb_coverage_sancov(
-        &mut self,
-        ir_path: &Path,
-        output_path: &Path,
-    ) -> Result<()> {
-        debug!("Applying LLVM SanitizerCoverage pass for BB instrumentation");
-        eprintln!("[INSTRUMENTER] Running opt with SanitizerCoverage pass");
-
-        // Use LLVM opt tool with SanitizerCoverage pass
-        // Note: Pass name changed in LLVM 13+: "sancov" → "sancov-module"
-        // For Windows COFF: use trace-pc (simple callback) instead of trace-pc-guard (requires section support)
-        let mut cmd = Command::new("opt");
-        cmd.arg("-passes=sancov-module")
-            .arg("-sanitizer-coverage-level=3") // BB-level coverage
-            .arg("-sanitizer-coverage-trace-pc") // Simple PC callback (works on Windows COFF)
-            .arg(ir_path)
-            .arg("-S") // Output as text IR
-            .arg("-o")
-            .arg(output_path);
-
-        eprintln!("[INSTRUMENTER] opt command: {:?}", cmd);
-
-        let output = cmd
-            .output()
-            .context("Failed to execute opt - ensure LLVM toolchain is in PATH")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("[INSTRUMENTER] opt failed: {}", stderr);
-            anyhow::bail!("opt (SanitizerCoverage) failed: {}", stderr);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !stdout.is_empty() {
-            debug!("opt stdout: {}", stdout);
-        }
-
-        // Count BBs from SanitizerCoverage guards (estimate)
-        let ir_content = tokio::fs::read_to_string(output_path)
-            .await
-            .context("Failed to read instrumented IR")?;
-
-        let call_count = ir_content
-            .matches("call void @__sanitizer_cov_trace_pc()")
-            .count();
-        self.bb_counter = call_count as u32;
-
-        eprintln!(
-            "[INSTRUMENTER] SanitizerCoverage injected {} BB callbacks",
-            self.bb_counter
-        );
-        debug!(
-            "SanitizerCoverage complete: {} basic blocks instrumented",
-            self.bb_counter
         );
 
         Ok(())

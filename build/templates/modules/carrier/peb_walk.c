@@ -65,7 +65,7 @@ typedef struct _PEB {
 // ====================================================================
 
 // @MUTATE:inline_assembly
-LPVOID get_module_by_name(WCHAR* module_name) {
+FORCE_INLINE LPVOID get_module_by_name(WCHAR* module_name) {
     PPEB peb = NULL;
     // @MUTATE:inline_assembly
 #if defined(_WIN64)
@@ -104,7 +104,7 @@ LPVOID get_module_by_name(WCHAR* module_name) {
 // ====================================================================
 
 // @MUTATE:inline_assembly
-LPVOID get_func_by_name(LPVOID module, char* func_name) {
+FORCE_INLINE LPVOID get_func_by_name(LPVOID module, char* func_name) {
     IMAGE_DOS_HEADER* idh = (IMAGE_DOS_HEADER*)module;
     // @MUTATE:opaque_predicate
     if (idh->e_magic != IMAGE_DOS_SIGNATURE) {
@@ -144,7 +144,7 @@ LPVOID get_func_by_name(LPVOID module, char* func_name) {
 // CARRIER IMPLEMENTATION
 // ====================================================================
 
-int carrier() {
+FORCE_INLINE int carrier() {
     // @MUTATE:timing_jitter
     // @MUTATE:benign_preamble
 

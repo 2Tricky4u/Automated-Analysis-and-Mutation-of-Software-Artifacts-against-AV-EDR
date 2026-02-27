@@ -11,7 +11,7 @@
 // @MUTATE:literal_encoding
 #define MIN_DLL_COUNT 200
 
-void antiemulation() {
+FORCE_INLINE void antiemulation() {
     WIN32_FIND_DATAA fd;
     int count = 0;
 

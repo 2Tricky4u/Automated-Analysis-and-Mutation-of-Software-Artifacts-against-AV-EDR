@@ -187,7 +187,7 @@ static void __coverage_write_internal(void) {
 
     HANDLE hFile = INVALID_HANDLE_VALUE;
     for (int i = 0; i < 3 && hFile == INVALID_HANDLE_VALUE; i++) {
-        fprintf(stderr, "[RUNTIME] Trying path: %s\n", paths[i]);
+        //fprintf(stderr, "[RUNTIME] Trying path: %s\n", paths[i]);
         hFile = CreateFileA(
             paths[i],
             GENERIC_WRITE,
@@ -198,17 +198,17 @@ static void __coverage_write_internal(void) {
             NULL
         );
         if (hFile != INVALID_HANDLE_VALUE) {
-            fprintf(stderr, "[RUNTIME] Successfully opened: %s\n", paths[i]);
+            //fprintf(stderr, "[RUNTIME] Successfully opened: %s\n", paths[i]);
         }
     }
 
     if (hFile != INVALID_HANDLE_VALUE) {
         DWORD written;
         WriteFile(hFile, __coverage_map, COVERAGE_MAP_SIZE, &written, NULL);
-        fprintf(stderr, "[RUNTIME] Wrote %lu bytes to coverage file\n", written);
+        //fprintf(stderr, "[RUNTIME] Wrote %lu bytes to coverage file\n", written);
         CloseHandle(hFile);
     } else {
-        fprintf(stderr, "[RUNTIME] ERROR: Could not create coverage file!\n");
+        //fprintf(stderr, "[RUNTIME] ERROR: Could not create coverage file!\n");
     }
 
     // Save BB metadata (which BBs exist and were hit)
@@ -273,7 +273,7 @@ void __coverage_flush(void) {
     }
     __coverage_flushed = 1;
 
-    fprintf(stderr, "[RUNTIME] Final coverage flush\n");
+    //fprintf(stderr, "[RUNTIME] Final coverage flush\n");
     __coverage_write_internal();
 }
 
@@ -297,6 +297,11 @@ static uint32_t __sancov_bb_counter = 0;
  * Simple PC trace callback (called on every BB entry)
  * This is used with -sanitizer-coverage-trace-pc mode
  * More portable than guard-based mode, works on all platforms
+ *
+ * Delegates to __coverage_bb() which handles tracking, edge coverage,
+ * AND incremental flush (writes coverage.bin every 50 BBs).
+ * Without incremental flush, coverage data is lost if the process is
+ * killed by EDR before atexit runs.
  */
 void __sanitizer_cov_trace_pc(void) {
     // Initialize coverage if needed
@@ -309,34 +314,8 @@ void __sanitizer_cov_trace_pc(void) {
     void *return_address = __builtin_return_address(0);
     uint32_t bb_id = (uint32_t)((uintptr_t)return_address & 0xFFFFFFFF);
 
-    // Track this BB
-    int found_idx = -1;
-    for (uint32_t i = 0; i < __bb_count; i++) {
-        if (__bb_ids[i] == bb_id) {
-            found_idx = (int)i;
-            break;
-        }
-    }
-
-    if (found_idx >= 0) {
-        // BB already registered, increment hit count
-        if (__bb_hit_counts[found_idx] < UINT32_MAX) {
-            __bb_hit_counts[found_idx]++;
-        }
-    } else if (__bb_count < MAX_BB_IDS) {
-        // New BB, register it
-        __bb_ids[__bb_count] = bb_id;
-        __bb_hit_counts[__bb_count] = 1;
-        __bb_count++;
-    }
-
-    // AFL-style edge coverage
-    uint32_t edge = (__coverage_prev_bb << 1) ^ bb_id;
-    uint32_t idx = edge % COVERAGE_MAP_SIZE;
-    if (__coverage_map[idx] < 255) {
-        __coverage_map[idx]++;
-    }
-    __coverage_prev_bb = bb_id;
+    // Delegate to __coverage_bb which has incremental flush logic
+    __coverage_bb(bb_id);
 }
 
 /**
@@ -355,7 +334,7 @@ void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *stop) {
     __sancov_guards_end = stop;
     __total_bbs = (uint32_t)(stop - start);
 
-    fprintf(stderr, "[RUNTIME] SanitizerCoverage initialized: %u basic blocks\n", __total_bbs);
+    //fprintf(stderr, "[RUNTIME] SanitizerCoverage initialized: %u basic blocks\n", __total_bbs);
 
     // Initialize coverage tracking
     if (!__coverage_initialized) {
@@ -368,7 +347,7 @@ void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *stop) {
         *guard = id++;
     }
 
-    fprintf(stderr, "[RUNTIME] Assigned IDs 1 to %u\n", __total_bbs);
+    //fprintf(stderr, "[RUNTIME] Assigned IDs 1 to %u\n", __total_bbs);
 }
 
 /**

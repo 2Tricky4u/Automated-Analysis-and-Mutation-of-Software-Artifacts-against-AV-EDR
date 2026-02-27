@@ -685,11 +685,21 @@ impl ArtifactBuilder {
 
         // Build extra flags for SC checkpoints when active
         let output_dir_include = format!("-I{}", self.config.output_dir.display());
-        let sc_extra_flags: Vec<&str> = if sc_checkpoint_runtime_obj.is_some() {
+        let needs_bb = matches!(
+            trace_mode,
+            crate::TraceMode::BB | crate::TraceMode::ApiPlusBB | crate::TraceMode::All
+        );
+        let mut sc_extra_flags: Vec<&str> = if sc_checkpoint_runtime_obj.is_some() {
             vec!["-DENABLE_SC_CHECKPOINTS", &output_dir_include]
         } else {
             vec![]
         };
+        // LLVM 17+: SanitizerCoverage pass requires the sanitize_coverage function
+        // attribute, which Clang only adds when -fsanitize-coverage is passed.
+        // Let Clang handle BB instrumentation natively instead of relying on opt.
+        if needs_bb {
+            sc_extra_flags.push("-fsanitize-coverage=trace-pc");
+        }
 
         self.compile_source_to_ir_with_extra(
             &source_for_compilation,
@@ -939,7 +949,11 @@ impl ArtifactBuilder {
             .arg(&minimal_runtime_obj) // ALWAYS link minimal runtime
             .arg("/out:".to_owned() + output_exe.to_str().unwrap())
             .arg("/subsystem:console")
-            .arg("/machine:x64");
+            .arg("/machine:x64")
+            // Suppress Clang sanitizer runtime dependencies embedded by
+            // -fsanitize-coverage=trace-pc.  Our instrumentation_runtime.o
+            // provides __sanitizer_cov_trace_pc() — no need for clang_rt.
+            .arg("/NODEFAULTLIB:clang_rt.ubsan_standalone-x86_64.lib");
         // Link extra object files (e.g. sc_checkpoint_runtime.o)
         for extra in extra_objs {
             cmd.arg(extra);

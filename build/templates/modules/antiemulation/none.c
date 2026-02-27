@@ -4,7 +4,7 @@
  */
 #include "../header/definitions.h"
 
-void antiemulation() {
+FORCE_INLINE void antiemulation() {
     // @MUTATE:benign_preamble
     // @MUTATE:timing_jitter
     return;

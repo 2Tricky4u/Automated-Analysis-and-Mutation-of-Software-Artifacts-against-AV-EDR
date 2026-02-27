@@ -29,7 +29,7 @@ static unsigned int xorshift32(void) {
     return x;
 }
 
-void deconditioner() {
+FORCE_INLINE void deconditioner() {
     DWORD old_prot;
 
     // @MUTATE:loop_mutation(fixed->GetTickCount_modulo)
