@@ -133,10 +133,9 @@ pub fn prepare_payload(
             if count > 0 && instrumented {
                 let stub_size = crate::template::shellcode_stub::STUB_SIZE;
                 let mut buf = payload_to_encode.to_vec();
-                let patched = crate::template::sc_checkpoints::patch_shellcode(
-                    &mut buf, count, stub_size,
-                )
-                .context("Failed to patch shellcode with INT3 checkpoints")?;
+                let patched =
+                    crate::template::sc_checkpoints::patch_shellcode(&mut buf, count, stub_size)
+                        .context("Failed to patch shellcode with INT3 checkpoints")?;
                 let header = crate::template::sc_checkpoints::generate_c_header(&patched);
                 info!(
                     "Inserted {} INT3 shellcode checkpoints (stub_size={}, body={})",
@@ -1850,7 +1849,8 @@ mod tests {
         let actual_len = parse_payload_len(&result.payload_header);
 
         assert_eq!(
-            actual_len, expected_len,
+            actual_len,
+            expected_len,
             "Instrumented PAYLOAD_LEN must be original ({}) + STUB_SIZE ({})",
             payload.len(),
             stub_size
@@ -1876,7 +1876,10 @@ mod tests {
             "Instrumented+SC PAYLOAD_LEN must be original + STUB_SIZE"
         );
 
-        let sc = result.sc_header.as_ref().expect("sc_header must be Some when sc_checkpoint_count > 0 and instrumented");
+        let sc = result
+            .sc_header
+            .as_ref()
+            .expect("sc_header must be Some when sc_checkpoint_count > 0 and instrumented");
         assert!(
             sc.contains("SC_CHECKPOINT_COUNT"),
             "sc_header must contain SC_CHECKPOINT_COUNT"

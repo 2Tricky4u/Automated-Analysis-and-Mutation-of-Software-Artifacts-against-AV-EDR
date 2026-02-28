@@ -14,7 +14,7 @@
 //! - Emit events for ES indexing
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::mpsc;
@@ -32,7 +32,7 @@ use super::channels::{JobRunResult, JobWorkerEvent, RoundCompletedData};
 use super::run_pool::RunPool;
 use super::types::{
     ArtifactRef, JobId, JobOutcome, JobSession, ModularBuildSpec, RoundAgg, RoundId, RoundSpec,
-    RunEnvelope, RunId, RunType,
+    RunEnvelope, RunId, RunOutcome, RunType,
 };
 use crate::triage::Selector;
 
@@ -56,6 +56,80 @@ const DRYRUN_GRACE_PERIOD_SECS: u64 = 5;
 
 /// Interval for checking if more rounds can be produced
 const PRODUCTION_CHECK_INTERVAL_MS: u64 = 100;
+
+// ============================================================================
+// Static Defender Scan
+// ============================================================================
+
+/// Run a Defender static file scan on the built artifact from WSL.
+///
+/// Converts the WSL path to a Windows path via `wslpath -w`, then invokes
+/// `MpCmdRun.exe -Scan -ScanType 3 -File <win_path> -DisableRemediation`.
+///
+/// Returns `true` if the artifact was statically detected (exit code == 2),
+/// `false` otherwise (clean, error, or timeout).
+async fn static_defender_scan(artifact_path: &Path) -> bool {
+    // Convert WSL path → Windows path
+    let win_path = match tokio::process::Command::new("wslpath")
+        .arg("-w")
+        .arg(artifact_path.as_os_str())
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+        Ok(output) => {
+            warn!(
+                "wslpath failed (status={}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            return false;
+        }
+        Err(e) => {
+            warn!("Failed to run wslpath: {}", e);
+            return false;
+        }
+    };
+
+    debug!("Static scan: {} → {}", artifact_path.display(), win_path);
+
+    // Run Defender scan
+    let scan_result =
+        tokio::process::Command::new("/mnt/c/Program Files/Windows Defender/MpCmdRun.exe")
+            .args([
+                "-Scan",
+                "-ScanType",
+                "3",
+                "-File",
+                &win_path,
+                "-DisableRemediation",
+            ])
+            .output()
+            .await;
+
+    match scan_result {
+        Ok(output) => {
+            let code = output.status.code().unwrap_or(-1);
+            if code == 2 {
+                info!("Static Defender scan DETECTED: {}", artifact_path.display());
+                true
+            } else {
+                debug!(
+                    "Static Defender scan clean (exit={}): {}",
+                    code,
+                    artifact_path.display()
+                );
+                false
+            }
+        }
+        Err(e) => {
+            warn!("Failed to run MpCmdRun.exe: {}", e);
+            false
+        }
+    }
+}
 
 // ============================================================================
 // JobWorker
@@ -377,6 +451,59 @@ impl JobWorker {
                 e
             })?;
 
+        // Static Defender scan: check if artifact is detected on-disk before VM dispatch
+        if static_defender_scan(&baseline_built.output_path).await {
+            info!(
+                "[JobWorker:{}] Round {} statically detected by Defender, skipping VM dispatch",
+                self.job.id, round_id
+            );
+
+            // Defer cleanup of the baseline artifact
+            self.artifact_cleanup
+                .push(baseline_built.output_path.clone());
+
+            // Build a synthetic RoundAgg with static_scan_detected flag
+            let static_agg = RoundAgg {
+                spec,
+                baseline_run_id: RunId(format!("{}-baseline", round_id.0)),
+                instrumented_run_id: RunId(format!("{}-instrumented", round_id.0)),
+                baseline: Some(RunOutcome {
+                    detected: true,
+                    exit_code: 2,
+                    error: None,
+                    success: false,
+                    elapsed_ms: 0.0,
+                    detection_verdict: "static_detection".to_string(),
+                    last_checkpoint: String::new(),
+                }),
+                instrumented: Some(RunOutcome {
+                    detected: true,
+                    exit_code: 2,
+                    error: None,
+                    success: false,
+                    elapsed_ms: 0.0,
+                    detection_verdict: "static_detection".to_string(),
+                    last_checkpoint: String::new(),
+                }),
+                baseline_vm_id: "static_scan".to_string(),
+                instrumented_vm_id: "static_scan".to_string(),
+                started_at: SystemTime::now(),
+                timeout_ms: DEFAULT_TIMEOUT_SECONDS as u64 * 1000,
+                assembled_source: None,
+                baseline_artifact_path: baseline_built.output_path.clone(),
+                instrumented_artifact_path: baseline_built.output_path,
+                dryrun_run_id: RunId(format!("{}-dryrun", round_id.0)),
+                dryrun: None,
+                dryrun_vm_id: String::new(),
+                dryrun_deadline: None,
+                static_scan_detected: true,
+            };
+
+            self.round_aggs.insert(round_id.clone(), static_agg);
+            self.finalize_round(&round_id).await;
+            return Ok(());
+        }
+
         // Build instrumented artifact (trace_mode from job config)
         let trace_mode = self.job.trace_mode.clone();
         let instrumented_built = self
@@ -477,6 +604,7 @@ impl JobWorker {
             dryrun: None,
             dryrun_vm_id: String::new(),
             dryrun_deadline: None,
+            static_scan_detected: false,
         };
         self.round_aggs.insert(round_id.clone(), agg);
 
@@ -553,23 +681,15 @@ impl JobWorker {
         // Select cached precomputed payload header (lazy init)
         let precomputed = if trace_mode == "off" || trace_mode.is_empty() {
             if self.baseline_payload.is_none() {
-                let prepared = prepare_payload(
-                    &payload,
-                    encoding,
-                    trace_mode,
-                    self.job.sc_checkpoint_count,
-                )?;
+                let prepared =
+                    prepare_payload(&payload, encoding, trace_mode, self.job.sc_checkpoint_count)?;
                 self.baseline_payload = Some(prepared);
             }
             self.baseline_payload.clone()
         } else {
             if self.instrumented_payload.is_none() {
-                let prepared = prepare_payload(
-                    &payload,
-                    encoding,
-                    trace_mode,
-                    self.job.sc_checkpoint_count,
-                )?;
+                let prepared =
+                    prepare_payload(&payload, encoding, trace_mode, self.job.sc_checkpoint_count)?;
                 self.instrumented_payload = Some(prepared);
             }
             self.instrumented_payload.clone()

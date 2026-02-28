@@ -1131,8 +1131,7 @@ fn test_precomputed_payload_matches_fresh_xor() {
     let payload = common::payload_typical();
 
     // Path A: use prepare_payload() directly
-    let prepared =
-        build::prepare_payload(&payload, EncodingType::Xor, "off", None).unwrap();
+    let prepared = build::prepare_payload(&payload, EncodingType::Xor, "off", None).unwrap();
 
     // Path B: run_pipeline encodes independently via PayloadEncoder
     let pipeline =
@@ -1153,8 +1152,7 @@ fn test_precomputed_payload_matches_fresh_xor() {
 fn test_precomputed_payload_matches_fresh_english() {
     let payload = common::payload_small();
 
-    let prepared =
-        build::prepare_payload(&payload, EncodingType::English, "off", None).unwrap();
+    let prepared = build::prepare_payload(&payload, EncodingType::English, "off", None).unwrap();
 
     let pipeline = common::run_pipeline(
         ModuleSelection {
@@ -1180,8 +1178,7 @@ fn test_precomputed_payload_matches_fresh_english() {
 fn test_precomputed_payload_with_different_modules() {
     let payload = common::payload_typical();
 
-    let prepared =
-        build::prepare_payload(&payload, EncodingType::Xor, "off", None).unwrap();
+    let prepared = build::prepare_payload(&payload, EncodingType::Xor, "off", None).unwrap();
 
     // Assemble with carrier A
     let dir = common::templates_dir();
@@ -1190,7 +1187,9 @@ fn test_precomputed_payload_with_different_modules() {
         carrier: "change_rw_rx".to_string(),
         ..ModuleSelection::new()
     };
-    let source_a = asm_a.assemble(&modules_a, &prepared.payload_header).unwrap();
+    let source_a = asm_a
+        .assemble(&modules_a, &prepared.payload_header)
+        .unwrap();
 
     // Assemble with carrier B
     let mut asm_b = build::Assembler::new(&dir).unwrap();
@@ -1198,7 +1197,9 @@ fn test_precomputed_payload_with_different_modules() {
         carrier: "peb_walk".to_string(),
         ..ModuleSelection::new()
     };
-    let source_b = asm_b.assemble(&modules_b, &prepared.payload_header).unwrap();
+    let source_b = asm_b
+        .assemble(&modules_b, &prepared.payload_header)
+        .unwrap();
 
     // Both assembled sources must contain the same payload header content
     assert!(
