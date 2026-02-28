@@ -158,7 +158,7 @@ fn visit_node(
 ) {
     // Check if this is a compound statement (block)
     if node.kind() == "compound_statement" {
-        let parent_is_loop = node.parent().map_or(false, |p| is_loop_kind(p.kind()));
+        let parent_is_loop = node.parent().is_some_and(|p| is_loop_kind(p.kind()));
         let mut deferred_lines: Vec<usize> = Vec::new();
 
         // Iterate through child statements and inject before each
@@ -259,8 +259,8 @@ fn visit_node(
             }
         }
 
-        if let Some(loop_node) = enclosing_loop {
-            if !deferred_lines.is_empty() {
+        if let Some(loop_node) = enclosing_loop
+            && !deferred_lines.is_empty() {
                 deferred_lines.dedup(); // Remove consecutive duplicate line numbers (same-line statements)
                 let loop_indent = calculate_indentation(source, loop_node.start_byte());
 
@@ -285,7 +285,6 @@ fn visit_node(
                 }
                 injections.push((loop_node.end_byte(), deferred_block));
             }
-        }
     }
 
     // Recursively visit children
@@ -358,13 +357,11 @@ fn is_eager_in_loop(kind: &str) -> bool {
 fn find_enclosing_loop<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
-        if parent.kind() == "compound_statement" {
-            if let Some(grandparent) = parent.parent() {
-                if is_loop_kind(grandparent.kind()) {
+        if parent.kind() == "compound_statement"
+            && let Some(grandparent) = parent.parent()
+                && is_loop_kind(grandparent.kind()) {
                     return Some(grandparent);
                 }
-            }
-        }
         current = parent.parent();
     }
     None
