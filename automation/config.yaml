@@ -99,6 +99,11 @@ rededr:
 # Logging
 logging:
   level: "INFO"  # DEBUG, INFO, WARN, ERROR
+  # suppress:     # Crates to pin at warn level (useful at DEBUG/TRACE)
+  #   - goblin
+  #   - hyper
+  #   - h2
+  #   - tower
 
 security:
   enable_vm_isolation: false

@@ -15,8 +15,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tonic::transport::Server;
 use tracing::{debug, info, warn};
-use tracing_subscriber::Layer;
-use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
@@ -53,22 +52,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     });
 
-    // Initialize logging
-    let log_level = match config.logging.level.to_uppercase().as_str() {
-        "TRACE" => tracing::Level::TRACE,
-        "DEBUG" => tracing::Level::DEBUG,
-        "INFO" => tracing::Level::INFO,
-        "WARN" => tracing::Level::WARN,
-        "ERROR" => tracing::Level::ERROR,
-        _ => tracing::Level::INFO,
-    };
-
-    let level_filter = LevelFilter::from_level(log_level);
-
-    // Console layer
-    let console_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(true)
-        .with_filter(level_filter);
+    // Initialize logging with per-crate suppression support
+    let env_filter =
+        EnvFilter::try_new(config.logging.to_env_filter_string()).unwrap_or_else(|e| {
+            eprintln!("Invalid log filter '{}': {}", config.logging.level, e);
+            EnvFilter::new("info")
+        });
 
     // File layer
     let file = OpenOptions::new()
@@ -77,12 +66,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .truncate(true)
         .open("controller.log")?;
 
+    // Console + file layers under a single global EnvFilter
+    let console_layer = tracing_subscriber::fmt::layer().with_ansi(true);
+
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(file)
-        .with_ansi(true)
-        .with_filter(level_filter);
+        .with_ansi(true);
 
     tracing_subscriber::registry()
+        .with(env_filter)
         .with(console_layer)
         .with(file_layer)
         .init();

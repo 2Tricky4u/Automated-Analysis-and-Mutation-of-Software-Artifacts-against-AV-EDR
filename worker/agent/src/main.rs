@@ -24,23 +24,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     });
 
-    // Initialize logging with level from config
-    let log_level = match config.logging.level.to_uppercase().as_str() {
-        "TRACE" => tracing::Level::TRACE,
-        "DEBUG" => tracing::Level::DEBUG,
-        "INFO" => tracing::Level::INFO,
-        "WARN" => tracing::Level::WARN,
-        "ERROR" => tracing::Level::ERROR,
-        _ => {
+    // Initialize logging with per-crate suppression support
+    let env_filter = tracing_subscriber::EnvFilter::try_new(config.logging.to_env_filter_string())
+        .unwrap_or_else(|e| {
             eprintln!(
-                "Invalid log level '{}', defaulting to INFO",
-                config.logging.level
+                "Invalid log filter '{}': {}, defaulting to INFO",
+                config.logging.level, e
             );
-            tracing::Level::INFO
-        }
-    };
+            tracing_subscriber::EnvFilter::new("info")
+        });
 
-    tracing_subscriber::fmt().with_max_level(log_level).init();
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     let worker_id = config.worker.worker_id.clone();
 
