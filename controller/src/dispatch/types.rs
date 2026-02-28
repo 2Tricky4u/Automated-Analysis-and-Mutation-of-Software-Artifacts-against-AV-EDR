@@ -341,6 +341,8 @@ pub enum DifferentialCategory {
     MutationFailed,
     /// Dryrun crash — .bin payload broken (no mutations, reached payload execution)
     PayloadFailed,
+    /// Defender static file scan detected the artifact before execution
+    StaticDetection,
 }
 
 impl DifferentialCategory {
@@ -353,16 +355,19 @@ impl DifferentialCategory {
         }
     }
 
-    /// True only for RealDetection — the only trustworthy "detected" signal.
+    /// True for RealDetection and StaticDetection — trustworthy "detected" signals.
     pub fn is_detected(self) -> bool {
-        matches!(self, Self::RealDetection)
+        matches!(self, Self::RealDetection | Self::StaticDetection)
     }
 
     /// True for categories where the result is trustworthy for the feedback loop.
     /// Used by future token scorer / mutation selector (FEEDBACK-LOOP-PLAN.md).
     #[allow(dead_code)]
     pub fn is_trustworthy(self) -> bool {
-        matches!(self, Self::RealDetection | Self::Evasion)
+        matches!(
+            self,
+            Self::RealDetection | Self::Evasion | Self::StaticDetection
+        )
     }
 
     pub fn as_str(self) -> &'static str {
@@ -373,6 +378,7 @@ impl DifferentialCategory {
             Self::Evasion => "evasion",
             Self::MutationFailed => "mutation_failed",
             Self::PayloadFailed => "payload_failed",
+            Self::StaticDetection => "static_detection",
         }
     }
 }
@@ -587,6 +593,9 @@ pub struct RoundAgg {
     /// Grace period deadline: set when baseline+instrumented are done, dryrun still pending.
     /// If the deadline passes before dryrun arrives, the round finalizes without it.
     pub dryrun_deadline: Option<Instant>,
+    /// Set to true when Defender static scan detected the artifact before VM dispatch.
+    /// Causes `to_summary()` to short-circuit with `StaticDetection` category.
+    pub static_scan_detected: bool,
 }
 
 impl RoundAgg {
@@ -599,6 +608,25 @@ impl RoundAgg {
     /// If a dryrun result is available, `override_with_dryrun()` produces the
     /// authoritative verdict. Otherwise the worker's provisional verdict is used.
     pub fn to_summary(&self) -> Option<RoundSummary> {
+        // Short-circuit: Defender static scan detected the artifact before VM dispatch
+        if self.static_scan_detected {
+            return Some(RoundSummary {
+                round_id: self.spec.id.clone(),
+                round_number: self.spec.round_number,
+                mutations: self.spec.mutations.iter().map(|m| m.id.clone()).collect(),
+                mutation_specs: self.spec.mutations.clone(),
+                modules: self.spec.modules.clone(),
+                detected: true,
+                behavior_match: true,
+                evasion_score: 0.0,
+                differential_category: DifferentialCategory::StaticDetection,
+                completed_at: SystemTime::now(),
+                dry_run_exit_code: None,
+                has_dryrun: false,
+                detection_verdict: "static_detection".to_string(),
+            });
+        }
+
         let baseline = self.baseline.as_ref()?;
         let instrumented = self.instrumented.as_ref()?;
 
@@ -697,7 +725,9 @@ impl RoundAgg {
             DifferentialCategory::InstrumentationArtifact => 0.5 + 0.2 * survival_ratio,
             DifferentialCategory::Flaky => 0.3 * survival_ratio,
             DifferentialCategory::Evasion => 0.6 + 0.2 * payload_reached + 0.2 * behavior_match_val,
-            DifferentialCategory::MutationFailed | DifferentialCategory::PayloadFailed => 0.0,
+            DifferentialCategory::MutationFailed
+            | DifferentialCategory::PayloadFailed
+            | DifferentialCategory::StaticDetection => 0.0,
         }
     }
 }
@@ -1040,6 +1070,7 @@ mod tests {
             dryrun: None,
             dryrun_vm_id: String::new(),
             dryrun_deadline: None,
+            static_scan_detected: false,
         };
 
         assert!(!agg.is_complete());
@@ -1310,6 +1341,7 @@ mod tests {
             dryrun: None,
             dryrun_vm_id: String::new(),
             dryrun_deadline: None,
+            static_scan_detected: false,
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1367,6 +1399,7 @@ mod tests {
             dryrun: None,
             dryrun_vm_id: String::new(),
             dryrun_deadline: None,
+            static_scan_detected: false,
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1433,6 +1466,7 @@ mod tests {
             dryrun: None,
             dryrun_vm_id: String::new(),
             dryrun_deadline: None,
+            static_scan_detected: false,
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1595,6 +1629,7 @@ mod tests {
         assert!(!DifferentialCategory::Evasion.is_detected());
         assert!(!DifferentialCategory::MutationFailed.is_detected());
         assert!(!DifferentialCategory::PayloadFailed.is_detected());
+        assert!(DifferentialCategory::StaticDetection.is_detected());
     }
 
     #[test]
@@ -1605,6 +1640,7 @@ mod tests {
         assert!(DifferentialCategory::Evasion.is_trustworthy());
         assert!(!DifferentialCategory::MutationFailed.is_trustworthy());
         assert!(!DifferentialCategory::PayloadFailed.is_trustworthy());
+        assert!(DifferentialCategory::StaticDetection.is_trustworthy());
     }
 
     #[test]
@@ -1627,6 +1663,52 @@ mod tests {
             DifferentialCategory::PayloadFailed.as_str(),
             "payload_failed"
         );
+        assert_eq!(
+            DifferentialCategory::StaticDetection.as_str(),
+            "static_detection"
+        );
+    }
+
+    #[test]
+    fn test_static_scan_detected_short_circuits_to_summary() {
+        let spec = RoundSpec {
+            id: RoundId("r-static".into()),
+            job_id: JobId("j1".into()),
+            round_number: 1,
+            mutations: vec![],
+            modules: ModuleSelectionSpec::default(),
+        };
+        let agg = RoundAgg {
+            spec,
+            baseline_run_id: RunId("b".into()),
+            instrumented_run_id: RunId("i".into()),
+            // No actual run outcomes needed — static_scan_detected bypasses them
+            baseline: None,
+            instrumented: None,
+            baseline_vm_id: "static_scan".to_string(),
+            instrumented_vm_id: "static_scan".to_string(),
+            started_at: SystemTime::now(),
+            timeout_ms: 10_000,
+            assembled_source: None,
+            baseline_artifact_path: PathBuf::new(),
+            instrumented_artifact_path: PathBuf::new(),
+            dryrun_run_id: RunId("dryrun".into()),
+            dryrun: None,
+            dryrun_vm_id: String::new(),
+            dryrun_deadline: None,
+            static_scan_detected: true,
+        };
+
+        let summary = agg.to_summary().unwrap();
+        assert_eq!(
+            summary.differential_category,
+            DifferentialCategory::StaticDetection
+        );
+        assert!(summary.detected);
+        assert!(summary.behavior_match);
+        assert_eq!(summary.evasion_score, 0.0);
+        assert_eq!(summary.detection_verdict, "static_detection");
+        assert!(!summary.has_dryrun);
     }
 
     #[test]
@@ -1671,6 +1753,7 @@ mod tests {
             dryrun: None,
             dryrun_vm_id: String::new(),
             dryrun_deadline: None,
+            static_scan_detected: false,
         };
 
         let summary = agg.to_summary().unwrap();
@@ -1730,6 +1813,7 @@ mod tests {
                 dryrun: None,
                 dryrun_vm_id: String::new(),
                 dryrun_deadline: None,
+                static_scan_detected: false,
             }
         };
 
@@ -1808,6 +1892,7 @@ mod tests {
             }),
             dryrun_vm_id: String::new(),
             dryrun_deadline: None,
+            static_scan_detected: false,
         }
     }
 
