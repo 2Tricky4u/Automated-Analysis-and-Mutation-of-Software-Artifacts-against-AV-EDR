@@ -87,6 +87,93 @@ fn format_template_lib_args(template_name: &str) -> Vec<String> {
         .collect()
 }
 
+/// Precomputed payload data (encoding + optional SC checkpoint table).
+///
+/// Produced by [`prepare_payload`]. Deterministic: same inputs → same output.
+/// Cache and reuse across builds with identical payload/encoding/trace settings.
+#[derive(Debug, Clone)]
+pub struct PreparedPayload {
+    /// C header with encoded payload (payload.h content)
+    pub payload_header: String,
+    /// SC checkpoint table header (if sc_checkpoint_count > 0 and instrumented)
+    pub sc_header: Option<String>,
+}
+
+/// Prepare (encode) payload for embedding in artifact.
+///
+/// Runs the full encoding pipeline: stub prepend → INT3 patching → XOR/English
+/// encoding → C header generation. Deterministic: same inputs → same output.
+/// Call once per (payload, encoding, trace_mode, sc_checkpoint_count) tuple and
+/// reuse via `BuildInput::ModularTemplate::precomputed_payload`.
+pub fn prepare_payload(
+    payload: &[u8],
+    encoding: EncodingType,
+    trace_mode: &str,
+    sc_checkpoint_count: Option<u32>,
+) -> Result<PreparedPayload> {
+    // For instrumented builds, prepend a checkpoint stub
+    let instrumented = trace_mode != "off" && !trace_mode.is_empty();
+    let effective_payload;
+    let payload_to_encode: &[u8] = if instrumented {
+        effective_payload = crate::template::shellcode_stub::prepend_checkpoint_stub(payload);
+        info!(
+            "Prepended checkpoint stub: {} + {} = {} bytes",
+            crate::template::shellcode_stub::STUB_SIZE,
+            payload.len(),
+            effective_payload.len()
+        );
+        &effective_payload
+    } else {
+        payload
+    };
+
+    // SC checkpoint INT3 patching (after stub, before encoding)
+    let (final_payload_buf, sc_header) = {
+        if let Some(count) = sc_checkpoint_count {
+            if count > 0 && instrumented {
+                let stub_size = crate::template::shellcode_stub::STUB_SIZE;
+                let mut buf = payload_to_encode.to_vec();
+                let patched = crate::template::sc_checkpoints::patch_shellcode(
+                    &mut buf, count, stub_size,
+                )
+                .context("Failed to patch shellcode with INT3 checkpoints")?;
+                let header = crate::template::sc_checkpoints::generate_c_header(&patched);
+                info!(
+                    "Inserted {} INT3 shellcode checkpoints (stub_size={}, body={})",
+                    patched.table.len(),
+                    stub_size,
+                    buf.len() - stub_size
+                );
+                (patched.bytes, Some(header))
+            } else {
+                (payload_to_encode.to_vec(), None)
+            }
+        } else {
+            (payload_to_encode.to_vec(), None)
+        }
+    };
+
+    let encoder = PayloadEncoder::new();
+    let encoded = encoder.encode(&final_payload_buf, encoding);
+    let payload_header = encoder.generate_c_header(&encoded);
+
+    debug!(
+        "Encoded payload: {} bytes -> {} encoded bytes ({})",
+        payload.len(),
+        encoded.data.len(),
+        match encoding {
+            EncodingType::Xor => "XOR",
+            EncodingType::English => "English",
+            EncodingType::None => "None",
+        }
+    );
+
+    Ok(PreparedPayload {
+        payload_header,
+        sc_header,
+    })
+}
+
 /// Input format for artifact building
 #[derive(Debug, Clone)]
 pub enum BuildInput {
@@ -108,6 +195,9 @@ pub enum BuildInput {
         /// Number of INT3 shellcode checkpoints to insert (None or 0 = disabled).
         /// Only active for instrumented builds.
         sc_checkpoint_count: Option<u32>,
+        /// Pre-encoded payload header. When Some, skip the encoding pipeline.
+        /// Produced by [`prepare_payload`].
+        precomputed_payload: Option<PreparedPayload>,
     },
 }
 
@@ -150,6 +240,7 @@ impl ArtifactBuilder {
             trace_mode,
             mutation_targets,
             sc_checkpoint_count,
+            precomputed_payload,
         } = input;
 
         debug!(
@@ -165,6 +256,7 @@ impl ArtifactBuilder {
             &trace_mode,
             &mutation_targets,
             sc_checkpoint_count,
+            precomputed_payload,
         )
         .await
     }
@@ -1068,6 +1160,7 @@ impl ArtifactBuilder {
         trace_mode: &str,
         mutation_targets: &[String],
         sc_checkpoint_count: Option<u32>,
+        precomputed_payload: Option<PreparedPayload>,
     ) -> Result<BuiltArtifact> {
         // Step 0: Sync decoder module to match encoding type
         let expected_decoder = encoding.decoder_module();
@@ -1079,64 +1172,14 @@ impl ArtifactBuilder {
             modules.decoder = expected_decoder.to_string();
         }
 
-        // Step 1: Encode the payload
-        // For instrumented builds, prepend a checkpoint stub so we can confirm
-        // shellcode execution. The carrier passes __artifact_checkpoint in RCX.
-        let instrumented = trace_mode != "off" && !trace_mode.is_empty();
-        let effective_payload;
-        let payload_to_encode: &[u8] = if instrumented {
-            effective_payload = crate::template::shellcode_stub::prepend_checkpoint_stub(payload);
-            info!(
-                "Prepended checkpoint stub: {} + {} = {} bytes",
-                crate::template::shellcode_stub::STUB_SIZE,
-                payload.len(),
-                effective_payload.len()
-            );
-            &effective_payload
+        // Step 1: Encode the payload (or use precomputed header)
+        let (payload_header, sc_header) = if let Some(prepared) = precomputed_payload {
+            debug!("Using precomputed payload header (skipping encoding)");
+            (prepared.payload_header, prepared.sc_header)
         } else {
-            payload
+            let prepared = prepare_payload(payload, encoding, trace_mode, sc_checkpoint_count)?;
+            (prepared.payload_header, prepared.sc_header)
         };
-
-        // --- SC checkpoint INT3 patching (after stub, before encoding) ---
-        let (final_payload_buf, sc_header) = {
-            if let Some(count) = sc_checkpoint_count {
-                if count > 0 && instrumented {
-                    let stub_size = crate::template::shellcode_stub::STUB_SIZE;
-                    let mut buf = payload_to_encode.to_vec();
-                    let patched = crate::template::sc_checkpoints::patch_shellcode(
-                        &mut buf, count, stub_size,
-                    )
-                    .context("Failed to patch shellcode with INT3 checkpoints")?;
-                    let header = crate::template::sc_checkpoints::generate_c_header(&patched);
-                    info!(
-                        "Inserted {} INT3 shellcode checkpoints (stub_size={}, body={})",
-                        patched.table.len(),
-                        stub_size,
-                        buf.len() - stub_size
-                    );
-                    (patched.bytes, Some(header))
-                } else {
-                    (payload_to_encode.to_vec(), None)
-                }
-            } else {
-                (payload_to_encode.to_vec(), None)
-            }
-        };
-
-        let encoder = PayloadEncoder::new();
-        let encoded = encoder.encode(&final_payload_buf, encoding);
-        let payload_header = encoder.generate_c_header(&encoded);
-
-        debug!(
-            "Encoded payload: {} bytes -> {} encoded bytes ({})",
-            payload.len(),
-            encoded.data.len(),
-            match encoding {
-                EncodingType::Xor => "XOR",
-                EncodingType::English => "English",
-                EncodingType::None => "None",
-            }
-        );
 
         // Step 2: Use template directory from config
         let template_dir = &self.config.modular_template_dir;
@@ -1718,5 +1761,175 @@ mod tests {
         );
 
         assert_eq!(artifact.artifact_id, artifact.sha256);
+    }
+
+    // ── prepare_payload tests ─────────────────────────────────────────────
+
+    /// Parse PAYLOAD_LEN from a generated C header
+    fn parse_payload_len(header: &str) -> usize {
+        header
+            .lines()
+            .find_map(|l| {
+                l.strip_prefix("#define PAYLOAD_LEN ")
+                    .map(|v| v.trim().parse().unwrap())
+            })
+            .expect("PAYLOAD_LEN not found")
+    }
+
+    #[test]
+    fn test_prepare_payload_xor_baseline() {
+        let payload = vec![0x41, 0x42, 0x43, 0x44];
+        let result = prepare_payload(&payload, EncodingType::Xor, "off", None).unwrap();
+
+        assert!(
+            result.payload_header.contains("PAYLOAD_LEN"),
+            "Header must contain PAYLOAD_LEN"
+        );
+        assert!(
+            result.payload_header.contains("supermega_payload"),
+            "Header must contain supermega_payload array"
+        );
+        assert_eq!(
+            parse_payload_len(&result.payload_header),
+            payload.len(),
+            "XOR baseline PAYLOAD_LEN must match input length"
+        );
+        assert!(
+            result.sc_header.is_none(),
+            "Baseline (off) must not produce sc_header"
+        );
+    }
+
+    #[test]
+    fn test_prepare_payload_english_baseline() {
+        let payload = vec![0x41, 0x42, 0x43, 0x44];
+        let result = prepare_payload(&payload, EncodingType::English, "off", None).unwrap();
+
+        assert!(
+            result.payload_header.contains("DICTIONARY[]"),
+            "English header must contain DICTIONARY[]"
+        );
+        assert!(
+            result.payload_header.contains("supermega_payload_str"),
+            "English header must contain supermega_payload_str"
+        );
+        assert!(
+            result.sc_header.is_none(),
+            "Baseline (off) must not produce sc_header"
+        );
+    }
+
+    #[test]
+    fn test_prepare_payload_none_encoding() {
+        let payload = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let result = prepare_payload(&payload, EncodingType::None, "off", None).unwrap();
+
+        assert!(
+            result.payload_header.contains("PAYLOAD_LEN"),
+            "None-encoded header must contain PAYLOAD_LEN"
+        );
+        assert!(
+            result.payload_header.contains("supermega_payload"),
+            "None-encoded header must contain supermega_payload"
+        );
+        assert_eq!(
+            parse_payload_len(&result.payload_header),
+            payload.len(),
+            "None encoding PAYLOAD_LEN must match input length"
+        );
+        assert!(result.sc_header.is_none());
+    }
+
+    #[test]
+    fn test_prepare_payload_instrumented_prepends_stub() {
+        let payload = vec![0x90; 16];
+        let result = prepare_payload(&payload, EncodingType::Xor, "lines", None).unwrap();
+
+        let stub_size = crate::template::shellcode_stub::STUB_SIZE;
+        let expected_len = payload.len() + stub_size;
+        let actual_len = parse_payload_len(&result.payload_header);
+
+        assert_eq!(
+            actual_len, expected_len,
+            "Instrumented PAYLOAD_LEN must be original ({}) + STUB_SIZE ({})",
+            payload.len(),
+            stub_size
+        );
+        assert!(
+            result.sc_header.is_none(),
+            "No sc_header when sc_checkpoint_count is None"
+        );
+    }
+
+    #[test]
+    fn test_prepare_payload_instrumented_with_sc_checkpoints() {
+        // Use 64 NOPs — plenty of instruction boundaries for patching
+        let payload = vec![0x90; 64];
+        let result = prepare_payload(&payload, EncodingType::Xor, "lines", Some(3)).unwrap();
+
+        let stub_size = crate::template::shellcode_stub::STUB_SIZE;
+        let expected_len = payload.len() + stub_size;
+        let actual_len = parse_payload_len(&result.payload_header);
+
+        assert_eq!(
+            actual_len, expected_len,
+            "Instrumented+SC PAYLOAD_LEN must be original + STUB_SIZE"
+        );
+
+        let sc = result.sc_header.as_ref().expect("sc_header must be Some when sc_checkpoint_count > 0 and instrumented");
+        assert!(
+            sc.contains("SC_CHECKPOINT_COUNT"),
+            "sc_header must contain SC_CHECKPOINT_COUNT"
+        );
+    }
+
+    #[test]
+    fn test_prepare_payload_sc_disabled_variants() {
+        let payload = vec![0x90; 64];
+
+        // sc_checkpoint_count = None → no sc_header
+        let r1 = prepare_payload(&payload, EncodingType::Xor, "lines", None).unwrap();
+        assert!(r1.sc_header.is_none(), "None count → no sc_header");
+
+        // sc_checkpoint_count = Some(0) → no sc_header
+        let r2 = prepare_payload(&payload, EncodingType::Xor, "lines", Some(0)).unwrap();
+        assert!(r2.sc_header.is_none(), "Zero count → no sc_header");
+
+        // sc_checkpoint_count = Some(5) with trace_mode = "off" → no sc_header
+        let r3 = prepare_payload(&payload, EncodingType::Xor, "off", Some(5)).unwrap();
+        assert!(
+            r3.sc_header.is_none(),
+            "Baseline (off) ignores SC even when count > 0"
+        );
+    }
+
+    #[test]
+    fn test_prepare_payload_deterministic() {
+        let payload = vec![0x90; 64];
+
+        let a = prepare_payload(&payload, EncodingType::Xor, "lines", Some(3)).unwrap();
+        let b = prepare_payload(&payload, EncodingType::Xor, "lines", Some(3)).unwrap();
+
+        assert_eq!(
+            a.payload_header, b.payload_header,
+            "Same inputs must produce identical payload_header"
+        );
+        assert_eq!(
+            a.sc_header, b.sc_header,
+            "Same inputs must produce identical sc_header"
+        );
+    }
+
+    #[test]
+    fn test_prepare_payload_different_trace_modes_differ() {
+        let payload = vec![0x90; 16];
+
+        let off = prepare_payload(&payload, EncodingType::Xor, "off", None).unwrap();
+        let lines = prepare_payload(&payload, EncodingType::Xor, "lines", None).unwrap();
+
+        assert_ne!(
+            off.payload_header, lines.payload_header,
+            "off vs lines must produce different payload_header (stub changes encoded payload)"
+        );
     }
 }

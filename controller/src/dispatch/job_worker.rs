@@ -25,6 +25,7 @@ use std::str::FromStr;
 
 use build::{
     ArtifactBuilder, BuildInput, BuilderConfig, BuiltArtifact, EncodingType, ModuleSelection,
+    PreparedPayload, prepare_payload,
 };
 
 use super::channels::{JobRunResult, JobWorkerEvent, RoundCompletedData};
@@ -93,6 +94,15 @@ pub struct JobWorker {
     /// Deferred from per-round cleanup to avoid deleting files still referenced
     /// by other rounds (content-addressed paths can collide across rounds).
     artifact_cleanup: Vec<PathBuf>,
+
+    /// Cached payload headers: baseline (trace=off), computed on first build.
+    baseline_payload: Option<PreparedPayload>,
+
+    /// Cached payload headers: instrumented (trace≠off), computed on first build.
+    instrumented_payload: Option<PreparedPayload>,
+
+    /// Cached raw payload bytes (read from disk once).
+    cached_payload: Option<Vec<u8>>,
 }
 
 impl JobWorker {
@@ -114,6 +124,9 @@ impl JobWorker {
             selector,
             shutdown_token: CancellationToken::new(),
             artifact_cleanup: Vec::new(),
+            baseline_payload: None,
+            instrumented_payload: None,
+            cached_payload: None,
         }
     }
 
@@ -365,8 +378,9 @@ impl JobWorker {
             })?;
 
         // Build instrumented artifact (trace_mode from job config)
+        let trace_mode = self.job.trace_mode.clone();
         let instrumented_built = self
-            .build_artifact(&selected_build_spec, &self.job.trace_mode, &spec)
+            .build_artifact(&selected_build_spec, &trace_mode, &spec)
             .await
             .map_err(|e| {
                 error!(
@@ -485,7 +499,7 @@ impl JobWorker {
 
     /// Build an artifact using the modular template system.
     async fn build_artifact(
-        &self,
+        &mut self,
         build_spec: &ModularBuildSpec,
         trace_mode: &str,
         round_spec: &RoundSpec,
@@ -493,16 +507,23 @@ impl JobWorker {
         // Create builder with default system paths
         let builder = ArtifactBuilder::new(BuilderConfig::default())?;
 
-        // Read payload from file
-        let payload = tokio::fs::read(&build_spec.payload_path)
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to read payload {}: {}",
-                    build_spec.payload_path.display(),
-                    e
-                )
-            })?;
+        // Read payload from file (cached across rounds)
+        let payload = match &self.cached_payload {
+            Some(p) => p.clone(),
+            None => {
+                let p = tokio::fs::read(&build_spec.payload_path)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to read payload {}: {}",
+                            build_spec.payload_path.display(),
+                            e
+                        )
+                    })?;
+                self.cached_payload = Some(p.clone());
+                p
+            }
+        };
 
         // Convert module selection
         let modules: ModuleSelection = build_spec.modules.clone().into();
@@ -529,6 +550,31 @@ impl JobWorker {
             })
             .collect();
 
+        // Select cached precomputed payload header (lazy init)
+        let precomputed = if trace_mode == "off" || trace_mode.is_empty() {
+            if self.baseline_payload.is_none() {
+                let prepared = prepare_payload(
+                    &payload,
+                    encoding,
+                    trace_mode,
+                    self.job.sc_checkpoint_count,
+                )?;
+                self.baseline_payload = Some(prepared);
+            }
+            self.baseline_payload.clone()
+        } else {
+            if self.instrumented_payload.is_none() {
+                let prepared = prepare_payload(
+                    &payload,
+                    encoding,
+                    trace_mode,
+                    self.job.sc_checkpoint_count,
+                )?;
+                self.instrumented_payload = Some(prepared);
+            }
+            self.instrumented_payload.clone()
+        };
+
         debug!(
             "[JobWorker:{}] Building artifact (carrier={}, decoder={}, encoding={}, trace_mode={})",
             self.job.id, modules.carrier, modules.decoder, build_spec.encoding, trace_mode
@@ -544,6 +590,7 @@ impl JobWorker {
                 trace_mode: trace_mode.to_string(),
                 mutation_targets: self.job.search_space.mutation_targets.clone(),
                 sc_checkpoint_count: self.job.sc_checkpoint_count,
+                precomputed_payload: precomputed,
             })
             .await?;
 

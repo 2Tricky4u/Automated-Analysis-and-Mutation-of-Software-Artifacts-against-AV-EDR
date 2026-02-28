@@ -112,6 +112,7 @@ pub async fn build_artifact(
             trace_mode: trace_mode.clone(),
             mutation_targets: vec![],
             sc_checkpoint_count: None,
+            precomputed_payload: None,
         })
         .await
         .map_err(|e| {

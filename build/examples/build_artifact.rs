@@ -95,6 +95,7 @@ fn main() {
         trace_mode: args.trace.clone(),
         mutation_targets: vec![],
         sc_checkpoint_count: None,
+        precomputed_payload: None,
     };
 
     eprintln!(

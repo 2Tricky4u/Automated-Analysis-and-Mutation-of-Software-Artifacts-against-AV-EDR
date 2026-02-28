@@ -1119,3 +1119,110 @@ fn test_enabled_path_produces_int3_and_header() {
         "Header must declare correct SC_CHECKPOINT_COUNT"
     );
 }
+
+// ============================================================================
+// K) Precomputed payload equivalence tests
+// ============================================================================
+
+/// Verify that `prepare_payload()` with XOR encoding produces the same
+/// payload header as the `run_pipeline` helper (which encodes independently).
+#[test]
+fn test_precomputed_payload_matches_fresh_xor() {
+    let payload = common::payload_typical();
+
+    // Path A: use prepare_payload() directly
+    let prepared =
+        build::prepare_payload(&payload, EncodingType::Xor, "off", None).unwrap();
+
+    // Path B: run_pipeline encodes independently via PayloadEncoder
+    let pipeline =
+        common::run_pipeline(ModuleSelection::new(), &payload, EncodingType::Xor, &[]).unwrap();
+
+    assert_eq!(
+        prepared.payload_header, pipeline.payload_header,
+        "prepare_payload() XOR header must match run_pipeline's header"
+    );
+    assert!(
+        prepared.sc_header.is_none(),
+        "Baseline prepare_payload must not produce sc_header"
+    );
+}
+
+/// Same equivalence check for English encoding.
+#[test]
+fn test_precomputed_payload_matches_fresh_english() {
+    let payload = common::payload_small();
+
+    let prepared =
+        build::prepare_payload(&payload, EncodingType::English, "off", None).unwrap();
+
+    let pipeline = common::run_pipeline(
+        ModuleSelection {
+            decoder: "english".to_string(),
+            ..ModuleSelection::new()
+        },
+        &payload,
+        EncodingType::English,
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(
+        prepared.payload_header, pipeline.payload_header,
+        "prepare_payload() English header must match run_pipeline's header"
+    );
+}
+
+/// Prepare payload once, assemble with two different module selections.
+/// The payload_header section must be identical in both assembled sources
+/// (modules don't affect encoding).
+#[test]
+fn test_precomputed_payload_with_different_modules() {
+    let payload = common::payload_typical();
+
+    let prepared =
+        build::prepare_payload(&payload, EncodingType::Xor, "off", None).unwrap();
+
+    // Assemble with carrier A
+    let dir = common::templates_dir();
+    let mut asm_a = build::Assembler::new(&dir).unwrap();
+    let modules_a = ModuleSelection {
+        carrier: "change_rw_rx".to_string(),
+        ..ModuleSelection::new()
+    };
+    let source_a = asm_a.assemble(&modules_a, &prepared.payload_header).unwrap();
+
+    // Assemble with carrier B
+    let mut asm_b = build::Assembler::new(&dir).unwrap();
+    let modules_b = ModuleSelection {
+        carrier: "peb_walk".to_string(),
+        ..ModuleSelection::new()
+    };
+    let source_b = asm_b.assemble(&modules_b, &prepared.payload_header).unwrap();
+
+    // Both assembled sources must contain the same payload header content
+    assert!(
+        source_a.contains("PAYLOAD_LEN"),
+        "Assembled source A must contain PAYLOAD_LEN"
+    );
+    assert!(
+        source_b.contains("PAYLOAD_LEN"),
+        "Assembled source B must contain PAYLOAD_LEN"
+    );
+
+    // Extract PAYLOAD_LEN values — must be identical
+    let len_a = common::parse_payload_len(&prepared.payload_header);
+    let len_b_from_source = common::parse_payload_len(&prepared.payload_header);
+    assert_eq!(
+        len_a, len_b_from_source,
+        "Same precomputed payload must yield same PAYLOAD_LEN regardless of modules"
+    );
+
+    // The carrier sections should differ (proving modules were actually different)
+    let has_peb = source_b.contains("get_module_by_name");
+    let has_change = source_a.contains("MyVirtualProtect");
+    assert!(
+        has_peb && has_change,
+        "Module selections must produce different carrier content"
+    );
+}

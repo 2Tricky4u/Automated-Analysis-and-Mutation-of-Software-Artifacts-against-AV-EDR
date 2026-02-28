@@ -31,6 +31,9 @@
 //!     encoding: EncodingType::Xor,
 //!     mutations: vec![],
 //!     trace_mode: "off".to_string(),
+//!     mutation_targets: vec![],
+//!     sc_checkpoint_count: None,
+//!     precomputed_payload: None,
 //! }).await?;
 //! ```
 
@@ -67,7 +70,9 @@ pub use template::{
 pub use template::{extract_mutation_markers, generate_test_payload, strip_mutation_markers};
 
 // Builder module (main API)
-pub use builder::{ArtifactBuilder, BuildInput, BuilderConfig, BuiltArtifact};
+pub use builder::{
+    ArtifactBuilder, BuildInput, BuilderConfig, BuiltArtifact, PreparedPayload, prepare_payload,
+};
 
 // ============================================================================
 // Core Types
