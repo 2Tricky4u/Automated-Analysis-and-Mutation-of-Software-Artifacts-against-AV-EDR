@@ -174,6 +174,9 @@ pub struct CorpusConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub level: String,
+    /// Crate names to suppress to `warn` level (e.g. ["goblin", "hyper", "h2"])
+    #[serde(default)]
+    pub suppress: Vec<String>,
     //pub format: String,
     //#[serde(default)]
     //pub file_enabled: bool,
@@ -183,6 +186,28 @@ pub struct LoggingConfig {
     //pub file_rotation: Option<String>,
     //#[serde(default)]
     //pub file_retention_days: Option<u32>,
+}
+
+impl LoggingConfig {
+    /// Build an `EnvFilter`-compatible directive string.
+    ///
+    /// Returns e.g. `"debug,goblin=warn,hyper=warn"` when suppress is populated,
+    /// or just `"info"` when it is empty.
+    pub fn to_env_filter_string(&self) -> String {
+        let base = self.level.to_lowercase();
+        if self.suppress.is_empty() {
+            return base;
+        }
+        let mut parts = Vec::with_capacity(1 + self.suppress.len());
+        parts.push(base);
+        for name in &self.suppress {
+            let name = name.trim();
+            if !name.is_empty() {
+                parts.push(format!("{}=warn", name));
+            }
+        }
+        parts.join(",")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -667,6 +692,7 @@ impl ControllerConfig {
             },
             logging: LoggingConfig {
                 level: "info".to_string(),
+                suppress: vec![],
             },
             //differential: DifferentialConfig {
             //    enabled: true,
@@ -714,7 +740,43 @@ impl WorkerConfig {
             },
             logging: LoggingConfig {
                 level: "info".to_string(),
+                suppress: vec![],
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_filter_no_suppress() {
+        let cfg = LoggingConfig {
+            level: "debug".to_string(),
+            suppress: vec![],
+        };
+        assert_eq!(cfg.to_env_filter_string(), "debug");
+    }
+
+    #[test]
+    fn env_filter_with_suppress() {
+        let cfg = LoggingConfig {
+            level: "DEBUG".to_string(),
+            suppress: vec!["goblin".into(), "hyper".into(), "h2".into()],
+        };
+        assert_eq!(
+            cfg.to_env_filter_string(),
+            "debug,goblin=warn,hyper=warn,h2=warn"
+        );
+    }
+
+    #[test]
+    fn env_filter_skips_empty_entries() {
+        let cfg = LoggingConfig {
+            level: "info".to_string(),
+            suppress: vec!["goblin".into(), "  ".into(), "".into(), "tower".into()],
+        };
+        assert_eq!(cfg.to_env_filter_string(), "info,goblin=warn,tower=warn");
     }
 }

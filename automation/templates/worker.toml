@@ -176,6 +176,10 @@ logs_path = "C:\\AutoMutate\\logs"
 [logging]
 # Worker logging
 level = "INFO"  # "trace" | "debug" | "info" | "warn" | "error"
+
+# Suppress noisy crates to warn level (useful at debug/trace level)
+# suppress = ["goblin", "hyper", "h2", "tower"]
+
 #format = "json"
 #output_path = "C:\\AutoMutate\\logs\\worker.log"
 #rotation = "daily"

@@ -96,6 +96,9 @@ run_timeout_secs = 300
 # Log level: "trace" | "debug" | "info" | "warn" | "error"
 level = "INFO"
 
+# Suppress noisy crates to warn level (useful at debug/trace level)
+# suppress = ["goblin", "hyper", "h2", "tower"]
+
 # Log format: "json" | "pretty"
 #format = "json"
 
