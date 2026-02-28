@@ -260,31 +260,32 @@ fn visit_node(
         }
 
         if let Some(loop_node) = enclosing_loop
-            && !deferred_lines.is_empty() {
-                deferred_lines.dedup(); // Remove consecutive duplicate line numbers (same-line statements)
-                let loop_indent = calculate_indentation(source, loop_node.start_byte());
+            && !deferred_lines.is_empty()
+        {
+            deferred_lines.dedup(); // Remove consecutive duplicate line numbers (same-line statements)
+            let loop_indent = calculate_indentation(source, loop_node.start_byte());
 
-                // Flag declarations before the loop
-                let mut declarations = String::new();
-                for line in &deferred_lines {
-                    declarations.push_str(&generate_flag_declaration(*line, &loop_indent));
-                }
-                injections.push((loop_node.start_byte(), declarations));
-
-                // Deferred conditional traces after the loop
-                let mut deferred_block = String::from("\n");
-                for line in &deferred_lines {
-                    deferred_block.push_str(&generate_deferred_trace(
-                        *line,
-                        &loop_indent,
-                        language,
-                        file_path,
-                        format,
-                        delay_iterations,
-                    ));
-                }
-                injections.push((loop_node.end_byte(), deferred_block));
+            // Flag declarations before the loop
+            let mut declarations = String::new();
+            for line in &deferred_lines {
+                declarations.push_str(&generate_flag_declaration(*line, &loop_indent));
             }
+            injections.push((loop_node.start_byte(), declarations));
+
+            // Deferred conditional traces after the loop
+            let mut deferred_block = String::from("\n");
+            for line in &deferred_lines {
+                deferred_block.push_str(&generate_deferred_trace(
+                    *line,
+                    &loop_indent,
+                    language,
+                    file_path,
+                    format,
+                    delay_iterations,
+                ));
+            }
+            injections.push((loop_node.end_byte(), deferred_block));
+        }
     }
 
     // Recursively visit children
@@ -359,9 +360,10 @@ fn find_enclosing_loop<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     while let Some(parent) = current {
         if parent.kind() == "compound_statement"
             && let Some(grandparent) = parent.parent()
-                && is_loop_kind(grandparent.kind()) {
-                    return Some(grandparent);
-                }
+            && is_loop_kind(grandparent.kind())
+        {
+            return Some(grandparent);
+        }
         current = parent.parent();
     }
     None
