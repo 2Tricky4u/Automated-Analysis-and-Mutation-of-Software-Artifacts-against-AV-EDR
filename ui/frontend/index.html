@@ -477,6 +477,13 @@
             font-family: 'Consolas', monospace;
         }
 
+        .mutation-params {
+            margin-left: 6px;
+            font-size: 0.65rem;
+            color: #8b949e;
+            font-style: italic;
+        }
+
         .collapsible-section {
             margin-top: 8px;
             border: 1px solid #21262d;
@@ -1380,9 +1387,18 @@
 
                 // Mutations section
                 if (d.mutations && d.mutations.length > 0) {
-                    let mutHtml = d.mutations.map(m =>
-                        `<span class="mutation-tag">${escapeHtml(m)}</span>`
-                    ).join('');
+                    let mutHtml = d.mutations.map(m => {
+                        const id = typeof m === 'string' ? m : m.id;
+                        const params = (typeof m === 'object' && m.params) ? m.params : {};
+                        const keys = Object.keys(params).filter(k => params[k] !== '');
+                        let tag = `<span class="mutation-tag">${escapeHtml(id)}`;
+                        if (keys.length > 0) {
+                            const paramStr = keys.map(k => `${k}=${params[k]}`).join(', ');
+                            tag += `<span class="mutation-params">${escapeHtml(paramStr)}</span>`;
+                        }
+                        tag += `</span>`;
+                        return tag;
+                    }).join('');
                     html += collapsibleSection('sec-mutations', `Mutations (${d.mutations.length})`, mutHtml, true);
                 }
 

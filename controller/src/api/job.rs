@@ -295,14 +295,8 @@ pub async fn get_round(
         None => return Ok(Response::new(GetRoundResponse { round: None })),
     };
 
-    // Parse mutations
-    let mutations = string_array_field(&source, "mutations")
-        .into_iter()
-        .map(|id| crate::automutate::common::Mutation {
-            id,
-            params: Default::default(),
-        })
-        .collect();
+    // Parse mutations (prefer mutation_recipe with params, fall back to mutations string array)
+    let mutations = parse_mutation_recipe(&source);
 
     // Query both runs
     let baseline_run_id = str_field(&source, "baseline_run_id");
@@ -734,6 +728,47 @@ fn apply_round_correction(
             b.detected = matches!(category.as_str(), "real_detection" | "flaky");
         }
     }
+}
+
+/// Parse mutations from ES round doc.
+/// Prefers `mutation_recipe` (array of {id, params}) over `mutations` (array of strings).
+fn parse_mutation_recipe(source: &Value) -> Vec<crate::automutate::common::Mutation> {
+    // Try mutation_recipe first (has full params)
+    if let Some(arr) = source["mutation_recipe"].as_array() {
+        let recipes: Vec<crate::automutate::common::Mutation> = arr
+            .iter()
+            .filter_map(|entry| {
+                let id = entry["id"].as_str()?.to_string();
+                let params = entry["params"]
+                    .as_object()
+                    .map(|obj| {
+                        obj.iter()
+                            .filter_map(|(k, v)| {
+                                let val = v
+                                    .as_str()
+                                    .map(String::from)
+                                    .unwrap_or_else(|| v.to_string());
+                                Some((k.clone(), val))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(crate::automutate::common::Mutation { id, params })
+            })
+            .collect();
+        if !recipes.is_empty() {
+            return recipes;
+        }
+    }
+
+    // Fall back to mutations string array (no params)
+    string_array_field(source, "mutations")
+        .into_iter()
+        .map(|id| crate::automutate::common::Mutation {
+            id,
+            params: Default::default(),
+        })
+        .collect()
 }
 
 fn build_behavior_comparison(
