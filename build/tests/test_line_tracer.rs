@@ -549,10 +549,9 @@ fn test_return_inside_loop_stays_eager() {
     // x = i should be deferred (flag-set, not eager trace)
     let mut found_deferred_flag = false;
     for (i, line) in lines.iter().enumerate() {
-        if line.contains("int x = i;") && i > 0
-            && lines[i - 1].contains("__seen_L") {
-                found_deferred_flag = true;
-            }
+        if line.contains("int x = i;") && i > 0 && lines[i - 1].contains("__seen_L") {
+            found_deferred_flag = true;
+        }
     }
     assert!(
         found_deferred_flag,
