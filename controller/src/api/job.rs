@@ -743,12 +743,12 @@ fn parse_mutation_recipe(source: &Value) -> Vec<crate::automutate::common::Mutat
                     .as_object()
                     .map(|obj| {
                         obj.iter()
-                            .filter_map(|(k, v)| {
+                            .map(|(k, v)| {
                                 let val = v
                                     .as_str()
                                     .map(String::from)
                                     .unwrap_or_else(|| v.to_string());
-                                Some((k.clone(), val))
+                                (k.clone(), val)
                             })
                             .collect()
                     })
