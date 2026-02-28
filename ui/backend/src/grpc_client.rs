@@ -53,6 +53,7 @@ pub struct ScheduleJobParams {
     pub mutation_targets: Vec<String>,
     pub fixed_mutations: Vec<String>,
     pub sc_checkpoint_count: u32,
+    pub cache_payload: bool,
 }
 
 /// gRPC client wrapper with connection management
@@ -163,6 +164,7 @@ impl ControllerGrpcClient {
             mutation_targets: params.mutation_targets,
             fixed_mutations: params.fixed_mutations,
             sc_checkpoint_count: params.sc_checkpoint_count,
+            cache_payload: params.cache_payload,
             ..Default::default()
         };
 

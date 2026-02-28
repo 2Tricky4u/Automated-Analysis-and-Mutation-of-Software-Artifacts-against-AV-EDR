@@ -125,6 +125,7 @@ pub async fn schedule_job(
     if req.sc_checkpoint_count > 0 {
         job.sc_checkpoint_count = Some(req.sc_checkpoint_count);
     }
+    job.cache_payload = req.cache_payload;
 
     // Index to ES before submission
     if let Err(e) = service.storage.index_job(&job).await {
