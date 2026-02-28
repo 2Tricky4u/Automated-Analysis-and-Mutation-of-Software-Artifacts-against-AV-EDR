@@ -443,6 +443,10 @@ pub struct JobSession {
     // Shellcode checkpoints (INT3 breakpoints; None = disabled)
     pub sc_checkpoint_count: Option<u32>,
 
+    /// Cache precomputed payload headers across rounds (default: true).
+    /// Set to false for debugging to force fresh encoding every round.
+    pub cache_payload: bool,
+
     // Completed round summaries
     pub rounds: BTreeMap<u32, RoundSummary>,
     pub last_round: Option<RoundSummary>,
@@ -462,6 +466,7 @@ impl JobSession {
             trace_mode: "lines".to_string(),
             search_space: SearchSpace::default(),
             sc_checkpoint_count: None,
+            cache_payload: true,
             current_round: 0,
             completed_rounds: 0,
             max_rounds,

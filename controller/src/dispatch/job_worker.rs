@@ -678,21 +678,34 @@ impl JobWorker {
             })
             .collect();
 
-        // Select cached precomputed payload header (lazy init)
-        let precomputed = if trace_mode == "off" || trace_mode.is_empty() {
-            if self.baseline_payload.is_none() {
-                let prepared =
-                    prepare_payload(&payload, encoding, trace_mode, self.job.sc_checkpoint_count)?;
-                self.baseline_payload = Some(prepared);
+        // Select cached precomputed payload header (lazy init), gated on cache_payload flag
+        let precomputed = if self.job.cache_payload {
+            if trace_mode == "off" || trace_mode.is_empty() {
+                if self.baseline_payload.is_none() {
+                    let prepared = prepare_payload(
+                        &payload,
+                        encoding,
+                        trace_mode,
+                        self.job.sc_checkpoint_count,
+                    )?;
+                    self.baseline_payload = Some(prepared);
+                }
+                self.baseline_payload.clone()
+            } else {
+                if self.instrumented_payload.is_none() {
+                    let prepared = prepare_payload(
+                        &payload,
+                        encoding,
+                        trace_mode,
+                        self.job.sc_checkpoint_count,
+                    )?;
+                    self.instrumented_payload = Some(prepared);
+                }
+                self.instrumented_payload.clone()
             }
-            self.baseline_payload.clone()
         } else {
-            if self.instrumented_payload.is_none() {
-                let prepared =
-                    prepare_payload(&payload, encoding, trace_mode, self.job.sc_checkpoint_count)?;
-                self.instrumented_payload = Some(prepared);
-            }
-            self.instrumented_payload.clone()
+            // cache_payload=false: force fresh encoding every round
+            None
         };
 
         debug!(

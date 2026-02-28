@@ -74,6 +74,14 @@ pub struct SubmitJobRequest {
     /// INT3 shellcode checkpoints (0 = disabled)
     #[serde(default)]
     pub sc_checkpoint_count: u32,
+
+    /// Cache encoded payload across rounds (default: true)
+    #[serde(default = "default_true")]
+    pub cache_payload: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_max_rounds() -> u32 {
@@ -248,6 +256,7 @@ pub async fn submit_job(
             mutation_targets: payload.mutation_targets,
             fixed_mutations: payload.fixed_mutations,
             sc_checkpoint_count: payload.sc_checkpoint_count,
+            cache_payload: payload.cache_payload,
         })
         .await
     {
