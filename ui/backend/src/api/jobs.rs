@@ -164,6 +164,12 @@ pub struct ModulesInfo {
 }
 
 #[derive(Debug, Serialize)]
+pub struct MutationInfo {
+    pub id: String,
+    pub params: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RoundDetailResponse {
     pub round_id: String,
     pub job_id: String,
@@ -177,7 +183,7 @@ pub struct RoundDetailResponse {
     pub cutoff_func: String,
     pub function_coverage: Vec<FunctionCoverageInfo>,
     pub modules: Option<ModulesInfo>,
-    pub mutations: Vec<String>,
+    pub mutations: Vec<MutationInfo>,
     pub coverage_total_lines: u32,
     pub coverage_executable_lines: u32,
     pub coverage_executed_lines: u32,
@@ -422,7 +428,14 @@ pub async fn get_round(
                     deconditioner: m.deconditioner,
                 });
 
-                let mutations: Vec<String> = round.mutations.into_iter().map(|m| m.id).collect();
+                let mutations: Vec<MutationInfo> = round
+                    .mutations
+                    .into_iter()
+                    .map(|m| MutationInfo {
+                        id: m.id,
+                        params: m.params,
+                    })
+                    .collect();
 
                 Ok(Json(ApiResponse::new(RoundDetailResponse {
                     round_id: round.round_id,
