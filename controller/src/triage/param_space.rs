@@ -158,6 +158,11 @@ pub struct SeededRng {
 }
 
 impl SeededRng {
+    /// Create a RNG from a raw seed value (must be non-zero).
+    pub fn from_raw(seed: u64) -> Self {
+        SeededRng { state: seed.max(1) }
+    }
+
     /// Create a seeded RNG from job_id and round_number.
     pub fn new(job_id: &str, round_number: u32) -> Self {
         // FNV-1a hash of job_id + round_number
