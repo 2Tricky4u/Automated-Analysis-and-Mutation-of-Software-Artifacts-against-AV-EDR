@@ -10,7 +10,10 @@
 /// NullSink in worker-only mode).
 use crate::automutate::common::ExecutionStatusReport;
 use crate::automutate::worker::{ExecutionStatus, MonitorEvent};
-use crate::dispatch::sink::ControlPlaneSink;
+use crate::constants::{
+    CPU_IDLE_THRESHOLD, IDLE_COUNT_THRESHOLD, MONITOR_POLL_INTERVAL_SECS, TIMEOUT_APPROACH_SECS,
+};
+use crate::execution::sink::ControlPlaneSink;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
@@ -29,16 +32,9 @@ pub struct MonitorConfig {
 }
 
 pub struct ExecutionMonitor {
-    pub run_id: String,
-    pub job_id: String,
-    pub worker_id: String,
-    pub worker_ip: String,
-    pub artifact_name: String,
-    pub pid: u32,
-    pub rededr_base_url: String,
-    pub sink: Arc<dyn ControlPlaneSink>,
-    pub start_time: Instant,
-    pub timeout_seconds: i32,
+    config: MonitorConfig,
+    sink: Arc<dyn ControlPlaneSink>,
+    start_time: Instant,
     client: reqwest::Client,
     sys: Arc<tokio::sync::Mutex<sysinfo::System>>,
 }
@@ -48,21 +44,14 @@ impl ExecutionMonitor {
         use sysinfo::System;
 
         Self {
-            run_id: config.run_id,
-            job_id: config.job_id,
-            worker_id: config.worker_id,
-            worker_ip: config.worker_ip,
-            artifact_name: config.artifact_name,
-            pid: config.pid,
-            rededr_base_url: config.rededr_base_url,
+            config,
             sink,
             start_time: Instant::now(),
-            timeout_seconds: config.timeout_seconds,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(3))
                 .build()
                 .expect("Failed to create HTTP client"),
-            sys: std::sync::Arc::new(tokio::sync::Mutex::new(System::new())),
+            sys: Arc::new(tokio::sync::Mutex::new(System::new())),
         }
     }
 
@@ -74,25 +63,19 @@ impl ExecutionMonitor {
     ) {
         info!(
             "Starting execution monitor for run_id={}, pid={}",
-            self.run_id, self.pid
+            self.config.run_id, self.config.pid
         );
 
-        let mut interval = tokio::time::interval(Duration::from_secs(3));
+        let mut interval = tokio::time::interval(Duration::from_secs(MONITOR_POLL_INTERVAL_SECS));
         let mut last_event_count = 0;
         let mut idle_count = 0;
-        let timeout_thr = 5;
-        let idle_count_thr = 3;
-        /// CPU threshold (%) below which the process is considered idle.
-        /// If CPU is above this and events are stale, the process is busy
-        /// but not generating telemetry (different from truly idle).
-        const CPU_IDLE_THRESHOLD: i32 = 5;
 
         // Send initial "started" event
-        let started_details = format!("Process started: pid={}", self.pid);
+        let started_details = format!("Process started: pid={}", self.config.pid);
 
         // Send started status to controller
         let initial_status = ExecutionStatus {
-            pid: self.pid as i32,
+            pid: self.config.pid as i32,
             elapsed_seconds: 0,
             process_alive: true,
             cpu_percent: 0,
@@ -146,11 +129,11 @@ impl ExecutionMonitor {
                             last_event_count = event_count;
 
                             // Detect approaching timeout (within 5 seconds of timeout threshold)
-                            let approaching_timeout = status.elapsed_seconds >= (self.timeout_seconds - timeout_thr);
+                            let approaching_timeout = status.elapsed_seconds >= (self.config.timeout_seconds - TIMEOUT_APPROACH_SECS);
 
                             let event_type = if approaching_timeout && process_is_alive {
                                 "approaching_timeout".to_string()
-                            } else if idle_count >= idle_count_thr && status.elapsed_seconds > 0{
+                            } else if idle_count >= IDLE_COUNT_THRESHOLD && status.elapsed_seconds > 0{
                                 "telemetry_idle".to_string()
                             } else if process_is_alive {
                                 "heartbeat".to_string()
@@ -166,7 +149,7 @@ impl ExecutionMonitor {
                                 status.memory_mb,
                                 status.elapsed_seconds,
                                 if approaching_timeout { " [TIMEOUT APPROACHING]" } else { "" },
-                                if idle_count >= 3 { " [TELEMETRY_IDLE]" } else { "" }
+                                if idle_count >= IDLE_COUNT_THRESHOLD { " [TELEMETRY_IDLE]" } else { "" }
                             );
 
                             debug!("{}: {}", event_type, details);
@@ -186,7 +169,7 @@ impl ExecutionMonitor {
 
                             // Stop monitoring after sending "terminated" event
                             if !process_is_alive {
-                                info!("Process terminated (pid={}), stopping monitor", self.pid);
+                                info!("Process terminated (pid={}), stopping monitor", self.config.pid);
                                 break;
                             }
                         }
@@ -198,7 +181,7 @@ impl ExecutionMonitor {
                 }
                 _ = stop_rx.changed() => {
                     if *stop_rx.borrow() {
-                        info!("Monitor received stop signal for run_id={}", self.run_id);
+                        info!("Monitor received stop signal for run_id={}", self.config.run_id);
 
                         // Don't send status here - the main code will send the correct
                         // final status (timeout/error/success) after stopping the monitor.
@@ -210,24 +193,29 @@ impl ExecutionMonitor {
             }
         }
 
-        info!("Execution monitor stopped for run_id={}", self.run_id);
+        info!(
+            "Execution monitor stopped for run_id={}",
+            self.config.run_id
+        );
     }
 
     async fn collect_status(
         &self,
     ) -> Result<ExecutionStatus, Box<dyn std::error::Error + Send + Sync>> {
         // 1. Check if process still alive
-        let process_alive = crate::infra::process::is_process_alive(self.pid);
+        let process_alive = crate::infra::process::is_process_alive(self.config.pid);
 
         // 2. Get CPU/memory usage
         let (cpu_percent, memory_mb) = if process_alive {
-            self.get_process_metrics(self.pid).await.unwrap_or((0, 0))
+            self.get_process_metrics(self.config.pid)
+                .await
+                .unwrap_or((0, 0))
         } else {
             (0, 0)
         };
 
         // 3. Query RedEDR for event count (lightweight, best effort)
-        let stats_url = format!("{}/api/stats", self.rededr_base_url);
+        let stats_url = format!("{}/api/stats", self.config.rededr_base_url);
         let events_count = match self.client.get(&stats_url).send().await {
             Ok(response) => match response.text().await {
                 Ok(body_text) => {
@@ -267,7 +255,7 @@ impl ExecutionMonitor {
         };
 
         Ok(ExecutionStatus {
-            pid: self.pid as i32,
+            pid: self.config.pid as i32,
             elapsed_seconds: self.start_time.elapsed().as_secs() as i32,
             process_alive,
             cpu_percent,
@@ -287,11 +275,11 @@ impl ExecutionMonitor {
         details: &str,
     ) {
         let report = ExecutionStatusReport {
-            worker_id: self.worker_id.clone(),
-            worker_ip: self.worker_ip.clone(),
-            job_id: self.job_id.clone(),
-            run_id: self.run_id.clone(),
-            artifact_name: self.artifact_name.clone(),
+            worker_id: self.config.worker_id.clone(),
+            worker_ip: self.config.worker_ip.clone(),
+            job_id: self.config.job_id.clone(),
+            run_id: self.config.run_id.clone(),
+            artifact_name: self.config.artifact_name.clone(),
             pid: status.pid,
             elapsed_seconds: status.elapsed_seconds,
             process_alive: status.process_alive,
@@ -307,19 +295,19 @@ impl ExecutionMonitor {
             Ok(Ok(())) => {
                 debug!(
                     "Monitor: Execution status sent [event: {}, job: {}]",
-                    event_type, self.job_id
+                    event_type, self.config.job_id
                 );
             }
             Ok(Err(e)) => {
                 warn!(
                     "[!] Monitor: Failed to send execution status [event: {}, job: {}]: {}",
-                    event_type, self.job_id, e
+                    event_type, self.config.job_id, e
                 );
             }
             Err(_) => {
                 warn!(
                     "[!] Monitor: Execution status send timeout (>1s) [event: {}, job: {}]",
-                    event_type, self.job_id
+                    event_type, self.config.job_id
                 );
                 warn!("   Stream may be blocked - monitoring will continue");
             }
@@ -362,7 +350,7 @@ impl ExecutionMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::sink::NullSink;
+    use crate::execution::sink::NullSink;
 
     #[test]
     fn test_monitor_creation() {
@@ -380,13 +368,13 @@ mod tests {
             Arc::new(NullSink),
         );
 
-        assert_eq!(monitor.run_id, "run-test-001");
-        assert_eq!(monitor.job_id, "job-test-001");
-        assert_eq!(monitor.worker_id, "worker-01");
-        assert_eq!(monitor.worker_ip, "10.200.200.11");
-        assert_eq!(monitor.artifact_name, "test-artifact.exe");
-        assert_eq!(monitor.pid, 1234);
-        assert_eq!(monitor.rededr_base_url, "http://localhost:8081");
-        assert_eq!(monitor.timeout_seconds, 30);
+        assert_eq!(monitor.config.run_id, "run-test-001");
+        assert_eq!(monitor.config.job_id, "job-test-001");
+        assert_eq!(monitor.config.worker_id, "worker-01");
+        assert_eq!(monitor.config.worker_ip, "10.200.200.11");
+        assert_eq!(monitor.config.artifact_name, "test-artifact.exe");
+        assert_eq!(monitor.config.pid, 1234);
+        assert_eq!(monitor.config.rededr_base_url, "http://localhost:8081");
+        assert_eq!(monitor.config.timeout_seconds, 30);
     }
 }

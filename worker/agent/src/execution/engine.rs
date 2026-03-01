@@ -7,14 +7,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
-use crate::dispatch::classifier;
-use crate::dispatch::guards::{DELAY, MonitorGuard, ProcessGuard, RedEdrGuard};
-use crate::dispatch::sink::ControlPlaneSink;
-use crate::dispatch::types::{
+use crate::constants::CLEANUP_TIMEOUT_SECS;
+use crate::execution::classifier;
+use crate::execution::guards::{MonitorGuard, ProcessGuard, RedEdrGuard};
+use crate::execution::sink::ControlPlaneSink;
+use crate::execution::types::{
     EXIT_NO_CODE, EXIT_TIMEOUT, EXIT_WAIT_FAILED, RunContext, RunOutcome, RunPhaseTimings,
     RunRequest,
 };
-use crate::infra::helpers;
 use crate::telemetry;
 
 /// Errors during execution setup (before process spawns)
@@ -243,28 +243,7 @@ pub async fn execute_run(
         }
 
         warn!(
-            "Sending contaminated events to controller with metadata: job_id=contaminated, artifact_id=unknown"
-        );
-
-        let _contaminated_events: Vec<crate::automutate::common::TelemetryData> = pre_run_events
-            .into_iter()
-            .map(|mut event| {
-                event.job_id = "contaminated".to_string();
-                event
-                    .metadata
-                    .insert("artifact_id".to_string(), "unknown".to_string());
-                event.metadata.insert(
-                    "run_id".to_string(),
-                    format!("contaminated-{}", chrono::Utc::now().timestamp()),
-                );
-                event
-                    .metadata
-                    .insert("contamination_detected".to_string(), "true".to_string());
-                event
-            })
-            .collect();
-        warn!(
-            "{} contaminated events detected but not sent",
+            "{} contaminated events discarded (not sent to controller)",
             leftover_count
         );
 
@@ -448,8 +427,8 @@ pub async fn execute_run(
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(100);
 
-    let monitor = crate::dispatch::monitor::ExecutionMonitor::new(
-        crate::dispatch::monitor::MonitorConfig {
+    let monitor = crate::execution::monitor::ExecutionMonitor::new(
+        crate::execution::monitor::MonitorConfig {
             run_id: request.run_id.clone(),
             job_id: request.job_id.clone(),
             worker_id: context.worker_id.clone(),
@@ -597,10 +576,13 @@ pub async fn execute_run(
     trace_handle.abort();
     drop(trace_tx);
 
-    match tokio::time::timeout(Duration::from_secs(DELAY), streaming_handle).await {
+    match tokio::time::timeout(Duration::from_secs(CLEANUP_TIMEOUT_SECS), streaming_handle).await {
         Ok(Ok(())) => info!("Streaming writer completed successfully"),
         Ok(Err(e)) => error!("Streaming writer panicked: {:?}", e),
-        Err(_) => warn!("Streaming writer timeout after {} seconds", DELAY),
+        Err(_) => warn!(
+            "Streaming writer timeout after {} seconds",
+            CLEANUP_TIMEOUT_SECS
+        ),
     }
 
     // ====================================================================
@@ -647,8 +629,12 @@ pub async fn execute_run(
             coverage_bin_path, coverage_bbs_path
         );
 
-        match helpers::collect_bb_coverage(&coverage_bin_path, &coverage_bbs_path, &request.job_id)
-            .await
+        match crate::telemetry::pipeline::collect_bb_coverage(
+            &coverage_bin_path,
+            &coverage_bbs_path,
+            &request.job_id,
+        )
+        .await
         {
             Ok(coverage_event) => {
                 info!(
@@ -685,7 +671,12 @@ pub async fn execute_run(
     if checkpoints_path.exists() {
         info!("Found API checkpoints file: {:?}", checkpoints_path);
 
-        match helpers::collect_api_checkpoints(&checkpoints_path, &request.job_id).await {
+        match crate::telemetry::pipeline::collect_api_checkpoints(
+            &checkpoints_path,
+            &request.job_id,
+        )
+        .await
+        {
             Ok(checkpoint_events) => {
                 let checkpoint_count = checkpoint_events.len();
                 info!("Collected {} API checkpoint events", checkpoint_count);

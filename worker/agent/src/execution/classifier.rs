@@ -14,7 +14,7 @@
 pub use automutate_common::DetectionVerdict;
 
 use crate::automutate::common::TelemetryData;
-use crate::dispatch::types::{EXIT_INFRA, EXIT_NO_CODE, EXIT_TIMEOUT, EXIT_WAIT_FAILED};
+use crate::execution::types::{EXIT_INFRA, EXIT_NO_CODE, EXIT_TIMEOUT, EXIT_WAIT_FAILED};
 use automutate_common::has_launched;
 
 /// Known AV/EDR NTSTATUS termination codes.

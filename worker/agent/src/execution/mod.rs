@@ -1,4 +1,4 @@
-/// Execution dispatch, monitoring, and state management
+/// Execution engine, monitoring, and state management
 ///
 /// Provides execution guards, monitoring, typed domain types,
 /// control plane sink, and state management for artifact execution lifecycle.

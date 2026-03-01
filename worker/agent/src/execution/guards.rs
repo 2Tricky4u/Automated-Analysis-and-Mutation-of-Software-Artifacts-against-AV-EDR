@@ -1,7 +1,6 @@
+use crate::constants::CLEANUP_TIMEOUT_SECS;
 use crate::telemetry;
 use std::time::Duration;
-
-pub const DELAY: u64 = 10;
 
 // ============================================================================
 // RAII Guards for Resource Cleanup
@@ -43,21 +42,30 @@ impl Drop for RedEdrGuard {
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 // Fire-and-forget: spawn cleanup on the existing runtime
                 handle.spawn(async move {
-                    let client = reqwest::Client::builder()
-                        .timeout(Duration::from_secs(DELAY))
+                    let client = match reqwest::Client::builder()
+                        .timeout(Duration::from_secs(CLEANUP_TIMEOUT_SECS))
                         .build()
-                        .unwrap();
+                    {
+                        Ok(client) => client,
+                        Err(e) => {
+                            tracing::error!(
+                                "RedEDR cleanup in Drop: failed to build HTTP client: {}",
+                                e
+                            );
+                            return;
+                        }
+                    };
                     let url = format!("{}/api/trace/reset", base_url);
                     if let Err(e) = client.post(&url).send().await {
-                        eprintln!("RedEDR cleanup in Drop failed: {}", e);
+                        tracing::error!("RedEDR cleanup in Drop failed: {}", e);
                     } else {
-                        eprintln!("RedEDR cleanup in Drop succeeded (error path)");
+                        tracing::warn!("RedEDR cleanup in Drop succeeded (error path)");
                     }
                 });
             } else {
                 // Fallback: no runtime available (shouldn't happen, but defensive)
-                eprintln!("RedEDR cleanup skipped: no tokio runtime available in Drop");
-                eprintln!("WARNING: RedEDR may be contaminated for the next run");
+                tracing::error!("RedEDR cleanup skipped: no tokio runtime available in Drop");
+                tracing::warn!("RedEDR may be contaminated for the next run");
             }
         }
     }
@@ -97,7 +105,7 @@ impl MonitorGuard {
 
         // Wait for monitor to finish
         if let Some(handle) = self.handle.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(DELAY), handle).await;
+            let _ = tokio::time::timeout(Duration::from_secs(CLEANUP_TIMEOUT_SECS), handle).await;
         }
     }
 }
@@ -146,9 +154,9 @@ impl Drop for ProcessGuard {
         {
             // start_kill() is synchronous — sends kill signal without awaiting
             if let Err(e) = child.start_kill() {
-                eprintln!("Failed to kill process in Drop: {}", e);
+                tracing::error!("Failed to kill process in Drop: {}", e);
             } else {
-                eprintln!("Process kill signal sent in Drop (error path)");
+                tracing::warn!("Process kill signal sent in Drop (error path)");
             }
         }
     }
