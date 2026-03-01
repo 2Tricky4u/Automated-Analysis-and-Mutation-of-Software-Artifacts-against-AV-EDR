@@ -225,6 +225,21 @@ impl BinaryMutator {
         self.read_u32(self.optional_header_offset() + 0x3C)
     }
 
+    /// Compute the next available section VA (aligned to SectionAlignment).
+    fn next_section_va(&self) -> u32 {
+        let (sec_table_off, num_sec) = self.section_table_info();
+        let sec_align = self.section_alignment();
+        if num_sec > 0 {
+            let last = sec_table_off + (num_sec - 1) * SECTION_HEADER_SIZE;
+            let last_va = self.read_u32(last + 12);
+            let last_vs = self.read_u32(last + 8);
+            let last_rs = self.read_u32(last + 16);
+            align_up(last_va + std::cmp::max(last_vs, last_rs), sec_align)
+        } else {
+            align_up(self.size_of_headers(), sec_align)
+        }
+    }
+
     /// Set NumberOfSections in COFF header
     fn set_num_sections(&mut self, val: u16) {
         let e_lfanew = self.read_u32(0x3C) as usize;
@@ -528,18 +543,7 @@ impl BinaryMutator {
         };
 
         // Calculate where new section will go
-        let (sec_table_off, num_sec) = self.section_table_info();
-        let sec_align = self.section_alignment();
-
-        let new_section_va = if num_sec > 0 {
-            let last = sec_table_off + (num_sec - 1) * SECTION_HEADER_SIZE;
-            let last_va = self.read_u32(last + 12);
-            let last_vs = self.read_u32(last + 8);
-            let last_rs = self.read_u32(last + 16);
-            align_up(last_va + std::cmp::max(last_vs, last_rs), sec_align)
-        } else {
-            align_up(self.size_of_headers(), sec_align)
-        };
+        let new_section_va = self.next_section_va();
 
         // Build the import section data
         let section_data = build_import_section(&existing_idt_bytes, &new_dlls, new_section_va);
@@ -619,18 +623,7 @@ impl BinaryMutator {
         let manifest_data = build_manifest(product_name, company).into_bytes();
 
         // Calculate where new section will go
-        let (sec_table_off, num_sec) = self.section_table_info();
-        let sec_align = self.section_alignment();
-
-        let new_section_va = if num_sec > 0 {
-            let last = sec_table_off + (num_sec - 1) * SECTION_HEADER_SIZE;
-            let last_va = self.read_u32(last + 12);
-            let last_vs = self.read_u32(last + 8);
-            let last_rs = self.read_u32(last + 16);
-            align_up(last_va + std::cmp::max(last_vs, last_rs), sec_align)
-        } else {
-            align_up(self.size_of_headers(), sec_align)
-        };
+        let new_section_va = self.next_section_va();
 
         // Build resource directory + data
         let section_data = build_resource_section(&version_data, &manifest_data, new_section_va);
@@ -1119,47 +1112,11 @@ fn build_resource_section(version_data: &[u8], manifest_data: &[u8], section_rva
 
     let directories_end: usize = 0xA0; // after all directories + data entries
     let ver_data_offset = directories_end;
-    let ver_data_aligned = align_up_u32(version_data.len() as u32, 4) as usize;
+    let ver_data_aligned = align_up(version_data.len() as u32, 4) as usize;
     let manifest_data_offset = ver_data_offset + ver_data_aligned;
     let total_size = manifest_data_offset + manifest_data.len();
 
     let mut data = vec![0u8; total_size];
-
-    // ── Root Directory @ 0x00 ──
-    // NumberOfIdEntries = 2
-    write_u16_at(&mut data, 0x0C, 0); // NumberOfNamedEntries
-    write_u16_at(&mut data, 0x0E, 2); // NumberOfIdEntries
-
-    // Entry[0]: RT_VERSION → subdirectory at 0x20
-    write_u32_at(&mut data, 0x10, RT_VERSION); // ID
-    write_u32_at(&mut data, 0x14, 0x20 | 0x8000_0000); // Offset (high bit = subdirectory)
-
-    // Entry[1]: RT_MANIFEST → subdirectory at 0x38
-    write_u32_at(&mut data, 0x18, RT_MANIFEST);
-    write_u32_at(&mut data, 0x1C, 0x38 | 0x8000_0000);
-
-    // ── Version Name Directory @ 0x20 ──
-    write_u16_at(&mut data, 0x2C, 0); // Named
-    write_u16_at(&mut data, 0x2E, 1); // ID entries
-    // Entry: ID=1 → subdirectory at 0x50
-    write_u32_at(&mut data, 0x30, 1); // Resource Name/ID = 1
-    write_u32_at(&mut data, 0x34, 0x50 | 0x8000_0000);
-
-    // ── Manifest Name Directory @ 0x38 ──
-    write_u16_at(&mut data, 0x48, 0);
-    write_u16_at(&mut data, 0x4A, 1);
-    // Entry: ID=1 → subdirectory at 0x68
-    write_u32_at(&mut data, 0x4C, 1);
-    write_u32_at(&mut data, 0x50 - 4, 0x68 | 0x8000_0000); // 0x4C + 4 = 0x50
-
-    // Wait, let me recalculate offsets more carefully.
-    // The directory entries start after the directory header.
-    // At 0x38: directory header (16 bytes) → entries start at 0x48
-    // But I wrote NumberOfIdEntries at 0x48/0x4A. That's wrong.
-    // Let me redo with explicit offset tracking.
-
-    // Actually let me just zero the buffer and write everything at explicit offsets.
-    data.fill(0);
 
     // Root directory (0x00..0x10)
     write_u16_at(&mut data, 0x0E, 2); // 2 ID entries
@@ -1279,14 +1236,7 @@ fn estimate_entropy_padding(current_size: usize, current_h: f64, target_h: f64) 
 }
 
 fn align_up(val: u32, align: u32) -> u32 {
-    if align == 0 {
-        return val;
-    }
-    (val + align - 1) & !(align - 1)
-}
-
-fn align_up_u32(val: u32, align: u32) -> u32 {
-    align_up(val, align)
+    super::binary_data::align_up(val as u64, align as u64) as u32
 }
 
 fn write_u16_at(buf: &mut [u8], offset: usize, val: u16) {
@@ -1311,7 +1261,7 @@ mod tests {
     use crate::transform::binary_data;
     use std::collections::HashMap;
 
-    /// Build a minimal valid PE32+ (x64) for testing
+    /// Build a valid PE32+ (x64) for testing with configurable header size and section name.
     ///
     /// Layout:
     /// - DOS header at 0x00 (64 bytes), e_lfanew = 0x80
@@ -1320,99 +1270,73 @@ mod tests {
     /// - COFF header at 0x84
     /// - Optional header (PE32+) at 0x98 (240 bytes)
     /// - Section table at 0x188 (1 section, 40 bytes)
-    /// - Padding to 0x200
-    /// - .text section data at 0x200 (512 bytes)
-    fn create_test_pe() -> Vec<u8> {
+    /// - Padding to `headers_size`
+    /// - .text section data at `headers_size` (512 bytes)
+    fn create_test_pe_with_opts(headers_size: u32, section_name: &[u8; 8]) -> Vec<u8> {
         let file_alignment: u32 = 0x200;
         let section_alignment: u32 = 0x1000;
-        let headers_size: u32 = 0x200;
         let text_va: u32 = 0x1000;
         let text_raw_size: u32 = 0x200;
         let size_of_image: u32 = 0x2000;
 
         let mut pe = vec![0u8; (headers_size + text_raw_size) as usize];
 
-        // ── DOS Header ──
+        // DOS Header
         pe[0] = b'M';
         pe[1] = b'Z';
-        // e_lfanew at 0x3C
         write_u32_at(&mut pe, 0x3C, 0x80);
 
-        // ── PE Signature at 0x80 ──
+        // PE Signature at 0x80
         pe[0x80] = b'P';
         pe[0x81] = b'E';
-        // 0x82, 0x83 = 0x00
 
-        // ── COFF Header at 0x84 ──
+        // COFF Header at 0x84
         write_u16_at(&mut pe, 0x84, 0x8664); // Machine = AMD64
         write_u16_at(&mut pe, 0x86, 1); // NumberOfSections
         write_u32_at(&mut pe, 0x88, 0x6789_ABCD); // TimeDateStamp
-        // PointerToSymbolTable, NumberOfSymbols = 0
         write_u16_at(&mut pe, 0x94, 0xF0); // SizeOfOptionalHeader = 240
-        write_u16_at(&mut pe, 0x96, 0x0022); // Characteristics (EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE)
+        write_u16_at(&mut pe, 0x96, 0x0022); // Characteristics
 
-        // ── Optional Header at 0x98 ──
+        // Optional Header at 0x98
         let opt = 0x98;
         write_u16_at(&mut pe, opt, 0x020B); // Magic = PE32+
         pe[opt + 2] = 14; // MajorLinkerVersion
-        pe[opt + 3] = 0; // MinorLinkerVersion
-
-        // SizeOfCode
         write_u32_at(&mut pe, opt + 4, text_raw_size);
-        // AddressOfEntryPoint
         write_u32_at(&mut pe, opt + 16, text_va);
-        // ImageBase (PE32+: 8 bytes at offset 24)
         write_u64_at(&mut pe, opt + 24, 0x0000_0001_4000_0000);
-        // SectionAlignment
         write_u32_at(&mut pe, opt + 32, section_alignment);
-        // FileAlignment
         write_u32_at(&mut pe, opt + 36, file_alignment);
-
-        // MajorOperatingSystemVersion
         write_u16_at(&mut pe, opt + 40, 6);
-        // MinorOperatingSystemVersion
         write_u16_at(&mut pe, opt + 42, 0);
-        // MajorSubsystemVersion
         write_u16_at(&mut pe, opt + 48, 6);
-
-        // SizeOfImage
         write_u32_at(&mut pe, opt + 56, size_of_image);
-        // SizeOfHeaders
         write_u32_at(&mut pe, opt + 60, headers_size);
-        // Subsystem = WINDOWS_CUI (3)
         write_u16_at(&mut pe, opt + 68, 3);
-        // DllCharacteristics
-        write_u16_at(&mut pe, opt + 70, 0x8160); // NX | DYNAMIC_BASE | HIGH_ENTROPY_VA | TERMINAL_SERVER_AWARE
-
-        // SizeOfStackReserve (8 bytes at offset 72)
+        write_u16_at(&mut pe, opt + 70, 0x8160);
         write_u64_at(&mut pe, opt + 72, 0x100000);
-        // SizeOfStackCommit
         write_u64_at(&mut pe, opt + 80, 0x1000);
-        // SizeOfHeapReserve
         write_u64_at(&mut pe, opt + 88, 0x100000);
-        // SizeOfHeapCommit
         write_u64_at(&mut pe, opt + 96, 0x1000);
-
-        // NumberOfRvaAndSizes
         write_u32_at(&mut pe, opt + 108, 16);
 
-        // DataDirectories: 16 * 8 = 128 bytes (all zeros for now)
-        // offset 112..240
-
-        // ── Section Table at 0x188 ──
+        // Section Table at 0x188
         let sec = 0x188;
-        // .text section
-        pe[sec..sec + 5].copy_from_slice(b".text");
-        write_u32_at(&mut pe, sec + 8, 0x10); // VirtualSize
-        write_u32_at(&mut pe, sec + 12, text_va); // VirtualAddress
-        write_u32_at(&mut pe, sec + 16, text_raw_size); // SizeOfRawData
-        write_u32_at(&mut pe, sec + 20, headers_size); // PointerToRawData
+        pe[sec..sec + 8].copy_from_slice(section_name);
+        write_u32_at(&mut pe, sec + 8, 0x10);
+        write_u32_at(&mut pe, sec + 12, text_va);
+        write_u32_at(&mut pe, sec + 16, text_raw_size);
+        write_u32_at(&mut pe, sec + 20, headers_size);
         write_u32_at(&mut pe, sec + 36, 0x6000_0020); // CODE | EXECUTE | READ
 
         // .text section data: just a "ret" instruction
         pe[headers_size as usize] = 0xC3;
 
         pe
+    }
+
+    /// Build a minimal valid PE32+ (x64) for testing
+    fn create_test_pe() -> Vec<u8> {
+        create_test_pe_with_opts(0x200, b".text\0\0\0")
     }
 
     #[test]
@@ -1631,71 +1555,14 @@ mod tests {
 
     /// Build a test PE with a non-standard code section name for section_rename tests
     fn create_test_pe_with_custom_section() -> Vec<u8> {
-        let mut pe = create_test_pe();
-        // Overwrite the .text section name with ".foo\0\0\0\0"
-        let sec = 0x188;
-        pe[sec..sec + 8].copy_from_slice(b".foo\0\0\0\0");
-        pe
+        create_test_pe_with_opts(0x200, b".foo\0\0\0\0")
     }
 
     /// Build a test PE with large headers (room for many section entries)
     ///
     /// SizeOfHeaders = 0x600, which gives room for (0x600 - 0x188) / 40 = ~28 sections.
     fn create_test_pe_large_headers() -> Vec<u8> {
-        let file_alignment: u32 = 0x200;
-        let section_alignment: u32 = 0x1000;
-        let headers_size: u32 = 0x600; // 1536 bytes — room for many section headers
-        let text_va: u32 = 0x1000;
-        let text_raw_size: u32 = 0x200;
-        let size_of_image: u32 = 0x2000;
-
-        let mut pe = vec![0u8; (headers_size + text_raw_size) as usize];
-
-        pe[0] = b'M';
-        pe[1] = b'Z';
-        write_u32_at(&mut pe, 0x3C, 0x80);
-
-        pe[0x80] = b'P';
-        pe[0x81] = b'E';
-
-        write_u16_at(&mut pe, 0x84, 0x8664);
-        write_u16_at(&mut pe, 0x86, 1);
-        write_u32_at(&mut pe, 0x88, 0x6789_ABCD);
-        write_u16_at(&mut pe, 0x94, 0xF0);
-        write_u16_at(&mut pe, 0x96, 0x0022);
-
-        let opt = 0x98;
-        write_u16_at(&mut pe, opt, 0x020B);
-        pe[opt + 2] = 14;
-        write_u32_at(&mut pe, opt + 4, text_raw_size);
-        write_u32_at(&mut pe, opt + 16, text_va);
-        write_u64_at(&mut pe, opt + 24, 0x0000_0001_4000_0000);
-        write_u32_at(&mut pe, opt + 32, section_alignment);
-        write_u32_at(&mut pe, opt + 36, file_alignment);
-        write_u16_at(&mut pe, opt + 40, 6);
-        write_u16_at(&mut pe, opt + 42, 0);
-        write_u16_at(&mut pe, opt + 48, 6);
-        write_u32_at(&mut pe, opt + 56, size_of_image);
-        write_u32_at(&mut pe, opt + 60, headers_size);
-        write_u16_at(&mut pe, opt + 68, 3);
-        write_u16_at(&mut pe, opt + 70, 0x8160);
-        write_u64_at(&mut pe, opt + 72, 0x100000);
-        write_u64_at(&mut pe, opt + 80, 0x1000);
-        write_u64_at(&mut pe, opt + 88, 0x100000);
-        write_u64_at(&mut pe, opt + 96, 0x1000);
-        write_u32_at(&mut pe, opt + 108, 16);
-
-        let sec = 0x188;
-        pe[sec..sec + 8].copy_from_slice(b".foo\0\0\0\0");
-        write_u32_at(&mut pe, sec + 8, 0x10);
-        write_u32_at(&mut pe, sec + 12, text_va);
-        write_u32_at(&mut pe, sec + 16, text_raw_size);
-        write_u32_at(&mut pe, sec + 20, headers_size);
-        write_u32_at(&mut pe, sec + 36, 0x6000_0020); // CODE | EXECUTE | READ
-
-        pe[headers_size as usize] = 0xC3;
-
-        pe
+        create_test_pe_with_opts(0x600, b".foo\0\0\0\0")
     }
 
     #[test]

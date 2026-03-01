@@ -550,6 +550,14 @@ fn pad_to_dword(buf: &mut Vec<u8>) {
 }
 
 fn align_up_usize(val: usize, align: usize) -> usize {
+    align_up(val as u64, align as u64) as usize
+}
+
+/// Align `val` up to the next multiple of `align`.
+pub(crate) fn align_up(val: u64, align: u64) -> u64 {
+    if align == 0 {
+        return val;
+    }
     (val + align - 1) & !(align - 1)
 }
 

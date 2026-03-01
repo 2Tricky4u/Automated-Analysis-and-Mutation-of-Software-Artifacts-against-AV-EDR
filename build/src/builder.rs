@@ -70,23 +70,6 @@ pub struct BuiltArtifact {
     pub assembled_source: Option<String>,
 }
 
-/// Template-specific library dependencies
-/// Returns base library names (without .lib extension or -Wl prefix)
-/// Caller is responsible for formatting for specific linker
-fn get_template_libs(_template_name: &str) -> &'static [&'static str] {
-    // Modular templates link all needed libs via the standard flags;
-    // no per-template overrides are required.
-    &[]
-}
-
-/// Format template-specific library names as clang `-Wl,-defaultlib:name` args
-fn format_template_lib_args(template_name: &str) -> Vec<String> {
-    get_template_libs(template_name)
-        .iter()
-        .map(|lib| format!("-Wl,-defaultlib:{}", lib))
-        .collect()
-}
-
 /// Precomputed payload data (encoding + optional SC checkpoint table).
 ///
 /// Produced by [`prepare_payload`]. Deterministic: same inputs → same output.
@@ -342,7 +325,7 @@ impl ArtifactBuilder {
     /// Invoke Clang with xwin SDK to cross-compile C to Windows PE with optional runtime linking
     async fn invoke_clang_internal(
         &self,
-        template_name: &str,
+        _template_name: &str,
         source: &Path,
         output: &Path,
         link_runtime: bool,
@@ -397,12 +380,6 @@ impl ArtifactBuilder {
         // Define ENABLE_INSTRUMENTATION macro only when runtime will be linked
         if link_runtime {
             args.push("-DENABLE_INSTRUMENTATION");
-        }
-
-        // Add template-specific libraries (format for clang wrapper: -Wl,-defaultlib:name)
-        let formatted_lib_args = format_template_lib_args(template_name);
-        for lib_arg in &formatted_lib_args {
-            args.push(lib_arg.as_str());
         }
 
         // Compile minimal_runtime.o only when instrumentation is enabled.
@@ -570,7 +547,7 @@ impl ArtifactBuilder {
         &self,
         ir_path: &Path,
         exe_path: &Path,
-        template_name: &str,
+        _template_name: &str,
     ) -> Result<()> {
         let xwin = &self.xwin;
 
@@ -583,12 +560,6 @@ impl ArtifactBuilder {
             "-Wl,-defaultlib:libcmt",
             "-Wl,-defaultlib:kernel32",
         ]);
-
-        // Add template-specific libraries (format for clang wrapper: -Wl,-defaultlib:name)
-        let formatted_lib_args = format_template_lib_args(template_name);
-        for lib_arg in &formatted_lib_args {
-            args.push(lib_arg.as_str());
-        }
 
         args.push("-o");
         args.push(exe_path.to_str().unwrap());
@@ -631,19 +602,12 @@ impl ArtifactBuilder {
     }
 
     /// Get compiler flags used for this template (for metadata)
-    fn get_compiler_flags(&self, template_name: &str) -> Vec<String> {
-        let mut flags = vec![
+    fn get_compiler_flags(&self, _template_name: &str) -> Vec<String> {
+        vec![
             "-target x86_64-pc-windows-msvc".to_string(),
             "-O2".to_string(),
             "-fuse-ld=lld".to_string(),
-        ];
-
-        // Add template-specific libs
-        for lib in get_template_libs(template_name) {
-            flags.push(lib.to_string());
-        }
-
-        flags
+        ]
     }
 
     /// Compile LLVM IR to object file
@@ -689,21 +653,13 @@ impl ArtifactBuilder {
         debug!("Applying instrumentation: trace_mode={}", trace_mode_str);
 
         // Parse trace_mode string to crate::TraceMode enum
-        let trace_mode = match trace_mode_str {
-            "off" => crate::TraceMode::Off,
-            "api" => crate::TraceMode::Api,
-            "bb" => crate::TraceMode::BB,
-            "api+bb" => crate::TraceMode::ApiPlusBB,
-            "lines" => crate::TraceMode::Lines,
-            "all" => crate::TraceMode::All,
-            _ => {
-                warn!(
-                    "Unknown trace_mode '{}', defaulting to 'lines'",
-                    trace_mode_str
-                );
-                crate::TraceMode::Lines
-            }
-        };
+        let trace_mode: crate::TraceMode = trace_mode_str.parse().unwrap_or_else(|_| {
+            warn!(
+                "Unknown trace_mode '{}', defaulting to 'lines'",
+                trace_mode_str
+            );
+            crate::TraceMode::Lines
+        });
 
         if trace_mode == crate::TraceMode::Off {
             debug!("Instrumentation disabled (trace_mode=off)");
@@ -1035,11 +991,9 @@ impl ArtifactBuilder {
         obj_path: &Path,
         runtime_obj: &Path,
         output_exe: &Path,
-        template_name: &str,
+        _template_name: &str,
         extra_objs: &[&Path],
     ) -> Result<()> {
-        let template_libs = get_template_libs(template_name);
-
         // Use full path to lld-link (WSL has it at /usr/lib/llvm-17/bin/lld-link)
         let lld_link_path = if cfg!(target_os = "linux") {
             "/usr/lib/llvm-17/bin/lld-link"
@@ -1068,11 +1022,6 @@ impl ArtifactBuilder {
         // Add xwin library paths (CRT and Windows SDK)
         for arg in self.xwin.lld_lib_args() {
             cmd.arg(arg);
-        }
-
-        // Add template-specific libraries
-        for lib in template_libs {
-            cmd.arg(format!("{}.lib", lib));
         }
 
         // Add standard Windows libraries

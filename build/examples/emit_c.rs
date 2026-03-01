@@ -14,7 +14,6 @@ use build::{
     Assembler, EncodingType, ModuleSelection, PayloadEncoder, SourceLanguage, TraceFormat,
     inject_line_traces_with_opts, strip_mutation_markers,
 };
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::{env, fs, process};
 
@@ -192,7 +191,7 @@ impl Args {
                 }
                 "--mutation" | "-m" => {
                     i += 1;
-                    a.mutations.push(parse_mutation_spec(&argv[i]));
+                    a.mutations.push(MutationSpec::from_cli_str(&argv[i]));
                 }
                 other => {
                     eprintln!("Unknown argument: {}", other);
@@ -202,31 +201,6 @@ impl Args {
             i += 1;
         }
         a
-    }
-}
-
-/// Parse "id:key=val,key=val" into a MutationSpec.
-/// Examples:
-///   "ast.string_xor"                        → id="ast.string_xor", params={}
-///   "ast.decon_rounds:count=50,method=fixed" → id="ast.decon_rounds", params={count:50, method:fixed}
-fn parse_mutation_spec(s: &str) -> MutationSpec {
-    if let Some((id, params_str)) = s.split_once(':') {
-        let params: HashMap<String, String> = params_str
-            .split(',')
-            .filter_map(|kv| {
-                let (k, v) = kv.split_once('=')?;
-                Some((k.to_string(), v.to_string()))
-            })
-            .collect();
-        MutationSpec {
-            id: id.to_string(),
-            params,
-        }
-    } else {
-        MutationSpec {
-            id: s.to_string(),
-            params: HashMap::new(),
-        }
     }
 }
 

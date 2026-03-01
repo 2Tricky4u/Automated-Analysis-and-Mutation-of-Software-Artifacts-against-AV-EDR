@@ -72,7 +72,7 @@ pub fn inject_line_traces_with_opts(
 /// Inject line tracing statements with configurable delay loop iterations
 pub fn inject_line_traces_with_delay(
     source: &str,
-    language: SourceLanguage,
+    _language: SourceLanguage,
     file_path: &str,
     format: TraceFormat,
     delay_iterations: u32,
@@ -93,7 +93,7 @@ pub fn inject_line_traces_with_delay(
 
     // Collect all statement locations where we want to inject traces
     let mut injections =
-        collect_injection_points(&root, source, language, file_path, format, delay_iterations)?;
+        collect_injection_points(&root, source, file_path, format, delay_iterations)?;
 
     // Sort by offset (descending) so we can inject without shifting offsets
     injections.sort_by_key(|(offset, _)| std::cmp::Reverse(*offset));
@@ -125,7 +125,6 @@ pub fn inject_line_traces_with_delay(
 fn collect_injection_points(
     root: &Node,
     source: &str,
-    language: SourceLanguage,
     file_path: &str,
     format: TraceFormat,
     delay_iterations: u32,
@@ -136,7 +135,6 @@ fn collect_injection_points(
     visit_node(
         root,
         source,
-        language,
         file_path,
         format,
         delay_iterations,
@@ -150,7 +148,6 @@ fn collect_injection_points(
 fn visit_node(
     node: &Node,
     source: &str,
-    language: SourceLanguage,
     file_path: &str,
     format: TraceFormat,
     delay_iterations: u32,
@@ -180,7 +177,6 @@ fn visit_node(
                     let trace_stmt = generate_trace_statement(
                         start_line,
                         &indent,
-                        language,
                         file_path,
                         format,
                         delay_iterations,
@@ -191,33 +187,17 @@ fn visit_node(
         }
 
         // Emit flag declarations BEFORE the loop and deferred traces AFTER it.
-        // Declarations must be outside the loop's compound_statement so the
-        // names are visible at the deferred trace site after the loop.
         if parent_is_loop && !deferred_lines.is_empty() {
-            deferred_lines.dedup(); // Remove consecutive duplicate line numbers (same-line statements)
             let loop_node = node.parent().unwrap();
-            let loop_indent = calculate_indentation(source, loop_node.start_byte());
-
-            // Flag declarations before the loop
-            let mut declarations = String::new();
-            for line in &deferred_lines {
-                declarations.push_str(&generate_flag_declaration(*line, &loop_indent));
-            }
-            injections.push((loop_node.start_byte(), declarations));
-
-            // Deferred conditional traces after the loop
-            let mut deferred_block = String::from("\n");
-            for line in &deferred_lines {
-                deferred_block.push_str(&generate_deferred_trace(
-                    *line,
-                    &loop_indent,
-                    language,
-                    file_path,
-                    format,
-                    delay_iterations,
-                ));
-            }
-            injections.push((loop_node.end_byte(), deferred_block));
+            emit_deferred_loop_traces(
+                &loop_node,
+                source,
+                &mut deferred_lines,
+                file_path,
+                format,
+                delay_iterations,
+                injections,
+            );
         }
     }
 
@@ -249,7 +229,6 @@ fn visit_node(
                     let trace_stmt = generate_trace_statement(
                         start_line,
                         &indent,
-                        language,
                         file_path,
                         format,
                         delay_iterations,
@@ -262,29 +241,15 @@ fn visit_node(
         if let Some(loop_node) = enclosing_loop
             && !deferred_lines.is_empty()
         {
-            deferred_lines.dedup(); // Remove consecutive duplicate line numbers (same-line statements)
-            let loop_indent = calculate_indentation(source, loop_node.start_byte());
-
-            // Flag declarations before the loop
-            let mut declarations = String::new();
-            for line in &deferred_lines {
-                declarations.push_str(&generate_flag_declaration(*line, &loop_indent));
-            }
-            injections.push((loop_node.start_byte(), declarations));
-
-            // Deferred conditional traces after the loop
-            let mut deferred_block = String::from("\n");
-            for line in &deferred_lines {
-                deferred_block.push_str(&generate_deferred_trace(
-                    *line,
-                    &loop_indent,
-                    language,
-                    file_path,
-                    format,
-                    delay_iterations,
-                ));
-            }
-            injections.push((loop_node.end_byte(), deferred_block));
+            emit_deferred_loop_traces(
+                &loop_node,
+                source,
+                &mut deferred_lines,
+                file_path,
+                format,
+                delay_iterations,
+                injections,
+            );
         }
     }
 
@@ -293,13 +258,49 @@ fn visit_node(
         visit_node(
             &child,
             source,
-            language,
             file_path,
             format,
             delay_iterations,
             injections,
         );
     }
+}
+
+/// Emit flag declarations before a loop and deferred conditional traces after it.
+///
+/// Declarations must be outside the loop so the names are visible both inside
+/// the loop body and at the deferred trace site after the loop.
+fn emit_deferred_loop_traces(
+    loop_node: &Node,
+    source: &str,
+    deferred_lines: &mut Vec<usize>,
+    file_path: &str,
+    format: TraceFormat,
+    delay_iterations: u32,
+    injections: &mut Vec<(usize, String)>,
+) {
+    deferred_lines.dedup(); // Remove consecutive duplicate line numbers
+    let loop_indent = calculate_indentation(source, loop_node.start_byte());
+
+    // Flag declarations before the loop
+    let mut declarations = String::new();
+    for line in deferred_lines.iter() {
+        declarations.push_str(&generate_flag_declaration(*line, &loop_indent));
+    }
+    injections.push((loop_node.start_byte(), declarations));
+
+    // Deferred conditional traces after the loop
+    let mut deferred_block = String::from("\n");
+    for line in deferred_lines.iter() {
+        deferred_block.push_str(&generate_deferred_trace(
+            *line,
+            &loop_indent,
+            file_path,
+            format,
+            delay_iterations,
+        ));
+    }
+    injections.push((loop_node.end_byte(), deferred_block));
 }
 
 /// Check if a node has a compound_statement (function body) ancestor.
@@ -384,7 +385,6 @@ fn calculate_indentation(source: &str, offset: usize) -> String {
 fn generate_trace_statement(
     line: usize,
     indent: &str,
-    _language: SourceLanguage,
     file_path: &str,
     format: TraceFormat,
     delay_iterations: u32,
@@ -448,7 +448,6 @@ fn generate_flag_set(line: usize, indent: &str) -> String {
 fn generate_deferred_trace(
     line: usize,
     indent: &str,
-    _language: SourceLanguage,
     file_path: &str,
     format: TraceFormat,
     delay_iterations: u32,
