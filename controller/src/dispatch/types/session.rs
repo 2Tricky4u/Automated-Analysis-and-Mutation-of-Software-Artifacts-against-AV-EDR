@@ -1,0 +1,188 @@
+//! Job session and status types.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::time::SystemTime;
+
+use super::config::ModularBuildSpec;
+use super::ids::JobId;
+use super::round::{DifferentialCategory, RoundSummary};
+use crate::triage::SearchSpace;
+
+// ============================================================================
+// Job Session (ephemeral runtime state)
+// ============================================================================
+
+/// JobSession is ephemeral runtime state.
+/// State (queued/running/finished) is implied by placement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobSession {
+    pub id: JobId,
+
+    // Constraints / config
+    pub target_os: Option<String>,
+    pub required_capabilities: Vec<String>,
+
+    // Build configuration
+    pub build_spec: ModularBuildSpec,
+
+    // Instrumented run trace mode (default: "lines")
+    pub trace_mode: String,
+
+    // Selection
+    pub search_space: SearchSpace,
+
+    // Progress
+    pub current_round: u32,
+    pub completed_rounds: u32,
+    pub max_rounds: u32,
+    pub stop_on_evasion: bool,
+
+    // Shellcode checkpoints (INT3 breakpoints; None = disabled)
+    pub sc_checkpoint_count: Option<u32>,
+
+    /// Cache precomputed payload headers across rounds (default: true).
+    /// Set to false for debugging to force fresh encoding every round.
+    pub cache_payload: bool,
+
+    // Completed round summaries
+    pub rounds: BTreeMap<u32, RoundSummary>,
+    pub last_round: Option<RoundSummary>,
+
+    // Timestamps
+    pub created_at: SystemTime,
+    pub started_at: Option<SystemTime>,
+}
+
+impl JobSession {
+    pub fn new(id: impl Into<String>, max_rounds: u32, build_spec: ModularBuildSpec) -> Self {
+        Self {
+            id: JobId(id.into()),
+            target_os: None,
+            required_capabilities: Vec::new(),
+            build_spec,
+            trace_mode: "lines".to_string(),
+            search_space: SearchSpace::default(),
+            sc_checkpoint_count: None,
+            cache_payload: true,
+            current_round: 0,
+            completed_rounds: 0,
+            max_rounds,
+            stop_on_evasion: false,
+            rounds: BTreeMap::new(),
+            last_round: None,
+            created_at: SystemTime::now(),
+            started_at: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn with_constraints(mut self, os: Option<String>, caps: Vec<String>) -> Self {
+        self.target_os = os;
+        self.required_capabilities = caps;
+        self
+    }
+
+    pub fn mark_started(&mut self) {
+        if self.started_at.is_none() {
+            self.started_at = Some(SystemTime::now());
+        }
+    }
+
+    pub fn should_continue(&self) -> bool {
+        if self.current_round >= self.max_rounds {
+            return false;
+        }
+        // Only stop on real evasion, not InstrumentationArtifact
+        if let Some(last) = &self.last_round
+            && self.stop_on_evasion
+            && last.differential_category == DifferentialCategory::Evasion
+        {
+            return false;
+        }
+        true
+    }
+
+    pub fn start_round(&mut self) -> (u32, super::ids::RoundId) {
+        self.current_round += 1;
+        let rid = super::ids::RoundId(format!("{}-round-{}", self.id.0, self.current_round));
+        (self.current_round, rid)
+    }
+
+    pub fn record_round_summary(&mut self, summary: RoundSummary) {
+        self.rounds.insert(summary.round_number, summary.clone());
+        self.last_round = Some(summary);
+        self.completed_rounds += 1;
+    }
+
+    /// Create a lightweight snapshot for external visibility
+    pub fn to_info(&self, status: JobStatus) -> JobInfo {
+        JobInfo {
+            id: self.id.clone(),
+            status,
+            current_round: self.current_round,
+            completed_rounds: self.completed_rounds,
+            max_rounds: self.max_rounds,
+            target_os: self.target_os.clone(),
+            started_at: self.started_at,
+        }
+    }
+}
+
+// ============================================================================
+// Job Status & Outcome
+// ============================================================================
+
+/// Job execution status for tracking
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JobStatus {
+    Running,
+    Completed,
+    Stopped,
+    Failed,
+}
+
+impl std::fmt::Display for JobStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JobStatus::Running => write!(f, "running"),
+            JobStatus::Completed => write!(f, "completed"),
+            JobStatus::Stopped => write!(f, "stopped"),
+            JobStatus::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum JobOutcome {
+    Completed { rounds_completed: u32 },
+    Stopped { reason: String },
+    Failed { error: String },
+}
+
+impl JobOutcome {
+    pub fn to_status(&self) -> JobStatus {
+        match self {
+            JobOutcome::Completed { .. } => JobStatus::Completed,
+            JobOutcome::Stopped { .. } => JobStatus::Stopped,
+            JobOutcome::Failed { .. } => JobStatus::Failed,
+        }
+    }
+}
+
+// ============================================================================
+// Job Info (lightweight snapshot for registry)
+// ============================================================================
+
+/// Lightweight job info for API responses.
+/// Snapshot of JobSession state for external visibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobInfo {
+    pub id: JobId,
+    pub status: JobStatus,
+    pub current_round: u32,
+    pub completed_rounds: u32,
+    pub max_rounds: u32,
+    pub target_os: Option<String>,
+    pub started_at: Option<SystemTime>,
+}
