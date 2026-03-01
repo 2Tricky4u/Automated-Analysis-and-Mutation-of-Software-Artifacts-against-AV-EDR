@@ -46,7 +46,10 @@ extern void __sc_veh_remove(void);
       __sc_veh_remove(); \
   } while(0)
 #else
-  #define EXECUTE_SHELLCODE(addr) (*(void(*)())(addr))()
+  #define EXECUTE_SHELLCODE(addr) do { \
+      void (*volatile __sc_fn)(void) = (void(*)(void))(addr); \
+      __sc_fn(); \
+  } while(0)
 #endif
 
 #endif /* SC_CHECKPOINT_H */
