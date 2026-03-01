@@ -12,7 +12,7 @@
 #define SLEEP_DURATION_MS  2000
 #define MIN_ELAPSED_MS     1500
 
-FORCE_INLINE void antiemulation() {
+void antiemulation() {
     LARGE_INTEGER freq, before, after;
 
     if (!QueryPerformanceFrequency(&freq) || freq.QuadPart == 0) {

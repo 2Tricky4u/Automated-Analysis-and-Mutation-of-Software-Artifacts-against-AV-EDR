@@ -11,7 +11,7 @@
 #define BURN_OUTER  800
 #define BURN_INNER  1000
 
-FORCE_INLINE void antiemulation() {
+void antiemulation() {
     volatile unsigned int acc = 0x5A3C1E0F;
 
     // @MUTATE:loop_mutation(fixed->GetTickCount_modulo)

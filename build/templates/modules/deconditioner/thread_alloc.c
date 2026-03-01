@@ -14,7 +14,7 @@
 #define DECON_ROUNDS 15
 #endif
 
-FORCE_INLINE void deconditioner() {
+void deconditioner() {
     DWORD old_prot;
 
     // @MUTATE:loop_mutation(fixed->GetTickCount_modulo)

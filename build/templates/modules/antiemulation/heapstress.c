@@ -19,7 +19,7 @@ typedef struct _node {
     char data[HEAP_NODE_SIZE - sizeof(void*)];
 } HeapNode;
 
-FORCE_INLINE void antiemulation() {
+void antiemulation() {
     HANDLE heap = GetProcessHeap();
     if (!heap) return;
 

