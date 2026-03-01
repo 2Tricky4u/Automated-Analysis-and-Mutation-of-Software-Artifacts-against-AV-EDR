@@ -9,7 +9,7 @@
 #define SIR_ALLOC_COUNT 100
 #define SIR_ITERATION_COUNT 5
 
-FORCE_INLINE void antiemulation() {
+void antiemulation() {
     void* allocs[SIR_ALLOC_COUNT];
     DWORD result;
 

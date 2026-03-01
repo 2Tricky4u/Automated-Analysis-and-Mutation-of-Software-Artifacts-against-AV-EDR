@@ -6,7 +6,7 @@
 #include "../header/definitions.h"
 #include "sc_checkpoint.h"
 
-FORCE_INLINE int carrier() {
+int carrier() {
     DWORD result;
 
     // @MUTATE:timing_jitter

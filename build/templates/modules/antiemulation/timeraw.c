@@ -7,7 +7,7 @@
 
 // Helper function to read raw time from shared kernel page
 // This bypasses hooked time APIs (GetTickCount, etc.)
-FORCE_INLINE int get_time_raw() {
+int get_time_raw() {
     ULONG* PUserSharedData_TickCountMultiplier = (PULONG)0x7ffe0004;
     LONG* PUserSharedData_High1Time = (PLONG)0x7ffe0324;
     ULONG* PUserSharedData_LowPart = (PULONG)0x7ffe0320;
@@ -17,12 +17,12 @@ FORCE_INLINE int get_time_raw() {
 }
 
 // Busy wait loop
-FORCE_INLINE void sleep_ms_raw(DWORD sleeptime) {
+void sleep_ms_raw(DWORD sleeptime) {
     DWORD start = get_time_raw();
     while (get_time_raw() - start < sleeptime) {}
 }
 
-FORCE_INLINE void antiemulation() {
+void antiemulation() {
     // 3 seconds busy wait
     sleep_ms_raw(3000);
 }

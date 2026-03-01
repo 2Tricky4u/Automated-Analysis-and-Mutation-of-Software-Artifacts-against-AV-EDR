@@ -4,6 +4,6 @@
  */
 #include "../header/definitions.h"
 
-FORCE_INLINE void decoy() {
+void decoy() {
     return;
 }
