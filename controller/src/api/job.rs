@@ -734,6 +734,10 @@ fn apply_round_correction(
 /// Prefers `mutation_recipe` (array of {id, params}) over `mutations` (array of strings).
 fn parse_mutation_recipe(source: &Value) -> Vec<crate::automutate::common::Mutation> {
     // Try mutation_recipe first (has full params)
+    debug!(
+        "parse_mutation_recipe: mutation_recipe field = {}",
+        &source["mutation_recipe"]
+    );
     if let Some(arr) = source["mutation_recipe"].as_array() {
         let recipes: Vec<crate::automutate::common::Mutation> = arr
             .iter()
@@ -757,11 +761,20 @@ fn parse_mutation_recipe(source: &Value) -> Vec<crate::automutate::common::Mutat
             })
             .collect();
         if !recipes.is_empty() {
+            debug!(
+                "parse_mutation_recipe: parsed {} recipes from mutation_recipe",
+                recipes.len()
+            );
+            for r in &recipes {
+                debug!("  mutation: id={}, params={:?}", r.id, r.params);
+            }
             return recipes;
         }
+        debug!("parse_mutation_recipe: mutation_recipe was empty, falling back to mutations[]");
     }
 
     // Fall back to mutations string array (no params)
+    debug!("parse_mutation_recipe: using fallback mutations[] field");
     string_array_field(source, "mutations")
         .into_iter()
         .map(|id| crate::automutate::common::Mutation {
