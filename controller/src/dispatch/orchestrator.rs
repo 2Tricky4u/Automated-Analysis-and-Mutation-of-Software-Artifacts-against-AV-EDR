@@ -9,7 +9,7 @@
 use super::channels::{JobControlCommand, JobWorkerEvent, RoundCompletedData};
 use super::job_worker::JobWorker;
 use super::run_pool::RunPool;
-use super::types::{JobId, JobOutcome, JobSession, WorkerId, WorkerInfo};
+use super::types::{JobId, JobOutcome, JobSession, WorkerId, WorkerInfo, capabilities_match};
 use crate::storage::{EsStorage, RoundIndexParams, RunIndexParams, TelemetryContext};
 use crate::triage::SelectorType;
 use crate::triage::coverage_selector::CoverageSelector;
@@ -231,15 +231,8 @@ impl Orchestrator {
             }
 
             // Check capabilities match if requested
-            if !requested_caps.is_empty() {
-                let has_all = requested_caps.iter().all(|req| {
-                    t.capabilities
-                        .iter()
-                        .any(|cap| cap.eq_ignore_ascii_case(req))
-                });
-                if !has_all {
-                    continue;
-                }
+            if !requested_caps.is_empty() && !capabilities_match(requested_caps, &t.capabilities) {
+                continue;
             }
 
             let is_available = t.status == TargetStatus::Available;
@@ -275,177 +268,15 @@ impl Orchestrator {
     async fn on_job_worker_event(&mut self, event: JobWorkerEvent) {
         match event {
             JobWorkerEvent::RoundCompleted(data) => {
-                let RoundCompletedData {
-                    job_id,
-                    round_id,
-                    summary,
-                    baseline_run_id,
-                    instrumented_run_id,
-                    baseline_outcome,
-                    instrumented_outcome,
-                    mutation_specs,
-                    mutations,
-                    modules,
-                    baseline_vm_id,
-                    instrumented_vm_id,
-                    round_started_at,
-                    assembled_source,
-                    dryrun_run_id,
-                    dryrun_outcome,
-                    dryrun_vm_id,
-                } = *data;
                 info!(
                     "[Orchestrator] Round {} completed for job {}: detected={}, evasion={:.2}",
-                    round_id, job_id, summary.detected, summary.evasion_score
+                    data.round_id, data.job_id, data.summary.detected, data.summary.evasion_score
                 );
 
-                // Convert round_started_at to RFC3339
-                let started_at_str =
-                    crate::storage::helpers::system_time_to_rfc3339(round_started_at);
-
-                // Index round, both runs, and update job progress in ES
                 let storage = self.storage.clone();
-                let jid = job_id.0.clone();
-                let rid = round_id.0.clone();
-                let round_number = summary.round_number;
-                let b_run_id = baseline_run_id.0.clone();
-                let i_run_id = instrumented_run_id.0.clone();
-                let b_vm_id = baseline_vm_id;
-                let i_vm_id = instrumented_vm_id;
-                let d_run_id = dryrun_run_id.map(|id| id.0.clone());
-                let d_outcome = dryrun_outcome;
-                let d_vm_id = dryrun_vm_id;
                 tokio::spawn(async move {
-                    // Update job progress (current_round)
-                    if let Err(e) = storage.update_job_progress(&jid, round_number).await {
-                        error!("Failed to update job progress: {}", e);
-                    }
-                    // Index round summary
-                    if let Err(e) = storage
-                        .index_round(&RoundIndexParams {
-                            job_id: &jid,
-                            summary: &summary,
-                            mutation_specs: &mutation_specs,
-                            baseline_run_id: &b_run_id,
-                            instrumented_run_id: &i_run_id,
-                            started_at: Some(&started_at_str),
-                            modules: Some(&modules),
-                            assembled_source: assembled_source.as_deref(),
-                            dry_run_exit_code: summary.dry_run_exit_code,
-                            has_dryrun: summary.has_dryrun,
-                            dryrun_run_id: d_run_id.as_deref(),
-                        })
-                        .await
-                    {
-                        error!("Failed to index round: {}", e);
-                    }
-                    // Index baseline run with exit_code, detected, round_id, run_type
-                    if let Err(e) = storage
-                        .index_run_result(&RunIndexParams {
-                            job_id: &jid,
-                            round_id: &rid,
-                            run_id: &b_run_id,
-                            run_type: "baseline",
-                            outcome: &baseline_outcome,
-                            mutations: &mutations,
-                            vm_id: &b_vm_id,
-                        })
-                        .await
-                    {
-                        error!("Failed to index baseline run: {}", e);
-                    }
-                    // Index instrumented run
-                    if let Err(e) = storage
-                        .index_run_result(&RunIndexParams {
-                            job_id: &jid,
-                            round_id: &rid,
-                            run_id: &i_run_id,
-                            run_type: "instrumented",
-                            outcome: &instrumented_outcome,
-                            mutations: &mutations,
-                            vm_id: &i_vm_id,
-                        })
-                        .await
-                    {
-                        error!("Failed to index instrumented run: {}", e);
-                    }
-                    // Index dryrun run (if present)
-                    if let (Some(dr_run_id), Some(dr_outcome)) = (&d_run_id, &d_outcome)
-                        && let Err(e) = storage
-                            .index_run_result(&RunIndexParams {
-                                job_id: &jid,
-                                round_id: &rid,
-                                run_id: dr_run_id,
-                                run_type: "dryrun",
-                                outcome: dr_outcome,
-                                mutations: &mutations,
-                                vm_id: &d_vm_id,
-                            })
-                            .await
-                    {
-                        error!("Failed to index dryrun run: {}", e);
-                    }
-
-                    // Compute line coverage from trace data
-                    if let Some(ref source) = assembled_source {
-                        // Telemetry bulk+refresh should make data immediately visible.
-                        // Single defensive retry in case of edge-case latency.
-                        let mut trace_content = storage.query_trace_content(&i_run_id).await;
-                        if trace_content.is_none() {
-                            debug!(
-                                "Round {}/{}: trace content not found on first query, retrying in 1s",
-                                jid, rid
-                            );
-                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                            trace_content = storage.query_trace_content(&i_run_id).await;
-                        }
-                        match trace_content {
-                            Some(content) => {
-                                let executed_lines: HashSet<usize> = content
-                                    .lines()
-                                    .filter_map(|line| {
-                                        serde_json::from_str::<serde_json::Value>(line.trim()).ok()
-                                    })
-                                    .filter_map(|v| v["line"].as_u64().map(|n| n as usize))
-                                    .collect();
-
-                                if !executed_lines.is_empty() {
-                                    let sm = SourceMap::new(source);
-                                    let coverage = sm.compute_coverage(&executed_lines);
-                                    info!(
-                                        "Round {}/{}: coverage {:.1}% ({}/{} lines), cutoff: {:?}",
-                                        jid,
-                                        rid,
-                                        coverage.coverage_percent,
-                                        coverage.executed_lines,
-                                        coverage.total_executable,
-                                        coverage.cutoff_line,
-                                    );
-                                    if let Err(e) =
-                                        storage.update_round_coverage(&jid, &rid, &coverage).await
-                                    {
-                                        error!("Failed to update round coverage: {}", e);
-                                    }
-                                } else {
-                                    warn!(
-                                        "Round {}/{}: trace content found but no line numbers parsed",
-                                        jid, rid
-                                    );
-                                }
-                            }
-                            None => {
-                                warn!(
-                                    "Round {}/{}: no trace content found after retry, skipping coverage",
-                                    jid, rid
-                                );
-                            }
-                        }
-                    } else {
-                        debug!(
-                            "Round {}/{}: no assembled source, skipping coverage",
-                            jid, rid
-                        );
-                    }
+                    index_round_and_runs(&storage, &data).await;
+                    compute_round_coverage(&storage, &data).await;
                 });
             }
             JobWorkerEvent::JobCompleted { job_id, outcome } => {
@@ -656,6 +487,160 @@ impl Orchestrator {
     #[allow(dead_code)]
     pub fn vm_count(&self) -> usize {
         self.vms.len()
+    }
+}
+
+// ============================================================================
+// Extracted helpers for on_job_worker_event
+// ============================================================================
+
+/// Index round summary, all run results, and update job progress in ES.
+async fn index_round_and_runs(storage: &EsStorage, data: &RoundCompletedData) {
+    let jid = &data.job_id.0;
+    let rid = &data.round_id.0;
+    let round_number = data.summary.round_number;
+    let b_run_id = &data.baseline_run_id.0;
+    let i_run_id = &data.instrumented_run_id.0;
+    let d_run_id = data.dryrun_run_id.as_ref().map(|id| id.0.as_str());
+
+    let started_at_str = crate::storage::helpers::system_time_to_rfc3339(data.round_started_at);
+
+    // Update job progress (current_round)
+    if let Err(e) = storage.update_job_progress(jid, round_number).await {
+        error!("Failed to update job progress: {}", e);
+    }
+    // Index round summary
+    if let Err(e) = storage
+        .index_round(&RoundIndexParams {
+            job_id: jid,
+            summary: &data.summary,
+            mutation_specs: &data.mutation_specs,
+            baseline_run_id: b_run_id,
+            instrumented_run_id: i_run_id,
+            started_at: Some(&started_at_str),
+            modules: Some(&data.modules),
+            assembled_source: data.assembled_source.as_deref(),
+            dry_run_exit_code: data.summary.dry_run_exit_code,
+            has_dryrun: data.summary.has_dryrun,
+            dryrun_run_id: d_run_id,
+        })
+        .await
+    {
+        error!("Failed to index round: {}", e);
+    }
+    // Index baseline run
+    if let Err(e) = storage
+        .index_run_result(&RunIndexParams {
+            job_id: jid,
+            round_id: rid,
+            run_id: b_run_id,
+            run_type: "baseline",
+            outcome: &data.baseline_outcome,
+            mutations: &data.mutations,
+            vm_id: &data.baseline_vm_id,
+        })
+        .await
+    {
+        error!("Failed to index baseline run: {}", e);
+    }
+    // Index instrumented run
+    if let Err(e) = storage
+        .index_run_result(&RunIndexParams {
+            job_id: jid,
+            round_id: rid,
+            run_id: i_run_id,
+            run_type: "instrumented",
+            outcome: &data.instrumented_outcome,
+            mutations: &data.mutations,
+            vm_id: &data.instrumented_vm_id,
+        })
+        .await
+    {
+        error!("Failed to index instrumented run: {}", e);
+    }
+    // Index dryrun run (if present)
+    if let (Some(dr_run_id), Some(dr_outcome)) = (d_run_id, &data.dryrun_outcome)
+        && let Err(e) = storage
+            .index_run_result(&RunIndexParams {
+                job_id: jid,
+                round_id: rid,
+                run_id: dr_run_id,
+                run_type: "dryrun",
+                outcome: dr_outcome,
+                mutations: &data.mutations,
+                vm_id: &data.dryrun_vm_id,
+            })
+            .await
+    {
+        error!("Failed to index dryrun run: {}", e);
+    }
+}
+
+/// Compute line coverage from trace data and update round in ES.
+async fn compute_round_coverage(storage: &EsStorage, data: &RoundCompletedData) {
+    let jid = &data.job_id.0;
+    let rid = &data.round_id.0;
+    let i_run_id = &data.instrumented_run_id.0;
+
+    let source = match &data.assembled_source {
+        Some(s) => s,
+        None => {
+            debug!(
+                "Round {}/{}: no assembled source, skipping coverage",
+                jid, rid
+            );
+            return;
+        }
+    };
+
+    // Telemetry bulk+refresh should make data immediately visible.
+    // Single defensive retry in case of edge-case latency.
+    let mut trace_content = storage.query_trace_content(i_run_id).await;
+    if trace_content.is_none() {
+        debug!(
+            "Round {}/{}: trace content not found on first query, retrying in 1s",
+            jid, rid
+        );
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        trace_content = storage.query_trace_content(i_run_id).await;
+    }
+
+    match trace_content {
+        Some(content) => {
+            let executed_lines: HashSet<usize> = content
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok())
+                .filter_map(|v| v["line"].as_u64().map(|n| n as usize))
+                .collect();
+
+            if !executed_lines.is_empty() {
+                let sm = SourceMap::new(source);
+                let coverage = sm.compute_coverage(&executed_lines);
+                info!(
+                    "Round {}/{}: coverage {:.1}% ({}/{} lines), cutoff: {:?}",
+                    jid,
+                    rid,
+                    coverage.coverage_percent,
+                    coverage.executed_lines,
+                    coverage.total_executable,
+                    coverage.cutoff_line,
+                );
+                if let Err(e) = storage.update_round_coverage(jid, rid, &coverage).await {
+                    error!("Failed to update round coverage: {}", e);
+                }
+            } else {
+                warn!(
+                    "Round {}/{}: trace content found but no line numbers parsed",
+                    jid, rid
+                );
+            }
+        }
+        None => {
+            warn!(
+                "Round {}/{}: no trace content found after retry, skipping coverage",
+                jid, rid
+            );
+        }
     }
 }
 
