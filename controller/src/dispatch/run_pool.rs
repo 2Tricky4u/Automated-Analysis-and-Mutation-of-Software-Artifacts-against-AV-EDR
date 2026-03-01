@@ -15,7 +15,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::channels::JobRunResult;
-use super::types::{JobId, JobInfo, JobOutcome, JobSession, JobStatus, RunEnvelope, RunId};
+use super::types::{
+    JobId, JobInfo, JobOutcome, JobSession, JobStatus, RunEnvelope, RunId, capabilities_match,
+};
 
 // ============================================================================
 // Configuration
@@ -263,11 +265,8 @@ impl RunPool {
 
             // Check if run exists and matches capabilities
             if let Some(run_ref) = self.pending.get(&run_id) {
-                let caps_match = run_ref.required_capabilities.iter().all(|required| {
-                    vm_capabilities
-                        .iter()
-                        .any(|cap| cap.eq_ignore_ascii_case(required))
-                });
+                let caps_match =
+                    capabilities_match(&run_ref.required_capabilities, vm_capabilities);
 
                 // Bidirectional dryrun guard: dryrun VMs only take dryrun runs,
                 // and non-dryrun VMs never take dryrun runs.

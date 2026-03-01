@@ -156,7 +156,7 @@ impl Default for SearchSpace {
     }
 }
 
-/// Future: token-level guidance from async triage. None in v0.
+/// Token-level guidance from async triage (planned for feedback loop).
 #[allow(dead_code)]
 pub struct TriageGuidance {
     pub avoid_tokens: Vec<String>,

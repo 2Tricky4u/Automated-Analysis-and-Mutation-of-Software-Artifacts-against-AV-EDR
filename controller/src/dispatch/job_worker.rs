@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -463,41 +463,23 @@ impl JobWorker {
                 .push(baseline_built.output_path.clone());
 
             // Build a synthetic RoundAgg with static_scan_detected flag
-            let static_agg = RoundAgg {
-                spec,
-                baseline_run_id: RunId(format!("{}-baseline", round_id.0)),
-                instrumented_run_id: RunId(format!("{}-instrumented", round_id.0)),
-                baseline: Some(RunOutcome {
-                    detected: true,
-                    exit_code: 2,
-                    error: None,
-                    success: false,
-                    elapsed_ms: 0.0,
-                    detection_verdict: "static_detection".to_string(),
-                    last_checkpoint: String::new(),
-                }),
-                instrumented: Some(RunOutcome {
-                    detected: true,
-                    exit_code: 2,
-                    error: None,
-                    success: false,
-                    elapsed_ms: 0.0,
-                    detection_verdict: "static_detection".to_string(),
-                    last_checkpoint: String::new(),
-                }),
-                baseline_vm_id: "static_scan".to_string(),
-                instrumented_vm_id: "static_scan".to_string(),
-                started_at: SystemTime::now(),
-                timeout_ms: DEFAULT_TIMEOUT_SECONDS as u64 * 1000,
-                assembled_source: None,
-                baseline_artifact_path: baseline_built.output_path.clone(),
-                instrumented_artifact_path: baseline_built.output_path,
-                dryrun_run_id: RunId(format!("{}-dryrun", round_id.0)),
-                dryrun: None,
-                dryrun_vm_id: String::new(),
-                dryrun_deadline: None,
-                static_scan_detected: true,
+            let static_outcome = RunOutcome {
+                detected: true,
+                exit_code: 2,
+                error: None,
+                success: false,
+                elapsed_ms: 0.0,
+                detection_verdict: "static_detection".to_string(),
+                last_checkpoint: String::new(),
             };
+            let mut static_agg = RoundAgg::new(spec, DEFAULT_TIMEOUT_SECONDS as u64 * 1000);
+            static_agg.baseline = Some(static_outcome.clone());
+            static_agg.instrumented = Some(static_outcome);
+            static_agg.baseline_vm_id = "static_scan".to_string();
+            static_agg.instrumented_vm_id = "static_scan".to_string();
+            static_agg.baseline_artifact_path = baseline_built.output_path.clone();
+            static_agg.instrumented_artifact_path = baseline_built.output_path;
+            static_agg.static_scan_detected = true;
 
             self.round_aggs.insert(round_id.clone(), static_agg);
             self.finalize_round(&round_id).await;
@@ -535,77 +517,23 @@ impl JobWorker {
         let instrumented_artifact_path = instrumented_built.output_path.clone();
 
         // Create run envelopes
-        let baseline_run = RunEnvelope {
-            run_id: RunId(format!("{}-baseline", round_id.0)),
-            job_id: self.job.id.clone(),
-            round_id: round_id.clone(),
-            round_number: round_num,
-            run_type: RunType::Baseline,
-            artifact: ArtifactRef {
-                path: baseline_built.output_path.clone(),
-                sha256: Some(baseline_built.sha256.clone()),
-            },
-            mutations: spec.mutations.iter().map(|m| m.id.clone()).collect(),
-            timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
-            required_os: target_os.clone(),
-            required_capabilities: required_caps.clone(),
-        };
-
-        let instrumented_run = RunEnvelope {
-            run_id: RunId(format!("{}-instrumented", round_id.0)),
-            job_id: self.job.id.clone(),
-            round_id: round_id.clone(),
-            round_number: round_num,
-            run_type: RunType::Instrumented,
-            artifact: ArtifactRef {
-                path: instrumented_built.output_path,
-                sha256: Some(instrumented_built.sha256),
-            },
-            mutations: spec.mutations.iter().map(|m| m.id.clone()).collect(),
-            timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
-            required_os: target_os.clone(),
-            required_capabilities: required_caps,
-        };
-
-        // Always create a dryrun envelope — reuses the baseline artifact (same binary).
-        // If no dryrun worker is connected, the run sits in the pool until grace period expires.
-        let dryrun_run_id = RunId(format!("{}-dryrun", round_id.0));
-        let dryrun_run = RunEnvelope {
-            run_id: dryrun_run_id.clone(),
-            job_id: self.job.id.clone(),
-            round_id: round_id.clone(),
-            round_number: round_num,
-            run_type: RunType::DryRun,
-            artifact: ArtifactRef {
-                path: baseline_artifact_path.clone(),
-                sha256: Some(baseline_built.sha256.clone()),
-            },
-            mutations: spec.mutations.iter().map(|m| m.id.clone()).collect(),
-            timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
-            required_os: target_os,
-            required_capabilities: vec!["dryrun".to_string()],
-        };
+        let (runs, dryrun_run_id) = create_run_envelopes(
+            &self.job.id,
+            &round_id,
+            round_num,
+            &spec,
+            &baseline_built,
+            &instrumented_built,
+            &baseline_artifact_path,
+            &target_os,
+            &required_caps,
+        );
 
         // Create round aggregator
-        let agg = RoundAgg {
-            spec,
-            baseline_run_id: baseline_run.run_id.clone(),
-            instrumented_run_id: instrumented_run.run_id.clone(),
-            baseline: None,
-            instrumented: None,
-            baseline_vm_id: String::new(),
-            instrumented_vm_id: String::new(),
-            started_at: SystemTime::now(),
-            timeout_ms: DEFAULT_TIMEOUT_SECONDS as u64 * 1000,
-            assembled_source,
-            baseline_artifact_path,
-            instrumented_artifact_path,
-            dryrun_run_id: dryrun_run_id.clone(),
-            dryrun: None,
-            dryrun_vm_id: String::new(),
-            dryrun_deadline: None,
-            static_scan_detected: false,
-        };
+        let mut agg = RoundAgg::new(spec, DEFAULT_TIMEOUT_SECONDS as u64 * 1000);
+        agg.assembled_source = assembled_source;
+        agg.baseline_artifact_path = baseline_artifact_path;
+        agg.instrumented_artifact_path = instrumented_artifact_path;
         self.round_aggs.insert(round_id.clone(), agg);
 
         info!(
@@ -618,9 +546,7 @@ impl JobWorker {
         );
 
         // Add all 3 runs to shared pool
-        self.run_pool
-            .add_runs(vec![baseline_run, instrumented_run, dryrun_run])
-            .await;
+        self.run_pool.add_runs(runs).await;
 
         Ok(())
     }
@@ -820,23 +746,7 @@ impl JobWorker {
         self.artifact_cleanup
             .push(agg.instrumented_artifact_path.clone());
 
-        // Extract all data from agg BEFORE to_summary() consumes it
-        let baseline_run_id = agg.baseline_run_id.clone();
-        let instrumented_run_id = agg.instrumented_run_id.clone();
-        let baseline_outcome = agg.baseline.clone().unwrap();
-        let instrumented_outcome = agg.instrumented.clone().unwrap();
-        let mutation_specs = agg.spec.mutations.clone();
-        let mutations: Vec<String> = agg.spec.mutations.iter().map(|m| m.id.clone()).collect();
-        let modules = agg.spec.modules.clone();
-        let baseline_vm_id = agg.baseline_vm_id.clone();
-        let instrumented_vm_id = agg.instrumented_vm_id.clone();
-        let round_started_at = agg.started_at;
-        let assembled_source = agg.assembled_source.clone();
-        let dryrun_run_id = Some(agg.dryrun_run_id.clone());
-        let dryrun_outcome = agg.dryrun.clone();
-        let dryrun_vm_id = agg.dryrun_vm_id.clone();
-
-        if let Some(ref dr) = dryrun_outcome {
+        if let Some(dr) = &agg.dryrun {
             info!(
                 "[JobWorker:{}] Round {} has dryrun result (exit={})",
                 self.job.id, round_id, dr.exit_code
@@ -871,30 +781,110 @@ impl JobWorker {
         self.run_pool.update_job_progress(&self.job);
 
         // Emit enriched event for ES indexing (round + both runs + optional dryrun)
+        let data = build_round_completed_data(self.job.id.clone(), round_id.clone(), agg, summary);
         let _ = self
             .event_tx
-            .send(JobWorkerEvent::RoundCompleted(Box::new(
-                RoundCompletedData {
-                    job_id: self.job.id.clone(),
-                    round_id: round_id.clone(),
-                    summary,
-                    baseline_run_id,
-                    instrumented_run_id,
-                    baseline_outcome,
-                    instrumented_outcome,
-                    mutation_specs,
-                    mutations,
-                    modules,
-                    baseline_vm_id,
-                    instrumented_vm_id,
-                    round_started_at,
-                    assembled_source,
-                    dryrun_run_id,
-                    dryrun_outcome,
-                    dryrun_vm_id,
-                },
-            )))
+            .send(JobWorkerEvent::RoundCompleted(Box::new(data)))
             .await;
+    }
+}
+
+/// Build the 3 RunEnvelopes (baseline + instrumented + dryrun) for a round.
+/// Returns the envelopes and the dryrun RunId (for logging).
+#[allow(clippy::too_many_arguments)]
+fn create_run_envelopes(
+    job_id: &JobId,
+    round_id: &RoundId,
+    round_number: u32,
+    spec: &RoundSpec,
+    baseline_built: &BuiltArtifact,
+    instrumented_built: &BuiltArtifact,
+    baseline_artifact_path: &Path,
+    target_os: &str,
+    required_caps: &[String],
+) -> (Vec<RunEnvelope>, RunId) {
+    let mutations: Vec<String> = spec.mutations.iter().map(|m| m.id.clone()).collect();
+
+    let baseline_run = RunEnvelope {
+        run_id: RunId(format!("{}-baseline", round_id.0)),
+        job_id: job_id.clone(),
+        round_id: round_id.clone(),
+        round_number,
+        run_type: RunType::Baseline,
+        artifact: ArtifactRef {
+            path: baseline_built.output_path.clone(),
+            sha256: Some(baseline_built.sha256.clone()),
+        },
+        mutations: mutations.clone(),
+        timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
+        required_os: target_os.to_string(),
+        required_capabilities: required_caps.to_vec(),
+    };
+
+    let instrumented_run = RunEnvelope {
+        run_id: RunId(format!("{}-instrumented", round_id.0)),
+        job_id: job_id.clone(),
+        round_id: round_id.clone(),
+        round_number,
+        run_type: RunType::Instrumented,
+        artifact: ArtifactRef {
+            path: instrumented_built.output_path.clone(),
+            sha256: Some(instrumented_built.sha256.clone()),
+        },
+        mutations: mutations.clone(),
+        timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
+        required_os: target_os.to_string(),
+        required_capabilities: required_caps.to_vec(),
+    };
+
+    let dryrun_run_id = RunId(format!("{}-dryrun", round_id.0));
+    let dryrun_run = RunEnvelope {
+        run_id: dryrun_run_id.clone(),
+        job_id: job_id.clone(),
+        round_id: round_id.clone(),
+        round_number,
+        run_type: RunType::DryRun,
+        artifact: ArtifactRef {
+            path: baseline_artifact_path.to_path_buf(),
+            sha256: Some(baseline_built.sha256.clone()),
+        },
+        mutations,
+        timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
+        required_os: target_os.to_string(),
+        required_capabilities: vec!["dryrun".to_string()],
+    };
+
+    (
+        vec![baseline_run, instrumented_run, dryrun_run],
+        dryrun_run_id,
+    )
+}
+
+/// Extract all fields from a RoundAgg into a RoundCompletedData for ES indexing.
+fn build_round_completed_data(
+    job_id: JobId,
+    round_id: RoundId,
+    agg: RoundAgg,
+    summary: super::types::RoundSummary,
+) -> RoundCompletedData {
+    RoundCompletedData {
+        job_id,
+        round_id,
+        summary,
+        baseline_run_id: agg.baseline_run_id,
+        instrumented_run_id: agg.instrumented_run_id,
+        baseline_outcome: agg.baseline.unwrap(),
+        instrumented_outcome: agg.instrumented.unwrap(),
+        mutation_specs: agg.spec.mutations.clone(),
+        mutations: agg.spec.mutations.into_iter().map(|m| m.id).collect(),
+        modules: agg.spec.modules,
+        baseline_vm_id: agg.baseline_vm_id,
+        instrumented_vm_id: agg.instrumented_vm_id,
+        round_started_at: agg.started_at,
+        assembled_source: agg.assembled_source,
+        dryrun_run_id: Some(agg.dryrun_run_id),
+        dryrun_outcome: agg.dryrun,
+        dryrun_vm_id: agg.dryrun_vm_id,
     }
 }
 
