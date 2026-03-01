@@ -9,5 +9,5 @@ pub mod line_tracer;
 pub use instrumenter::Instrumenter;
 pub use line_tracer::{
     DEFAULT_DELAY_ITERATIONS, SourceLanguage, TraceFormat, inject_line_traces,
-    inject_line_traces_with_delay, inject_line_traces_with_opts,
+    inject_line_traces_with_delay, inject_line_traces_with_opts, inject_line_traces_with_path,
 };

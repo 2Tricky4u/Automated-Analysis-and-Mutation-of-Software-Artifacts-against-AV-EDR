@@ -19,17 +19,11 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::debug;
 
-pub struct Instrumenter {
-    bb_counter: u32,
-    line_counter: u32,
-}
+pub struct Instrumenter;
 
 impl Instrumenter {
     pub fn new() -> Self {
-        Self {
-            bb_counter: 0,
-            line_counter: 0,
-        }
+        Self
     }
 
     /// Inject instrumentation into LLVM IR
@@ -42,14 +36,9 @@ impl Instrumenter {
         let abs_ir_path = std::fs::canonicalize(ir_path).unwrap_or_else(|_| ir_path.to_path_buf());
         let abs_output_path =
             std::fs::canonicalize(output_path).unwrap_or_else(|_| output_path.to_path_buf());
-        eprintln!(
-            "[INSTRUMENTER] Starting instrumentation: {:?} mode={:?}",
-            abs_ir_path, trace_mode
-        );
-        eprintln!("[INSTRUMENTER] Output path: {:?}", abs_output_path);
         debug!(
-            "Instrumenting LLVM IR: {:?} (mode: {:?})",
-            abs_ir_path, trace_mode
+            "Starting instrumentation: {:?} mode={:?}, output={:?}",
+            abs_ir_path, trace_mode, abs_output_path
         );
 
         // Determine what instrumentation we need
@@ -68,19 +57,18 @@ impl Instrumenter {
         //
         // Previous approach (opt -passes=sancov-module) broke in LLVM 17+ because the
         // pass requires sanitize_coverage function attributes that only Clang adds.
+        let mut bb_counter: u32 = 0;
+
         if needs_bb {
             // Count BB callbacks injected by Clang for logging
             let ir_text = tokio::fs::read_to_string(ir_path)
                 .await
                 .context("Failed to read IR for BB callback count")?;
-            self.bb_counter = ir_text
+            bb_counter = ir_text
                 .matches("call void @__sanitizer_cov_trace_pc()")
                 .count() as u32;
-            eprintln!(
-                "[INSTRUMENTER] Clang SanitizerCoverage: {} BB callbacks in IR",
-                self.bb_counter
-            );
-            if self.bb_counter == 0 {
+            debug!("Clang SanitizerCoverage: {} BB callbacks in IR", bb_counter);
+            if bb_counter == 0 {
                 tracing::warn!(
                     "BB coverage requested but 0 callbacks found in IR. \
                      Check that clang was invoked with -fsanitize-coverage=trace-pc"
@@ -94,14 +82,15 @@ impl Instrumenter {
             .context("Failed to read IR file")?;
 
         // Apply API tracing (text-based injection) if needed
+        let mut line_counter: u32 = 0;
         let instrumented_ir = if needs_api {
-            self.inject_api_tracing(&ir_content)?
+            Self::inject_api_tracing(&ir_content, &mut line_counter)?
         } else {
             ir_content
         };
 
         // Add runtime function declarations
-        let full_ir = self.add_runtime_declarations(&instrumented_ir, trace_mode)?;
+        let full_ir = Self::add_runtime_declarations(&instrumented_ir, trace_mode)?;
 
         // Write final instrumented IR
         tokio::fs::write(output_path, full_ir)
@@ -110,7 +99,7 @@ impl Instrumenter {
 
         debug!(
             "IR-level instrumentation complete: {} BBs (via SanitizerCoverage), {} API checkpoints",
-            self.bb_counter, self.line_counter
+            bb_counter, line_counter
         );
 
         Ok(())
@@ -122,7 +111,7 @@ impl Instrumenter {
     // See BB-COVERAGE-IMPROVEMENT.md for detailed comparison
 
     /// Inject API tracing instrumentation
-    fn inject_api_tracing(&mut self, ir: &str) -> Result<String> {
+    fn inject_api_tracing(ir: &str, line_counter: &mut u32) -> Result<String> {
         debug!("Injecting API tracing instrumentation");
 
         // API calls to instrument (Windows API subset)
@@ -146,7 +135,7 @@ impl Instrumenter {
                 if line.contains(&"call ".to_string()) && line.contains(api) {
                     // Insert checkpoint before API call
                     let checkpoint_name = format!("api:{}", api);
-                    let str_id = self.line_counter;
+                    let str_id = *line_counter;
 
                     instrumented.push_str(&format!(
                         "  call void @__checkpoint(i8* getelementptr inbounds ([{} x i8], [{} x i8]* @.str.checkpoint.{}, i32 0, i32 0))\n",
@@ -157,7 +146,7 @@ impl Instrumenter {
 
                     // Store string constant for later injection
                     string_constants.push((str_id, checkpoint_name));
-                    self.line_counter += 1;
+                    *line_counter += 1;
                     break;
                 }
             }
@@ -167,11 +156,14 @@ impl Instrumenter {
         }
 
         // Now inject string constants at the beginning (after metadata)
-        Ok(self.inject_string_constants(&instrumented, &string_constants))
+        Ok(Self::inject_string_constants(
+            &instrumented,
+            &string_constants,
+        ))
     }
 
     /// Inject string constant definitions into IR
-    fn inject_string_constants(&self, ir: &str, constants: &[(u32, String)]) -> String {
+    fn inject_string_constants(ir: &str, constants: &[(u32, String)]) -> String {
         if constants.is_empty() {
             return ir.to_string();
         }
@@ -208,7 +200,7 @@ impl Instrumenter {
     // Line tracing is now done at AST/source level using tree-sitter (see ast_line_tracer.rs)
 
     /// Add runtime function declarations to IR
-    fn add_runtime_declarations(&self, ir: &str, trace_mode: crate::TraceMode) -> Result<String> {
+    fn add_runtime_declarations(ir: &str, trace_mode: crate::TraceMode) -> Result<String> {
         let mut declarations = String::new();
 
         // Add necessary runtime function declarations based on trace mode
@@ -232,13 +224,9 @@ impl Instrumenter {
         }
 
         if needs_bb {
-            // Note: SanitizerCoverage pass automatically adds its own declarations
+            // SanitizerCoverage pass automatically adds its own declarations
             // (__sanitizer_cov_trace_pc_guard, __sanitizer_cov_trace_pc_guard_init)
-            // We only add legacy coverage functions for backward compatibility
-            declarations.push_str("; Legacy coverage functions (for backward compatibility)\n");
-            declarations.push_str("declare void @__coverage_init()\n");
-            declarations.push_str("declare void @__coverage_flush()\n");
-            declarations.push('\n');
+            // No additional declarations needed for BB coverage.
         }
 
         if needs_api {

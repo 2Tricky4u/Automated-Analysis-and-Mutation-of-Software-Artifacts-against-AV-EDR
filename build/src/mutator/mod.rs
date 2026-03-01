@@ -27,6 +27,32 @@ pub struct MutationSpec {
 }
 
 impl MutationSpec {
+    /// Parse "id:key=val,key=val" CLI syntax into a MutationSpec.
+    ///
+    /// Examples:
+    /// - `"ast.string_xor"` → id="ast.string_xor", params={}
+    /// - `"ast.decon_rounds:count=50,method=fixed"` → id="ast.decon_rounds", params={count:50, method:fixed}
+    pub fn from_cli_str(s: &str) -> Self {
+        if let Some((id, params_str)) = s.split_once(':') {
+            let params: HashMap<String, String> = params_str
+                .split(',')
+                .filter_map(|kv| {
+                    let (k, v) = kv.split_once('=')?;
+                    Some((k.to_string(), v.to_string()))
+                })
+                .collect();
+            MutationSpec {
+                id: id.to_string(),
+                params,
+            }
+        } else {
+            MutationSpec {
+                id: s.to_string(),
+                params: HashMap::new(),
+            }
+        }
+    }
+
     /// Parse mutation ID into category and name
     pub fn parse(&self) -> (&str, &str) {
         let parts: Vec<&str> = self.id.split('.').collect();

@@ -13,7 +13,6 @@
 
 use build::mutator::MutationSpec;
 use build::{ArtifactBuilder, BuildInput, BuilderConfig, EncodingType, ModuleSelection};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::{env, fs, process};
@@ -84,7 +83,7 @@ fn main() {
     let mutations: Vec<MutationSpec> = args
         .mutations
         .iter()
-        .map(|s| parse_mutation_spec(s))
+        .map(|s| MutationSpec::from_cli_str(s))
         .collect();
 
     let input = BuildInput::ModularTemplate {
@@ -292,32 +291,6 @@ impl Args {
         }
 
         a
-    }
-}
-
-/// Parse "id:key=val,key=val" into a MutationSpec.
-/// Examples:
-///   "ast.string_xor"                        → id="ast.string_xor", params={}
-///   "ast.decon_rounds:count=50,method=fixed" → id="ast.decon_rounds", params={count:50, method:fixed}
-///   "binary.size_pad:target_kb=256"         → id="binary.size_pad", params={target_kb:256}
-fn parse_mutation_spec(s: &str) -> MutationSpec {
-    if let Some((id, params_str)) = s.split_once(':') {
-        let params: HashMap<String, String> = params_str
-            .split(',')
-            .filter_map(|kv| {
-                let (k, v) = kv.split_once('=')?;
-                Some((k.to_string(), v.to_string()))
-            })
-            .collect();
-        MutationSpec {
-            id: id.to_string(),
-            params,
-        }
-    } else {
-        MutationSpec {
-            id: s.to_string(),
-            params: HashMap::new(),
-        }
     }
 }
 

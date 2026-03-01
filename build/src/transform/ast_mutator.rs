@@ -88,12 +88,20 @@ impl AstMutator {
 
             // Apply bottom-up (reverse line order) to preserve line numbers
             let count = matching.len();
+            let before = result.clone();
             for marker in matching.into_iter().rev() {
                 result = self.apply_at_marker(&result, marker, name, &mutation.params)?;
             }
 
-            applied.push(mutation.id.clone());
-            info!("Applied ast.{} at {} location(s)", name, count);
+            if result != before {
+                applied.push(mutation.id.clone());
+                info!("Applied ast.{} at {} location(s)", name, count);
+            } else {
+                debug!(
+                    "ast.{} matched {} marker(s) but made no changes",
+                    name, count
+                );
+            }
         }
 
         // Phase 2: global string_xor (after marker mutations, so new code is also encoded)
@@ -468,8 +476,14 @@ impl AstMutator {
 }
 
 impl Default for AstMutator {
+    /// Creates an `AstMutator` with the default C language grammar.
+    ///
+    /// # Panics
+    ///
+    /// Panics if tree-sitter C grammar initialization fails (should never
+    /// happen unless the tree-sitter-c dependency is broken).
     fn default() -> Self {
-        Self::new().expect("Failed to initialize AstMutator")
+        Self::new().expect("Failed to initialize AstMutator: tree-sitter C grammar unavailable")
     }
 }
 
@@ -653,7 +667,8 @@ void deconditioner() {
         let spec = make_spec("ast.fill_pattern", &[("pattern", "xor")]);
         let (out, applied) = ast.apply(basic_template(), &[&spec]).unwrap();
 
-        assert!(applied.contains(&"ast.fill_pattern".to_string()));
+        // Default "xor" makes no changes → not recorded as applied
+        assert!(applied.is_empty());
         // Default "xor" should leave source unchanged
         assert!(out.contains("k ^ (i + 0x41)"));
     }
@@ -686,7 +701,8 @@ void deconditioner() {
         let spec = make_spec("ast.exec_decoy", &[("method", "none")]);
         let (out, applied) = ast.apply(basic_template(), &[&spec]).unwrap();
 
-        assert!(applied.contains(&"ast.exec_decoy".to_string()));
+        // "none" makes no changes → not recorded as applied
+        assert!(applied.is_empty());
         // "none" should not add any execution code
         assert!(!out.contains("((void(*)())buf)()"));
         assert!(!out.contains("CreateThread"));
@@ -761,7 +777,8 @@ void deconditioner() {
         let spec = make_spec("ast.protection_transition", &[("pattern", "rw_rx")]);
         let (out, applied) = ast.apply(basic_template(), &[&spec]).unwrap();
 
-        assert!(applied.contains(&"ast.protection_transition".to_string()));
+        // Default "rw_rx" makes no changes → not recorded as applied
+        assert!(applied.is_empty());
         // Default should not change anything
         assert!(out.contains("p_RX"));
         assert!(!out.contains("p_RWX"));
@@ -807,8 +824,8 @@ void deconditioner() {
 
         let (out, applied) = ast.apply(source, &[&spec]).unwrap();
 
-        // Unknown mutation is applied (returns source unchanged) but still recorded
-        assert!(applied.contains(&"ast.unknown_thing".to_string()));
+        // Unknown mutation makes no changes → not recorded as applied
+        assert!(applied.is_empty());
         assert!(out.contains("int x = 42;"));
     }
 
