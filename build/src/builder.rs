@@ -362,9 +362,8 @@ impl ArtifactBuilder {
             // reproducible-ish + no incremental
             "-Wl,/Brepro",
             "-Wl,/INCREMENTAL:NO",
-            // typical release link opts
-            "-Wl,/OPT:REF",
-            "-Wl,/OPT:ICF",
+            // Note: /OPT:REF and /OPT:ICF removed — they can eliminate
+            // static-inline carrier code, causing payload non-execution.
             // Keep consistent runtime model: /MT == libcmt (static CRT)
             // (If you prefer /MD, replace libcmt with msvcrt and ensure matching libs everywhere.)
             "-Wl,-defaultlib:libcmt",
