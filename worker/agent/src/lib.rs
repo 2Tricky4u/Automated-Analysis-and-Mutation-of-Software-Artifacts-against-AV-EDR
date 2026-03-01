@@ -17,7 +17,8 @@ pub mod automutate {
 // New module structure
 pub mod api;
 pub mod capabilities;
-pub mod dispatch;
+pub mod constants;
+pub mod execution;
 pub mod infra;
 pub mod session;
 pub mod telemetry;
@@ -25,7 +26,7 @@ pub mod telemetry;
 // Re-export WorkerAgentService for use in session and main
 use automutate_config::WorkerConfig;
 use capabilities::WorkerCapabilities;
-use dispatch::state::ExecutionState;
+use execution::state::ExecutionState;
 use std::sync::Arc;
 use sysinfo::System;
 use tokio::sync::Mutex;
@@ -65,7 +66,7 @@ impl WorkerAgentService {
         self.execution_lock.lock().await.clone()
     }
 
-    pub fn truncate_middle_output(stdout_output: &String) -> String {
+    pub fn truncate_middle_output(stdout_output: &str) -> String {
         if stdout_output.len() > 1000 {
             // Show first 400 chars and last 400 chars, truncate middle
             let first_part = &stdout_output[..400];

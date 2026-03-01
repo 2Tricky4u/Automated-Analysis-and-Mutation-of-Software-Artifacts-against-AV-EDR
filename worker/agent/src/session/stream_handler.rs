@@ -22,7 +22,7 @@ use crate::automutate::common::{
     worker_message,
 };
 
-use crate::dispatch::state::ExecutionState;
+use crate::execution::state::ExecutionState;
 use crate::session::worker_state::WorkerState;
 use automutate_config::WorkerConfig;
 
@@ -127,10 +127,10 @@ impl StreamHandler {
     /// Calls engine::execute_run() directly instead of going through
     /// api::run::run_sample(), avoiding the need to hold Arc<WorkerAgentService>.
     async fn handle_run_sample(&self, cmd: RunSampleCommand) -> Result<()> {
-        use crate::dispatch::engine;
-        use crate::dispatch::state::ExecutionLockGuard;
-        use crate::dispatch::types::{
-            RunContext, RunRequest, sample_response_error, sample_response_ok,
+        use crate::execution::engine;
+        use crate::execution::state::ExecutionLockGuard;
+        use crate::execution::types::{
+            RunContext, RunRequest, format_output, sample_response_error, sample_response_ok,
         };
 
         let request_id = cmd.request_id.clone();
@@ -155,8 +155,11 @@ impl StreamHandler {
 
         tokio::spawn(async move {
             let job_id = sample_request.job_id.clone();
-            let artifact_name = format!("{}.exe", sample_request.artifact_id);
             let run_id = request_id.clone();
+
+            // Build context early so we can use artifact_name for the lock
+            let run_context = RunContext::new(&sample_request.artifact_id, worker_id, config);
+            let artifact_name = run_context.artifact_name.clone();
 
             // Update worker state to indicate job is running
             {
@@ -188,7 +191,7 @@ impl StreamHandler {
                 ExecutionLockGuard::new(execution_lock.clone())
             };
 
-            // Build typed request and context
+            // Build typed request
             let run_request = RunRequest {
                 job_id: job_id.clone(),
                 artifact_id: sample_request.artifact_id.clone(),
@@ -196,10 +199,8 @@ impl StreamHandler {
                 run_id: run_id.clone(),
             };
 
-            let run_context = RunContext::new(&sample_request.artifact_id, worker_id, config);
-
             // Build sink from tx channel (no Arc<StreamHandler> needed)
-            let sink = crate::dispatch::sink::build_sink(Some(&tx));
+            let sink = crate::execution::sink::build_sink(Some(&tx));
 
             // Execute via engine — dryrun skips RedEDR/telemetry
             let result = match if sample_request.is_dryrun {
@@ -208,10 +209,7 @@ impl StreamHandler {
                 engine::execute_run(&run_request, &run_context, sink).await
             } {
                 Ok(outcome) => {
-                    let output = crate::api::run::format_output(
-                        &outcome,
-                        sample_request.timeout_seconds as u32,
-                    );
+                    let output = format_output(&outcome, sample_request.timeout_seconds as u32);
                     sample_response_ok(&job_id, &run_id, &outcome, output)
                 }
                 Err(e) => {

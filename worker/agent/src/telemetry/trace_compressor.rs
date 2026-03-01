@@ -173,7 +173,7 @@ impl MatrixProfile {
             }
 
             // Filter patterns that occur frequently enough
-            for (pattern, occurrences) in pattern_map {
+            for (_pattern, occurrences) in pattern_map {
                 if occurrences.len() >= min_occurrences {
                     // Compute average distance between occurrences
                     let distances: Vec<usize> =
@@ -340,7 +340,7 @@ impl Grammar {
     }
 }
 
-fn symbols_to_string(symbols: &[Symbol], columnar: &ColumnarTrace) -> String {
+fn symbols_to_string(symbols: &[Symbol], _columnar: &ColumnarTrace) -> String {
     symbols
         .iter()
         .map(|s| match s {
