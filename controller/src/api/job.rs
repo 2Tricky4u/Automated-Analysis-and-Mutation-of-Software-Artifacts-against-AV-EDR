@@ -734,10 +734,6 @@ fn apply_round_correction(
 /// Prefers `mutation_recipe` (array of {id, params}) over `mutations` (array of strings).
 fn parse_mutation_recipe(source: &Value) -> Vec<crate::automutate::common::Mutation> {
     // Try mutation_recipe first (has full params)
-    debug!(
-        "parse_mutation_recipe: mutation_recipe field = {}",
-        &source["mutation_recipe"]
-    );
     if let Some(arr) = source["mutation_recipe"].as_array() {
         let recipes: Vec<crate::automutate::common::Mutation> = arr
             .iter()
