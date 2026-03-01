@@ -13,6 +13,7 @@
 
 use super::{SearchSpace, Selection, Selector, TriageGuidance, VariationStrategy};
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
+use crate::triage::param_space::{default_registry, find_param_space};
 use async_trait::async_trait;
 use std::collections::{BTreeMap, HashMap};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -194,6 +195,17 @@ impl CoverageSelector {
         nanos as usize % n
     }
 
+    /// Sample params for a mutation ID from the default registry, if available.
+    fn sample_mutation_params(mutation_id: &str) -> Option<serde_json::Value> {
+        let registry = default_registry();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() as u64;
+        let mut rng = crate::triage::param_space::SeededRng::from_raw(nanos.max(1));
+        find_param_space(&registry, mutation_id).and_then(|ps| ps.sample_params(&mut rng))
+    }
+
     /// Build the fixed mutation specs from search_space.fixed_mutations.
     fn fixed_mutation_specs(search_space: &SearchSpace) -> Vec<MutationSpec> {
         search_space
@@ -201,7 +213,7 @@ impl CoverageSelector {
             .iter()
             .map(|id| MutationSpec {
                 id: id.clone(),
-                params: None,
+                params: Self::sample_mutation_params(id),
             })
             .collect()
     }
@@ -305,8 +317,8 @@ impl CoverageSelector {
 
         Some((
             MutationSpec {
-                id: chosen,
-                params: None,
+                id: chosen.clone(),
+                params: Self::sample_mutation_params(&chosen),
             },
             rationale,
         ))
