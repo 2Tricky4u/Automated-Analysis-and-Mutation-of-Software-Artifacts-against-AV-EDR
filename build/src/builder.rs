@@ -541,45 +541,6 @@ impl ArtifactBuilder {
         Ok(())
     }
 
-    /// Compile LLVM IR to executable
-    async fn compile_ir_to_exe(
-        &self,
-        ir_path: &Path,
-        exe_path: &Path,
-        _template_name: &str,
-    ) -> Result<()> {
-        let xwin = &self.xwin;
-
-        let mut args = vec!["-target", "x86_64-pc-windows-msvc"];
-        args.extend(xwin.lib_args());
-        args.extend_from_slice(&[
-            "-fuse-ld=lld",
-            "-Wl,/subsystem:console",
-            "-O0", // Keep -O0 to preserve mutated NOPs (don't optimize them out)
-            "-Wl,-defaultlib:libcmt",
-            "-Wl,-defaultlib:kernel32",
-        ]);
-
-        args.push("-o");
-        args.push(exe_path.to_str().unwrap());
-        args.push(ir_path.to_str().unwrap());
-
-        debug!("Compiling IR -> EXE: clang {}", args.join(" "));
-
-        let output = tokio::process::Command::new("clang")
-            .args(&args)
-            .output()
-            .await
-            .context("Failed to execute clang for linking")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Clang linking failed:\n{}", stderr);
-        }
-
-        Ok(())
-    }
-
     /// Get Clang version for metadata
     fn get_clang_version(&self) -> Result<String> {
         let output = std::process::Command::new("clang")
@@ -627,6 +588,59 @@ impl ArtifactBuilder {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("IR compilation failed:\n{}", stderr);
+        }
+
+        Ok(())
+    }
+
+    /// Link a compiled object file into a baseline (non-instrumented) executable.
+    ///
+    /// Mirrors `link_instrumented_exe` but without runtime object files.
+    /// Uses lld-link directly (two-step compile+link) to match the working
+    /// instrumented path and avoid clang-driver issues in `compile_ir_to_exe`.
+    async fn link_baseline_exe(&self, obj_path: &Path, output_exe: &Path) -> Result<()> {
+        let lld_link_path = if cfg!(target_os = "linux") {
+            "/usr/lib/llvm-17/bin/lld-link"
+        } else {
+            "lld-link"
+        };
+
+        // ALWAYS link minimal_runtime.o (provides __runtime_exit)
+        let minimal_runtime_obj = self.ensure_minimal_runtime().await?;
+
+        let mut cmd = tokio::process::Command::new(lld_link_path);
+        cmd.arg(obj_path)
+            .arg(&minimal_runtime_obj)
+            .arg("/out:".to_owned() + output_exe.to_str().unwrap())
+            .arg("/subsystem:console")
+            .arg("/machine:x64")
+            .arg("/DEBUG:NONE")
+            .arg("/Brepro")
+            .arg("/INCREMENTAL:NO");
+
+        // Add xwin library paths (CRT and Windows SDK)
+        for arg in self.xwin.lld_lib_args() {
+            cmd.arg(arg);
+        }
+
+        // Libraries — match invoke_clang_internal + link_instrumented_exe
+        cmd.arg("kernel32.lib")
+            .arg("advapi32.lib")
+            .arg("libcmt.lib")
+            .arg("libucrt.lib");
+
+        let full_cmd = format!("{:?}", cmd);
+        debug!("Baseline link command: {}", full_cmd);
+
+        let output = cmd.output().await.context("Failed to run lld-link")?;
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !output.status.success() {
+            anyhow::bail!("Baseline linking failed:\n{}", stderr);
+        }
+
+        if !stderr.is_empty() {
+            debug!("Baseline linker stderr: {}", stderr);
         }
 
         Ok(())
@@ -1269,12 +1283,20 @@ impl ArtifactBuilder {
                 .await
                 .context("Failed to write mutated IR")?;
 
-            // Compile IR → EXE at -O0 (preserves NOP inserts, opaque predicates)
-            self.compile_ir_to_exe(&temp_ir, &temp_output, "modular")
+            // Two-step compile+link (mirrors the working instrumented path):
+            // Step 1: IR → object file
+            let temp_obj = self.config.output_dir.join(format!("{}.o", artifact_name));
+            self.compile_ir_to_object(&temp_ir, &temp_obj)
                 .await
-                .context("Failed to compile mutated IR to executable")?;
+                .context("Failed to compile mutated IR to object")?;
 
-            // Clean up IR file (keep .c for potential instrumentation)
+            // Step 2: object → executable (via lld-link directly)
+            self.link_baseline_exe(&temp_obj, &temp_output)
+                .await
+                .context("Failed to link mutated object to executable")?;
+
+            // Clean up intermediate files (keep .c for potential instrumentation)
+            let _ = tokio::fs::remove_file(&temp_obj).await;
             let _ = tokio::fs::remove_file(&temp_ir).await;
         } else {
             // --- Direct path: C → EXE (unchanged from original) ---
