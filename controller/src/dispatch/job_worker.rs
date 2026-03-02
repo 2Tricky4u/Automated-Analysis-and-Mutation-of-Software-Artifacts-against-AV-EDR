@@ -34,7 +34,8 @@ use super::types::{
     ArtifactRef, JobId, JobOutcome, JobSession, ModularBuildSpec, RoundAgg, RoundId, RoundSpec,
     RunEnvelope, RunId, RunOutcome, RunType,
 };
-use crate::triage::Selector;
+use crate::storage::EsStorage;
+use crate::triage::{Selector, TriageGuidance};
 
 // ============================================================================
 // Configuration
@@ -180,6 +181,18 @@ pub struct JobWorker {
 
     /// Receives async coverage corrections from Orchestrator background tasks.
     correction_rx: mpsc::Receiver<CoverageCorrection>,
+
+    /// ES storage for async triage token extraction (None = triage disabled).
+    storage: Option<Arc<EsStorage>>,
+
+    /// Latest triage guidance from async background task. Updated non-blocking.
+    latest_guidance: Option<TriageGuidance>,
+
+    /// Receives triage guidance from background extraction tasks.
+    guidance_rx: mpsc::Receiver<TriageGuidance>,
+
+    /// Sender cloned into spawned triage tasks.
+    guidance_tx: mpsc::Sender<TriageGuidance>,
 }
 
 impl JobWorker {
@@ -190,8 +203,10 @@ impl JobWorker {
         event_tx: mpsc::Sender<JobWorkerEvent>,
         selector: Arc<dyn Selector>,
         correction_rx: mpsc::Receiver<CoverageCorrection>,
+        storage: Option<Arc<EsStorage>>,
     ) -> Self {
         let (result_tx, result_rx) = mpsc::channel(64);
+        let (guidance_tx, guidance_rx) = mpsc::channel(16);
         Self {
             job,
             run_pool,
@@ -206,6 +221,10 @@ impl JobWorker {
             instrumented_payload: None,
             cached_payload: None,
             correction_rx,
+            storage,
+            latest_guidance: None,
+            guidance_rx,
+            guidance_tx,
         }
     }
 
@@ -277,6 +296,15 @@ impl JobWorker {
                 // Receive async coverage corrections from Orchestrator
                 Some(correction) = self.correction_rx.recv() => {
                     self.apply_coverage_correction(correction);
+                }
+
+                // Receive triage guidance (non-blocking update from background tasks)
+                Some(guidance) = self.guidance_rx.recv() => {
+                    info!(
+                        "[JobWorker:{}] Triage guidance: {} avoid, {} seek tokens",
+                        self.job.id, guidance.avoid_tokens.len(), guidance.seek_tokens.len()
+                    );
+                    self.latest_guidance = Some(guidance);
                 }
 
                 // Periodic check to produce more rounds
@@ -415,7 +443,7 @@ impl JobWorker {
             self.job.id, round_num, round_id
         );
 
-        // Call selector with in-memory history
+        // Call selector with in-memory history + async triage guidance
         let selection = self
             .selector
             .select(
@@ -424,7 +452,7 @@ impl JobWorker {
                 &self.job.search_space,
                 &self.job.build_spec.modules,
                 &self.job.rounds,
-                None,
+                self.latest_guidance.as_ref(),
             )
             .await;
 
@@ -790,6 +818,41 @@ impl JobWorker {
         // Update job registry for API visibility
         self.run_pool.update_job_progress(&self.job);
 
+        // Spawn async triage extraction (non-blocking, non-fatal)
+        if let Some(ref storage) = self.storage {
+            let guidance_tx = self.guidance_tx.clone();
+            let storage = storage.clone();
+            let job_id = self.job.id.0.clone();
+            let round_id_str = round_id.0.clone();
+            let baseline_run_id = format!("{}-baseline", round_id_str);
+            let summary_clone = summary.clone();
+            let all_summaries: Vec<(super::types::RoundSummary, bool)> = self
+                .job
+                .rounds
+                .values()
+                .map(|s| (s.clone(), s.detected))
+                .collect();
+            tokio::spawn(async move {
+                match crate::triage::extractor::extract_and_score(
+                    &storage,
+                    &job_id,
+                    &round_id_str,
+                    &baseline_run_id,
+                    &summary_clone,
+                    &all_summaries,
+                )
+                .await
+                {
+                    Ok(guidance) => {
+                        let _ = guidance_tx.send(guidance).await;
+                    }
+                    Err(e) => {
+                        warn!("[Triage:{}] Extraction failed (non-fatal): {}", job_id, e);
+                    }
+                }
+            });
+        }
+
         // Emit enriched event for ES indexing (round + both runs + optional dryrun)
         let data = build_round_completed_data(self.job.id.clone(), round_id.clone(), agg, summary);
         let _ = self
@@ -975,7 +1038,7 @@ mod tests {
         let (_corr_tx, corr_rx) = mpsc::channel(10);
 
         let job = JobSession::new("test-job", 3, test_build_spec());
-        let worker = JobWorker::new(job, pool, event_tx, Arc::new(NoopSelector), corr_rx);
+        let worker = JobWorker::new(job, pool, event_tx, Arc::new(NoopSelector), corr_rx, None);
 
         assert_eq!(worker.job_id().0, "test-job");
     }
@@ -987,7 +1050,7 @@ mod tests {
         let (_corr_tx, corr_rx) = mpsc::channel(10);
 
         let job = JobSession::new("test-job", 3, test_build_spec());
-        let worker = JobWorker::new(job, pool, event_tx, Arc::new(NoopSelector), corr_rx);
+        let worker = JobWorker::new(job, pool, event_tx, Arc::new(NoopSelector), corr_rx, None);
 
         // Should be able to produce initially
         assert!(worker.can_produce_round());

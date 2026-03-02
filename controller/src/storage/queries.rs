@@ -231,6 +231,58 @@ pub async fn query_trace_content(es: &Elasticsearch, run_id: &str) -> Option<Str
 }
 
 // ---------------------------------------------------------------------------
+// Triage token queries
+// ---------------------------------------------------------------------------
+
+/// Query `payload_func` telemetry events for a run, sorted by `payload_seq` ascending.
+///
+/// Returns raw `Value` objects with `payload_func`, `payload_seq`, `payload_ts_us` fields.
+/// Used by `triage::extractor` to build `api:*` and `seq2:*` tokens.
+pub async fn query_api_telemetry(es: &Elasticsearch, run_id: &str) -> Vec<Value> {
+    let response = es
+        .search(SearchParts::Index(&["telemetry-*"]))
+        .body(json!({
+            "query": {
+                "bool": {
+                    "filter": [
+                        { "match_phrase": { "run_id": run_id } },
+                        { "exists": { "field": "payload_func" } }
+                    ],
+                    "must_not": [
+                        { "match_phrase": { "event_type": "trace_log" } }
+                    ]
+                }
+            },
+            "sort": [{ "payload_seq": "asc" }],
+            "size": 5000,
+            "_source": ["payload_func", "payload_seq", "payload_ts_us"]
+        }))
+        .send()
+        .await;
+
+    extract_sources(response).await
+}
+
+#[allow(dead_code)]
+/// Query all token set documents for a job from `tokens-*`.
+///
+/// Each document represents one round's combined token set (module + mutation + API + seq2).
+/// Used by `triage::extractor::extract_and_score()` to compute lift across all prior rounds.
+pub async fn query_token_sets(es: &Elasticsearch, job_id: &str) -> Vec<Value> {
+    let response = es
+        .search(SearchParts::Index(&["tokens-*"]))
+        .body(json!({
+            "query": { "term": { "job_id": job_id } },
+            "sort": [{ "timestamp": "asc" }],
+            "size": 500
+        }))
+        .send()
+        .await;
+
+    extract_sources(response).await
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 

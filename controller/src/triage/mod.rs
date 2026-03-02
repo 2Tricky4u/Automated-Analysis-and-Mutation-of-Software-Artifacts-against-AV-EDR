@@ -10,9 +10,12 @@
 //!   queries ES for token-level data.
 
 pub mod coverage_selector;
+pub mod extractor;
 pub mod fuzzer_selector;
 pub mod param_space;
+pub mod scorer;
 pub mod source_resolver;
+pub mod token_selector;
 
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
 use crate::triage::fuzzer_selector::FuzzerConfig;
@@ -36,12 +39,14 @@ pub enum SelectorType {
     #[default]
     Coverage,
     Fuzzer,
+    Token,
 }
 
 impl SelectorType {
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "fuzzer" => Self::Fuzzer,
+            "token" => Self::Token,
             _ => Self::Coverage,
         }
     }
@@ -51,6 +56,7 @@ impl SelectorType {
         match self {
             Self::Coverage => "coverage",
             Self::Fuzzer => "fuzzer",
+            Self::Token => "token",
         }
     }
 }
@@ -156,8 +162,11 @@ impl Default for SearchSpace {
     }
 }
 
-/// Token-level guidance from async triage (planned for feedback loop).
-#[allow(dead_code)]
+/// Token-level guidance from async triage.
+///
+/// Produced by `extractor::extract_and_score()` in a background task,
+/// sent to `JobWorker` via a channel, consumed by `TokenSelector`.
+#[derive(Debug, Clone)]
 pub struct TriageGuidance {
     pub avoid_tokens: Vec<String>,
     pub seek_tokens: Vec<String>,

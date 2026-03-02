@@ -14,6 +14,7 @@ pub async fn ensure_templates(es: &Elasticsearch) -> anyhow::Result<()> {
         create_rounds_template(es),
         create_runs_template(es),
         create_telemetry_template(es),
+        create_tokens_template(es),
     );
 
     // Log failures but don't crash on template errors
@@ -28,6 +29,9 @@ pub async fn ensure_templates(es: &Elasticsearch) -> anyhow::Result<()> {
     }
     if let Err(e) = results.3 {
         warn!("Failed to create telemetry template: {}", e);
+    }
+    if let Err(e) = results.4 {
+        warn!("Failed to create tokens template: {}", e);
     }
 
     info!("Index templates ensured");
@@ -265,5 +269,52 @@ async fn create_telemetry_template(es: &Elasticsearch) -> anyhow::Result<()> {
         .await?;
 
     info!("Created index template: telemetry-template");
+    Ok(())
+}
+
+async fn create_tokens_template(es: &Elasticsearch) -> anyhow::Result<()> {
+    let template = json!({
+        "index_patterns": ["tokens-*"],
+        "template": {
+            "settings": {
+                "number_of_shards": 1,
+                "number_of_replicas": 0
+            },
+            "mappings": {
+                "_meta": { "version": 1 },
+                "properties": {
+                    "job_id": { "type": "keyword" },
+                    "round_id": { "type": "keyword" },
+                    "run_id": { "type": "keyword" },
+                    "detected": { "type": "boolean" },
+                    "differential_category": { "type": "keyword" },
+                    "evasion_score": { "type": "float" },
+                    "modules": {
+                        "properties": {
+                            "carrier": { "type": "keyword" },
+                            "decoder": { "type": "keyword" },
+                            "antiemulation": { "type": "keyword" },
+                            "deconditioner": { "type": "keyword" },
+                            "guardrail": { "type": "keyword" },
+                            "virtualprotect": { "type": "keyword" },
+                            "decoy": { "type": "keyword" }
+                        }
+                    },
+                    "mutations": { "type": "keyword" },
+                    "tokens": { "type": "keyword" },
+                    "token_count": { "type": "integer" },
+                    "timestamp": { "type": "date" }
+                }
+            }
+        }
+    });
+
+    es.indices()
+        .put_index_template(IndicesPutIndexTemplateParts::Name("tokens-template"))
+        .body(template)
+        .send()
+        .await?;
+
+    info!("Created index template: tokens-template");
     Ok(())
 }
