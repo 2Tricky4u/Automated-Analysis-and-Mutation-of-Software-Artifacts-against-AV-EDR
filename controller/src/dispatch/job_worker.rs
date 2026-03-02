@@ -372,7 +372,7 @@ impl JobWorker {
         };
 
         // Update job registry with final status
-        self.run_pool.complete_job(&self.job.id, &outcome);
+        self.run_pool.complete_job(&self.job.id, &outcome).await;
 
         let _ = self
             .event_tx
@@ -817,6 +817,7 @@ impl JobWorker {
 
         // Update job registry for API visibility
         self.run_pool.update_job_progress(&self.job);
+        self.run_pool.record_round_completed().await;
 
         // Spawn async triage extraction (non-blocking, non-fatal)
         if let Some(ref storage) = self.storage {

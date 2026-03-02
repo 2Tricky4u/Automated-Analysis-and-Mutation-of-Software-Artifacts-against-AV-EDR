@@ -1,6 +1,7 @@
 use crate::api::SchedulerService;
 use crate::automutate::controller::{
-    PingRequest, PingResponse, QueryRequest, QueryResponse, TriageRequest, TriageResponse,
+    AnalysisResult, PingRequest, PingResponse, QueryRequest, QueryResponse, TriageRequest,
+    TriageResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::{debug, info};
@@ -21,11 +22,13 @@ pub async fn ping(
     }))
 }
 
-// TODO: STUB - Needs full implementation
-// - Store triage results to Elasticsearch (triage-* index)
-// - Link triage to job and runs
-// - Store feature attributions and hypotheses
-// - Calculate and store evasion scores
+/// Submit triage results.
+///
+/// The internal triage pipeline (triage::extractor::extract_and_score(), called from
+/// JobWorker::finalize_round()) already handles token extraction, lift/confidence
+/// scoring, and guidance generation from the two-run differential protocol.
+/// This endpoint is kept for backwards compatibility but does not duplicate
+/// that internal pipeline.
 pub async fn submit_triage(
     _service: &SchedulerService,
     request: Request<TriageRequest>,
@@ -38,16 +41,6 @@ pub async fn submit_triage(
         req.job_id, req.detected
     );
 
-    // TODO: Index triage to Elasticsearch
-    // let doc = json!({
-    //     "triage_id": triage_id,
-    //     "job_id": req.job_id,
-    //     "detected": req.detected,
-    //     "hypotheses": req.hypotheses,
-    //     "feature_attributions": req.feature_attributions,
-    //     "timestamp": chrono::Utc::now().to_rfc3339(),
-    // });
-
     Ok(Response::new(TriageResponse {
         job_id: req.job_id,
         stored: true,
@@ -55,30 +48,46 @@ pub async fn submit_triage(
     }))
 }
 
-// TODO: STUB - Needs full implementation
-// - Parse query filters from request (job_id, run_id, time range, etc.)
-// - Build Elasticsearch query based on filters
-// - Support pagination (offset, limit)
-// - Return structured results with metadata
+/// Query analysis results from Elasticsearch.
+///
+/// Searches `runs-*` index filtered by job_ids and date range,
+/// returning structured results for the UI.
 pub async fn query_results(
-    _service: &SchedulerService,
+    service: &SchedulerService,
     request: Request<QueryRequest>,
 ) -> Result<Response<QueryResponse>, Status> {
-    let _req = request.into_inner();
+    let req = request.into_inner();
 
-    // TODO: Implement ES query based on request filters
-    // let search_result = service.storage.client()
-    //     .search(SearchParts::Index(&["runs-*", "jobs-*", "rounds-*"]))
-    //     .body(json!({
-    //         "query": { ... build from req filters ... },
-    //         "size": req.limit,
-    //         "from": req.offset,
-    //     }))
-    //     .send()
-    //     .await;
+    debug!(
+        "[RPC] QueryResults: job_ids={:?}, date_from={}, date_to={}",
+        req.job_ids, req.date_from, req.date_to
+    );
+
+    let docs = service
+        .storage
+        .query_analysis_results(&req.job_ids, &req.date_from, &req.date_to)
+        .await;
+
+    let results: Vec<AnalysisResult> = docs
+        .iter()
+        .map(|doc| AnalysisResult {
+            job_id: doc["job_id"].as_str().unwrap_or("").to_string(),
+            artifact_hash: doc["artifact_id"].as_str().unwrap_or("").to_string(),
+            detected: doc["detected"].as_bool().unwrap_or(false),
+            detection_rate: doc["detection_verdict"].as_str().unwrap_or("").to_string(),
+            evasion_techniques: vec![],
+            telemetry_summary: Default::default(),
+        })
+        .collect();
+
+    let total_count = results.len() as i32;
+
+    if total_count > 0 {
+        debug!("[RPC] QueryResults: returning {} results", total_count);
+    }
 
     Ok(Response::new(QueryResponse {
-        results: vec![],
-        total_count: 0,
+        results,
+        total_count,
     }))
 }

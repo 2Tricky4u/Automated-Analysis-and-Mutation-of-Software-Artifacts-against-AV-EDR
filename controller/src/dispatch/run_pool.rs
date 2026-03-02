@@ -64,6 +64,8 @@ pub struct RunPoolMetrics {
     pub total_runs_taken: u64,
     pub total_results_routed: u64,
     pub active_jobs: usize,
+    pub total_rounds_completed: u64,
+    pub total_jobs_completed: u64,
 }
 
 impl RunPool {
@@ -108,10 +110,16 @@ impl RunPool {
     }
 
     /// Mark job as completed with outcome.
-    pub fn complete_job(&self, job_id: &JobId, outcome: &JobOutcome) {
+    pub async fn complete_job(&self, job_id: &JobId, outcome: &JobOutcome) {
         if let Some(mut info) = self.job_registry.get_mut(job_id) {
             info.status = outcome.to_status();
         }
+        self.metrics.lock().await.total_jobs_completed += 1;
+    }
+
+    /// Record that a round was completed (for metrics).
+    pub async fn record_round_completed(&self) {
+        self.metrics.lock().await.total_rounds_completed += 1;
     }
 
     /// Unregister a job and remove all its pending runs.

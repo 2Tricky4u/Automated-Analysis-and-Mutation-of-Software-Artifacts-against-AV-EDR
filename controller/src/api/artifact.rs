@@ -1,10 +1,10 @@
 use crate::api::SchedulerService;
 use crate::automutate::controller::{BuildRequest, BuildResponse, DeployRequest, DeployResponse};
 use tonic::{Request, Response, Status};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 pub async fn build_artifact(
-    _service: &SchedulerService,
+    service: &SchedulerService,
     request: Request<BuildRequest>,
 ) -> Result<Response<BuildResponse>, Status> {
     let req = request.into_inner();
@@ -125,7 +125,21 @@ pub async fn build_artifact(
         built.artifact_id, built.size_bytes, built.mutations_applied, trace_mode
     );
 
-    // TODO Index artifact metadata to Elasticsearch
+    // Index artifact metadata to Elasticsearch
+    let artifact_doc = serde_json::json!({
+        "artifact_id": built.artifact_id,
+        "size_bytes": built.size_bytes,
+        "mutations_applied": built.mutations_applied,
+        "trace_mode": trace_mode,
+        "build_timestamp": built.build_timestamp.to_rfc3339(),
+        "storage_path": built.output_path.to_string_lossy(),
+        "encoding": modular.encoding,
+        "indexed_at": chrono::Utc::now().to_rfc3339(),
+    });
+    if let Err(e) = service.storage.index_artifact(artifact_doc).await {
+        warn!("Failed to index artifact metadata to ES: {}", e);
+        // Non-fatal: build still succeeds even if ES indexing fails
+    }
 
     Ok(Response::new(BuildResponse {
         artifact_id: built.artifact_id,

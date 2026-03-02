@@ -135,7 +135,19 @@ impl VMExecutor {
                 // Priority 1: Graceful shutdown
                 _ = shutdown_token.cancelled() => {
                     info!("[VM:{}] Shutdown requested", self.id);
-                    //TODO clean vm about this job
+                    if let Some(in_flight) = self.in_flight.take() {
+                        warn!(
+                            "[VM:{}] Cleaning up in-flight run {} (job={})",
+                            self.id, in_flight.envelope.run_id, in_flight.envelope.job_id
+                        );
+                        self.route_error(
+                            &in_flight.envelope,
+                            format!("VM {} shutting down (graceful)", self.id),
+                        ).await;
+                    } else {
+                        // No in-flight run, but release VM so it's not stuck in Busy state
+                        let _ = self.targets.release(&self.id);
+                    }
                     break;
                 }
 
