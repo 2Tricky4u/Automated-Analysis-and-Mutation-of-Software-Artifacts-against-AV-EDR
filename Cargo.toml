@@ -13,6 +13,9 @@ members = [
     # UI
     "ui/backend",
 
+    # Evaluation framework
+    "evaluation",
+
     # Shared libraries
     "common",
     "config",

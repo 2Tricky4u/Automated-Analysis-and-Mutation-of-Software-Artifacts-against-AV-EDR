@@ -609,6 +609,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "evaluation"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "automutate-common",
+ "controller",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
