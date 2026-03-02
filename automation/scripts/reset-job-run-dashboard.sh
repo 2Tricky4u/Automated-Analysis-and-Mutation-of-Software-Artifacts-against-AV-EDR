@@ -1,6 +1,6 @@
 #!/bin/bash
 # Reset Job & Run Drill-Down Dashboard
-# Deletes all 16 saved objects and optionally re-creates them.
+# Deletes all 22 saved objects and optionally re-creates them.
 #
 # Usage:
 #   ./reset-job-run-dashboard.sh          # delete + recreate
@@ -48,16 +48,19 @@ echo "=== Step 1: Deleting Dashboard ==="
 delete_object "dashboard" "job-run-drilldown-dashboard"
 
 echo ""
-echo "=== Step 2: Deleting Visualizations (6) ==="
+echo "=== Step 2: Deleting Visualizations (9) ==="
 delete_object "visualization" "viz-job-status-pie"
 delete_object "visualization" "viz-detection-outcome-pie"
 delete_object "visualization" "viz-differential-category-pie"
 delete_object "visualization" "viz-evasion-score-histogram"
 delete_object "visualization" "viz-run-type-breakdown"
 delete_object "visualization" "viz-elapsed-time-histogram"
+delete_object "visualization" "viz-top-tokens-bar"
+delete_object "visualization" "viz-token-count-over-time"
+delete_object "visualization" "viz-tokens-detected-vs-evasion"
 
 echo ""
-echo "=== Step 3: Deleting Saved Searches (7) ==="
+echo "=== Step 3: Deleting Saved Searches (9) ==="
 delete_object "search" "job-overview-search"
 delete_object "search" "job-modules-search"
 delete_object "search" "rounds-by-job-search"
@@ -65,14 +68,17 @@ delete_object "search" "rounds-modules-search"
 delete_object "search" "runs-drilldown-search"
 delete_object "search" "runs-errors-search"
 delete_object "search" "telemetry-per-run-search"
+delete_object "search" "tokens-per-round-search"
+delete_object "search" "tokens-mutations-search"
 
 echo ""
-echo "=== Step 4: Deleting Index Patterns (2) ==="
+echo "=== Step 4: Deleting Index Patterns (3) ==="
 delete_object "index-pattern" "jobs-star"
 delete_object "index-pattern" "rounds-star"
+delete_object "index-pattern" "tokens-star"
 
 echo ""
-echo "[+] Cleanup complete (16 objects)"
+echo "[+] Cleanup complete (22 objects)"
 
 if [[ "$DELETE_ONLY" == "true" ]]; then
     echo "[*] --delete flag set, skipping recreation"

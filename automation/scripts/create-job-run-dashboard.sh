@@ -1,7 +1,7 @@
 #!/bin/bash
 # Job & Run Drill-Down Kibana Dashboard Setup
-# Creates index patterns (jobs-*, rounds-*), saved searches, visualizations,
-# and a unified dashboard with per-job filtering across all 4 indices.
+# Creates index patterns (jobs-*, rounds-*, tokens-*), saved searches, visualizations,
+# and a unified dashboard with per-job filtering across all 5 indices.
 #
 # Prerequisites:
 #   - Kibana 8.x running
@@ -82,9 +82,18 @@ create_object "index-pattern" "rounds-star" '{
 }'
 echo "[+] Index pattern rounds-* created (time field: completed_at)"
 
+echo "[*] Creating index pattern: tokens-*"
+create_object "index-pattern" "tokens-star" '{
+    "attributes": {
+        "title": "tokens-*",
+        "timeFieldName": "timestamp"
+    }
+}'
+echo "[+] Index pattern tokens-* created (time field: timestamp)"
+
 # ── Step 2: Saved Searches ─────────────────────────────────────────────
 echo ""
-echo "=== Step 2: Creating Saved Searches (7 data tables) ==="
+echo "=== Step 2: Creating Saved Searches (9 data tables) ==="
 
 # 2a) Job Overview
 echo "[*] Creating saved search: Job Overview"
@@ -212,9 +221,45 @@ create_object "search" "telemetry-per-run-search" '{
 }'
 echo "[+] Saved search created: Telemetry per Run"
 
+# 2h) Tokens per Round
+echo "[*] Creating saved search: Tokens per Round"
+create_object "search" "tokens-per-round-search" '{
+    "attributes": {
+        "title": "Tokens per Round",
+        "description": "Token sets per round with detection outcome, differential category, and evasion score",
+        "columns": ["round_id","job_id","detected","differential_category","evasion_score","token_count","tokens","timestamp"],
+        "sort": [["timestamp","desc"]],
+        "kibanaSavedObjectMeta": {
+            "searchSourceJSON": "{\"index\":\"tokens-star\",\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"
+        }
+    },
+    "references": [
+        {"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"tokens-star"}
+    ]
+}'
+echo "[+] Saved search created: Tokens per Round"
+
+# 2i) Token Mutations
+echo "[*] Creating saved search: Token Mutations"
+create_object "search" "tokens-mutations-search" '{
+    "attributes": {
+        "title": "Token Mutations",
+        "description": "Mutations correlated with detection outcome per round",
+        "columns": ["round_id","job_id","mutations","detected","evasion_score","timestamp"],
+        "sort": [["timestamp","desc"]],
+        "kibanaSavedObjectMeta": {
+            "searchSourceJSON": "{\"index\":\"tokens-star\",\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"
+        }
+    },
+    "references": [
+        {"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"tokens-star"}
+    ]
+}'
+echo "[+] Saved search created: Token Mutations"
+
 # ── Step 3: Visualizations (agg-based, jq for safe JSON) ──────────────
 echo ""
-echo "=== Step 3: Creating Visualizations (6 agg-based charts) ==="
+echo "=== Step 3: Creating Visualizations (9 agg-based charts) ==="
 
 # 3a) Job Status Pie
 echo "[*] Creating visualization: Job Status Pie"
@@ -440,6 +485,127 @@ create_object "visualization" "viz-elapsed-time-histogram" "$(jq -n \
     }')"
 echo "[+] Visualization created: Elapsed Time Histogram"
 
+# 3g) Top Tokens Bar
+echo "[*] Creating visualization: Top Tokens"
+VIS_STATE=$(jq -n '{
+    title: "Top Tokens",
+    type: "horizontal_bar",
+    aggs: [
+        { id: "1", enabled: true, type: "count", params: {}, schema: "metric" },
+        { id: "2", enabled: true, type: "terms", params: { field: "tokens", orderBy: "1", order: "desc", size: 20 }, schema: "segment" }
+    ],
+    params: {
+        type: "horizontal_bar",
+        grid: { categoryLines: false, valueAxis: "ValueAxis-1" },
+        categoryAxes: [{ id: "CategoryAxis-1", type: "category", position: "left", show: true, style: {}, scale: { type: "linear" }, labels: { show: true, filter: true, truncate: 200 }, title: {} }],
+        valueAxes: [{ id: "ValueAxis-1", name: "BottomAxis-1", type: "value", position: "bottom", show: true, style: {}, scale: { type: "linear", mode: "normal", defaultYExtents: false }, labels: { show: true, rotate: 0, filter: false, truncate: 100 }, title: { text: "Count" } }],
+        seriesParams: [{ show: true, type: "histogram", mode: "stacked", data: { label: "Count", id: "1" }, valueAxis: "ValueAxis-1", drawLinesBetweenPoints: true, lineWidth: 2, showCircles: true }],
+        addTooltip: true,
+        addLegend: false,
+        legendPosition: "right",
+        times: [],
+        addTimeMarker: false
+    }
+}')
+create_object "visualization" "viz-top-tokens-bar" "$(jq -n \
+    --arg visState "$VIS_STATE" \
+    '{
+        attributes: {
+            title: "Top Tokens",
+            visState: $visState,
+            uiStateJSON: "{}",
+            description: "Top 20 most frequent triage tokens across all rounds",
+            kibanaSavedObjectMeta: {
+                searchSourceJSON: "{\"index\":\"tokens-star\",\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"
+            }
+        },
+        references: [
+            { name: "kibanaSavedObjectMeta.searchSourceJSON.index", type: "index-pattern", id: "tokens-star" }
+        ]
+    }')"
+echo "[+] Visualization created: Top Tokens"
+
+# 3h) Token Count Over Time
+echo "[*] Creating visualization: Token Count Over Time"
+VIS_STATE=$(jq -n '{
+    title: "Token Count Over Time",
+    type: "line",
+    aggs: [
+        { id: "1", enabled: true, type: "avg", params: { field: "token_count" }, schema: "metric" },
+        { id: "2", enabled: true, type: "date_histogram", params: { field: "timestamp", useNormalizedEsInterval: true, scaleMetricValues: false, interval: "auto", drop_partials: false, min_doc_count: 1, extended_bounds: {} }, schema: "segment" }
+    ],
+    params: {
+        type: "line",
+        grid: { categoryLines: false, valueAxis: "ValueAxis-1" },
+        categoryAxes: [{ id: "CategoryAxis-1", type: "category", position: "bottom", show: true, style: {}, scale: { type: "linear" }, labels: { show: true, filter: true, truncate: 100 }, title: {} }],
+        valueAxes: [{ id: "ValueAxis-1", name: "LeftAxis-1", type: "value", position: "left", show: true, style: {}, scale: { type: "linear", mode: "normal", defaultYExtents: false }, labels: { show: true, rotate: 0, filter: false, truncate: 100 }, title: { text: "Avg Token Count" } }],
+        seriesParams: [{ show: true, type: "line", mode: "normal", data: { label: "Avg token_count", id: "1" }, valueAxis: "ValueAxis-1", drawLinesBetweenPoints: true, lineWidth: 2, showCircles: true }],
+        addTooltip: true,
+        addLegend: true,
+        legendPosition: "right",
+        times: [],
+        addTimeMarker: false
+    }
+}')
+create_object "visualization" "viz-token-count-over-time" "$(jq -n \
+    --arg visState "$VIS_STATE" \
+    '{
+        attributes: {
+            title: "Token Count Over Time",
+            visState: $visState,
+            uiStateJSON: "{}",
+            description: "Average token count per round over time",
+            kibanaSavedObjectMeta: {
+                searchSourceJSON: "{\"index\":\"tokens-star\",\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"
+            }
+        },
+        references: [
+            { name: "kibanaSavedObjectMeta.searchSourceJSON.index", type: "index-pattern", id: "tokens-star" }
+        ]
+    }')"
+echo "[+] Visualization created: Token Count Over Time"
+
+# 3i) Tokens: Detected vs Evasion
+echo "[*] Creating visualization: Tokens: Detected vs Evasion"
+VIS_STATE=$(jq -n '{
+    title: "Tokens: Detected vs Evasion",
+    type: "horizontal_bar",
+    aggs: [
+        { id: "1", enabled: true, type: "count", params: {}, schema: "metric" },
+        { id: "2", enabled: true, type: "terms", params: { field: "tokens", orderBy: "1", order: "desc", size: 15 }, schema: "segment" },
+        { id: "3", enabled: true, type: "terms", params: { field: "detected", orderBy: "1", order: "desc", size: 2 }, schema: "group" }
+    ],
+    params: {
+        type: "horizontal_bar",
+        grid: { categoryLines: false, valueAxis: "ValueAxis-1" },
+        categoryAxes: [{ id: "CategoryAxis-1", type: "category", position: "left", show: true, style: {}, scale: { type: "linear" }, labels: { show: true, filter: true, truncate: 200 }, title: {} }],
+        valueAxes: [{ id: "ValueAxis-1", name: "BottomAxis-1", type: "value", position: "bottom", show: true, style: {}, scale: { type: "linear", mode: "normal", defaultYExtents: false }, labels: { show: true, rotate: 0, filter: false, truncate: 100 }, title: { text: "Count" } }],
+        seriesParams: [{ show: true, type: "histogram", mode: "stacked", data: { label: "Count", id: "1" }, valueAxis: "ValueAxis-1", drawLinesBetweenPoints: true, lineWidth: 2, showCircles: true }],
+        addTooltip: true,
+        addLegend: true,
+        legendPosition: "right",
+        times: [],
+        addTimeMarker: false
+    }
+}')
+create_object "visualization" "viz-tokens-detected-vs-evasion" "$(jq -n \
+    --arg visState "$VIS_STATE" \
+    '{
+        attributes: {
+            title: "Tokens: Detected vs Evasion",
+            visState: $visState,
+            uiStateJSON: "{}",
+            description: "Top 15 tokens split by detected (true/false) — shows which tokens correlate with detection",
+            kibanaSavedObjectMeta: {
+                searchSourceJSON: "{\"index\":\"tokens-star\",\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"
+            }
+        },
+        references: [
+            { name: "kibanaSavedObjectMeta.searchSourceJSON.index", type: "index-pattern", id: "tokens-star" }
+        ]
+    }')"
+echo "[+] Visualization created: Tokens: Detected vs Evasion"
+
 # ── Step 4: Dashboard ──────────────────────────────────────────────────
 echo ""
 echo "=== Step 4: Creating Dashboard ==="
@@ -451,6 +617,8 @@ echo "=== Step 4: Creating Dashboard ==="
 # Row 3 (y=31, h=12): job modules + round modules
 # Row 4 (y=43, h=15): run drill-down (full width)
 # Row 5 (y=58, h=12): run errors + telemetry per run
+# Row 6 (y=70, h=10): token visualizations (3x)
+# Row 7 (y=80, h=12): token data tables (2x)
 
 PANELS_JSON=$(jq -n '[
     { version: "8.11.0", type: "visualization", gridData: { x: 0,  y: 0,  w: 16, h: 8,  i: "p1"  }, panelIndex: "p1",  embeddableConfig: { enhancements: {} }, panelRefName: "panel_p1" },
@@ -465,7 +633,12 @@ PANELS_JSON=$(jq -n '[
     { version: "8.11.0", type: "search",        gridData: { x: 24, y: 31, w: 24, h: 12, i: "p10" }, panelIndex: "p10", embeddableConfig: { enhancements: {} }, panelRefName: "panel_p10" },
     { version: "8.11.0", type: "search",        gridData: { x: 0,  y: 43, w: 48, h: 15, i: "p11" }, panelIndex: "p11", embeddableConfig: { enhancements: {} }, panelRefName: "panel_p11" },
     { version: "8.11.0", type: "search",        gridData: { x: 0,  y: 58, w: 24, h: 12, i: "p12" }, panelIndex: "p12", embeddableConfig: { enhancements: {} }, panelRefName: "panel_p12" },
-    { version: "8.11.0", type: "search",        gridData: { x: 24, y: 58, w: 24, h: 12, i: "p13" }, panelIndex: "p13", embeddableConfig: { enhancements: {} }, panelRefName: "panel_p13" }
+    { version: "8.11.0", type: "search",        gridData: { x: 24, y: 58, w: 24, h: 12, i: "p13" }, panelIndex: "p13", embeddableConfig: { enhancements: {} }, panelRefName: "panel_p13" },
+    { version: "8.11.0", type: "visualization", gridData: { x: 0,  y: 70, w: 16, h: 10, i: "p14" }, panelIndex: "p14", embeddableConfig: { enhancements: {} }, panelRefName: "panel_p14" },
+    { version: "8.11.0", type: "visualization", gridData: { x: 16, y: 70, w: 16, h: 10, i: "p15" }, panelIndex: "p15", embeddableConfig: { enhancements: {} }, panelRefName: "panel_p15" },
+    { version: "8.11.0", type: "visualization", gridData: { x: 32, y: 70, w: 16, h: 10, i: "p16" }, panelIndex: "p16", embeddableConfig: { enhancements: {} }, panelRefName: "panel_p16" },
+    { version: "8.11.0", type: "search",        gridData: { x: 0,  y: 80, w: 24, h: 12, i: "p17" }, panelIndex: "p17", embeddableConfig: { enhancements: {} }, panelRefName: "panel_p17" },
+    { version: "8.11.0", type: "search",        gridData: { x: 24, y: 80, w: 24, h: 12, i: "p18" }, panelIndex: "p18", embeddableConfig: { enhancements: {} }, panelRefName: "panel_p18" }
 ]' | jq -c .)
 
 DASHBOARD_JSON=$(jq -n \
@@ -473,7 +646,7 @@ DASHBOARD_JSON=$(jq -n \
     '{
         attributes: {
             title: "Job & Run Drill-Down",
-            description: "Per-job and per-run drill-down across jobs, rounds, runs, and telemetry. Filter by job_id to scope all panels.",
+            description: "Per-job and per-run drill-down across jobs, rounds, runs, telemetry, and triage tokens. Filter by job_id to scope all panels.",
             panelsJSON: $panels,
             optionsJSON: "{\"useMargins\":true,\"hidePanelTitles\":false}",
             version: 1,
@@ -498,7 +671,12 @@ DASHBOARD_JSON=$(jq -n \
             { name: "panel_p10", type: "search",        id: "rounds-modules-search" },
             { name: "panel_p11", type: "search",        id: "runs-drilldown-search" },
             { name: "panel_p12", type: "search",        id: "runs-errors-search" },
-            { name: "panel_p13", type: "search",        id: "telemetry-per-run-search" }
+            { name: "panel_p13", type: "search",        id: "telemetry-per-run-search" },
+            { name: "panel_p14", type: "visualization", id: "viz-top-tokens-bar" },
+            { name: "panel_p15", type: "visualization", id: "viz-token-count-over-time" },
+            { name: "panel_p16", type: "visualization", id: "viz-tokens-detected-vs-evasion" },
+            { name: "panel_p17", type: "search",        id: "tokens-per-round-search" },
+            { name: "panel_p18", type: "search",        id: "tokens-mutations-search" }
         ]
     }')
 
@@ -511,12 +689,13 @@ echo "=== Dashboard Setup Complete! ==="
 echo ""
 echo "Dashboard URL: $KIBANA_URL/app/dashboards#/view/job-run-drilldown-dashboard"
 echo ""
-echo "=== Created Objects (16) ==="
-echo "  Index Patterns (2):"
+echo "=== Created Objects (22) ==="
+echo "  Index Patterns (3):"
 echo "    jobs-*   (time: created_at)"
 echo "    rounds-* (time: completed_at)"
+echo "    tokens-* (time: timestamp)"
 echo ""
-echo "  Saved Searches (7):"
+echo "  Saved Searches (9):"
 echo "    Job Overview          — jobs-*:      job_id, status, template, encoding, rounds, modules"
 echo "    Job Modules           — jobs-*:      all 7 module slots + outcome"
 echo "    Rounds by Job         — rounds-*:    round_id, detected, differential, evasion_score"
@@ -524,17 +703,22 @@ echo "    Round Modules         — rounds-*:    modules vs detection/evasion"
 echo "    Run Drill-down        — runs-*:      full run details with detection outcome"
 echo "    Run Errors            — runs-*:      filtered to error.class exists"
 echo "    Telemetry per Run     — telemetry-*: events by run_id/round_id/job_id"
+echo "    Tokens per Round      — tokens-*:    token sets per round with detection outcome"
+echo "    Token Mutations       — tokens-*:    mutations correlated with detection"
 echo ""
-echo "  Visualizations (6):"
+echo "  Visualizations (9):"
 echo "    Job Status Pie            — jobs-*:   status breakdown"
 echo "    Detection Outcome Pie     — runs-*:   FULL_EVASION vs KILLED_*"
 echo "    Differential Category Pie — rounds-*: real_detection vs artifact vs evasion"
 echo "    Evasion Score Histogram   — rounds-*: score distribution (0.0-1.0)"
 echo "    Run Type Breakdown        — runs-*:   baseline vs instrumented"
 echo "    Elapsed Time Histogram    — runs-*:   execution time distribution"
+echo "    Top Tokens Bar            — tokens-*: top 20 most frequent tokens"
+echo "    Token Count Over Time     — tokens-*: avg token count trend"
+echo "    Detected vs Evasion       — tokens-*: tokens split by detection outcome"
 echo ""
 echo "  Dashboard (1):"
-echo "    Job & Run Drill-Down — 13 panels, 48-col grid"
+echo "    Job & Run Drill-Down — 18 panels, 48-col grid"
 echo ""
 echo "=== Layout ==="
 echo "  Row 0: [Job Status Pie] [Detection Outcome Pie] [Differential Category Pie]"
@@ -543,6 +727,8 @@ echo "  Row 2: [Job Overview] [Rounds by Job]"
 echo "  Row 3: [Job Modules] [Round Modules]"
 echo "  Row 4: [Run Drill-down (full width)]"
 echo "  Row 5: [Run Errors] [Telemetry per Run]"
+echo "  Row 6: [Top Tokens] [Token Count Over Time] [Detected vs Evasion]"
+echo "  Row 7: [Tokens per Round] [Token Mutations]"
 echo ""
 echo "=== Filtering ==="
 echo "  All indices share job_id — add 'job_id: \"job-xxx\"' in Kibana filter bar"
