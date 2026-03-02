@@ -18,6 +18,7 @@ use crate::triage::SelectorType;
 use crate::triage::coverage_selector::CoverageSelector;
 use crate::triage::fuzzer_selector::FuzzerSelector;
 use crate::triage::source_resolver::SourceMap;
+use crate::triage::token_selector::TokenSelector;
 use crate::vm::{TargetEvent, TargetManager};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -180,6 +181,7 @@ impl Orchestrator {
         let selector: Arc<dyn crate::triage::Selector> = match job.search_space.selector {
             SelectorType::Fuzzer => Arc::new(FuzzerSelector::new()),
             SelectorType::Coverage => Arc::new(CoverageSelector::new()),
+            SelectorType::Token => Arc::new(TokenSelector::new()),
         };
 
         let (correction_tx, correction_rx) = mpsc::channel(64);
@@ -189,6 +191,7 @@ impl Orchestrator {
             self.job_event_tx.clone(),
             selector,
             correction_rx,
+            Some(self.storage.clone()),
         );
 
         let shutdown_token = worker.cancellation_token();

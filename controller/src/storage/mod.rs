@@ -156,6 +156,29 @@ impl EsStorage {
         queries::query_trace_content(&self.client, run_id).await
     }
 
+    // -- Triage tokens -----------------------------------------------------
+
+    pub async fn query_api_telemetry(&self, run_id: &str) -> Vec<serde_json::Value> {
+        queries::query_api_telemetry(&self.client, run_id).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn query_token_sets(&self, job_id: &str) -> Vec<serde_json::Value> {
+        queries::query_token_sets(&self.client, job_id).await
+    }
+
+    pub async fn index_token_set(&self, doc: serde_json::Value) -> anyhow::Result<()> {
+        let index = helpers::es_index_name("tokens");
+        let response = self
+            .client
+            .index(elasticsearch::IndexParts::Index(&index))
+            .body(doc)
+            .refresh(elasticsearch::params::Refresh::WaitFor)
+            .send()
+            .await?;
+        helpers::check_index_response(response, "token_set", "").await
+    }
+
     // -- Bootstrap ---------------------------------------------------------
 
     pub async fn ensure_templates(&self) -> anyhow::Result<()> {
