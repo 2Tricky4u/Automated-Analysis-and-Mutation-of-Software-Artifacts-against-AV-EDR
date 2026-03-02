@@ -234,10 +234,14 @@ pub async fn query_trace_content(es: &Elasticsearch, run_id: &str) -> Option<Str
 // Triage token queries
 // ---------------------------------------------------------------------------
 
-/// Query `payload_func` telemetry events for a run, sorted by `payload_seq` ascending.
+/// Query all non-trace telemetry events for a run, sorted by `payload_id` ascending.
 ///
-/// Returns raw `Value` objects with `payload_func`, `payload_seq`, `payload_ts_us` fields.
-/// Used by `triage::extractor` to build `api:*` and `seq2:*` tokens.
+/// Returns raw `Value` docs covering all three event categories:
+/// - `dll`: syscall hooks (`NtAllocateVirtualMemory`, etc.) with `payload_protect`, `payload_size`
+/// - `kernel`: lifecycle events (`thread_create`, `image_load`) with `payload_image`
+/// - `etw`: OS-level events with `payload_event`, `payload_etw_provider_name`, `payload_event_id`
+///
+/// Used by `triage::extractor` to build `api:*`, `api_arg:*`, `etw:*`, `image:*`, and `seq2:*` tokens.
 pub async fn query_api_telemetry(es: &Elasticsearch, run_id: &str) -> Vec<Value> {
     let response = es
         .search(SearchParts::Index(&["telemetry-*"]))
@@ -245,17 +249,29 @@ pub async fn query_api_telemetry(es: &Elasticsearch, run_id: &str) -> Vec<Value>
             "query": {
                 "bool": {
                     "filter": [
-                        { "match_phrase": { "run_id": run_id } },
-                        { "exists": { "field": "payload_func" } }
+                        { "match_phrase": { "run_id": run_id } }
                     ],
                     "must_not": [
                         { "match_phrase": { "event_type": "trace_log" } }
                     ]
                 }
             },
-            "sort": [{ "payload_seq": "asc" }],
+            "sort": [{ "payload_id": "asc" }],
             "size": 5000,
-            "_source": ["payload_func", "payload_seq", "payload_ts_us"]
+            "_source": [
+                "payload_func",
+                "payload_id",
+                "payload_protect",
+                "payload_size",
+                "payload_alloc_type",
+                "payload_free_type",
+                "payload_event",
+                "payload_etw_provider_name",
+                "payload_event_id",
+                "payload_image",
+                "event_type",
+                "payload_type"
+            ]
         }))
         .send()
         .await;
