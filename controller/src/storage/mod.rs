@@ -98,6 +98,15 @@ impl EsStorage {
         rounds::update_round_coverage(&self.client, job_id, round_id, coverage).await
     }
 
+    pub async fn update_round_evasion_score(
+        &self,
+        job_id: &str,
+        round_id: &str,
+        blended_score: f64,
+    ) -> anyhow::Result<()> {
+        rounds::update_round_evasion_score(&self.client, job_id, round_id, blended_score).await
+    }
+
     // -- Runs --------------------------------------------------------------
 
     pub async fn index_run_result(&self, params: &RunIndexParams<'_>) -> anyhow::Result<()> {

@@ -133,3 +133,34 @@ pub async fn update_round_coverage(
     );
     Ok(())
 }
+
+/// Update an existing round document with a blended evasion score.
+pub async fn update_round_evasion_score(
+    es: &Elasticsearch,
+    job_id: &str,
+    round_id: &str,
+    blended_score: f64,
+) -> anyhow::Result<()> {
+    let body = json!({
+        "doc": {
+            "evasion_score": (blended_score * 1000.0).round() / 1000.0,
+            "evasion_score_blended": true,
+        }
+    });
+
+    helpers::update_doc_by_id(
+        es,
+        "rounds-*",
+        "round_id",
+        round_id,
+        body,
+        "round-evasion-blend",
+    )
+    .await?;
+
+    info!(
+        "Updated round {}/{} blended evasion score: {:.3}",
+        job_id, round_id, blended_score
+    );
+    Ok(())
+}

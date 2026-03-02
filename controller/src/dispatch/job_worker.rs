@@ -28,7 +28,7 @@ use build::{
     PreparedPayload, prepare_payload,
 };
 
-use super::channels::{JobRunResult, JobWorkerEvent, RoundCompletedData};
+use super::channels::{CoverageCorrection, JobRunResult, JobWorkerEvent, RoundCompletedData};
 use super::run_pool::RunPool;
 use super::types::{
     ArtifactRef, JobId, JobOutcome, JobSession, ModularBuildSpec, RoundAgg, RoundId, RoundSpec,
@@ -177,6 +177,9 @@ pub struct JobWorker {
 
     /// Cached raw payload bytes (read from disk once).
     cached_payload: Option<Vec<u8>>,
+
+    /// Receives async coverage corrections from Orchestrator background tasks.
+    correction_rx: mpsc::Receiver<CoverageCorrection>,
 }
 
 impl JobWorker {
@@ -186,6 +189,7 @@ impl JobWorker {
         run_pool: Arc<RunPool>,
         event_tx: mpsc::Sender<JobWorkerEvent>,
         selector: Arc<dyn Selector>,
+        correction_rx: mpsc::Receiver<CoverageCorrection>,
     ) -> Self {
         let (result_tx, result_rx) = mpsc::channel(64);
         Self {
@@ -201,6 +205,7 @@ impl JobWorker {
             baseline_payload: None,
             instrumented_payload: None,
             cached_payload: None,
+            correction_rx,
         }
     }
 
@@ -267,6 +272,11 @@ impl JobWorker {
                 // Receive results from VMs (via RunPool routing)
                 Some(result) = self.result_rx.recv() => {
                     self.on_result(result).await;
+                }
+
+                // Receive async coverage corrections from Orchestrator
+                Some(correction) = self.correction_rx.recv() => {
+                    self.apply_coverage_correction(correction);
                 }
 
                 // Periodic check to produce more rounds
@@ -787,6 +797,29 @@ impl JobWorker {
             .send(JobWorkerEvent::RoundCompleted(Box::new(data)))
             .await;
     }
+
+    /// Apply an async coverage correction to a completed round's evasion score.
+    /// This patches the in-memory history so subsequent selector calls see the blended score.
+    fn apply_coverage_correction(&mut self, correction: CoverageCorrection) {
+        if let Some(summary) = self.job.rounds.get_mut(&correction.round_number) {
+            let old_score = summary.evasion_score;
+            summary.evasion_score = correction.blended_evasion_score;
+            summary.coverage_percent = Some(correction.coverage_percent);
+            debug!(
+                "[JobWorker:{}] Coverage correction for round {}: score {:.3} → {:.3} (cov={:.1}%)",
+                self.job.id,
+                correction.round_number,
+                old_score,
+                correction.blended_evasion_score,
+                correction.coverage_percent,
+            );
+        } else {
+            warn!(
+                "[JobWorker:{}] Coverage correction for unknown round {}",
+                self.job.id, correction.round_number
+            );
+        }
+    }
 }
 
 /// Build the 3 RunEnvelopes (baseline + instrumented + dryrun) for a round.
@@ -939,9 +972,10 @@ mod tests {
     async fn test_job_worker_creation() {
         let pool = Arc::new(RunPool::new());
         let (event_tx, _) = mpsc::channel(10);
+        let (_corr_tx, corr_rx) = mpsc::channel(10);
 
         let job = JobSession::new("test-job", 3, test_build_spec());
-        let worker = JobWorker::new(job, pool, event_tx, Arc::new(NoopSelector));
+        let worker = JobWorker::new(job, pool, event_tx, Arc::new(NoopSelector), corr_rx);
 
         assert_eq!(worker.job_id().0, "test-job");
     }
@@ -950,9 +984,10 @@ mod tests {
     async fn test_can_produce_round() {
         let pool = Arc::new(RunPool::new());
         let (event_tx, _) = mpsc::channel(10);
+        let (_corr_tx, corr_rx) = mpsc::channel(10);
 
         let job = JobSession::new("test-job", 3, test_build_spec());
-        let worker = JobWorker::new(job, pool, event_tx, Arc::new(NoopSelector));
+        let worker = JobWorker::new(job, pool, event_tx, Arc::new(NoopSelector), corr_rx);
 
         // Should be able to produce initially
         assert!(worker.can_produce_round());

@@ -6,10 +6,13 @@
 //! - Routes telemetry to ES indexing
 //! - Manages shared RunPool
 
-use super::channels::{JobControlCommand, JobWorkerEvent, RoundCompletedData};
+use super::channels::{CoverageCorrection, JobControlCommand, JobWorkerEvent, RoundCompletedData};
 use super::job_worker::JobWorker;
 use super::run_pool::RunPool;
-use super::types::{JobId, JobOutcome, JobSession, WorkerId, WorkerInfo, capabilities_match};
+use super::types::{
+    JobId, JobOutcome, JobSession, WorkerId, WorkerInfo, capabilities_match,
+    round::compute_blended_evasion_score,
+};
 use crate::storage::{EsStorage, RoundIndexParams, RunIndexParams, TelemetryContext};
 use crate::triage::SelectorType;
 use crate::triage::coverage_selector::CoverageSelector;
@@ -23,6 +26,12 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+/// Per-job handle: shutdown token + channel for async corrections.
+struct JobHandle {
+    shutdown_token: CancellationToken,
+    correction_tx: mpsc::Sender<CoverageCorrection>,
+}
+
 pub struct Orchestrator {
     /// Shared run pool
     run_pool: Arc<RunPool>,
@@ -33,8 +42,8 @@ pub struct Orchestrator {
     /// Consolidated ES storage
     storage: Arc<EsStorage>,
 
-    /// Active job workers: JobId -> CancellationToken
-    job_workers: HashMap<JobId, CancellationToken>,
+    /// Active job workers: JobId -> JobHandle
+    job_workers: HashMap<JobId, JobHandle>,
 
     /// Sender for job worker events (given to each JobWorker)
     job_event_tx: mpsc::Sender<JobWorkerEvent>,
@@ -172,16 +181,25 @@ impl Orchestrator {
             SelectorType::Fuzzer => Arc::new(FuzzerSelector::new()),
             SelectorType::Coverage => Arc::new(CoverageSelector::new()),
         };
+
+        let (correction_tx, correction_rx) = mpsc::channel(64);
         let worker = JobWorker::new(
             job,
             Arc::clone(&self.run_pool),
             self.job_event_tx.clone(),
             selector,
+            correction_rx,
         );
 
         let shutdown_token = worker.cancellation_token();
         tokio::spawn(worker.run());
-        self.job_workers.insert(job_id.clone(), shutdown_token);
+        self.job_workers.insert(
+            job_id.clone(),
+            JobHandle {
+                shutdown_token,
+                correction_tx,
+            },
+        );
 
         // Update job status to "running" in ES
         let storage = self.storage.clone();
@@ -274,9 +292,13 @@ impl Orchestrator {
                 );
 
                 let storage = self.storage.clone();
+                let correction_tx = self
+                    .job_workers
+                    .get(&data.job_id)
+                    .map(|h| h.correction_tx.clone());
                 tokio::spawn(async move {
                     index_round_and_runs(&storage, &data).await;
-                    compute_round_coverage(&storage, &data).await;
+                    compute_round_coverage(&storage, &data, correction_tx.as_ref()).await;
                 });
             }
             JobWorkerEvent::JobCompleted { job_id, outcome } => {
@@ -460,17 +482,17 @@ impl Orchestrator {
     // ========================================================================
 
     pub fn shutdown_job(&self, job_id: &JobId) {
-        if let Some(token) = self.job_workers.get(job_id) {
+        if let Some(handle) = self.job_workers.get(job_id) {
             warn!("[Orchestrator] Shutting down job {}", job_id);
-            token.cancel();
+            handle.shutdown_token.cancel();
         }
     }
 
     #[allow(dead_code)]
     pub fn shutdown_all_jobs(&self) {
         warn!("[Orchestrator] Shutting down all jobs");
-        for token in self.job_workers.values() {
-            token.cancel();
+        for handle in self.job_workers.values() {
+            handle.shutdown_token.cancel();
         }
         self.run_pool.shutdown();
         let targets = Arc::clone(&self.targets);
@@ -576,8 +598,13 @@ async fn index_round_and_runs(storage: &EsStorage, data: &RoundCompletedData) {
     }
 }
 
-/// Compute line coverage from trace data and update round in ES.
-async fn compute_round_coverage(storage: &EsStorage, data: &RoundCompletedData) {
+/// Compute line coverage from trace data, update round in ES, and send
+/// blended evasion score correction back to the JobWorker.
+async fn compute_round_coverage(
+    storage: &EsStorage,
+    data: &RoundCompletedData,
+    correction_tx: Option<&mpsc::Sender<CoverageCorrection>>,
+) {
     let jid = &data.job_id.0;
     let rid = &data.round_id.0;
     let i_run_id = &data.instrumented_run_id.0;
@@ -627,6 +654,27 @@ async fn compute_round_coverage(storage: &EsStorage, data: &RoundCompletedData) 
                 );
                 if let Err(e) = storage.update_round_coverage(jid, rid, &coverage).await {
                     error!("Failed to update round coverage: {}", e);
+                }
+
+                // Compute blended score and send correction + ES update
+                let blended = compute_blended_evasion_score(
+                    data.summary.differential_category,
+                    coverage.coverage_percent,
+                    data.summary.time_factor,
+                );
+
+                if let Err(e) = storage.update_round_evasion_score(jid, rid, blended).await {
+                    error!("Failed to update round blended evasion score: {}", e);
+                }
+
+                if let Some(tx) = correction_tx {
+                    let _ = tx
+                        .send(CoverageCorrection {
+                            round_number: data.summary.round_number,
+                            coverage_percent: coverage.coverage_percent,
+                            blended_evasion_score: blended,
+                        })
+                        .await;
                 }
             } else {
                 warn!(

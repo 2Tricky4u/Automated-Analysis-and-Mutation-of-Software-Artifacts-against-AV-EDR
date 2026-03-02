@@ -449,6 +449,8 @@ mod tests {
             dry_run_exit_code: None,
             has_dryrun: false,
             detection_verdict: String::new(),
+            coverage_percent: None,
+            time_factor: 0.0,
         }
     }
 
