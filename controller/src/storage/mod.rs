@@ -158,6 +158,7 @@ impl EsStorage {
 
     // -- Triage tokens -----------------------------------------------------
 
+    /// Query all non-trace telemetry for a run (dll + kernel + etw), sorted by `payload_id`.
     pub async fn query_api_telemetry(&self, run_id: &str) -> Vec<serde_json::Value> {
         queries::query_api_telemetry(&self.client, run_id).await
     }

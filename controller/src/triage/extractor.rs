@@ -2,7 +2,12 @@
 //!
 //! Two sources:
 //! - **In-memory** (`extract_round_tokens`): module + mutation tokens from `RoundSummary`
-//! - **ES telemetry** (`extract_telemetry_tokens`): `api:*` and `seq2:*` from `payload_func` events
+//! - **ES telemetry** (`extract_telemetry_tokens`): tokens from all non-trace events:
+//!   - `api:*` — syscall/lifecycle function names (dll + kernel events)
+//!   - `api_arg:*` — memory protection arguments (e.g. `api_arg:NtAllocateVirtualMemory:protect=RW-`)
+//!   - `etw:*` — ETW provider/event pairs (e.g. `etw:Microsoft-Windows-Kernel-Process/6`)
+//!   - `image:*` — loaded DLL basenames (e.g. `image:ntdll.dll`)
+//!   - `seq2:*` — bigrams from consecutive `payload_func` calls
 //!
 //! `extract_and_score` is the top-level async function spawned in the background
 //! by `finalize_round()`. It combines both sources, indexes to ES, and produces
@@ -12,7 +17,8 @@ use crate::dispatch::types::RoundSummary;
 use crate::storage::EsStorage;
 use crate::triage::TriageGuidance;
 use crate::triage::scorer;
-use serde_json::json;
+use serde_json::{Value, json};
+use std::collections::HashSet;
 use tracing::{debug, warn};
 
 // ============================================================================
@@ -57,44 +63,100 @@ pub fn extract_round_tokens(summary: &RoundSummary) -> Vec<String> {
 // ES telemetry token extraction (async)
 // ============================================================================
 
-/// Extract `api:*` and `seq2:*` tokens from ES telemetry for a specific run.
+/// Extract telemetry tokens from ES for a specific run.
 ///
-/// Queries `telemetry-*` for `payload_func` events, sorted by `payload_seq`.
-/// Returns deduplicated tokens.
+/// Queries all non-trace telemetry sorted by `payload_id` and delegates to
+/// [`extract_tokens_from_docs`] for the pure extraction logic.
 pub async fn extract_telemetry_tokens(
     storage: &EsStorage,
     _job_id: &str,
     run_id: &str,
 ) -> anyhow::Result<Vec<String>> {
     let docs = storage.query_api_telemetry(run_id).await;
+    Ok(extract_tokens_from_docs(&docs))
+}
 
+/// Pure token extraction from sorted telemetry docs (no IO).
+///
+/// Handles three event categories:
+/// - **dll/kernel** (`payload_func` present): `api:<func>`, `seq2:<prev>→<func>`,
+///   `api_arg:<func>:protect=<val>`, `image:<basename>`
+/// - **etw** (`payload_event` present, `payload_func` null): `etw:<provider>/<event_id>`
+///
+/// Returns deduplicated tokens in insertion order.
+pub fn extract_tokens_from_docs(docs: &[Value]) -> Vec<String> {
     if docs.is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
 
     let mut tokens = Vec::new();
+    let mut seen = HashSet::new();
     let mut prev_func: Option<String> = None;
-    let mut seen = std::collections::HashSet::new();
 
-    for doc in &docs {
+    for doc in docs {
+        // --- dll / kernel events (payload_func is non-null) ---
         if let Some(func) = doc["payload_func"].as_str() {
-            let api_token = format!("api:{}", func);
+            // api:<func>
+            let api_token = format!("api:{func}");
             if seen.insert(api_token.clone()) {
                 tokens.push(api_token);
             }
 
-            // Bigram: seq2 token from consecutive payload_func calls
+            // seq2:<prev>→<func> bigram from consecutive payload_func calls
             if let Some(ref prev) = prev_func {
-                let seq_token = format!("seq2:{}→{}", prev, func);
+                let seq_token = format!("seq2:{prev}→{func}");
                 if seen.insert(seq_token.clone()) {
                     tokens.push(seq_token);
                 }
             }
             prev_func = Some(func.to_string());
+
+            // api_arg:<func>:protect=<val> (memory protection — top detection signal)
+            if let Some(protect) = doc["payload_protect"].as_str() {
+                let arg_token = format!("api_arg:{func}:protect={protect}");
+                if seen.insert(arg_token.clone()) {
+                    tokens.push(arg_token);
+                }
+            }
+
+            // image:<dll_basename> from kernel image_load events
+            if func == "image_load"
+                && let Some(path) = doc["payload_image"].as_str()
+            {
+                let basename = path.rsplit('\\').next().unwrap_or(path);
+                let img_token = format!("image:{}", basename.to_lowercase());
+                if seen.insert(img_token.clone()) {
+                    tokens.push(img_token);
+                }
+            }
+
+            continue;
+        }
+
+        // --- etw events (payload_func is null, payload_event is set) ---
+        if let Some(event) = doc["payload_event"].as_str() {
+            let event = event.trim();
+            if let Some(provider) = doc["payload_etw_provider_name"].as_str() {
+                let event_id = doc["payload_event_id"]
+                    .as_u64()
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "?".to_string());
+                let etw_token = format!("etw:{provider}/{event_id}");
+                if seen.insert(etw_token.clone()) {
+                    tokens.push(etw_token);
+                }
+            }
+            // Also emit a descriptive etw event token
+            if !event.is_empty() {
+                let evt_token = format!("etw_event:{event}");
+                if seen.insert(evt_token.clone()) {
+                    tokens.push(evt_token);
+                }
+            }
         }
     }
 
-    Ok(tokens)
+    tokens
 }
 
 // ============================================================================
@@ -263,5 +325,137 @@ mod tests {
         // Only 7 module tokens, no mutation tokens
         assert_eq!(tokens.len(), 7);
         assert!(tokens.iter().all(|t| t.starts_with("module:")));
+    }
+
+    #[test]
+    fn test_extract_telemetry_tokens_from_docs() {
+        // Build mock ES docs matching real RedEDR telemetry schema
+        let docs = vec![
+            // dll event: NtAllocateVirtualMemory with protect=RW-
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtAllocateVirtualMemory",
+                "payload_id": 1,
+                "payload_protect": "RW-",
+                "payload_size": 4096,
+                "payload_alloc_type": 12288,
+            }),
+            // dll event: NtProtectVirtualMemory with protect=R-X
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtProtectVirtualMemory",
+                "payload_id": 2,
+                "payload_protect": "R-X",
+                "payload_size": 4096,
+            }),
+            // kernel event: image_load with DLL path
+            json!({
+                "event_type": "kernel",
+                "payload_func": "image_load",
+                "payload_id": 3,
+                "payload_image": "\\Device\\HarddiskVolume3\\Windows\\System32\\ntdll.dll",
+                "payload_type": "kernel",
+            }),
+            // kernel event: thread_create (no payload_protect, no payload_image)
+            json!({
+                "event_type": "kernel",
+                "payload_func": "thread_create",
+                "payload_id": 4,
+                "payload_type": "kernel",
+            }),
+            // etw event: payload_func is null
+            json!({
+                "event_type": "etw",
+                "payload_func": null,
+                "payload_id": 5,
+                "payload_event": "ImageUnloadInfo ",
+                "payload_etw_provider_name": "Microsoft-Windows-Kernel-Process",
+                "payload_event_id": 6,
+                "payload_type": "etw",
+            }),
+            // etw event: ProcessStopStop
+            json!({
+                "event_type": "etw",
+                "payload_func": null,
+                "payload_id": 6,
+                "payload_event": "ProcessStopStop",
+                "payload_etw_provider_name": "Microsoft-Windows-Kernel-Process",
+                "payload_event_id": 2,
+                "payload_type": "etw",
+            }),
+            // Another dll event: duplicate NtAllocateVirtualMemory (should be deduplicated)
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtAllocateVirtualMemory",
+                "payload_id": 7,
+                "payload_protect": "RW-",
+                "payload_size": 8192,
+            }),
+        ];
+
+        let tokens = extract_tokens_from_docs(&docs);
+
+        // --- api: tokens ---
+        assert!(tokens.contains(&"api:NtAllocateVirtualMemory".to_string()));
+        assert!(tokens.contains(&"api:NtProtectVirtualMemory".to_string()));
+        assert!(tokens.contains(&"api:image_load".to_string()));
+        assert!(tokens.contains(&"api:thread_create".to_string()));
+
+        // --- api_arg: tokens ---
+        assert!(tokens.contains(&"api_arg:NtAllocateVirtualMemory:protect=RW-".to_string()));
+        assert!(tokens.contains(&"api_arg:NtProtectVirtualMemory:protect=R-X".to_string()));
+
+        // --- seq2: bigrams (from consecutive payload_func calls) ---
+        assert!(
+            tokens.contains(&"seq2:NtAllocateVirtualMemory→NtProtectVirtualMemory".to_string())
+        );
+        assert!(tokens.contains(&"seq2:NtProtectVirtualMemory→image_load".to_string()));
+        assert!(tokens.contains(&"seq2:image_load→thread_create".to_string()));
+        // After ETW events (no payload_func), next dll event continues bigram from thread_create
+        assert!(tokens.contains(&"seq2:thread_create→NtAllocateVirtualMemory".to_string()));
+
+        // --- image: tokens ---
+        assert!(tokens.contains(&"image:ntdll.dll".to_string()));
+
+        // --- etw: tokens ---
+        assert!(tokens.contains(&"etw:Microsoft-Windows-Kernel-Process/6".to_string()));
+        assert!(tokens.contains(&"etw:Microsoft-Windows-Kernel-Process/2".to_string()));
+
+        // --- etw_event: tokens ---
+        assert!(tokens.contains(&"etw_event:ImageUnloadInfo".to_string()));
+        assert!(tokens.contains(&"etw_event:ProcessStopStop".to_string()));
+
+        // --- deduplication: api:NtAllocateVirtualMemory appears only once ---
+        let alloc_count = tokens
+            .iter()
+            .filter(|t| *t == "api:NtAllocateVirtualMemory")
+            .count();
+        assert_eq!(
+            alloc_count, 1,
+            "api:NtAllocateVirtualMemory should be deduplicated"
+        );
+    }
+
+    #[test]
+    fn test_extract_tokens_empty_docs() {
+        let tokens = extract_tokens_from_docs(&[]);
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn test_extract_tokens_etw_only() {
+        let docs = vec![json!({
+            "event_type": "etw",
+            "payload_func": null,
+            "payload_id": 1,
+            "payload_event": "ThreadStart",
+            "payload_etw_provider_name": "Microsoft-Windows-Kernel-Process",
+            "payload_event_id": 3,
+        })];
+
+        let tokens = extract_tokens_from_docs(&docs);
+        assert_eq!(tokens.len(), 2); // etw: + etw_event:
+        assert!(tokens.contains(&"etw:Microsoft-Windows-Kernel-Process/3".to_string()));
+        assert!(tokens.contains(&"etw_event:ThreadStart".to_string()));
     }
 }
