@@ -148,6 +148,14 @@ pub struct RoundSummary {
     /// Authoritative detection verdict (e.g. "detected", "mutation_failed")
     #[serde(default)]
     pub detection_verdict: String,
+    /// Coverage percent from line trace (None until async coverage computation completes)
+    #[serde(default)]
+    pub coverage_percent: Option<f64>,
+    /// Normalized time component of the evasion score, stored for async blended recomputation.
+    /// For RealDetection/InstrumentationArtifact/Flaky: survival_ratio.
+    /// For Evasion: 0.5 * payload_reached + 0.5 * behavior_match.
+    #[serde(default)]
+    pub time_factor: f64,
 }
 
 // ============================================================================
@@ -237,6 +245,8 @@ impl RoundAgg {
                 dry_run_exit_code: None,
                 has_dryrun: false,
                 detection_verdict: "static_detection".to_string(),
+                coverage_percent: None,
+                time_factor: 0.0,
             });
         }
 
@@ -269,12 +279,14 @@ impl RoundAgg {
         };
 
         // Short-circuit for broken artifacts: skip differential computation entirely
-        let (category, detected, behavior_match, evasion_score) = if effective_verdict.is_broken() {
+        let (category, detected, behavior_match, evasion_score, time_factor) = if effective_verdict
+            .is_broken()
+        {
             let cat = match effective_verdict {
                 DetectionVerdict::PayloadFailed => DifferentialCategory::PayloadFailed,
                 _ => DifferentialCategory::MutationFailed,
             };
-            (cat, false, false, 0.0)
+            (cat, false, false, 0.0, 0.0)
         } else {
             let effective_baseline_detected = effective_verdict.is_detected();
 
@@ -287,8 +299,8 @@ impl RoundAgg {
             let bm = baseline.exit_code == instrumented.exit_code
                 && effective_baseline_detected == instrumented.detected;
 
-            let es = self.compute_evasion_score(baseline, instrumented, cat);
-            (cat, det, bm, es)
+            let (es, tf) = self.compute_evasion_score(baseline, instrumented, cat);
+            (cat, det, bm, es, tf)
         };
 
         Some(RoundSummary {
@@ -305,10 +317,14 @@ impl RoundAgg {
             dry_run_exit_code,
             has_dryrun,
             detection_verdict: effective_verdict.as_str().to_string(),
+            coverage_percent: None,
+            time_factor,
         })
     }
 
     /// Composite evasion score with per-category ranges.
+    /// Returns `(evasion_score, time_factor)` where `time_factor` is the
+    /// normalized time component stored for async blended recomputation.
     ///
     /// | Category               | Range     |
     /// |------------------------|-----------|
@@ -321,7 +337,7 @@ impl RoundAgg {
         baseline: &RunOutcome,
         instrumented: &RunOutcome,
         category: DifferentialCategory,
-    ) -> f64 {
+    ) -> (f64, f64) {
         let timeout = self.timeout_ms.max(100 * 1000) as f64;
         let survival_ratio = (baseline.elapsed_ms / timeout).clamp(0.0, 1.0);
         let payload_reached = if baseline.exit_code == 0 { 1.0 } else { 0.0 };
@@ -334,14 +350,41 @@ impl RoundAgg {
         };
 
         match category {
-            DifferentialCategory::RealDetection => 0.4 * survival_ratio,
-            DifferentialCategory::InstrumentationArtifact => 0.5 + 0.2 * survival_ratio,
-            DifferentialCategory::Flaky => 0.3 * survival_ratio,
-            DifferentialCategory::Evasion => 0.6 + 0.2 * payload_reached + 0.2 * behavior_match_val,
+            DifferentialCategory::RealDetection => (0.4 * survival_ratio, survival_ratio),
+            DifferentialCategory::InstrumentationArtifact => {
+                (0.5 + 0.2 * survival_ratio, survival_ratio)
+            }
+            DifferentialCategory::Flaky => (0.3 * survival_ratio, survival_ratio),
+            DifferentialCategory::Evasion => {
+                let tf = 0.5 * payload_reached + 0.5 * behavior_match_val;
+                (0.6 + 0.2 * payload_reached + 0.2 * behavior_match_val, tf)
+            }
             DifferentialCategory::MutationFailed
             | DifferentialCategory::PayloadFailed
-            | DifferentialCategory::StaticDetection => 0.0,
+            | DifferentialCategory::StaticDetection => (0.0, 0.0),
         }
+    }
+}
+
+/// Compute blended evasion score: 70% coverage + 30% time.
+///
+/// Called asynchronously after coverage data becomes available.
+/// The result replaces the time-only score in the selector history.
+pub fn compute_blended_evasion_score(
+    category: DifferentialCategory,
+    coverage_percent: f64,
+    time_factor: f64,
+) -> f64 {
+    let cov = (coverage_percent / 100.0).clamp(0.0, 1.0);
+    let blend = 0.7 * cov + 0.3 * time_factor;
+    match category {
+        DifferentialCategory::RealDetection => 0.4 * blend,
+        DifferentialCategory::InstrumentationArtifact => 0.5 + 0.2 * blend,
+        DifferentialCategory::Flaky => 0.3 * blend,
+        DifferentialCategory::Evasion => 0.6 + 0.4 * blend,
+        DifferentialCategory::MutationFailed
+        | DifferentialCategory::PayloadFailed
+        | DifferentialCategory::StaticDetection => 0.0,
     }
 }
 
@@ -494,6 +537,8 @@ mod tests {
             dry_run_exit_code: None,
             has_dryrun: false,
             detection_verdict: String::new(),
+            coverage_percent: None,
+            time_factor: 0.0,
         });
 
         assert_eq!(job.current_round, 1);
@@ -620,6 +665,8 @@ mod tests {
             dry_run_exit_code: None,
             has_dryrun: false,
             detection_verdict: String::new(),
+            coverage_percent: None,
+            time_factor: 0.0,
         });
 
         assert!(
@@ -649,6 +696,8 @@ mod tests {
             dry_run_exit_code: None,
             has_dryrun: false,
             detection_verdict: String::new(),
+            coverage_percent: None,
+            time_factor: 0.0,
         });
 
         assert!(
@@ -677,6 +726,8 @@ mod tests {
             dry_run_exit_code: None,
             has_dryrun: false,
             detection_verdict: String::new(),
+            coverage_percent: None,
+            time_factor: 0.0,
         });
 
         let (_, rid2) = job.start_round();
@@ -694,6 +745,8 @@ mod tests {
             dry_run_exit_code: None,
             has_dryrun: false,
             detection_verdict: String::new(),
+            coverage_percent: None,
+            time_factor: 0.0,
         });
 
         assert!(
@@ -1235,11 +1288,130 @@ mod tests {
             dry_run_exit_code: None,
             has_dryrun: false,
             detection_verdict: String::new(),
+            coverage_percent: None,
+            time_factor: 0.0,
         });
 
         assert!(
             job.should_continue(),
             "Job should NOT stop on InstrumentationArtifact even with stop_on_evasion=true"
         );
+    }
+
+    // ── Blended evasion score tests ────────────────────────────────────────
+
+    #[test]
+    fn test_blended_evasion_score_real_detection_range() {
+        // 0% coverage, tf=0 → 0.0
+        assert_eq!(
+            compute_blended_evasion_score(DifferentialCategory::RealDetection, 0.0, 0.0),
+            0.0
+        );
+        // 100% coverage, tf=1.0 → 0.4 * (0.7 + 0.3) = 0.4
+        let score = compute_blended_evasion_score(DifferentialCategory::RealDetection, 100.0, 1.0);
+        assert!((score - 0.4).abs() < 1e-9, "Expected 0.4, got {}", score);
+    }
+
+    #[test]
+    fn test_blended_evasion_score_evasion_range() {
+        // 0% coverage, tf=0 → 0.6
+        assert_eq!(
+            compute_blended_evasion_score(DifferentialCategory::Evasion, 0.0, 0.0),
+            0.6
+        );
+        // 100% coverage, tf=1.0 → 0.6 + 0.4 * 1.0 = 1.0
+        let score = compute_blended_evasion_score(DifferentialCategory::Evasion, 100.0, 1.0);
+        assert!((score - 1.0).abs() < 1e-9, "Expected 1.0, got {}", score);
+    }
+
+    #[test]
+    fn test_blended_evasion_score_instrumentation_artifact_range() {
+        let lo =
+            compute_blended_evasion_score(DifferentialCategory::InstrumentationArtifact, 0.0, 0.0);
+        let hi = compute_blended_evasion_score(
+            DifferentialCategory::InstrumentationArtifact,
+            100.0,
+            1.0,
+        );
+        assert!((lo - 0.5).abs() < 1e-9, "Expected 0.5, got {}", lo);
+        assert!((hi - 0.7).abs() < 1e-9, "Expected 0.7, got {}", hi);
+    }
+
+    #[test]
+    fn test_blended_evasion_score_broken_categories() {
+        assert_eq!(
+            compute_blended_evasion_score(DifferentialCategory::MutationFailed, 50.0, 0.5),
+            0.0
+        );
+        assert_eq!(
+            compute_blended_evasion_score(DifferentialCategory::PayloadFailed, 80.0, 0.8),
+            0.0
+        );
+        assert_eq!(
+            compute_blended_evasion_score(DifferentialCategory::StaticDetection, 100.0, 1.0),
+            0.0
+        );
+    }
+
+    #[test]
+    fn test_blended_score_weighting() {
+        // 70% coverage, 0% time → blend = 0.7 * 0.7 = 0.49
+        let score = compute_blended_evasion_score(DifferentialCategory::Evasion, 70.0, 0.0);
+        let expected = 0.6 + 0.4 * (0.7 * 0.7);
+        assert!(
+            (score - expected).abs() < 1e-9,
+            "Expected {}, got {}",
+            expected,
+            score
+        );
+    }
+
+    #[test]
+    fn test_blended_score_coverage_clamped() {
+        // Coverage > 100 should be clamped
+        let score = compute_blended_evasion_score(DifferentialCategory::Evasion, 150.0, 1.0);
+        assert!((score - 1.0).abs() < 1e-9, "Expected 1.0, got {}", score);
+
+        // Negative coverage should be clamped to 0
+        let score = compute_blended_evasion_score(DifferentialCategory::Evasion, -10.0, 1.0);
+        let expected = 0.6 + 0.4 * 0.3;
+        assert!(
+            (score - expected).abs() < 1e-9,
+            "Expected {}, got {}",
+            expected,
+            score
+        );
+    }
+
+    #[test]
+    fn test_compute_evasion_score_returns_time_factor() {
+        let mut agg = test_round_agg(test_round_spec("r-tf"));
+        agg.baseline = Some(RunOutcome {
+            detected: false,
+            exit_code: 0,
+            error: None,
+            success: true,
+            elapsed_ms: 120_000.0,
+            detection_verdict: String::new(),
+            last_checkpoint: String::new(),
+        });
+        agg.instrumented = Some(RunOutcome {
+            detected: false,
+            exit_code: 0,
+            error: None,
+            success: true,
+            elapsed_ms: 118_000.0,
+            detection_verdict: String::new(),
+            last_checkpoint: String::new(),
+        });
+
+        let summary = agg.to_summary().unwrap();
+        // Evasion with payload_reached=1.0, behavior_match=1.0 → tf = 1.0
+        assert!(
+            (summary.time_factor - 1.0).abs() < 1e-9,
+            "Expected tf=1.0, got {}",
+            summary.time_factor
+        );
+        assert!(summary.coverage_percent.is_none());
     }
 }

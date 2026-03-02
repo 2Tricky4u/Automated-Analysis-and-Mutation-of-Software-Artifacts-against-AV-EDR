@@ -99,6 +99,19 @@ pub enum JobWorkerEvent {
 }
 
 // ============================================================================
+// Orchestrator -> JobWorker (Async Coverage Correction)
+// ============================================================================
+
+/// Sent from Orchestrator background task to JobWorker after coverage
+/// computation completes, so the selector sees blended evasion scores.
+#[derive(Debug, Clone)]
+pub struct CoverageCorrection {
+    pub round_number: u32,
+    pub coverage_percent: f64,
+    pub blended_evasion_score: f64,
+}
+
+// ============================================================================
 // VMExecutor -> RunPool -> JobWorker (Run Results)
 // ============================================================================
 
