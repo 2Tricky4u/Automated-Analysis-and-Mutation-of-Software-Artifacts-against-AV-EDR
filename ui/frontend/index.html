@@ -704,8 +704,10 @@
                             <div class="flex-row" style="gap: 16px;">
                                 <label style="font-size: 0.85rem; color: #ccc;"><input type="radio" name="selectorType" value="coverage" checked> Coverage (default)</label>
                                 <label style="font-size: 0.85rem; color: #ccc;"><input type="radio" name="selectorType" value="fuzzer"> Fuzzer (genetic)</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="radio" name="selectorType" value="token"> Token (triage-guided)</label>
+                                <label style="font-size: 0.85rem; color: #ccc;"><input type="radio" name="selectorType" value="random"> Random (baseline)</label>
                             </div>
-                            <div class="muted" style="font-size: 0.75rem; margin-top: 4px;">Coverage: epsilon-greedy exploration. Fuzzer: evolutionary parameter search.</div>
+                            <div class="muted" style="font-size: 0.75rem; margin-top: 4px;">Coverage: epsilon-greedy. Fuzzer: evolutionary search. Token: triage-guided avoid/seek. Random: uniform baseline.</div>
                         </div>
                     </div>
 
