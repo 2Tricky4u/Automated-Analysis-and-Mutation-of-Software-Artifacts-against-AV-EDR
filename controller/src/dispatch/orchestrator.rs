@@ -17,6 +17,7 @@ use crate::storage::{EsStorage, RoundIndexParams, RunIndexParams, TelemetryConte
 use crate::triage::SelectorType;
 use crate::triage::coverage_selector::CoverageSelector;
 use crate::triage::fuzzer_selector::FuzzerSelector;
+use crate::triage::random_selector::RandomSelector;
 use crate::triage::source_resolver::SourceMap;
 use crate::triage::token_selector::TokenSelector;
 use crate::vm::{TargetEvent, TargetManager};
@@ -182,6 +183,7 @@ impl Orchestrator {
             SelectorType::Fuzzer => Arc::new(FuzzerSelector::new()),
             SelectorType::Coverage => Arc::new(CoverageSelector::new()),
             SelectorType::Token => Arc::new(TokenSelector::new()),
+            SelectorType::Random => Arc::new(RandomSelector::new()),
         };
 
         let (correction_tx, correction_rx) = mpsc::channel(64);
