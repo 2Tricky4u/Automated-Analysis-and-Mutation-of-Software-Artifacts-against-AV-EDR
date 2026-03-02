@@ -316,8 +316,8 @@ pub async fn get_pool_metrics(
         pool_id: "shared-run-pool".to_string(),
         total_runs_dispatched: metrics.total_runs_added, // Renamed in new architecture
         total_runs_completed: metrics.total_runs_taken,
-        total_rounds_completed: 0, // TODO: Track in RunPool or Orchestrator
-        total_jobs_completed: 0,   // TODO: Track in Orchestrator
+        total_rounds_completed: metrics.total_rounds_completed,
+        total_jobs_completed: metrics.total_jobs_completed,
         current_queue_size: queue_size as u32,
         worker_count: vm_count as u32,
         current_job_id: format!("{} active jobs", job_count),

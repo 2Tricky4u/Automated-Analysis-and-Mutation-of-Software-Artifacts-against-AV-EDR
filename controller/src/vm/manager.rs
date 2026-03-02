@@ -115,6 +115,12 @@ struct TargetTomlConfig {
 struct TargetInfo {
     worker_id: String,
     ip_address: String,
+    #[serde(default = "default_listen_port")]
+    listen_port: u16,
+}
+
+fn default_listen_port() -> u16 {
+    50052
 }
 
 /// Load target configuration from individual worker TOML file
@@ -122,8 +128,7 @@ fn load_target_config(path: &Path) -> Result<(String, String)> {
     let content = std::fs::read_to_string(path)?;
     let config: TargetTomlConfig = toml::from_str(&content)?;
 
-    // Target gRPC address is IP + port 50052 (standard worker port) TODO make it from config
-    let address = format!("{}:50052", config.worker.ip_address);
+    let address = format!("{}:{}", config.worker.ip_address, config.worker.listen_port);
 
     Ok((config.worker.worker_id, address))
 }

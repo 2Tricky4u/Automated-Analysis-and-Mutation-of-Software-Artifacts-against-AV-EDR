@@ -8,6 +8,7 @@
 //! - queries: reusable ES query helpers for API handlers
 //! - templates: index template bootstrap
 
+pub mod artifacts;
 pub mod helpers;
 pub mod jobs;
 pub mod queries;
@@ -117,6 +118,12 @@ impl EsStorage {
         runs::index_run_status(&self.client, report).await
     }
 
+    // -- Artifacts ---------------------------------------------------------
+
+    pub async fn index_artifact(&self, doc: serde_json::Value) -> anyhow::Result<()> {
+        artifacts::index_artifact(&self.client, doc).await
+    }
+
     // -- Queries (read-side) -----------------------------------------------
 
     pub async fn query_job(&self, job_id: &str) -> Option<serde_json::Value> {
@@ -154,6 +161,17 @@ impl EsStorage {
 
     pub async fn query_trace_content(&self, run_id: &str) -> Option<String> {
         queries::query_trace_content(&self.client, run_id).await
+    }
+
+    // -- Analysis queries (UI) -----------------------------------------------
+
+    pub async fn query_analysis_results(
+        &self,
+        job_ids: &[String],
+        date_from: &str,
+        date_to: &str,
+    ) -> Vec<serde_json::Value> {
+        queries::query_analysis_results(&self.client, job_ids, date_from, date_to).await
     }
 
     // -- Triage tokens -----------------------------------------------------

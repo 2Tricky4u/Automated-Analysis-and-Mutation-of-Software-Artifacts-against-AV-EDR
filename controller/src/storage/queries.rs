@@ -231,6 +231,56 @@ pub async fn query_trace_content(es: &Elasticsearch, run_id: &str) -> Option<Str
 }
 
 // ---------------------------------------------------------------------------
+// Analysis result queries (UI)
+// ---------------------------------------------------------------------------
+
+/// Query run documents for the UI's QueryResults RPC.
+///
+/// Searches `runs-*` filtered by job_ids (if non-empty) and date range
+/// (if `date_from`/`date_to` are non-empty). Returns up to 100 docs.
+pub async fn query_analysis_results(
+    es: &Elasticsearch,
+    job_ids: &[String],
+    date_from: &str,
+    date_to: &str,
+) -> Vec<Value> {
+    let mut filters: Vec<Value> = Vec::new();
+
+    if !job_ids.is_empty() {
+        filters.push(json!({ "terms": { "job_id": job_ids } }));
+    }
+
+    if !date_from.is_empty() || !date_to.is_empty() {
+        let mut range = serde_json::Map::new();
+        if !date_from.is_empty() {
+            range.insert("gte".to_string(), json!(date_from));
+        }
+        if !date_to.is_empty() {
+            range.insert("lte".to_string(), json!(date_to));
+        }
+        filters.push(json!({ "range": { "@timestamp": range } }));
+    }
+
+    let query = if filters.is_empty() {
+        json!({ "match_all": {} })
+    } else {
+        json!({ "bool": { "filter": filters } })
+    };
+
+    let response = es
+        .search(SearchParts::Index(&["runs-*"]))
+        .body(json!({
+            "query": query,
+            "sort": [{ "@timestamp": "desc" }],
+            "size": 100
+        }))
+        .send()
+        .await;
+
+    extract_sources(response).await
+}
+
+// ---------------------------------------------------------------------------
 // Triage token queries
 // ---------------------------------------------------------------------------
 
