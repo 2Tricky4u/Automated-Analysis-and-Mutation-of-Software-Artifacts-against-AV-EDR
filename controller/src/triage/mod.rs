@@ -13,6 +13,7 @@ pub mod coverage_selector;
 pub mod extractor;
 pub mod fuzzer_selector;
 pub mod param_space;
+pub mod random_selector;
 pub mod scorer;
 pub mod source_resolver;
 pub mod token_selector;
@@ -40,6 +41,7 @@ pub enum SelectorType {
     Coverage,
     Fuzzer,
     Token,
+    Random,
 }
 
 impl SelectorType {
@@ -47,6 +49,7 @@ impl SelectorType {
         match s {
             "fuzzer" => Self::Fuzzer,
             "token" => Self::Token,
+            "random" => Self::Random,
             _ => Self::Coverage,
         }
     }
@@ -57,6 +60,7 @@ impl SelectorType {
             Self::Coverage => "coverage",
             Self::Fuzzer => "fuzzer",
             Self::Token => "token",
+            Self::Random => "random",
         }
     }
 }

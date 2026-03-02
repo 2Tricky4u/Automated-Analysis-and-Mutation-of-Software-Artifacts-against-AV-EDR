@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const EPSILON: f64 = 0.3;
 
 /// All available deconditioner variants (matches build/templates/modules/deconditioner/*.c).
-const DECONDITIONER_VARIANTS: &[&str] = &[
+pub(crate) const DECONDITIONER_VARIANTS: &[&str] = &[
     "none",
     "alloc_loop",
     "alloc_exec",
