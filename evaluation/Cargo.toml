@@ -4,6 +4,15 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
+[[bin]]
+name = "evaluate"
+path = "src/bin/evaluate.rs"
+required-features = ["full"]
+
+[[bin]]
+name = "eval-export"
+path = "src/bin/export.rs"
+
 [features]
 default = []
 input = []

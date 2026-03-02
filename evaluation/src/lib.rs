@@ -105,6 +105,7 @@ pub trait EvalMetric: Send + Sync {
 
 /// Returns all metrics enabled by compile-time features.
 pub fn all_metrics() -> Vec<Box<dyn EvalMetric>> {
+    #[allow(unused_mut)]
     let mut metrics: Vec<Box<dyn EvalMetric>> = Vec::new();
 
     #[cfg(feature = "input")]
