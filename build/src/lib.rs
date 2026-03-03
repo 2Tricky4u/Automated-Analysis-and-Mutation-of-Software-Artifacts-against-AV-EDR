@@ -45,6 +45,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod builder;
 pub mod instrument;
+pub mod msvc_compat;
 pub mod mutator;
 pub mod template;
 pub mod transform;
@@ -72,6 +73,9 @@ pub use template::{extract_mutation_markers, generate_test_payload, strip_mutati
 pub use builder::{
     ArtifactBuilder, BuildInput, BuilderConfig, BuiltArtifact, PreparedPayload, prepare_payload,
 };
+
+// MSVC compat module
+pub use msvc_compat::MsvcCompat;
 
 // ============================================================================
 // Core Types

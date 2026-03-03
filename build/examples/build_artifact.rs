@@ -11,6 +11,7 @@
 //!   cargo run -p build --example build_artifact -- -p sc.bin --carrier peb_walk --encoding english
 //!   cargo run -p build --example build_artifact -- -p sc.bin -m ast.string_xor --trace lines
 
+use build::msvc_compat::MsvcCompat;
 use build::mutator::MutationSpec;
 use build::{ArtifactBuilder, BuildInput, BuilderConfig, EncodingType, ModuleSelection};
 use std::path::PathBuf;
@@ -49,12 +50,21 @@ fn main() {
     // Resolve paths from CARGO_MANIFEST_DIR (build/)
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
+    let msvc_compat = if args.msvc_compat {
+        Some(MsvcCompat {
+            vcvarsall_path: args.vcvarsall.unwrap_or_else(MsvcCompat::default_vcvarsall),
+        })
+    } else {
+        None
+    };
+
     let config = BuilderConfig {
         output_dir: args.output_dir.clone(),
         xwin_dir: args.xwin,
         runtime_src: manifest.join("runtime/instrumentation_runtime.c"),
         minimal_runtime_src: manifest.join("runtime/minimal_runtime.c"),
         modular_template_dir: manifest.join("templates"),
+        msvc_compat,
     };
 
     let builder = ArtifactBuilder::new(config).unwrap_or_else(|e| {
@@ -108,8 +118,8 @@ fn main() {
         modules.decoy,
     );
     eprintln!(
-        "[build_artifact] Encoding: {}, Trace: {}",
-        args.encoding, args.trace
+        "[build_artifact] Encoding: {}, Trace: {}, MSVC-compat: {}",
+        args.encoding, args.trace, args.msvc_compat
     );
     if !args.mutations.is_empty() {
         eprintln!("[build_artifact] Mutations: {:?}", args.mutations);
@@ -174,6 +184,8 @@ struct Args {
     mutations: Vec<String>,
     xwin: PathBuf,
     output_dir: PathBuf,
+    msvc_compat: bool,
+    vcvarsall: Option<PathBuf>,
     // Track which flags the user explicitly set (for auto-sync)
     decoder_set: bool,
     encoding_set: bool,
@@ -197,6 +209,8 @@ impl Args {
             mutations: vec![],
             xwin: PathBuf::from("/root/.xwin"),
             output_dir: PathBuf::from("./artifacts"),
+            msvc_compat: false,
+            vcvarsall: None,
             decoder_set: false,
             encoding_set: false,
         };
@@ -263,6 +277,11 @@ impl Args {
                     i += 1;
                     a.output_dir = PathBuf::from(&argv[i]);
                 }
+                "--msvc-compat" => a.msvc_compat = true,
+                "--vcvarsall" => {
+                    i += 1;
+                    a.vcvarsall = Some(PathBuf::from(&argv[i]));
+                }
                 other => {
                     eprintln!("Unknown argument: {}", other);
                     process::exit(1);
@@ -322,6 +341,8 @@ OPTIONS:
     -m, --mutation <ID[:params]>     Mutation to apply (repeatable). Params: key=val,key=val
     --xwin <DIR>                    xwin SDK path (default: /root/.xwin)
     --output-dir <DIR>              Build output dir (default: ./artifacts)
+    --msvc-compat                   Use clang-cl + link.exe for genuine MSVC PE metadata
+    --vcvarsall <PATH>              WSL path to vcvarsall.bat (default: VS 2022 Build Tools)
 
 MUTATION SYNTAX:
     -m <id>                         No params (uses defaults)
