@@ -36,7 +36,7 @@ pub struct SubmitJobRequest {
     /// Module selection
     pub modules: Option<ModuleSelectionRequest>,
 
-    /// Payload encoding: "xor" or "english"
+    /// Payload encoding: "xor", "english", "subbyte", or "none"
     pub encoding: Option<String>,
 
     /// Stop after first successful evasion

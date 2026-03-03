@@ -19,6 +19,8 @@ pub enum EncodingType {
     English,
     /// No encoding — raw payload bytes
     None,
+    /// Sub-byte nibble mapping (4-bit split, 16-entry lookup table)
+    SubByte,
 }
 
 impl std::str::FromStr for EncodingType {
@@ -29,8 +31,9 @@ impl std::str::FromStr for EncodingType {
             "xor" => Ok(Self::Xor),
             "english" => Ok(Self::English),
             "none" => Ok(Self::None),
+            "subbyte" | "sub_byte" | "nibble" => Ok(Self::SubByte),
             other => bail!(
-                "Unknown encoding type: '{}'. Valid: xor, english, none",
+                "Unknown encoding type: '{}'. Valid: xor, english, none, subbyte",
                 other
             ),
         }
@@ -44,9 +47,14 @@ impl EncodingType {
             Self::Xor => "xor",
             Self::English => "english",
             Self::None => "none",
+            Self::SubByte => "subbyte",
         }
     }
 }
+
+/// Default sub-byte nibble mapping — empirically validated "safe" byte values
+/// that avoid ML-flagged entropy patterns.
+const DEFAULT_SUBBYTE_MAPPING: [u8; 16] = [0, 2, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 20];
 
 /// Payload encoder that generates C header code
 pub struct PayloadEncoder {
@@ -54,6 +62,8 @@ pub struct PayloadEncoder {
     xor_key: [u8; 2],
     /// Dictionary words (for English encoding)
     dictionary: Vec<String>,
+    /// Sub-byte nibble mapping (16 entries, one per 4-bit nibble value)
+    subbyte_mapping: [u8; 16],
 }
 
 impl PayloadEncoder {
@@ -64,6 +74,7 @@ impl PayloadEncoder {
         Self {
             xor_key: [0xAA, 0x55],
             dictionary: Self::generate_dictionary(),
+            subbyte_mapping: DEFAULT_SUBBYTE_MAPPING,
         }
     }
 
@@ -72,6 +83,16 @@ impl PayloadEncoder {
         Self {
             xor_key: key,
             dictionary: Self::generate_dictionary(),
+            subbyte_mapping: DEFAULT_SUBBYTE_MAPPING,
+        }
+    }
+
+    /// Create encoder with specific sub-byte nibble mapping
+    pub fn with_subbyte_mapping(mapping: [u8; 16]) -> Self {
+        Self {
+            xor_key: [0xAA, 0x55],
+            dictionary: Self::generate_dictionary(),
+            subbyte_mapping: mapping,
         }
     }
 
@@ -101,6 +122,7 @@ impl PayloadEncoder {
             EncodingType::Xor => self.encode_xor(payload),
             EncodingType::English => self.encode_english(payload),
             EncodingType::None => Self::encode_none(payload),
+            EncodingType::SubByte => self.encode_subbyte(payload),
         }
     }
 
@@ -153,12 +175,39 @@ impl PayloadEncoder {
         }
     }
 
+    /// Sub-byte nibble mapping encode
+    /// Each byte is split into two 4-bit nibbles, each mapped through a 16-entry lookup table.
+    /// Result: 2x payload size but fully controlled byte distribution/entropy.
+    fn encode_subbyte(&self, payload: &[u8]) -> EncodedPayload {
+        let mut encoded = Vec::with_capacity(payload.len() * 2);
+        for &byte in payload {
+            let high = (byte >> 4) & 0x0F;
+            let low = byte & 0x0F;
+            encoded.push(self.subbyte_mapping[high as usize]);
+            encoded.push(self.subbyte_mapping[low as usize]);
+        }
+
+        EncodedPayload {
+            encoding: EncodingType::SubByte,
+            data: encoded,
+            metadata: {
+                let mut m = HashMap::new();
+                for (i, &v) in self.subbyte_mapping.iter().enumerate() {
+                    m.insert(format!("subbyte_map_{}", i), format!("{}", v));
+                }
+                m.insert("original_len".to_string(), payload.len().to_string());
+                m
+            },
+        }
+    }
+
     /// Generate C header code for the encoded payload
     pub fn generate_c_header(&self, encoded: &EncodedPayload) -> String {
         match encoded.encoding {
             EncodingType::Xor => self.generate_xor_header(encoded),
             EncodingType::English => self.generate_english_header(encoded),
             EncodingType::None => Self::generate_none_header(encoded),
+            EncodingType::SubByte => self.generate_subbyte_header(encoded),
         }
     }
 
@@ -245,6 +294,40 @@ unsigned char supermega_payload[1] = {{ 0 }};
             len = word_count,
             dict = dict_array,
             words = word_string
+        )
+    }
+
+    /// Generate C header for sub-byte nibble-mapped payload
+    fn generate_subbyte_header(&self, encoded: &EncodedPayload) -> String {
+        let original_len: usize = encoded.metadata["original_len"].parse().unwrap();
+        let mapping_entries: Vec<String> = self
+            .subbyte_mapping
+            .iter()
+            .map(|b| format!("0x{:02X}", b))
+            .collect();
+        let array = format_c_byte_array(&encoded.data);
+
+        format!(
+            r#"/* Auto-generated payload header - SubByte encoding */
+#ifndef PAYLOAD_H
+#define PAYLOAD_H
+#define SUBBYTE_ENCODING
+
+#define PAYLOAD_LEN {original_len}
+#define ENCODED_PAYLOAD_LEN {encoded_len}
+
+unsigned char SUBBYTE_MAPPING[16] = {{ {mapping} }};
+
+unsigned char supermega_payload[ENCODED_PAYLOAD_LEN] = {{
+{array}
+}};
+
+#endif /* PAYLOAD_H */
+"#,
+            original_len = original_len,
+            encoded_len = encoded.data.len(),
+            mapping = mapping_entries.join(", "),
+            array = array,
         )
     }
 }
@@ -375,6 +458,10 @@ mod tests {
         );
         assert_eq!(EncodingType::from_str("none").unwrap(), EncodingType::None);
         assert_eq!(EncodingType::from_str("None").unwrap(), EncodingType::None);
+        assert_eq!(
+            EncodingType::from_str("subbyte").unwrap(),
+            EncodingType::SubByte
+        );
         assert!(EncodingType::from_str("unknown").is_err());
     }
 

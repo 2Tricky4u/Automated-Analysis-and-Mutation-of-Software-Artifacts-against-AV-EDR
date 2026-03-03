@@ -60,4 +60,8 @@ extern const char* DICTIONARY[];
 extern char supermega_payload_str[];
 #endif
 
+#ifdef SUBBYTE_ENCODING
+extern unsigned char SUBBYTE_MAPPING[16];
+#endif
+
 #endif
