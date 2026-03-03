@@ -6,7 +6,7 @@
  *       rather than in a PE image section. Running this DECON_ROUNDS times
  *       establishes a baseline of "this process creates threads in dynamic memory."
  *
- * MUTATIONS: loop_mutation, literal_encoding, loop_restructuring, timing_jitter
+ * MUTATIONS: loop_mutation, literal_encoding, loop_restructuring, timing_jitter, protection_transition
  */
 #include "../header/definitions.h"
 
@@ -34,6 +34,7 @@ void deconditioner() {
         buf[PAYLOAD_LEN - 1] = (char)0xC3;  // RET
 
         // @MUTATE:timing_jitter
+        // @MUTATE:protection_transition
         // @MUTATE:api_wrapper_injection(VirtualProtect)
         if (!VirtualProtect(buf, PAYLOAD_LEN, p_RX, &old_prot)) {
             VirtualFree(buf, 0, 0x8000);

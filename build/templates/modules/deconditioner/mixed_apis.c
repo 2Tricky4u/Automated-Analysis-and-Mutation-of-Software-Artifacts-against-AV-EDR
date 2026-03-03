@@ -12,7 +12,7 @@
  *       EDR token sequences become diluted with benign tokens, reducing the
  *       lift score of the suspicious sequence.
  *
- * MUTATIONS: loop_mutation, literal_encoding, loop_restructuring, timing_jitter, string_splitting
+ * MUTATIONS: loop_mutation, literal_encoding, loop_restructuring, timing_jitter, string_splitting, protection_transition
  */
 #include "../header/definitions.h"
 
@@ -80,6 +80,7 @@ void deconditioner() {
         do_benign_registry_io();
 
         // @MUTATE:timing_jitter
+        // @MUTATE:protection_transition
         // @MUTATE:api_wrapper_injection(VirtualProtect)
         VirtualProtect(buf, PAYLOAD_LEN, p_RX, &old_prot);
 

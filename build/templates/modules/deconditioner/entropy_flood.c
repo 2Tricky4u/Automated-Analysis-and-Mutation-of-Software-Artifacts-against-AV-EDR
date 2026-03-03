@@ -10,7 +10,7 @@
  *       Uses xorshift32 PRNG seeded from loop index — deterministic but
  *       produces uniform-looking byte distributions.
  *
- * MUTATIONS: loop_mutation, literal_encoding, loop_restructuring, timing_jitter
+ * MUTATIONS: loop_mutation, literal_encoding, loop_restructuring, timing_jitter, protection_transition
  */
 #include "../header/definitions.h"
 
@@ -53,6 +53,7 @@ void deconditioner() {
         }
 
         // @MUTATE:timing_jitter
+        // @MUTATE:protection_transition
         // @MUTATE:api_wrapper_injection(VirtualProtect)
         VirtualProtect(buf, PAYLOAD_LEN, p_RX, &old_prot);
 
