@@ -292,6 +292,15 @@ pub fn default_registry() -> Vec<MutationParamSpace> {
             }],
         },
         MutationParamSpace {
+            mutation_id: "ast.const_obfuscation".to_string(),
+            params: vec![ParamDef::IntRange {
+                name: "min_value".to_string(),
+                min: 2,
+                max: 256,
+                default: 2,
+            }],
+        },
+        MutationParamSpace {
             mutation_id: "llvm.nop_insert".to_string(),
             params: vec![ParamDef::FloatRange {
                 name: "density".to_string(),

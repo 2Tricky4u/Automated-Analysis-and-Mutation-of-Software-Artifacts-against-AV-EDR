@@ -146,6 +146,8 @@ fn default_mutation_pool() -> Vec<String> {
         "ast.exec_decoy",
         "ast.timing_pattern",
         "ast.protection_transition",
+        "ast.const_obfuscation",
+        "ast.string_xor",
     ]
     .into_iter()
     .map(String::from)

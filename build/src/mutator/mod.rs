@@ -8,6 +8,7 @@
 /// - ast.exec_decoy:            Execute from allocated memory (tree-sitter)
 /// - ast.timing_pattern:        Inter-operation delays (tree-sitter)
 /// - ast.protection_transition: Memory protection pattern (tree-sitter)
+/// - ast.const_obfuscation:     Volatile decomposition of integer constants (tree-sitter)
 /// - ast.string_xor:            XOR-encode string literals (tree-sitter)
 /// - llvm.nop_insert:           Insert NOP instructions in LLVM IR
 /// - llvm.opaque_predicate:     Opaque predicates in LLVM IR
