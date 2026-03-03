@@ -79,7 +79,7 @@ pub async fn query_results(
                 ("vm_id", "vm_id"),
                 ("exit_code", "exit_code"),
                 ("run_type", "run_type"),
-                ("timestamp", "@timestamp"),
+                ("timestamp", "timestamp"),
             ];
             for (key, doc_field) in &fields {
                 let val = if *doc_field == "elapsed_ms" || *doc_field == "exit_code" {
@@ -87,6 +87,7 @@ pub async fn query_results(
                     doc[doc_field]
                         .as_i64()
                         .map(|n| n.to_string())
+                        .or_else(|| doc[doc_field].as_f64().map(|n| format!("{:.1}", n)))
                         .or_else(|| doc[doc_field].as_str().map(|s| s.to_string()))
                 } else {
                     doc[doc_field].as_str().map(|s| s.to_string())
