@@ -48,6 +48,9 @@ service Controller {
   // NEW: Compare two runs (differential analysis)
   rpc CompareRuns(CompareRunsRequest) returns (CompareRunsResponse);
 
+  // Compare token sets between two runs (token diff + mutation param distances)
+  rpc CompareTokens(CompareTokensRequest) returns (CompareTokensResponse);
+
   // Get trace lines for a run (instrumented execution path)
   rpc GetTraceLines(GetTraceLinesRequest) returns (GetTraceLinesResponse);
 
@@ -501,6 +504,46 @@ message CompareRunsRequest {
 
 message CompareRunsResponse {
   BehaviorComparisonProto comparison = 1;
+}
+
+// ===== TOKEN COMPARISON MESSAGES =====
+
+message CompareTokensRequest {
+  string run_id_a = 1;
+  string run_id_b = 2;
+}
+
+message ParamComparisonProto {
+  string name = 1;
+  string value_a = 2;
+  string value_b = 3;
+  string param_type = 4;
+  double normalized_distance = 5;
+  string range_info = 6;
+}
+
+message MutationComparisonProto {
+  string mutation_id = 1;
+  string presence = 2;         // "both", "only_a", "only_b"
+  string token_a = 3;
+  string token_b = 4;
+  repeated ParamComparisonProto params = 5;
+  double overall_distance = 6;
+}
+
+message TokenSetComparisonProto {
+  repeated string only_in_a = 1;
+  repeated string only_in_b = 2;
+  repeated string common = 3;
+  repeated MutationComparisonProto mutation_comparisons = 4;
+  double jaccard_distance = 5;
+  uint32 count_a = 6;
+  uint32 count_b = 7;
+}
+
+message CompareTokensResponse {
+  TokenSetComparisonProto comparison = 1;
+  string error = 2;
 }
 
 // Feedback for selector (updated SelectionRequest)

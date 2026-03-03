@@ -4,13 +4,14 @@
 //! per-round token data for the frontend.
 
 use super::{ApiError, ApiResponse};
-use axum::{Json, extract::Extension, extract::Path};
+use crate::grpc_client::ControllerGrpcClient;
+use axum::{Json, extract::Extension, extract::Path, extract::State};
 use elasticsearch::Elasticsearch;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, error};
 
 #[derive(Debug, Serialize)]
 pub struct RoundTokensResponse {
@@ -93,4 +94,116 @@ pub async fn get_round_tokens(
         evasion_score,
         token_count,
     })))
+}
+
+// ============================================================================
+// Token Comparison (via gRPC CompareTokens)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct CompareTokensQuery {
+    pub run_a: String,
+    pub run_b: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ParamComparisonResponse {
+    pub name: String,
+    pub value_a: String,
+    pub value_b: String,
+    pub param_type: String,
+    pub normalized_distance: f64,
+    pub range_info: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MutationComparisonResponse {
+    pub mutation_id: String,
+    pub presence: String,
+    pub token_a: String,
+    pub token_b: String,
+    pub params: Vec<ParamComparisonResponse>,
+    pub overall_distance: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TokenCompareResponse {
+    pub only_in_a: Vec<String>,
+    pub only_in_b: Vec<String>,
+    pub common: Vec<String>,
+    pub mutation_comparisons: Vec<MutationComparisonResponse>,
+    pub jaccard_distance: f64,
+    pub count_a: u32,
+    pub count_b: u32,
+}
+
+/// GET /api/tokens/compare?run_a=X&run_b=Y
+pub async fn compare_tokens(
+    State(client): State<Arc<ControllerGrpcClient>>,
+    axum::extract::Query(query): axum::extract::Query<CompareTokensQuery>,
+) -> Result<Json<ApiResponse<TokenCompareResponse>>, ApiError> {
+    if query.run_a.is_empty() {
+        return Err(ApiError::bad_request("run_a is required"));
+    }
+    if query.run_b.is_empty() {
+        return Err(ApiError::bad_request("run_b is required"));
+    }
+
+    debug!(
+        "REST: Compare tokens (run_a={}, run_b={})",
+        query.run_a, query.run_b
+    );
+
+    match client.compare_tokens(&query.run_a, &query.run_b).await {
+        Ok(resp) => {
+            if !resp.error.is_empty() {
+                return Err(ApiError::not_found(resp.error));
+            }
+
+            if let Some(cmp) = resp.comparison {
+                let mutation_comparisons: Vec<MutationComparisonResponse> = cmp
+                    .mutation_comparisons
+                    .into_iter()
+                    .map(|mc| MutationComparisonResponse {
+                        mutation_id: mc.mutation_id,
+                        presence: mc.presence,
+                        token_a: mc.token_a,
+                        token_b: mc.token_b,
+                        params: mc
+                            .params
+                            .into_iter()
+                            .map(|p| ParamComparisonResponse {
+                                name: p.name,
+                                value_a: p.value_a,
+                                value_b: p.value_b,
+                                param_type: p.param_type,
+                                normalized_distance: p.normalized_distance,
+                                range_info: p.range_info,
+                            })
+                            .collect(),
+                        overall_distance: mc.overall_distance,
+                    })
+                    .collect();
+
+                Ok(Json(ApiResponse::new(TokenCompareResponse {
+                    only_in_a: cmp.only_in_a,
+                    only_in_b: cmp.only_in_b,
+                    common: cmp.common,
+                    mutation_comparisons,
+                    jaccard_distance: cmp.jaccard_distance,
+                    count_a: cmp.count_a,
+                    count_b: cmp.count_b,
+                })))
+            } else {
+                Err(ApiError::not_found("No token comparison data available"))
+            }
+        }
+        Err(e) => {
+            error!("Failed to compare tokens: {}", e);
+            Err(ApiError::unavailable(format!(
+                "Controller unavailable: {}",
+                e
+            )))
+        }
+    }
 }

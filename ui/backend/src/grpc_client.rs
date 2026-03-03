@@ -3,16 +3,16 @@
 //! Provides typed methods for all Controller gRPC endpoints.
 
 use crate::generated::controller::{
-    BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse, DeployRequest,
-    DeployResponse, DisconnectAllWorkersRequest, DisconnectAllWorkersResponse,
-    DisconnectWorkerRequest, DisconnectWorkerResponse, GetAvailableWorkersRequest,
-    GetAvailableWorkersResponse, GetOrchestratorStatusRequest, GetOrchestratorStatusResponse,
-    GetRoundRequest, GetRoundResponse, GetTraceLinesRequest, GetTraceLinesResponse,
-    GetWorkerMetadataRequest, GetWorkerMetadataResponse, JobProgressRequest, JobProgressResponse,
-    JobRequest, JobResponse, JobStatusRequest, JobStatusResponse, ListWorkersRequest,
-    ListWorkersResponse, ModuleSelection, PingRequest, PingResponse, PingWorkerRequest,
-    PingWorkerResponse, QueryRequest, QueryResponse, StopJobRequest, StopJobResponse,
-    TriageRequest, TriageResponse, controller_client::ControllerClient,
+    BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse, CompareTokensRequest,
+    CompareTokensResponse, DeployRequest, DeployResponse, DisconnectAllWorkersRequest,
+    DisconnectAllWorkersResponse, DisconnectWorkerRequest, DisconnectWorkerResponse,
+    GetAvailableWorkersRequest, GetAvailableWorkersResponse, GetOrchestratorStatusRequest,
+    GetOrchestratorStatusResponse, GetRoundRequest, GetRoundResponse, GetTraceLinesRequest,
+    GetTraceLinesResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, JobProgressRequest,
+    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
+    ListWorkersRequest, ListWorkersResponse, ModuleSelection, PingRequest, PingResponse,
+    PingWorkerRequest, PingWorkerResponse, QueryRequest, QueryResponse, StopJobRequest,
+    StopJobResponse, TriageRequest, TriageResponse, controller_client::ControllerClient,
 };
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
@@ -260,6 +260,27 @@ impl ControllerGrpcClient {
             .compare_runs(request)
             .await
             .map_err(|e| anyhow!("CompareRuns failed: {}", e))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Compare token sets between two runs
+    pub async fn compare_tokens(
+        &self,
+        run_id_a: &str,
+        run_id_b: &str,
+    ) -> Result<CompareTokensResponse> {
+        let mut client = self.get_client().await?;
+
+        let request = CompareTokensRequest {
+            run_id_a: run_id_a.to_string(),
+            run_id_b: run_id_b.to_string(),
+        };
+
+        let response = client
+            .compare_tokens(request)
+            .await
+            .map_err(|e| anyhow!("CompareTokens failed: {}", e))?;
 
         Ok(response.into_inner())
     }

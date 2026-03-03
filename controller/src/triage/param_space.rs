@@ -102,6 +102,84 @@ impl ParamDef {
             }
         }
     }
+
+    /// Compute normalized distance between two values in this parameter space.
+    ///
+    /// - IntRange:     |a - b| / (max - min), clamped to [0, 1]
+    /// - FloatRange:   same
+    /// - Categorical:  0.0 if equal, 1.0 if different
+    pub fn distance(&self, a: &str, b: &str) -> ParamDistance {
+        match self {
+            ParamDef::IntRange { min, max, .. } => {
+                let range = (*max - *min) as f64;
+                let va: f64 = a.parse().unwrap_or(*min as f64);
+                let vb: f64 = b.parse().unwrap_or(*min as f64);
+                let norm = if range <= 0.0 {
+                    0.0
+                } else {
+                    ((va - vb).abs() / range).clamp(0.0, 1.0)
+                };
+                ParamDistance {
+                    normalized: norm,
+                    param_type: "int_range".to_string(),
+                    range_info: format!("[{}, {}]", min, max),
+                }
+            }
+            ParamDef::FloatRange { min, max, .. } => {
+                let range = *max - *min;
+                let va: f64 = a.parse().unwrap_or(*min);
+                let vb: f64 = b.parse().unwrap_or(*min);
+                let norm = if range <= 0.0 {
+                    0.0
+                } else {
+                    ((va - vb).abs() / range).clamp(0.0, 1.0)
+                };
+                ParamDistance {
+                    normalized: norm,
+                    param_type: "float_range".to_string(),
+                    range_info: format!("[{}, {}]", min, max),
+                }
+            }
+            ParamDef::Categorical { options, .. } => ParamDistance {
+                normalized: if a == b { 0.0 } else { 1.0 },
+                param_type: "categorical".to_string(),
+                range_info: format!(
+                    "[{}]",
+                    options
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            },
+        }
+    }
+}
+
+/// Distance result for a single parameter.
+#[derive(Debug, Clone)]
+pub struct ParamDistance {
+    pub normalized: f64,
+    pub param_type: String,
+    pub range_info: String,
+}
+
+/// Named parameter distance (includes the actual values).
+#[derive(Debug, Clone)]
+pub struct NamedParamDistance {
+    pub name: String,
+    pub value_a: String,
+    pub value_b: String,
+    pub distance: ParamDistance,
+}
+
+/// Full mutation comparison result.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct MutationComparison {
+    pub mutation_id: String,
+    pub param_distances: Vec<NamedParamDistance>,
+    pub overall_distance: f64,
 }
 
 /// Full parameter space for one mutation.
@@ -123,6 +201,39 @@ impl MutationParamSpace {
             map.insert(p.name().to_string(), json!(val));
         }
         Some(Value::Object(map))
+    }
+
+    /// Compare two parameter sets and return per-param distances + overall mean.
+    ///
+    /// Missing keys in either map fall back to the parameter's default value.
+    pub fn compare_params(
+        &self,
+        a: &std::collections::HashMap<String, String>,
+        b: &std::collections::HashMap<String, String>,
+    ) -> MutationComparison {
+        let mut distances = Vec::new();
+        for p in &self.params {
+            let default = p.default_value();
+            let va = a.get(p.name()).unwrap_or(&default);
+            let vb = b.get(p.name()).unwrap_or(&default);
+            let dist = p.distance(va, vb);
+            distances.push(NamedParamDistance {
+                name: p.name().to_string(),
+                value_a: va.clone(),
+                value_b: vb.clone(),
+                distance: dist,
+            });
+        }
+        let overall = if distances.is_empty() {
+            0.0
+        } else {
+            distances.iter().map(|d| d.distance.normalized).sum::<f64>() / distances.len() as f64
+        };
+        MutationComparison {
+            mutation_id: self.mutation_id.clone(),
+            param_distances: distances,
+            overall_distance: overall,
+        }
     }
 
     /// Perturb existing params. If `current` is None, sample from scratch.
@@ -621,5 +732,121 @@ mod tests {
             params: vec![],
         };
         assert!(space.sample_params(&mut rng).is_none());
+    }
+
+    // ========= Distance tests =========
+
+    #[test]
+    fn test_distance_int_range() {
+        let param = ParamDef::IntRange {
+            name: "count".to_string(),
+            min: 0,
+            max: 100,
+            default: 50,
+        };
+        let d = param.distance("0", "100");
+        assert!((d.normalized - 1.0).abs() < 1e-9);
+
+        let d = param.distance("25", "75");
+        assert!((d.normalized - 0.5).abs() < 1e-9);
+
+        let d = param.distance("50", "50");
+        assert!((d.normalized).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_distance_float_range() {
+        let param = ParamDef::FloatRange {
+            name: "density".to_string(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.5,
+        };
+        let d = param.distance("0.0", "1.0");
+        assert!((d.normalized - 1.0).abs() < 1e-9);
+
+        let d = param.distance("0.25", "0.75");
+        assert!((d.normalized - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_distance_categorical() {
+        let param = ParamDef::Categorical {
+            name: "mode".to_string(),
+            options: vec!["a".to_string(), "b".to_string()],
+            default: "a".to_string(),
+        };
+        let d = param.distance("a", "a");
+        assert!((d.normalized).abs() < 1e-9);
+
+        let d = param.distance("a", "b");
+        assert!((d.normalized - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_distance_zero_range() {
+        let param = ParamDef::IntRange {
+            name: "x".to_string(),
+            min: 2,
+            max: 2,
+            default: 2,
+        };
+        let d = param.distance("2", "2");
+        assert!((d.normalized).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_compare_params_mixed() {
+        use std::collections::HashMap;
+        let space = MutationParamSpace {
+            mutation_id: "test.mix".to_string(),
+            params: vec![
+                ParamDef::IntRange {
+                    name: "count".to_string(),
+                    min: 0,
+                    max: 100,
+                    default: 50,
+                },
+                ParamDef::Categorical {
+                    name: "mode".to_string(),
+                    options: vec!["a".to_string(), "b".to_string()],
+                    default: "a".to_string(),
+                },
+            ],
+        };
+        let a: HashMap<String, String> =
+            [("count".into(), "0".into()), ("mode".into(), "a".into())]
+                .into_iter()
+                .collect();
+        let b: HashMap<String, String> =
+            [("count".into(), "100".into()), ("mode".into(), "b".into())]
+                .into_iter()
+                .collect();
+        let cmp = space.compare_params(&a, &b);
+        assert_eq!(cmp.param_distances.len(), 2);
+        // Both fully different → overall = 1.0
+        assert!((cmp.overall_distance - 1.0).abs() < 1e-9);
+
+        // Same params → overall = 0.0
+        let cmp2 = space.compare_params(&a, &a);
+        assert!((cmp2.overall_distance).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_compare_params_missing_keys_use_defaults() {
+        use std::collections::HashMap;
+        let space = MutationParamSpace {
+            mutation_id: "test.defaults".to_string(),
+            params: vec![ParamDef::IntRange {
+                name: "count".to_string(),
+                min: 0,
+                max: 100,
+                default: 50,
+            }],
+        };
+        let a = HashMap::new(); // missing "count" → uses default 50
+        let b: HashMap<String, String> = [("count".into(), "50".into())].into_iter().collect();
+        let cmp = space.compare_params(&a, &b);
+        assert!((cmp.overall_distance).abs() < 1e-9);
     }
 }
