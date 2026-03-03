@@ -11,6 +11,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 // Use modules from crate root
+use crate::msvc_compat::{self, MsvcCompat};
 use crate::mutator;
 use crate::template::assembler::{Assembler, ModuleSelection};
 use crate::template::payload::{EncodingType, PayloadEncoder};
@@ -30,6 +31,11 @@ pub struct BuilderConfig {
     /// Path to modular template directory
     /// Contains loader_template.c and modules/ subdirectory
     pub modular_template_dir: PathBuf,
+    /// MSVC-compatible build mode: clang-cl + link.exe instead of clang + lld-link.
+    /// When None (default), uses the current clang + lld-link pipeline unchanged.
+    /// When Some, uses clang-cl for compilation and link.exe for linking,
+    /// producing PE binaries with genuine MSVC metadata (Rich header, linker version).
+    pub msvc_compat: Option<MsvcCompat>,
 }
 
 impl Default for BuilderConfig {
@@ -40,6 +46,7 @@ impl Default for BuilderConfig {
             runtime_src: PathBuf::from("build/runtime/instrumentation_runtime.c"),
             minimal_runtime_src: PathBuf::from("build/runtime/minimal_runtime.c"),
             modular_template_dir: PathBuf::from("build/templates"),
+            msvc_compat: None,
         }
     }
 }
@@ -273,22 +280,43 @@ impl ArtifactBuilder {
             anyhow::bail!("SC checkpoint runtime source not found at {:?}", src);
         }
 
-        debug!("Compiling sc_checkpoint_runtime.o (with generated table header)...");
+        let use_clang_cl = self.config.msvc_compat.is_some();
+        let compiler = "clang";
+
+        debug!(
+            "Compiling sc_checkpoint_runtime.o (with generated table header, compiler={})...",
+            compiler
+        );
 
         let mut cmd = tokio::process::Command::new("clang");
-        cmd.arg("-c")
-            .arg(&src)
-            .arg("-o")
-            .arg(&obj)
-            .arg("-target")
-            .arg("x86_64-pc-windows-msvc")
-            .arg("-fms-compatibility")
-            .arg("-fms-extensions")
-            .arg("-D_CRT_SECURE_NO_WARNINGS")
-            .arg("-DENABLE_SC_CHECKPOINTS")
-            .arg("-O2")
-            .arg(format!("--sysroot={}", self.config.xwin_dir.display()))
-            .arg(format!("-I{}/crt/include", self.config.xwin_dir.display()))
+
+        if use_clang_cl {
+            cmd.arg(msvc_compat::DRIVER_MODE_CL)
+                .arg("/c")
+                .arg(&src)
+                .arg(format!("/Fo{}", obj.display()))
+                .arg("--target=x86_64-pc-windows-msvc")
+                .arg("/D_CRT_SECURE_NO_WARNINGS")
+                .arg("/DENABLE_SC_CHECKPOINTS")
+                .arg("/O2")
+                .arg(format!("--sysroot={}", self.config.xwin_dir.display()));
+        } else {
+            cmd.arg("-c")
+                .arg(&src)
+                .arg("-o")
+                .arg(&obj)
+                .arg("-target")
+                .arg("x86_64-pc-windows-msvc")
+                .arg("-fms-compatibility")
+                .arg("-fms-extensions")
+                .arg("-D_CRT_SECURE_NO_WARNINGS")
+                .arg("-DENABLE_SC_CHECKPOINTS")
+                .arg("-O2")
+                .arg(format!("--sysroot={}", self.config.xwin_dir.display()));
+        }
+
+        // Include paths (same for both modes)
+        cmd.arg(format!("-I{}/crt/include", self.config.xwin_dir.display()))
             .arg(format!(
                 "-I{}/sdk/include/ucrt",
                 self.config.xwin_dir.display()
@@ -304,16 +332,19 @@ impl ArtifactBuilder {
             // Include output_dir for sc_checkpoints_table.h
             .arg(format!("-I{}", self.config.output_dir.display()));
 
-        let output = cmd
-            .output()
-            .await
-            .context("Failed to run clang for sc_checkpoint_runtime compilation")?;
+        let output = cmd.output().await.with_context(|| {
+            format!(
+                "Failed to run {} for sc_checkpoint_runtime compilation",
+                compiler
+            )
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
             anyhow::bail!(
-                "SC checkpoint runtime compilation failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
+                "SC checkpoint runtime compilation failed ({}):\nSTDOUT:\n{}\nSTDERR:\n{}",
+                compiler,
                 stdout,
                 stderr
             );
@@ -323,7 +354,11 @@ impl ArtifactBuilder {
         Ok(obj)
     }
 
-    /// Invoke Clang with xwin SDK to cross-compile C to Windows PE with optional runtime linking
+    /// Invoke Clang with xwin SDK to cross-compile C to Windows PE with optional runtime linking.
+    ///
+    /// When `msvc_compat` is enabled, this splits into two steps:
+    /// 1. Compile source → temp .obj via clang-cl
+    /// 2. Link .obj → .exe via MSVC link.exe (with vcvarsall environment)
     async fn invoke_clang_internal(
         &self,
         _template_name: &str,
@@ -346,46 +381,7 @@ impl ArtifactBuilder {
                 .display()
         );
 
-        // Base flags
-        let mut args = vec!["-target", "x86_64-pc-windows-msvc"];
-        args.extend(xwin.include_args());
-        args.extend(xwin.lib_args());
-        args.extend_from_slice(&[
-            // TODO could use MSVC linker (link.exe , WINE?), not lld-link
-            //"-fuse-ld=link",
-            "-fuse-ld=lld",
-            // Codegen
-            "-O2",
-            // --- link.exe flags for "MSVC-ish" release ---
-            "-Wl,/subsystem:console",
-            // no debug directory / no PDB
-            "-Wl,/DEBUG:NONE",
-            // reproducible-ish + no incremental
-            "-Wl,/Brepro",
-            "-Wl,/INCREMENTAL:NO",
-            // Note: /OPT:REF and /OPT:ICF removed — they can eliminate
-            // static-inline carrier code, causing payload non-execution.
-            // Keep consistent runtime model: /MT == libcmt (static CRT)
-            // (If you prefer /MD, replace libcmt with msvcrt and ensure matching libs everywhere.)
-            "-Wl,-defaultlib:libcmt",
-            // System libs needed by various modules
-            "-Wl,-defaultlib:kernel32",
-            "-Wl,-defaultlib:advapi32",
-        ]);
-
-        // Always add instrumentation header path (needed for instrumentation.h)
-        args.push("-I");
-        args.push(runtime_include_str.as_str());
-
-        // Define ENABLE_INSTRUMENTATION macro only when runtime will be linked
-        if link_runtime {
-            args.push("-DENABLE_INSTRUMENTATION");
-        }
-
         // Compile minimal_runtime.o only when instrumentation is enabled.
-        // It provides __runtime_exit() (direct syscall termination + telemetry flush).
-        // For trace=off (baseline) builds, we skip it so the binary doesn't contain
-        // direct syscall patterns that taint ground-truth EDR measurements.
         let minimal_runtime_str = if link_runtime {
             let obj = self.ensure_minimal_runtime().await?;
             Some(obj.to_string_lossy().into_owned())
@@ -396,52 +392,152 @@ impl ArtifactBuilder {
         // If linking with instrumentation, compile instrumentation_runtime too
         let runtime_obj_str = if link_runtime {
             let runtime_obj = self.config.output_dir.join("instrumentation_runtime.o");
-
-            // Compile runtime if not already compiled
             if !runtime_obj.exists() {
                 debug!("Compiling instrumentation runtime for direct linking...");
                 self.compile_runtime(&self.config.runtime_src, &runtime_obj)
                     .await
                     .context("Failed to compile instrumentation runtime")?;
             }
-
             Some(runtime_obj.to_string_lossy().into_owned())
         } else {
             None
         };
 
-        // Add output and source
-        args.push("-o");
-        args.push(output_str);
-        args.push(source_str);
+        if let Some(ref msvc) = self.config.msvc_compat {
+            // ===== MSVC-compat mode: compile with clang-cl, link with link.exe =====
 
-        // Add minimal_runtime.o when instrumentation is enabled (telemetry flush + syscall exit)
-        if let Some(ref minimal_str) = minimal_runtime_str {
-            args.push(minimal_str.as_str());
-        }
+            // Step 1: Compile source → temp .obj
+            let temp_obj = self.config.output_dir.join(format!(
+                "temp_{}.obj",
+                source.file_stem().unwrap_or_default().to_string_lossy()
+            ));
 
-        // Add instrumentation_runtime.o if instrumentation is enabled
-        if let Some(ref runtime_str) = runtime_obj_str {
-            args.push(runtime_str.as_str());
-        }
+            let cl_includes = xwin.clang_cl_include_args();
+            let mut compile_args = vec![
+                msvc_compat::DRIVER_MODE_CL,
+                "--target=x86_64-pc-windows-msvc",
+            ];
+            for inc in &cl_includes {
+                compile_args.push(inc.as_str());
+            }
+            compile_args.extend_from_slice(&[
+                "/c",
+                "/O2",
+                "/MT",
+                "/Gy",
+                "/Gw",
+                "/Zc:inline",
+                "/DNDEBUG",
+                "/D_CRT_SECURE_NO_WARNINGS",
+                "/W3",
+                "-I",
+                runtime_include_str.as_str(),
+            ]);
+            if link_runtime {
+                compile_args.push("/DENABLE_INSTRUMENTATION");
+            }
+            let temp_obj_str = temp_obj.to_string_lossy().into_owned();
+            let fo_arg = format!("/Fo{}", temp_obj_str);
+            compile_args.push(&fo_arg);
+            compile_args.push(source_str);
 
-        debug!("Invoking: clang {}", args.join(" "));
-
-        // Execute clang
-        let output_result = tokio::process::Command::new("clang")
-            .args(&args)
-            .output()
-            .await
-            .context("Failed to execute clang")?;
-
-        if !output_result.status.success() {
-            let stderr = String::from_utf8_lossy(&output_result.stderr);
-            let stdout = String::from_utf8_lossy(&output_result.stdout);
-            anyhow::bail!(
-                "Clang build failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
-                stdout,
-                stderr
+            debug!(
+                "Invoking: clang --driver-mode=cl {}",
+                compile_args.join(" ")
             );
+
+            let compile_result = tokio::process::Command::new("clang")
+                .args(&compile_args)
+                .output()
+                .await
+                .context("Failed to execute clang --driver-mode=cl")?;
+
+            if !compile_result.status.success() {
+                let stderr = String::from_utf8_lossy(&compile_result.stderr);
+                let stdout = String::from_utf8_lossy(&compile_result.stdout);
+                anyhow::bail!(
+                    "clang-cl compile failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
+                    stdout,
+                    stderr
+                );
+            }
+
+            // Step 2: Link via MSVC link.exe
+            let mut objects = vec![temp_obj.clone()];
+            if let Some(ref minimal_str) = minimal_runtime_str {
+                objects.push(PathBuf::from(minimal_str));
+            }
+            if let Some(ref runtime_str) = runtime_obj_str {
+                objects.push(PathBuf::from(runtime_str));
+            }
+
+            let libs: Vec<&str> = vec!["kernel32.lib", "advapi32.lib", "libcmt.lib", "libucrt.lib"];
+
+            msvc_compat::invoke_msvc_link(
+                &msvc.vcvarsall_path,
+                &objects,
+                output,
+                &libs,
+                &[], // no extra flags for baseline single-step
+            )
+            .await?;
+
+            // Clean up temp object
+            let _ = tokio::fs::remove_file(&temp_obj).await;
+        } else {
+            // ===== Standard mode: single-step clang + lld-link =====
+            let mut args = vec!["-target", "x86_64-pc-windows-msvc"];
+            args.extend(xwin.include_args());
+            args.extend(xwin.lib_args());
+            args.extend_from_slice(&[
+                "-fuse-ld=lld",
+                "-O2",
+                "-Wl,/subsystem:console",
+                "-Wl,/DEBUG:NONE",
+                "-Wl,/Brepro",
+                "-Wl,/INCREMENTAL:NO",
+                // Note: /OPT:REF and /OPT:ICF removed — they can eliminate
+                // static-inline carrier code, causing payload non-execution.
+                "-Wl,-defaultlib:libcmt",
+                "-Wl,-defaultlib:kernel32",
+                "-Wl,-defaultlib:advapi32",
+            ]);
+
+            args.push("-I");
+            args.push(runtime_include_str.as_str());
+
+            if link_runtime {
+                args.push("-DENABLE_INSTRUMENTATION");
+            }
+
+            args.push("-o");
+            args.push(output_str);
+            args.push(source_str);
+
+            if let Some(ref minimal_str) = minimal_runtime_str {
+                args.push(minimal_str.as_str());
+            }
+            if let Some(ref runtime_str) = runtime_obj_str {
+                args.push(runtime_str.as_str());
+            }
+
+            debug!("Invoking: clang {}", args.join(" "));
+
+            let output_result = tokio::process::Command::new("clang")
+                .args(&args)
+                .output()
+                .await
+                .context("Failed to execute clang")?;
+
+            if !output_result.status.success() {
+                let stderr = String::from_utf8_lossy(&output_result.stderr);
+                let stdout = String::from_utf8_lossy(&output_result.stdout);
+                anyhow::bail!(
+                    "Clang build failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
+                    stdout,
+                    stderr
+                );
+            }
         }
 
         // Verify output file was created
@@ -507,7 +603,11 @@ impl ArtifactBuilder {
             .to_str()
             .context("Runtime include path is not valid UTF-8")?;
 
-        let mut args = vec!["-target", "x86_64-pc-windows-msvc"];
+        // IR emission always uses standard clang driver (not --driver-mode=cl).
+        // The target triple x86_64-pc-windows-msvc already defines _MSC_VER and
+        // enables MSVC ABI — driver mode only affects flag syntax and is
+        // incompatible with -S -emit-llvm (driver-mode=cl's /c forces -emit-obj).
+        let mut args = vec!["--target=x86_64-pc-windows-msvc"];
         args.extend(xwin.include_args());
         args.extend_from_slice(&[
             "-I",
@@ -520,11 +620,12 @@ impl ArtifactBuilder {
         args.extend_from_slice(&[
             "-S",         // Emit assembly (LLVM IR in this case)
             "-emit-llvm", // Output LLVM IR instead of native assembly
-            "-O2",        // TODO check if we loose some mutation here????
+            "-O2",
             "-o",
-            ir_path.to_str().unwrap(),
-            source_path.to_str().unwrap(),
         ]);
+
+        args.push(ir_path.to_str().unwrap());
+        args.push(source_path.to_str().unwrap());
 
         debug!("Compiling source -> IR: clang {}", args.join(" "));
 
@@ -536,7 +637,7 @@ impl ArtifactBuilder {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Clang IR generation failed:\n{}", stderr);
+            anyhow::bail!("clang IR generation failed:\n{}", stderr);
         }
 
         Ok(())
@@ -551,7 +652,6 @@ impl ArtifactBuilder {
 
         if output.status.success() {
             let version_output = String::from_utf8_lossy(&output.stdout);
-            // Extract first line (e.g., "clang version 17.0.6")
             Ok(version_output
                 .lines()
                 .next()
@@ -564,19 +664,29 @@ impl ArtifactBuilder {
 
     /// Get compiler flags used for this template (for metadata)
     fn get_compiler_flags(&self, _template_name: &str) -> Vec<String> {
-        vec![
-            "-target x86_64-pc-windows-msvc".to_string(),
-            "-O2".to_string(),
-            "-fuse-ld=lld".to_string(),
-        ]
+        if self.config.msvc_compat.is_some() {
+            vec![
+                "--target=x86_64-pc-windows-msvc".to_string(),
+                "/O2".to_string(),
+                "link.exe".to_string(),
+            ]
+        } else {
+            vec![
+                "-target x86_64-pc-windows-msvc".to_string(),
+                "-O2".to_string(),
+                "-fuse-ld=lld".to_string(),
+            ]
+        }
     }
 
-    /// Compile LLVM IR to object file
+    /// Compile LLVM IR to object file.
+    ///
+    /// Always uses standard clang driver (not driver-mode=cl) — IR→object
+    /// compilation is target-determined, not driver-mode-dependent.
     async fn compile_ir_to_object(&self, ir_path: &Path, obj_path: &Path) -> Result<()> {
         let output = tokio::process::Command::new("clang")
             .args([
-                "-target",
-                "x86_64-pc-windows-msvc",
+                "--target=x86_64-pc-windows-msvc",
                 "-c", // Compile only, don't link
                 "-o",
                 obj_path.to_str().context("Invalid obj path")?,
@@ -599,52 +709,62 @@ impl ArtifactBuilder {
     /// Mirrors `link_instrumented_exe` but without runtime object files.
     /// Uses lld-link directly (two-step compile+link) to match the working
     /// instrumented path and avoid clang-driver issues in `compile_ir_to_exe`.
+    ///
+    /// When `msvc_compat` is enabled, uses MSVC `link.exe` instead of `lld-link`.
     async fn link_baseline_exe(&self, obj_path: &Path, output_exe: &Path) -> Result<()> {
-        let lld_link_path = if cfg!(target_os = "linux") {
-            "/usr/lib/llvm-17/bin/lld-link"
-        } else {
-            "lld-link"
-        };
-
         // ALWAYS link minimal_runtime.o (provides __runtime_exit)
         let minimal_runtime_obj = self.ensure_minimal_runtime().await?;
 
-        let mut cmd = tokio::process::Command::new(lld_link_path);
-        cmd.arg(obj_path)
-            .arg(&minimal_runtime_obj)
-            .arg("/out:".to_owned() + output_exe.to_str().unwrap())
-            .arg("/subsystem:console")
-            .arg("/machine:x64")
-            .arg("/DEBUG:NONE")
-            .arg("/Brepro")
-            .arg("/INCREMENTAL:NO");
+        if let Some(ref msvc) = self.config.msvc_compat {
+            // ===== MSVC link.exe mode =====
+            let objects = vec![obj_path.to_path_buf(), minimal_runtime_obj];
+            let libs = vec!["kernel32.lib", "advapi32.lib", "libcmt.lib", "libucrt.lib"];
 
-        // Add xwin library paths (CRT and Windows SDK)
-        for arg in self.xwin.lld_lib_args() {
-            cmd.arg(arg);
+            msvc_compat::invoke_msvc_link(&msvc.vcvarsall_path, &objects, output_exe, &libs, &[])
+                .await
+        } else {
+            // ===== Standard lld-link mode =====
+            let lld_link_path = if cfg!(target_os = "linux") {
+                "/usr/lib/llvm-17/bin/lld-link"
+            } else {
+                "lld-link"
+            };
+
+            let mut cmd = tokio::process::Command::new(lld_link_path);
+            cmd.arg(obj_path)
+                .arg(&minimal_runtime_obj)
+                .arg("/out:".to_owned() + output_exe.to_str().unwrap())
+                .arg("/subsystem:console")
+                .arg("/machine:x64")
+                .arg("/DEBUG:NONE")
+                .arg("/Brepro")
+                .arg("/INCREMENTAL:NO");
+
+            for arg in self.xwin.lld_lib_args() {
+                cmd.arg(arg);
+            }
+
+            cmd.arg("kernel32.lib")
+                .arg("advapi32.lib")
+                .arg("libcmt.lib")
+                .arg("libucrt.lib");
+
+            let full_cmd = format!("{:?}", cmd);
+            debug!("Baseline link command: {}", full_cmd);
+
+            let output = cmd.output().await.context("Failed to run lld-link")?;
+
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success() {
+                anyhow::bail!("Baseline linking failed:\n{}", stderr);
+            }
+
+            if !stderr.is_empty() {
+                debug!("Baseline linker stderr: {}", stderr);
+            }
+
+            Ok(())
         }
-
-        // Libraries — match invoke_clang_internal + link_instrumented_exe
-        cmd.arg("kernel32.lib")
-            .arg("advapi32.lib")
-            .arg("libcmt.lib")
-            .arg("libucrt.lib");
-
-        let full_cmd = format!("{:?}", cmd);
-        debug!("Baseline link command: {}", full_cmd);
-
-        let output = cmd.output().await.context("Failed to run lld-link")?;
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if !output.status.success() {
-            anyhow::bail!("Baseline linking failed:\n{}", stderr);
-        }
-
-        if !stderr.is_empty() {
-            debug!("Baseline linker stderr: {}", stderr);
-        }
-
-        Ok(())
     }
 
     /// Apply instrumentation to an already-built artifact
@@ -940,21 +1060,38 @@ impl ArtifactBuilder {
 
     /// Compile instrumentation runtime C file to object file
     async fn compile_runtime(&self, runtime_src: &Path, runtime_obj: &Path) -> Result<()> {
-        // Build the command
+        let use_clang_cl = self.config.msvc_compat.is_some();
+        let compiler = "clang";
+
         let mut cmd = tokio::process::Command::new("clang");
-        cmd.arg("-c") // Compile only (don't link)
-            .arg(runtime_src)
-            .arg("-o")
-            .arg(runtime_obj)
-            .arg("-target")
-            .arg("x86_64-pc-windows-msvc")
-            .arg("-fms-compatibility")
-            .arg("-fms-extensions")
-            .arg("-D_CRT_SECURE_NO_WARNINGS")
-            .arg("-O2")
-            .arg(format!("--sysroot={}", self.config.xwin_dir.display()))
-            // Add explicit include paths for xwin SDK
-            .arg(format!("-I{}/crt/include", self.config.xwin_dir.display()))
+
+        if use_clang_cl {
+            // clang --driver-mode=cl: MSVC-style flags (-fms-compatibility enabled by default)
+            cmd.arg(msvc_compat::DRIVER_MODE_CL)
+                .arg("/c")
+                .arg(runtime_src)
+                .arg(format!("/Fo{}", runtime_obj.display()))
+                .arg("--target=x86_64-pc-windows-msvc")
+                .arg("/D_CRT_SECURE_NO_WARNINGS")
+                .arg("/O2")
+                .arg(format!("--sysroot={}", self.config.xwin_dir.display()));
+        } else {
+            // Standard clang mode
+            cmd.arg("-c")
+                .arg(runtime_src)
+                .arg("-o")
+                .arg(runtime_obj)
+                .arg("-target")
+                .arg("x86_64-pc-windows-msvc")
+                .arg("-fms-compatibility")
+                .arg("-fms-extensions")
+                .arg("-D_CRT_SECURE_NO_WARNINGS")
+                .arg("-O2")
+                .arg(format!("--sysroot={}", self.config.xwin_dir.display()));
+        }
+
+        // Add explicit include paths for xwin SDK (same for both modes)
+        cmd.arg(format!("-I{}/crt/include", self.config.xwin_dir.display()))
             .arg(format!(
                 "-I{}/sdk/include/ucrt",
                 self.config.xwin_dir.display()
@@ -968,9 +1105,9 @@ impl ArtifactBuilder {
                 self.config.xwin_dir.display()
             ));
 
-        // Log the command for debugging
         debug!(
-            "Compiling runtime: clang -c {} -o {} -target x86_64-pc-windows-msvc --sysroot={} -I.../crt/include -I.../sdk/include/{{ucrt,um,shared}}",
+            "Compiling runtime: {} -c {} -o {} --target=x86_64-pc-windows-msvc --sysroot={} -I.../crt/include -I.../sdk/include/{{ucrt,um,shared}}",
+            compiler,
             runtime_src.display(),
             runtime_obj.display(),
             self.config.xwin_dir.display()
@@ -979,13 +1116,14 @@ impl ArtifactBuilder {
         let output = cmd
             .output()
             .await
-            .context("Failed to run clang for runtime compilation")?;
+            .with_context(|| format!("Failed to run {} for runtime compilation", compiler))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
             anyhow::bail!(
-                "Runtime compilation failed:\nSTDOUT:\n{}\nSTDERR:\n{}\nRuntime source: {:?}\nXwin dir: {:?}",
+                "Runtime compilation failed ({}):\nSTDOUT:\n{}\nSTDERR:\n{}\nRuntime source: {:?}\nXwin dir: {:?}",
+                compiler,
                 stdout,
                 stderr,
                 runtime_src,
@@ -1000,6 +1138,8 @@ impl ArtifactBuilder {
     /// Link instrumented object file with runtime to create final executable.
     ///
     /// `extra_objs`: additional object files to link (e.g. sc_checkpoint_runtime.o).
+    ///
+    /// When `msvc_compat` is enabled, uses MSVC `link.exe` instead of `lld-link`.
     async fn link_instrumented_exe(
         &self,
         obj_path: &Path,
@@ -1008,69 +1148,98 @@ impl ArtifactBuilder {
         _template_name: &str,
         extra_objs: &[&Path],
     ) -> Result<()> {
-        // Use full path to lld-link (WSL has it at /usr/lib/llvm-17/bin/lld-link)
-        let lld_link_path = if cfg!(target_os = "linux") {
-            "/usr/lib/llvm-17/bin/lld-link"
-        } else {
-            "lld-link" // Fallback to PATH lookup on other platforms
-        };
-
         // ALWAYS compile minimal_runtime.o (provides __runtime_exit)
         let minimal_runtime_obj = self.ensure_minimal_runtime().await?;
 
-        let mut cmd = tokio::process::Command::new(lld_link_path);
-        cmd.arg(obj_path)
-            .arg(runtime_obj) // Link with instrumentation runtime
-            .arg(&minimal_runtime_obj) // ALWAYS link minimal runtime
-            .arg("/out:".to_owned() + output_exe.to_str().unwrap())
-            .arg("/subsystem:console")
-            .arg("/machine:x64")
-            // Suppress Clang sanitizer runtime dependencies embedded by
-            // -fsanitize-coverage=trace-pc.  Our instrumentation_runtime.o
-            // provides __sanitizer_cov_trace_pc() — no need for clang_rt.
-            .arg("/NODEFAULTLIB:clang_rt.ubsan_standalone-x86_64.lib");
-        // Link extra object files (e.g. sc_checkpoint_runtime.o)
-        for extra in extra_objs {
-            cmd.arg(extra);
-        }
-        // Add xwin library paths (CRT and Windows SDK)
-        for arg in self.xwin.lld_lib_args() {
-            cmd.arg(arg);
-        }
+        if let Some(ref msvc) = self.config.msvc_compat {
+            // ===== MSVC link.exe mode =====
+            let mut objects = vec![
+                obj_path.to_path_buf(),
+                runtime_obj.to_path_buf(),
+                minimal_runtime_obj,
+            ];
+            for extra in extra_objs {
+                objects.push(extra.to_path_buf());
+            }
 
-        // Add standard Windows libraries
-        cmd.arg("kernel32.lib")
-            .arg("user32.lib")
-            .arg("advapi32.lib")
-            .arg("ws2_32.lib")
-            .arg("libcmt.lib") // Static C runtime (must match clang builds that use -Wl,-defaultlib:libcmt)
-            .arg("libucrt.lib"); // Universal CRT
+            let libs = vec![
+                "kernel32.lib",
+                "user32.lib",
+                "advapi32.lib",
+                "ws2_32.lib",
+                "libcmt.lib",
+                "libucrt.lib",
+            ];
 
-        // Log the FULL command for debugging (including all library arguments)
-        let full_cmd = format!("{:?}", cmd);
-        debug!("Full linking command: {}", full_cmd);
+            let extra_flags = vec![
+                // Suppress Clang sanitizer runtime dependencies embedded by
+                // -fsanitize-coverage=trace-pc.
+                "/NODEFAULTLIB:clang_rt.ubsan_standalone-x86_64.lib",
+            ];
 
-        let output = cmd.output().await.context("Failed to run lld-link")?;
+            msvc_compat::invoke_msvc_link(
+                &msvc.vcvarsall_path,
+                &objects,
+                output_exe,
+                &libs,
+                &extra_flags,
+            )
+            .await?;
+        } else {
+            // ===== Standard lld-link mode =====
+            let lld_link_path = if cfg!(target_os = "linux") {
+                "/usr/lib/llvm-17/bin/lld-link"
+            } else {
+                "lld-link"
+            };
 
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
+            let mut cmd = tokio::process::Command::new(lld_link_path);
+            cmd.arg(obj_path)
+                .arg(runtime_obj)
+                .arg(&minimal_runtime_obj)
+                .arg("/out:".to_owned() + output_exe.to_str().unwrap())
+                .arg("/subsystem:console")
+                .arg("/machine:x64")
+                .arg("/NODEFAULTLIB:clang_rt.ubsan_standalone-x86_64.lib");
 
-        // Always log linker output (even if empty) to diagnose issues
-        debug!(
-            "Linker stderr: [{}]",
-            if stderr.is_empty() { "empty" } else { &stderr }
-        );
-        debug!(
-            "Linker stdout: [{}]",
-            if stdout.is_empty() { "empty" } else { &stdout }
-        );
+            for extra in extra_objs {
+                cmd.arg(extra);
+            }
+            for arg in self.xwin.lld_lib_args() {
+                cmd.arg(arg);
+            }
 
-        if !output.status.success() {
-            anyhow::bail!(
-                "Linking instrumented executable failed:\nSTDERR:\n{}\nSTDOUT:\n{}",
-                stderr,
-                stdout
+            cmd.arg("kernel32.lib")
+                .arg("user32.lib")
+                .arg("advapi32.lib")
+                .arg("ws2_32.lib")
+                .arg("libcmt.lib")
+                .arg("libucrt.lib");
+
+            let full_cmd = format!("{:?}", cmd);
+            debug!("Full linking command: {}", full_cmd);
+
+            let output = cmd.output().await.context("Failed to run lld-link")?;
+
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            debug!(
+                "Linker stderr: [{}]",
+                if stderr.is_empty() { "empty" } else { &stderr }
             );
+            debug!(
+                "Linker stdout: [{}]",
+                if stdout.is_empty() { "empty" } else { &stdout }
+            );
+
+            if !output.status.success() {
+                anyhow::bail!(
+                    "Linking instrumented executable failed:\nSTDERR:\n{}\nSTDOUT:\n{}",
+                    stderr,
+                    stdout
+                );
+            }
         }
 
         // Verify output file was created and has reasonable size
@@ -1549,7 +1718,7 @@ impl XwinPaths {
         }
     }
 
-    /// Return the include `-isystem` args in order
+    /// Return the include `-isystem` args in order (for standard clang driver)
     pub fn include_args(&self) -> Vec<&str> {
         vec![
             "-isystem",
@@ -1562,6 +1731,19 @@ impl XwinPaths {
             &self.sdk_um_include,
             "-isystem",
             &self.sdk_winrt_include,
+        ]
+    }
+
+    /// Return include args for clang-cl driver mode (`/imsvc` instead of `-isystem`).
+    ///
+    /// clang-cl ignores `-isystem`; the MSVC equivalent is `/imsvc`.
+    pub fn clang_cl_include_args(&self) -> Vec<String> {
+        vec![
+            format!("/imsvc{}", self.crt_include),
+            format!("/imsvc{}", self.sdk_ucrt_include),
+            format!("/imsvc{}", self.sdk_shared_include),
+            format!("/imsvc{}", self.sdk_um_include),
+            format!("/imsvc{}", self.sdk_winrt_include),
         ]
     }
 

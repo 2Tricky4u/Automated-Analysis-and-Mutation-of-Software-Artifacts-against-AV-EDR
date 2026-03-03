@@ -126,6 +126,8 @@ pub async fn schedule_job(
         job.sc_checkpoint_count = Some(req.sc_checkpoint_count);
     }
     job.cache_payload = req.cache_payload;
+    job.msvc_compat = req.msvc_compat;
+    job.msvc_vcvarsall = req.msvc_vcvarsall.clone();
 
     // Index to ES before submission
     if let Err(e) = service.storage.index_job(&job).await {

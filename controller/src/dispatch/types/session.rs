@@ -45,6 +45,14 @@ pub struct JobSession {
     /// Set to false for debugging to force fresh encoding every round.
     pub cache_payload: bool,
 
+    /// MSVC-compatible build mode: clang-cl + link.exe.
+    /// When true, produces PE binaries with genuine MSVC metadata (Rich header, linker version).
+    pub msvc_compat: bool,
+
+    /// Optional WSL path to vcvarsall.bat override.
+    /// When empty, uses default VS 2022 Build Tools path.
+    pub msvc_vcvarsall: String,
+
     // Completed round summaries
     pub rounds: BTreeMap<u32, RoundSummary>,
     pub last_round: Option<RoundSummary>,
@@ -65,6 +73,8 @@ impl JobSession {
             search_space: SearchSpace::default(),
             sc_checkpoint_count: None,
             cache_payload: true,
+            msvc_compat: false,
+            msvc_vcvarsall: String::new(),
             current_round: 0,
             completed_rounds: 0,
             max_rounds,

@@ -25,7 +25,7 @@ use std::str::FromStr;
 
 use build::{
     ArtifactBuilder, BuildInput, BuilderConfig, BuiltArtifact, EncodingType, ModuleSelection,
-    PreparedPayload, prepare_payload,
+    MsvcCompat, PreparedPayload, prepare_payload,
 };
 
 use super::channels::{CoverageCorrection, JobRunResult, JobWorkerEvent, RoundCompletedData};
@@ -596,8 +596,23 @@ impl JobWorker {
         trace_mode: &str,
         round_spec: &RoundSpec,
     ) -> anyhow::Result<BuiltArtifact> {
-        // Create builder with default system paths
-        let builder = ArtifactBuilder::new(BuilderConfig::default())?;
+        // Create builder config, optionally enabling MSVC-compat mode
+        let msvc_compat = if self.job.msvc_compat {
+            Some(MsvcCompat {
+                vcvarsall_path: if self.job.msvc_vcvarsall.is_empty() {
+                    MsvcCompat::default_vcvarsall()
+                } else {
+                    std::path::PathBuf::from(&self.job.msvc_vcvarsall)
+                },
+            })
+        } else {
+            None
+        };
+        let config = BuilderConfig {
+            msvc_compat,
+            ..BuilderConfig::default()
+        };
+        let builder = ArtifactBuilder::new(config)?;
 
         // Read payload from file (cached across rounds)
         let payload = match &self.cached_payload {

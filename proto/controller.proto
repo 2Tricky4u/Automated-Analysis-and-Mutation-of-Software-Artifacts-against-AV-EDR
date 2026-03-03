@@ -136,6 +136,8 @@ message JobRequest {
   uint32 sc_checkpoint_count = 18;             // INT3 shellcode checkpoints (0 = disabled, default)
   string selector_type = 19;                   // "coverage" (default) or "fuzzer"
   bool cache_payload = 20;                       // Cache encoded payload across rounds (default: true via handler)
+  bool msvc_compat = 21;                         // Use clang-cl + link.exe for MSVC-native PE metadata (default: false = clang + lld-link)
+  string msvc_vcvarsall = 22;                    // Optional: WSL path to vcvarsall.bat (default: VS 2022 Build Tools)
 }
 
 message JobResponse {
