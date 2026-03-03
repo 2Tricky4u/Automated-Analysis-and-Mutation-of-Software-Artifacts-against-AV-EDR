@@ -296,7 +296,7 @@ pub fn default_registry() -> Vec<MutationParamSpace> {
             params: vec![ParamDef::IntRange {
                 name: "min_value".to_string(),
                 min: 2,
-                max: 256,
+                max: 2,
                 default: 2,
             }],
         },

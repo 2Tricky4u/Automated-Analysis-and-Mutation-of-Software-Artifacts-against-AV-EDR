@@ -349,6 +349,39 @@ pub async fn query_token_sets(es: &Elasticsearch, job_id: &str) -> Vec<Value> {
 }
 
 // ---------------------------------------------------------------------------
+// Checkpoint event queries (triage)
+// ---------------------------------------------------------------------------
+
+/// Query all checkpoint events for a run from `telemetry-*`, sorted by timestamp.
+///
+/// Checkpoint events are emitted by instrumented artifacts via `ARTIFACT_CHECKPOINT()`.
+/// Each is stored as a separate document with `event_type: "checkpoint"` and
+/// `payload_checkpoint_name` identifying the checkpoint reached.
+///
+/// Used by `triage::extractor` to build `checkpoint:*` tokens.
+pub async fn query_checkpoint_events(es: &Elasticsearch, run_id: &str) -> Vec<Value> {
+    let response = es
+        .search(SearchParts::Index(&["telemetry-*"]))
+        .body(json!({
+            "query": {
+                "bool": {
+                    "filter": [
+                        { "match_phrase": { "run_id": run_id } },
+                        { "match_phrase": { "event_type": "checkpoint" } }
+                    ]
+                }
+            },
+            "sort": [{ "payload_ts_us": "asc" }],
+            "size": 500,
+            "_source": ["payload_checkpoint_name", "payload_ts_us", "event_type"]
+        }))
+        .send()
+        .await;
+
+    extract_sources(response).await
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 

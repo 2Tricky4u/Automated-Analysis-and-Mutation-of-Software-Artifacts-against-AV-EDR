@@ -195,7 +195,8 @@ The token-round matrix: what tokens were observed in each round and whether it w
 | Prefix | Source | Example |
 |--------|--------|---------|
 | `module:` | Module selection (7 categories) | `module:carrier=peb_walk` |
-| `mutation:` | Applied mutations | `mutation:ast.fill_pattern` |
+| `mutation:` | Applied mutations (with sorted params) | `mutation:ast.decon_rounds:count=50:method=fixed` |
+| `checkpoint:` | Instrumented run checkpoint events | `checkpoint:antiemulation_passed` |
 | `api:` | Syscall/lifecycle function | `api:NtAllocateVirtualMemory` |
 | `api_arg:` | Memory protection arguments | `api_arg:NtProtectVirtualMemory:protect=R-X` |
 | `seq2:` | Bigrams of consecutive calls | `seq2:NtAllocateVirtualMemory→NtProtectVirtualMemory` |
