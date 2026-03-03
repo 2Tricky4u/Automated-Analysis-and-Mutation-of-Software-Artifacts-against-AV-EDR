@@ -36,12 +36,15 @@ pub(crate) const MUTATION_CATALOG: &[&str] = &[
     // AST – global
     "ast.string_xor",
     "ast.const_obfuscation",
+    "ast.benign_syscall_insert",
     // AST – marker-based
     "ast.decon_rounds",
     "ast.fill_pattern",
     "ast.exec_decoy",
     "ast.timing_pattern",
     "ast.protection_transition",
+    "ast.benign_preamble",
+    "ast.api_sequence_obfuscation",
     // LLVM IR
     "llvm.nop_insert",
     "llvm.opaque_predicate",
