@@ -826,6 +826,7 @@ impl JobWorker {
             let job_id = self.job.id.0.clone();
             let round_id_str = round_id.0.clone();
             let baseline_run_id = format!("{}-baseline", round_id_str);
+            let instrumented_run_id = format!("{}-instrumented", round_id_str);
             let summary_clone = summary.clone();
             let all_summaries: Vec<(super::types::RoundSummary, bool)> = self
                 .job
@@ -839,6 +840,7 @@ impl JobWorker {
                     &job_id,
                     &round_id_str,
                     &baseline_run_id,
+                    &instrumented_run_id,
                     &summary_clone,
                     &all_summaries,
                 )

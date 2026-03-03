@@ -181,6 +181,11 @@ impl EsStorage {
         queries::query_api_telemetry(&self.client, run_id).await
     }
 
+    /// Query all checkpoint events for a run from `telemetry-*`.
+    pub async fn query_checkpoint_events(&self, run_id: &str) -> Vec<serde_json::Value> {
+        queries::query_checkpoint_events(&self.client, run_id).await
+    }
+
     #[allow(dead_code)]
     pub async fn query_token_sets(&self, job_id: &str) -> Vec<serde_json::Value> {
         queries::query_token_sets(&self.client, job_id).await

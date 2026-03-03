@@ -1,19 +1,22 @@
 //! Token extraction from round data and ES telemetry.
 //!
-//! Two sources:
+//! Three sources:
 //! - **In-memory** (`extract_round_tokens`): module + mutation tokens from `RoundSummary`
+//!   - `mutation:*` tokens include sorted `key=value` params when present
 //! - **ES telemetry** (`extract_telemetry_tokens`): tokens from all non-trace events:
 //!   - `api:*` — syscall/lifecycle function names (dll + kernel events)
 //!   - `api_arg:*` — memory protection arguments (e.g. `api_arg:NtAllocateVirtualMemory:protect=RW-`)
 //!   - `etw:*` — ETW provider/event pairs (e.g. `etw:Microsoft-Windows-Kernel-Process/6`)
 //!   - `image:*` — loaded DLL basenames (e.g. `image:ntdll.dll`)
 //!   - `seq2:*` — bigrams from consecutive `payload_func` calls
+//! - **ES checkpoint events** (`extract_checkpoint_tokens`): tokens from instrumented run:
+//!   - `checkpoint:*` — reached checkpoint names (e.g. `checkpoint:antiemulation_passed`)
 //!
 //! `extract_and_score` is the top-level async function spawned in the background
-//! by `finalize_round()`. It combines both sources, indexes to ES, and produces
+//! by `finalize_round()`. It combines all sources, indexes to ES, and produces
 //! `TriageGuidance` for the selector.
 
-use crate::dispatch::types::RoundSummary;
+use crate::dispatch::types::{MutationSpec, RoundSummary};
 use crate::storage::EsStorage;
 use crate::triage::TriageGuidance;
 use crate::triage::scorer;
@@ -25,13 +28,48 @@ use tracing::{debug, warn};
 // In-memory token extraction (pure, no IO)
 // ============================================================================
 
+/// Format a single mutation token from a `MutationSpec`.
+///
+/// - No params / `None` / empty object → `mutation:<id>`
+/// - With params → `mutation:<id>:<k1>=<v1>:<k2>=<v2>` (keys sorted alphabetically)
+/// - Values: String as-is, Number/Bool `.to_string()`, complex → compact JSON
+pub fn format_mutation_token(spec: &MutationSpec) -> String {
+    let base = format!("mutation:{}", spec.id);
+
+    let obj = match &spec.params {
+        Some(Value::Object(map)) if !map.is_empty() => map,
+        _ => return base,
+    };
+
+    // Sort keys alphabetically for deterministic tokens
+    let mut keys: Vec<&String> = obj.keys().collect();
+    keys.sort();
+
+    let mut token = base;
+    for key in keys {
+        let val = &obj[key];
+        let val_str = match val {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            other => other.to_string(), // compact JSON for arrays/objects
+        };
+        token.push(':');
+        token.push_str(key);
+        token.push('=');
+        token.push_str(&val_str);
+    }
+
+    token
+}
+
 /// Extract `module:*` and `mutation:*` tokens from a RoundSummary.
 ///
 /// Module tokens: one per category (carrier, decoder, antiemulation,
 /// deconditioner, guardrail, virtualprotect, decoy).
-/// Mutation tokens: one per applied mutation ID.
+/// Mutation tokens: one per applied mutation spec (includes params when present).
 pub fn extract_round_tokens(summary: &RoundSummary) -> Vec<String> {
-    let mut tokens = Vec::with_capacity(7 + summary.mutations.len());
+    let mut tokens = Vec::with_capacity(7 + summary.mutation_specs.len());
 
     // Module tokens — 7 categories
     tokens.push(format!("module:carrier={}", summary.modules.carrier));
@@ -51,9 +89,9 @@ pub fn extract_round_tokens(summary: &RoundSummary) -> Vec<String> {
     ));
     tokens.push(format!("module:decoy={}", summary.modules.decoy));
 
-    // Mutation tokens
-    for mutation_id in &summary.mutations {
-        tokens.push(format!("mutation:{}", mutation_id));
+    // Mutation tokens (with params when present)
+    for spec in &summary.mutation_specs {
+        tokens.push(format_mutation_token(spec));
     }
 
     tokens
@@ -160,6 +198,32 @@ pub fn extract_tokens_from_docs(docs: &[Value]) -> Vec<String> {
 }
 
 // ============================================================================
+// Checkpoint token extraction (async)
+// ============================================================================
+
+/// Extract `checkpoint:*` tokens from ES telemetry for an instrumented run.
+///
+/// Queries all checkpoint events, deduplicates by name (lowercased), and returns
+/// tokens in the order they were first observed.
+pub async fn extract_checkpoint_tokens(
+    storage: &EsStorage,
+    run_id: &str,
+) -> anyhow::Result<Vec<String>> {
+    let docs = storage.query_checkpoint_events(run_id).await;
+    let mut tokens = Vec::new();
+    let mut seen = HashSet::new();
+    for doc in &docs {
+        if let Some(name) = doc["payload_checkpoint_name"].as_str() {
+            let token = format!("checkpoint:{}", name.to_ascii_lowercase());
+            if seen.insert(token.clone()) {
+                tokens.push(token);
+            }
+        }
+    }
+    Ok(tokens)
+}
+
+// ============================================================================
 // Combined extract + index + score (async background task)
 // ============================================================================
 
@@ -172,13 +236,14 @@ pub async fn extract_and_score(
     job_id: &str,
     round_id: &str,
     baseline_run_id: &str,
+    instrumented_run_id: &str,
     summary: &RoundSummary,
     all_summaries: &[(RoundSummary, bool)], // (summary, detected) for all prior rounds
 ) -> anyhow::Result<TriageGuidance> {
     // 1. Extract in-memory tokens from this round
     let mut tokens = extract_round_tokens(summary);
 
-    // 2. Extract telemetry tokens from ES (api + seq2)
+    // 2a. Extract telemetry tokens from ES (api + seq2)
     match extract_telemetry_tokens(storage, job_id, baseline_run_id).await {
         Ok(telemetry_tokens) => {
             debug!(
@@ -195,6 +260,24 @@ pub async fn extract_and_score(
                 job_id, e
             );
             // Continue with in-memory tokens only
+        }
+    }
+
+    // 2b. Extract checkpoint tokens from instrumented run telemetry
+    match extract_checkpoint_tokens(storage, instrumented_run_id).await {
+        Ok(cp_tokens) => {
+            debug!(
+                "[Triage:{}] Extracted {} checkpoint tokens",
+                job_id,
+                cp_tokens.len()
+            );
+            tokens.extend(cp_tokens);
+        }
+        Err(e) => {
+            warn!(
+                "[Triage:{}] Failed to extract checkpoint tokens: {}",
+                job_id, e
+            );
         }
     }
 
@@ -289,9 +372,33 @@ mod tests {
         }
     }
 
+    fn make_summary_with_specs(
+        modules: ModuleSelectionSpec,
+        specs: Vec<MutationSpec>,
+    ) -> RoundSummary {
+        let mutations = specs.iter().map(|s| s.id.clone()).collect();
+        RoundSummary {
+            round_id: RoundId("test-round".to_string()),
+            round_number: 1,
+            mutation_specs: specs,
+            mutations,
+            modules,
+            detected: false,
+            behavior_match: true,
+            evasion_score: 0.5,
+            differential_category: DifferentialCategory::Evasion,
+            completed_at: SystemTime::now(),
+            dry_run_exit_code: None,
+            has_dryrun: false,
+            detection_verdict: String::new(),
+            coverage_percent: None,
+            time_factor: 0.0,
+        }
+    }
+
     #[test]
     fn test_extract_round_tokens() {
-        let summary = make_summary(
+        let summary = make_summary_with_specs(
             ModuleSelectionSpec {
                 carrier: "alloc_rw_rx".to_string(),
                 decoder: "xor".to_string(),
@@ -302,8 +409,14 @@ mod tests {
                 decoy: "none".to_string(),
             },
             vec![
-                "ast.string_xor".to_string(),
-                "binary.rich_header".to_string(),
+                MutationSpec {
+                    id: "ast.string_xor".to_string(),
+                    params: Some(json!({"key": "0xAB"})),
+                },
+                MutationSpec {
+                    id: "binary.rich_header".to_string(),
+                    params: None,
+                },
             ],
         );
 
@@ -313,7 +426,7 @@ mod tests {
         assert_eq!(tokens.len(), 9);
         assert!(tokens.contains(&"module:carrier=alloc_rw_rx".to_string()));
         assert!(tokens.contains(&"module:deconditioner=alloc_loop".to_string()));
-        assert!(tokens.contains(&"mutation:ast.string_xor".to_string()));
+        assert!(tokens.contains(&"mutation:ast.string_xor:key=0xAB".to_string()));
         assert!(tokens.contains(&"mutation:binary.rich_header".to_string()));
     }
 
@@ -325,6 +438,66 @@ mod tests {
         // Only 7 module tokens, no mutation tokens
         assert_eq!(tokens.len(), 7);
         assert!(tokens.iter().all(|t| t.starts_with("module:")));
+    }
+
+    // -- format_mutation_token tests --
+
+    #[test]
+    fn test_mutation_tokens_with_params() {
+        let spec = MutationSpec {
+            id: "ast.decon_rounds".to_string(),
+            params: Some(json!({"count": 50, "method": "fixed"})),
+        };
+        assert_eq!(
+            format_mutation_token(&spec),
+            "mutation:ast.decon_rounds:count=50:method=fixed"
+        );
+    }
+
+    #[test]
+    fn test_mutation_tokens_no_params() {
+        let spec = MutationSpec {
+            id: "binary.resource_inject".to_string(),
+            params: None,
+        };
+        assert_eq!(
+            format_mutation_token(&spec),
+            "mutation:binary.resource_inject"
+        );
+    }
+
+    #[test]
+    fn test_format_mutation_token_empty_object() {
+        let spec = MutationSpec {
+            id: "ast.noop".to_string(),
+            params: Some(json!({})),
+        };
+        assert_eq!(format_mutation_token(&spec), "mutation:ast.noop");
+    }
+
+    #[test]
+    fn test_format_mutation_token_sorted_keys() {
+        let spec = MutationSpec {
+            id: "ast.test".to_string(),
+            params: Some(json!({"zebra": "z", "alpha": "a", "middle": "m"})),
+        };
+        // Keys must appear in alphabetical order
+        assert_eq!(
+            format_mutation_token(&spec),
+            "mutation:ast.test:alpha=a:middle=m:zebra=z"
+        );
+    }
+
+    #[test]
+    fn test_format_mutation_token_bool_and_number() {
+        let spec = MutationSpec {
+            id: "ast.cfg".to_string(),
+            params: Some(json!({"enabled": true, "depth": 3})),
+        };
+        assert_eq!(
+            format_mutation_token(&spec),
+            "mutation:ast.cfg:depth=3:enabled=true"
+        );
     }
 
     #[test]
