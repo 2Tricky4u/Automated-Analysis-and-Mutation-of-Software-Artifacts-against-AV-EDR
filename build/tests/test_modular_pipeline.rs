@@ -336,6 +336,162 @@ fn test_string_xor_preserves_payload_header() {
 }
 
 // ============================================================================
+// B2) Const obfuscation pipeline tests
+// ============================================================================
+
+#[test]
+fn test_const_obfuscation_on_assembled_source() {
+    let modules = ModuleSelection {
+        carrier: "alloc_rw_rx".to_string(),
+        ..ModuleSelection::new()
+    };
+    let payload = common::payload_small();
+    let mutations = vec![MutationSpec {
+        id: "ast.const_obfuscation".to_string(),
+        params: HashMap::new(),
+    }];
+
+    let out = common::run_pipeline(modules, &payload, EncodingType::Xor, &mutations).unwrap();
+
+    assert!(
+        out.applied_mutations
+            .contains(&"ast.const_obfuscation".to_string()),
+        "ast.const_obfuscation should be in applied list"
+    );
+
+    // 0x3000 (MEM_COMMIT|MEM_RESERVE) from alloc_rw_rx carrier should be obfuscated
+    assert!(
+        !out.final_source.contains("0x3000"),
+        "0x3000 should be replaced by volatile decomposition"
+    );
+    assert!(
+        out.final_source.contains("__obf_c"),
+        "Volatile decomposition variables should be present"
+    );
+}
+
+#[test]
+fn test_const_obfuscation_preserves_payload_array() {
+    let modules = ModuleSelection::new();
+    let payload = common::payload_small();
+    let mutations = vec![MutationSpec {
+        id: "ast.const_obfuscation".to_string(),
+        params: HashMap::new(),
+    }];
+
+    let out = common::run_pipeline(modules, &payload, EncodingType::Xor, &mutations).unwrap();
+
+    // supermega_payload[] hex values are inside an initializer_list → must survive
+    assert!(
+        out.final_source.contains("supermega_payload"),
+        "supermega_payload array should survive const_obfuscation"
+    );
+    assert!(
+        out.final_source.contains("PAYLOAD_LEN"),
+        "PAYLOAD_LEN should survive const_obfuscation"
+    );
+}
+
+#[test]
+fn test_const_obfuscation_preserves_preprocessor_defines() {
+    let modules = ModuleSelection::new();
+    let payload = common::payload_small();
+    let mutations = vec![MutationSpec {
+        id: "ast.const_obfuscation".to_string(),
+        params: HashMap::new(),
+    }];
+
+    let out = common::run_pipeline(modules, &payload, EncodingType::Xor, &mutations).unwrap();
+
+    // #define constants (p_RW, p_RX, etc.) should be preserved
+    assert!(
+        out.final_source.contains("p_RW"),
+        "#define p_RW should survive const_obfuscation"
+    );
+    assert!(
+        out.final_source.contains("p_RX"),
+        "#define p_RX should survive const_obfuscation"
+    );
+}
+
+#[test]
+fn test_const_obfuscation_combined_with_string_xor_pipeline() {
+    let modules = ModuleSelection {
+        decoy: "winexec".to_string(),
+        ..ModuleSelection::new()
+    };
+    let payload = common::payload_small();
+    let mutations = vec![
+        MutationSpec {
+            id: "ast.const_obfuscation".to_string(),
+            params: HashMap::new(),
+        },
+        MutationSpec {
+            id: "ast.string_xor".to_string(),
+            params: HashMap::new(),
+        },
+    ];
+
+    let out = common::run_pipeline(modules, &payload, EncodingType::Xor, &mutations).unwrap();
+
+    assert!(
+        out.applied_mutations
+            .contains(&"ast.const_obfuscation".to_string()),
+        "const_obfuscation should be applied"
+    );
+    assert!(
+        out.applied_mutations
+            .contains(&"ast.string_xor".to_string()),
+        "string_xor should be applied"
+    );
+    assert!(
+        out.final_source.contains("__obf_c"),
+        "Volatile decomposition should be present"
+    );
+    assert!(
+        out.final_source.contains("xor_str_"),
+        "XOR-encoded strings should be present"
+    );
+}
+
+#[test]
+fn test_const_obfuscation_all_carriers() {
+    let carriers = ["alloc_rw_rx", "change_rw_rx", "peb_walk"];
+    let payload = common::payload_small();
+
+    for carrier in &carriers {
+        let modules = ModuleSelection {
+            carrier: carrier.to_string(),
+            ..ModuleSelection::new()
+        };
+        let mutations = vec![MutationSpec {
+            id: "ast.const_obfuscation".to_string(),
+            params: HashMap::new(),
+        }];
+
+        let out = common::run_pipeline(modules, &payload, EncodingType::Xor, &mutations).unwrap();
+
+        assert!(
+            out.applied_mutations
+                .contains(&"ast.const_obfuscation".to_string()),
+            "const_obfuscation should apply for carrier '{}'",
+            carrier
+        );
+        assert!(
+            out.final_source.contains("__obf_c"),
+            "Carrier '{}' should have obfuscated constants",
+            carrier
+        );
+        // Payload must survive
+        assert!(
+            out.final_source.contains("supermega_payload"),
+            "Carrier '{}': supermega_payload should survive",
+            carrier
+        );
+    }
+}
+
+// ============================================================================
 // C) Instrumentation pipeline tests (full chain → line traces)
 // ============================================================================
 

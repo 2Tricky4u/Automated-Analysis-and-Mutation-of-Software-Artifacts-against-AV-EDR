@@ -419,6 +419,89 @@ fn test_ast_before_ir_ordering() {
     );
 }
 
+// ── Const obfuscation integration tests ─────────────────────────────────────
+
+#[test]
+fn test_const_obfuscation_via_mutator() {
+    let source = "void f() {\n    int x = 0x3000;\n    int y = 0x8000;\n}";
+    let mutation = MutationSpec {
+        id: "ast.const_obfuscation".to_string(),
+        params: HashMap::new(),
+    };
+
+    let (output, applied) = Mutator::apply(source.as_bytes(), &[mutation]).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(applied.contains(&"ast.const_obfuscation".to_string()));
+    assert!(output_str.contains("volatile unsigned long long __obf_c0"));
+    assert!(output_str.contains("volatile unsigned long long __obf_c1"));
+    assert!(!output_str.contains("0x3000"));
+    assert!(!output_str.contains("0x8000"));
+}
+
+#[test]
+fn test_const_obfuscation_combined_with_string_xor_via_mutator() {
+    let source = r#"void f() {
+    char *msg = "hello";
+    int flags = 0x3000;
+}"#;
+
+    let mutations = vec![
+        MutationSpec {
+            id: "ast.const_obfuscation".to_string(),
+            params: HashMap::new(),
+        },
+        MutationSpec {
+            id: "ast.string_xor".to_string(),
+            params: HashMap::new(),
+        },
+    ];
+
+    let (output, applied) = Mutator::apply(source.as_bytes(), &mutations).unwrap();
+    let output_str = String::from_utf8(output).unwrap();
+
+    assert!(applied.contains(&"ast.const_obfuscation".to_string()));
+    assert!(applied.contains(&"ast.string_xor".to_string()));
+    assert!(
+        output_str.contains("__obf_c0"),
+        "Constant should be obfuscated"
+    );
+    assert!(
+        output_str.contains("xor_str_0"),
+        "String should be XOR-encoded"
+    );
+}
+
+#[test]
+fn test_const_obfuscation_ordering_independence() {
+    let source = "void f() {\n    int x = 0x3000;\n}";
+
+    let const_mut = MutationSpec {
+        id: "ast.const_obfuscation".to_string(),
+        params: [("seed".to_string(), "0xBEEF".to_string())]
+            .into_iter()
+            .collect(),
+    };
+    let xor_mut = MutationSpec {
+        id: "ast.string_xor".to_string(),
+        params: HashMap::new(),
+    };
+
+    // Order A: const first
+    let (out_a, _) =
+        Mutator::apply(source.as_bytes(), &[const_mut.clone(), xor_mut.clone()]).unwrap();
+    // Order B: xor first
+    let (out_b, _) = Mutator::apply(source.as_bytes(), &[xor_mut, const_mut]).unwrap();
+
+    let a_str = String::from_utf8(out_a).unwrap();
+    let b_str = String::from_utf8(out_b).unwrap();
+
+    assert_eq!(
+        a_str, b_str,
+        "Input ordering should not affect output (global mutations have fixed internal order)"
+    );
+}
+
 // ── Edge cases: string content ──────────────────────────────────────────────
 
 #[test]

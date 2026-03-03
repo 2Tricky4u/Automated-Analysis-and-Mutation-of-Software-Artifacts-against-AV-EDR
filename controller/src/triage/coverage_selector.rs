@@ -35,6 +35,7 @@ pub(crate) const DECONDITIONER_VARIANTS: &[&str] = &[
 pub(crate) const MUTATION_CATALOG: &[&str] = &[
     // AST – global
     "ast.string_xor",
+    "ast.const_obfuscation",
     // AST – marker-based
     "ast.decon_rounds",
     "ast.fill_pattern",

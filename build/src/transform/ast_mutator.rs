@@ -2,7 +2,7 @@
 //!
 //! Two mutation modes:
 //! - **Marker-based**: MutationSpec { id: "ast.<name>" } → `@MUTATE:<name>` locations
-//! - **Global**: `ast.string_xor` → all string literals (no markers needed)
+//! - **Global**: `ast.string_xor` / `ast.const_obfuscation` → all literals (no markers needed)
 //!
 //! Supported mutations:
 //! - `ast.decon_rounds`          — iteration count (EDR cutoff threshold)
@@ -10,6 +10,7 @@
 //! - `ast.exec_decoy`            — execute from allocated memory (#1 EDR signal)
 //! - `ast.timing_pattern`        — inter-operation delays (temporal tokens)
 //! - `ast.protection_transition` — memory protection pattern (rule match)
+//! - `ast.const_obfuscation`     — volatile decomposition of integer constants (global, tree-sitter)
 //! - `ast.string_xor`            — XOR-encode string literals (global, tree-sitter)
 //!
 //! Adding a new marker-based mutation:
@@ -45,8 +46,9 @@ impl AstMutator {
     /// Returns the mutated source and a list of applied mutation IDs.
     ///
     /// Mutation routing:
-    /// - `string_xor` → global (tree-sitter walk, no markers needed), runs last
-    /// - All others   → marker-based (`@MUTATE:<name>` comments)
+    /// - `const_obfuscation` → global (tree-sitter walk, `number_literal` nodes)
+    /// - `string_xor`        → global (tree-sitter walk, `string_literal` nodes)
+    /// - All others          → marker-based (`@MUTATE:<name>` comments)
     pub fn apply(
         &mut self,
         source: &str,
@@ -57,14 +59,15 @@ impl AstMutator {
 
         // Separate global mutations from marker-based ones
         let mut string_xor_spec: Option<&MutationSpec> = None;
+        let mut const_obfuscation_spec: Option<&MutationSpec> = None;
         let mut marker_mutations: Vec<&MutationSpec> = Vec::new();
 
         for mutation in mutations {
             let (_category, name) = mutation.parse();
-            if name == "string_xor" {
-                string_xor_spec = Some(mutation);
-            } else {
-                marker_mutations.push(mutation);
+            match name {
+                "string_xor" => string_xor_spec = Some(mutation),
+                "const_obfuscation" => const_obfuscation_spec = Some(mutation),
+                _ => marker_mutations.push(mutation),
             }
         }
 
@@ -104,7 +107,14 @@ impl AstMutator {
             }
         }
 
-        // Phase 2: global string_xor (after marker mutations, so new code is also encoded)
+        // Phase 2a: global const_obfuscation (number_literal nodes)
+        if let Some(spec) = const_obfuscation_spec {
+            result = self.apply_const_obfuscation(&result, &spec.params)?;
+            applied.push(spec.id.clone());
+            info!("Applied ast.const_obfuscation globally");
+        }
+
+        // Phase 2b: global string_xor (string_literal nodes, runs last)
         if let Some(spec) = string_xor_spec {
             result = self.apply_string_xor(&result, &spec.params)?;
             applied.push(spec.id.clone());
@@ -420,6 +430,168 @@ impl AstMutator {
         Ok(result)
     }
 
+    // ── const_obfuscation (global, no marker needed) ────────────────────
+
+    /// Replace integer constants with volatile decomposed sums.
+    ///
+    /// For each qualifying `number_literal` node, generates:
+    /// ```c
+    /// volatile unsigned long long __obf_cN_p = X;
+    /// volatile unsigned long long __obf_cN = __obf_cN_p + Y;
+    /// ```
+    /// where `X + Y == original_value`, then replaces the inline constant
+    /// with `(int)__obf_cN`. The `volatile` keyword prevents constant folding.
+    fn apply_const_obfuscation(
+        &mut self,
+        source: &str,
+        params: &HashMap<String, String>,
+    ) -> Result<String> {
+        let min_value: u64 = params
+            .get("min_value")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2);
+
+        let seed: u64 = params
+            .get("seed")
+            .and_then(|v| {
+                if v.starts_with("0x") || v.starts_with("0X") {
+                    u64::from_str_radix(&v[2..], 16).ok()
+                } else {
+                    v.parse().ok()
+                }
+            })
+            .unwrap_or(0xDEAD);
+
+        info!(
+            "Const obfuscation: min_value={}, seed=0x{:X}",
+            min_value, seed
+        );
+
+        let tree = match self.parser.parse(source, None) {
+            Some(t) => t,
+            None => {
+                warn!("tree-sitter failed to parse source for const_obfuscation");
+                return Ok(source.to_string());
+            }
+        };
+
+        let mut literals: Vec<NumberLiteralInfo> = Vec::new();
+        collect_number_literals(
+            tree.root_node(),
+            source.as_bytes(),
+            source,
+            min_value,
+            &mut literals,
+        );
+
+        if literals.is_empty() {
+            return Ok(source.to_string());
+        }
+
+        // Build edits: for each literal, we need:
+        //   1. Insert volatile declarations before the containing statement
+        //   2. Replace the literal inline with (int)__obf_cN
+        //
+        // Group by statement start byte to batch declarations.
+        struct Edit {
+            /// Byte offset where the original number starts
+            replace_start: usize,
+            /// Byte offset where the original number ends
+            replace_end: usize,
+            /// The inline replacement text: `(int)__obf_cN`
+            inline_text: String,
+            /// The volatile declarations to prepend before the statement
+            decl_lines: String,
+            /// Byte offset of the containing statement (for insertion point)
+            stmt_start: usize,
+        }
+
+        let mut edits: Vec<Edit> = Vec::new();
+
+        for (counter, lit) in literals.iter().enumerate() {
+            let var_name = format!("__obf_c{}", counter);
+            let (part_a, part_b) = split_value(lit.value, seed, counter as u64);
+
+            let decl = format!(
+                "{indent}volatile unsigned long long {var}_p = {a};\n\
+                 {indent}volatile unsigned long long {var} = {var}_p + {b};\n",
+                indent = lit.stmt_indent,
+                var = var_name,
+                a = part_a,
+                b = part_b,
+            );
+
+            let inline = format!("(int){}", var_name);
+
+            edits.push(Edit {
+                replace_start: lit.start_byte,
+                replace_end: lit.end_byte,
+                inline_text: inline,
+                decl_lines: decl,
+                stmt_start: lit.stmt_start_byte,
+            });
+        }
+
+        // Apply edits in reverse byte-offset order to preserve positions.
+        // First: inline replacements (reverse order).
+        // Second: declaration insertions (reverse order, deduplicated by stmt_start).
+        let mut result = source.to_string();
+
+        // Pass 1: Replace inline constants (reverse order)
+        for edit in edits.iter().rev() {
+            result.replace_range(edit.replace_start..edit.replace_end, &edit.inline_text);
+        }
+
+        // Pass 2: Insert declarations (reverse order by stmt_start).
+        // We must recalculate insertion points since Pass 1 shifted offsets.
+        // Instead, build a line-based approach: figure out which source line
+        // each statement starts on, and insert declaration lines before it.
+
+        // Map each edit to its containing statement's line number in the original source
+        let mut stmt_line_map: Vec<(usize, String)> = Vec::new(); // (line_number, decl_text)
+
+        for edit in &edits {
+            // Convert byte offset to line number in the original source
+            let line_num = source[..edit.stmt_start]
+                .chars()
+                .filter(|c| *c == '\n')
+                .count();
+            stmt_line_map.push((line_num, edit.decl_lines.clone()));
+        }
+
+        // Rebuild the result using line-based insertions on the already-inline-replaced text
+        let result_lines: Vec<&str> = result.lines().collect();
+        let mut final_lines: Vec<String> = Vec::new();
+
+        // Group declarations by target line (reverse to get highest line first isn't needed
+        // since we process line by line). Collect all decls for each line.
+        let mut decls_by_line: HashMap<usize, Vec<String>> = HashMap::new();
+        for (line_num, decl) in &stmt_line_map {
+            decls_by_line
+                .entry(*line_num)
+                .or_default()
+                .push(decl.clone());
+        }
+
+        for (i, line) in result_lines.iter().enumerate() {
+            if let Some(decls) = decls_by_line.get(&i) {
+                // Insert declarations before this line (deduplicate by content)
+                let mut seen = std::collections::HashSet::new();
+                for decl in decls {
+                    if seen.insert(decl.clone()) {
+                        // decl already ends with \n, but we're building line-by-line
+                        for dl in decl.trim_end_matches('\n').lines() {
+                            final_lines.push(dl.to_string());
+                        }
+                    }
+                }
+            }
+            final_lines.push(line.to_string());
+        }
+
+        Ok(final_lines.join("\n"))
+    }
+
     // ── protection_transition ─────────────────────────────────────────────
 
     fn apply_protection_transition(
@@ -523,6 +695,239 @@ fn collect_string_literals(
             collect_string_literals(child, source, out);
         }
     }
+}
+
+// ── Const obfuscation helpers ──────────────────────────────────────────────
+
+/// Information about a qualifying number literal in the AST.
+struct NumberLiteralInfo {
+    /// Byte offset where the literal starts in source
+    start_byte: usize,
+    /// Byte offset where the literal ends in source
+    end_byte: usize,
+    /// Parsed integer value
+    value: u64,
+    /// Byte offset where the containing statement starts
+    stmt_start_byte: usize,
+    /// Indentation string of the containing statement
+    stmt_indent: String,
+}
+
+/// Walk tree-sitter AST and collect qualifying number_literal nodes.
+///
+/// Skips:
+/// - Constants inside preprocessor directives (`#define`, `#if`, etc.)
+/// - Array sizes (`int arr[100]`)
+/// - Case label values (`case 5:`)
+/// - Initializer list values (`{0xAB, 0xCD, ...}`)
+/// - File/global scope constants (no containing compound_statement)
+/// - Already-obfuscated declarations (containing `__obf_c`)
+/// - Values below `min_value`
+/// - Non-integer literals (floats)
+fn collect_number_literals(
+    node: tree_sitter::Node,
+    source_bytes: &[u8],
+    source_str: &str,
+    min_value: u64,
+    out: &mut Vec<NumberLiteralInfo>,
+) {
+    if node.kind() == "number_literal" {
+        let text = match node.utf8_text(source_bytes) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+
+        // Skip floats
+        if text.contains('.') || text.contains('e') || text.contains('E') {
+            return;
+        }
+
+        // Parse the integer value
+        let value = match parse_c_integer(text) {
+            Some(v) => v,
+            None => return,
+        };
+
+        // Skip trivial values
+        if value < min_value {
+            return;
+        }
+
+        // Skip inside preprocessor directives
+        if has_ancestor_kind(node, "preproc_") {
+            return;
+        }
+
+        // Skip array sizes: parent is array_declarator
+        if let Some(parent) = node.parent() {
+            if parent.kind() == "array_declarator" {
+                return;
+            }
+        }
+
+        // Skip case label values: first named child of case_statement
+        if is_case_label_value(node) {
+            return;
+        }
+
+        // Skip initializer lists (e.g., supermega_payload[] = {0xAB, ...})
+        if has_ancestor_of_kind(node, "initializer_list") {
+            return;
+        }
+
+        // Skip already-obfuscated declarations
+        if is_inside_obf_declaration(node, source_bytes) {
+            return;
+        }
+
+        // Find containing statement (must be inside a compound_statement)
+        let stmt = match find_containing_statement(node) {
+            Some(s) => s,
+            None => return, // global/file scope — skip
+        };
+
+        let stmt_start = stmt.start_byte();
+        let indent = calculate_indent(source_str, stmt_start);
+
+        out.push(NumberLiteralInfo {
+            start_byte: node.start_byte(),
+            end_byte: node.end_byte(),
+            value,
+            stmt_start_byte: stmt_start,
+            stmt_indent: indent,
+        });
+        return;
+    }
+
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i) {
+            collect_number_literals(child, source_bytes, source_str, min_value, out);
+        }
+    }
+}
+
+/// Check if any ancestor's kind starts with the given prefix.
+fn has_ancestor_kind(node: tree_sitter::Node, prefix: &str) -> bool {
+    let mut ancestor = node.parent();
+    while let Some(a) = ancestor {
+        if a.kind().starts_with(prefix) {
+            return true;
+        }
+        ancestor = a.parent();
+    }
+    false
+}
+
+/// Check if any ancestor has exactly the given kind.
+fn has_ancestor_of_kind(node: tree_sitter::Node, kind: &str) -> bool {
+    let mut ancestor = node.parent();
+    while let Some(a) = ancestor {
+        if a.kind() == kind {
+            return true;
+        }
+        ancestor = a.parent();
+    }
+    false
+}
+
+/// Check if this node is the value of a `case` label (`case N:`).
+fn is_case_label_value(node: tree_sitter::Node) -> bool {
+    if let Some(parent) = node.parent() {
+        if parent.kind() == "case_statement" {
+            // The value is the first named child
+            if let Some(first) = parent.named_child(0) {
+                return first.id() == node.id();
+            }
+        }
+    }
+    false
+}
+
+/// Check if this node is inside a declaration containing `__obf_c` (idempotency).
+fn is_inside_obf_declaration(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut ancestor = node.parent();
+    while let Some(a) = ancestor {
+        if a.kind() == "declaration" || a.kind() == "init_declarator" {
+            if let Ok(text) = a.utf8_text(source) {
+                if text.contains("__obf_c") {
+                    return true;
+                }
+            }
+        }
+        ancestor = a.parent();
+    }
+    false
+}
+
+/// Walk ancestors to find the node whose parent is a `compound_statement`.
+/// Returns `None` for file/global scope.
+fn find_containing_statement(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "compound_statement" {
+            return Some(current);
+        }
+        if parent.kind() == "translation_unit" {
+            return None; // file scope
+        }
+        current = parent;
+    }
+    None
+}
+
+/// Extract the indentation (whitespace prefix) of the line containing `byte_offset`.
+fn calculate_indent(source: &str, byte_offset: usize) -> String {
+    // Find the start of the line containing byte_offset
+    let line_start = source[..byte_offset]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    source[line_start..byte_offset]
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect()
+}
+
+/// Parse a C integer literal (hex, octal, binary, decimal), stripping suffixes.
+///
+/// Supports: `0x3000`, `0X3000`, `0777`, `0b1010`, `42`, `42u`, `42ULL`, etc.
+fn parse_c_integer(text: &str) -> Option<u64> {
+    // Strip common C suffixes: u, U, l, L, ll, LL, ull, ULL, etc.
+    let stripped = text.trim_end_matches(|c: char| c == 'u' || c == 'U' || c == 'l' || c == 'L');
+
+    if stripped.is_empty() {
+        return None;
+    }
+
+    if stripped.starts_with("0x") || stripped.starts_with("0X") {
+        u64::from_str_radix(&stripped[2..], 16).ok()
+    } else if stripped.starts_with("0b") || stripped.starts_with("0B") {
+        u64::from_str_radix(&stripped[2..], 2).ok()
+    } else if stripped.starts_with('0')
+        && stripped.len() > 1
+        && stripped.chars().all(|c| c.is_ascii_digit())
+    {
+        u64::from_str_radix(&stripped[1..], 8).ok()
+    } else {
+        stripped.parse::<u64>().ok()
+    }
+}
+
+/// Deterministic split: returns `(a, b)` where `a + b == value`.
+///
+/// Uses a Knuth multiplicative hash of `seed + counter` to produce the split.
+fn split_value(value: u64, seed: u64, counter: u64) -> (u64, u64) {
+    if value == 0 {
+        return (0, 0);
+    }
+    // Knuth multiplicative hash
+    let hash = (seed.wrapping_add(counter))
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    // a is hash mod value (ensuring a < value so b > 0)
+    let a = hash % value;
+    let b = value - a;
+    (a, b)
 }
 
 /// Find the end of a code block starting at `start_line`.
@@ -851,5 +1256,331 @@ void deconditioner() {
             "        next();",
         ];
         assert_eq!(find_block_end(&lines, 0), 4);
+    }
+
+    // ── const_obfuscation unit tests ─────────────────────────────────────
+
+    #[test]
+    fn test_const_obfuscation_basic() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "void f() {\n    int x = 0x3000;\n}";
+        let spec = make_spec("ast.const_obfuscation", &[]);
+        let (out, applied) = ast.apply(source, &[&spec]).unwrap();
+
+        assert!(applied.contains(&"ast.const_obfuscation".to_string()));
+        assert!(out.contains("volatile unsigned long long __obf_c0_p"));
+        assert!(out.contains("volatile unsigned long long __obf_c0 = __obf_c0_p +"));
+        assert!(out.contains("(int)__obf_c0"));
+        assert!(
+            !out.contains("0x3000"),
+            "Original constant should be replaced"
+        );
+    }
+
+    #[test]
+    fn test_const_obfuscation_skip_0_and_1() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "void f() {\n    int a = 0;\n    int b = 1;\n}";
+        let spec = make_spec("ast.const_obfuscation", &[]);
+        let (out, applied) = ast.apply(source, &[&spec]).unwrap();
+
+        // 0 and 1 are below min_value=2, so nothing should change
+        assert!(applied.contains(&"ast.const_obfuscation".to_string()));
+        assert!(!out.contains("__obf_c"), "0 and 1 should not be obfuscated");
+    }
+
+    #[test]
+    fn test_const_obfuscation_skip_preprocessor() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "#define MAGIC 0x3000\nvoid f() {\n    int x = 42;\n}";
+        let spec = make_spec("ast.const_obfuscation", &[]);
+        let (out, _) = ast.apply(source, &[&spec]).unwrap();
+
+        // The #define constant should be preserved
+        assert!(out.contains("#define MAGIC 0x3000"));
+        // The local variable constant should be obfuscated
+        assert!(out.contains("__obf_c0"));
+        assert!(!out.contains("int x = 42;"), "42 should be replaced");
+    }
+
+    #[test]
+    fn test_const_obfuscation_skip_array_size() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "void f() {\n    int arr[100];\n    int x = 50;\n}";
+        let spec = make_spec("ast.const_obfuscation", &[]);
+        let (out, _) = ast.apply(source, &[&spec]).unwrap();
+
+        // Array size should be preserved
+        assert!(out.contains("arr[100]"));
+        // Regular constant should be obfuscated
+        assert!(out.contains("__obf_c0"));
+    }
+
+    #[test]
+    fn test_const_obfuscation_skip_case_label() {
+        let mut ast = AstMutator::new().unwrap();
+        let source =
+            "void f() {\n    switch(x) {\n        case 10: break;\n    }\n    int y = 10;\n}";
+        let spec = make_spec("ast.const_obfuscation", &[]);
+        let (out, _) = ast.apply(source, &[&spec]).unwrap();
+
+        // Case label should be preserved
+        assert!(out.contains("case 10:"));
+        // The assignment `int y = 10` should be obfuscated
+        assert!(out.contains("__obf_c0"));
+    }
+
+    #[test]
+    fn test_const_obfuscation_multiple_on_same_statement() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "void f() {\n    VirtualAlloc(NULL, PAYLOAD_LEN, 0x3000, 0x04);\n}";
+        let spec = make_spec("ast.const_obfuscation", &[]);
+        let (out, _) = ast.apply(source, &[&spec]).unwrap();
+
+        // Both constants should be obfuscated with different counters
+        assert!(out.contains("__obf_c0"));
+        assert!(out.contains("__obf_c1"));
+        assert!(!out.contains("0x3000"));
+        assert!(!out.contains("0x04"));
+    }
+
+    #[test]
+    fn test_const_obfuscation_deterministic() {
+        let mut ast1 = AstMutator::new().unwrap();
+        let mut ast2 = AstMutator::new().unwrap();
+        let source = "void f() {\n    int x = 0x3000;\n}";
+        let spec = make_spec("ast.const_obfuscation", &[("seed", "0xBEEF")]);
+
+        let (out1, _) = ast1.apply(source, &[&spec]).unwrap();
+        let (out2, _) = ast2.apply(source, &[&spec]).unwrap();
+
+        assert_eq!(out1, out2, "Same seed should produce identical output");
+    }
+
+    #[test]
+    fn test_const_obfuscation_volatile_sum_correctness() {
+        // Verify split_value produces correct sums
+        let test_values: &[u64] = &[0x3000, 0x8000, 0x40, 0xFF, 12288, 42];
+        for &val in test_values {
+            let (a, b) = split_value(val, 0xDEAD, 0);
+            assert_eq!(
+                a + b,
+                val,
+                "split_value({}) produced {} + {} = {} (expected {})",
+                val,
+                a,
+                b,
+                a + b,
+                val
+            );
+        }
+    }
+
+    #[test]
+    fn test_const_obfuscation_combined_with_string_xor() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = r#"void f() {
+    char *msg = "hello";
+    int x = 0x3000;
+}"#;
+        let specs = [
+            make_spec("ast.const_obfuscation", &[]),
+            make_spec("ast.string_xor", &[]),
+        ];
+        let refs: Vec<&MutationSpec> = specs.iter().collect();
+        let (out, applied) = ast.apply(source, &refs).unwrap();
+
+        assert!(applied.contains(&"ast.const_obfuscation".to_string()));
+        assert!(applied.contains(&"ast.string_xor".to_string()));
+        assert!(out.contains("__obf_c0"), "Constant should be obfuscated");
+        assert!(out.contains("xor_str_0"), "String should be XOR-encoded");
+    }
+
+    #[test]
+    fn test_const_obfuscation_combined_with_marker_mutation() {
+        let mut ast = AstMutator::new().unwrap();
+        let specs = [
+            make_spec("ast.decon_rounds", &[("count", "50"), ("method", "fixed")]),
+            make_spec("ast.const_obfuscation", &[]),
+        ];
+        let refs: Vec<&MutationSpec> = specs.iter().collect();
+        let (out, applied) = ast.apply(basic_template(), &refs).unwrap();
+
+        assert!(applied.contains(&"ast.decon_rounds".to_string()));
+        assert!(applied.contains(&"ast.const_obfuscation".to_string()));
+        // decon_rounds replaces DECON_ROUNDS→50, then const_obfuscation replaces 50→(int)__obf_cN
+        // So we check that 0x3000 and 0x8000 are obfuscated (the key goal)
+        assert!(!out.contains("0x3000"), "0x3000 should be obfuscated");
+        assert!(!out.contains("0x8000"), "0x8000 should be obfuscated");
+        assert!(out.contains("__obf_c"));
+    }
+
+    #[test]
+    fn test_const_obfuscation_custom_min_value() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "void f() {\n    int a = 5;\n    int b = 100;\n}";
+        let spec = make_spec("ast.const_obfuscation", &[("min_value", "10")]);
+        let (out, _) = ast.apply(source, &[&spec]).unwrap();
+
+        // 5 < min_value=10 → should stay as-is
+        assert!(
+            out.contains("int a = 5;"),
+            "5 should not be obfuscated (below min_value=10)"
+        );
+        // 100 >= min_value=10 → should be obfuscated
+        assert!(out.contains("__obf_c0"));
+    }
+
+    #[test]
+    fn test_const_obfuscation_idempotent() {
+        let mut ast1 = AstMutator::new().unwrap();
+        let source = "void f() {\n    int x = 0x3000;\n}";
+        let spec = make_spec("ast.const_obfuscation", &[]);
+
+        let (first_pass, _) = ast1.apply(source, &[&spec]).unwrap();
+
+        let mut ast2 = AstMutator::new().unwrap();
+        let (second_pass, _) = ast2.apply(&first_pass, &[&spec]).unwrap();
+
+        assert_eq!(
+            first_pass, second_pass,
+            "Second pass should not double-obfuscate (idempotent)"
+        );
+    }
+
+    #[test]
+    fn test_const_obfuscation_hex_values() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "void f() {\n    int a = 0xFF;\n    int b = 0x3000;\n    int c = 0x8000;\n}";
+        let spec = make_spec("ast.const_obfuscation", &[]);
+        let (out, _) = ast.apply(source, &[&spec]).unwrap();
+
+        assert!(out.contains("__obf_c0"), "0xFF should be obfuscated");
+        assert!(out.contains("__obf_c1"), "0x3000 should be obfuscated");
+        assert!(out.contains("__obf_c2"), "0x8000 should be obfuscated");
+        assert!(!out.contains("0xFF"));
+        assert!(!out.contains("0x3000"));
+        assert!(!out.contains("0x8000"));
+    }
+
+    #[test]
+    fn test_const_obfuscation_no_qualifying_constants() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "void f() {\n    int x = 0;\n    int y = 1;\n}";
+        let spec = make_spec("ast.const_obfuscation", &[]);
+        let (out, applied) = ast.apply(source, &[&spec]).unwrap();
+
+        // No constants >= min_value=2 → applied (global mutation always records) but no changes
+        assert!(applied.contains(&"ast.const_obfuscation".to_string()));
+        assert!(!out.contains("__obf_c"), "No obfuscation should occur");
+        assert!(out.contains("int x = 0;"));
+        assert!(out.contains("int y = 1;"));
+    }
+
+    #[test]
+    fn test_const_obfuscation_skip_initializer_list() {
+        let mut ast = AstMutator::new().unwrap();
+        let source =
+            "void f() {\n    unsigned char arr[] = {0xAB, 0xCD, 0xEF};\n    int x = 0x3000;\n}";
+        let spec = make_spec("ast.const_obfuscation", &[]);
+        let (out, _) = ast.apply(source, &[&spec]).unwrap();
+
+        // Initializer list values should be preserved
+        assert!(out.contains("0xAB"));
+        assert!(out.contains("0xCD"));
+        assert!(out.contains("0xEF"));
+        // Regular constant should be obfuscated
+        assert!(!out.contains("0x3000"));
+        assert!(out.contains("__obf_c0"));
+    }
+
+    #[test]
+    fn test_const_obfuscation_skip_file_scope() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "int global = 100;\nvoid f() {\n    int local = 200;\n}";
+        let spec = make_spec("ast.const_obfuscation", &[]);
+        let (out, _) = ast.apply(source, &[&spec]).unwrap();
+
+        // File-scope constant should be preserved
+        assert!(out.contains("int global = 100;"));
+        // Local constant should be obfuscated
+        assert!(out.contains("__obf_c0"));
+    }
+
+    #[test]
+    fn test_const_obfuscation_only_modifies_integers() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = r#"#define BUFFER_SIZE 4096
+// This function allocates memory
+void setup(int mode) {
+    char *name = "VirtualAlloc";
+    float ratio = 3.14;
+    int flags = 0x3000;
+    int prot = 0x40;
+    char *buf = (char*)VirtualAlloc(NULL, BUFFER_SIZE, flags, prot);
+    if (!buf) return;
+    memset(buf, 0, BUFFER_SIZE);
+}"#;
+        let spec = make_spec("ast.const_obfuscation", &[]);
+        let (out, _) = ast.apply(source, &[&spec]).unwrap();
+
+        // Strings preserved
+        assert!(
+            out.contains(r#""VirtualAlloc""#),
+            "string literal was modified"
+        );
+        // Comments preserved
+        assert!(
+            out.contains("// This function allocates memory"),
+            "comment was modified"
+        );
+        // Function names / identifiers preserved
+        assert!(
+            out.contains("void setup("),
+            "function signature was modified"
+        );
+        // Float literal preserved
+        assert!(out.contains("3.14"), "float literal was modified");
+        // Preprocessor directive preserved
+        assert!(
+            out.contains("#define BUFFER_SIZE 4096"),
+            "preprocessor define was modified"
+        );
+        // Trivial values preserved
+        assert!(out.contains("NULL"), "NULL was modified");
+        assert!(out.contains(", 0,"), "zero literal in memset was modified");
+        // Integer constants are obfuscated
+        assert!(
+            !out.contains("0x3000"),
+            "0x3000 should have been obfuscated"
+        );
+        assert!(!out.contains("0x40"), "0x40 should have been obfuscated");
+        // Obfuscation variables present
+        assert!(
+            out.contains("__obf_c0"),
+            "missing first obfuscation variable"
+        );
+        assert!(
+            out.contains("__obf_c1"),
+            "missing second obfuscation variable"
+        );
+        // String XOR not applied (only const_obfuscation requested)
+        assert!(
+            !out.contains("xor_str_"),
+            "string XOR should not be applied"
+        );
+    }
+
+    #[test]
+    fn test_parse_c_integer() {
+        assert_eq!(parse_c_integer("0x3000"), Some(0x3000));
+        assert_eq!(parse_c_integer("0X3000"), Some(0x3000));
+        assert_eq!(parse_c_integer("0xFF"), Some(0xFF));
+        assert_eq!(parse_c_integer("42"), Some(42));
+        assert_eq!(parse_c_integer("42u"), Some(42));
+        assert_eq!(parse_c_integer("42ULL"), Some(42));
+        assert_eq!(parse_c_integer("0"), Some(0));
+        assert_eq!(parse_c_integer("0b1010"), Some(10));
+        assert_eq!(parse_c_integer("3.14"), None); // float
     }
 }
