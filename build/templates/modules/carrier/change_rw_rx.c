@@ -10,6 +10,7 @@
 
 int carrier() {
     DWORD result;
+    // @MUTATE:benign_preamble
     char *dest = (char*)supermega_payload; // defined in payload.h
 
     // 1. Make RW
@@ -19,6 +20,7 @@ int carrier() {
 
     // 2. Decode (In-Place)
     decode_payload(dest, PAYLOAD_LEN);
+    // @MUTATE:api_sequence_obfuscation
 
     // @MUTATE:protection_transition
     // 3. Make RX
