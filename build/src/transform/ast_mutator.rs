@@ -467,6 +467,10 @@ impl AstMutator {
             min_value, seed
         );
 
+        // Inline protection macros so their values become obfuscatable number literals
+        let source = inline_protection_macros(source);
+        let source = source.as_str();
+
         let tree = match self.parser.parse(source, None) {
             Some(t) => t,
             None => {
@@ -759,10 +763,10 @@ fn collect_number_literals(
         }
 
         // Skip array sizes: parent is array_declarator
-        if let Some(parent) = node.parent() {
-            if parent.kind() == "array_declarator" {
-                return;
-            }
+        if let Some(parent) = node.parent()
+            && parent.kind() == "array_declarator"
+        {
+            return;
         }
 
         // Skip case label values: first named child of case_statement
@@ -832,12 +836,12 @@ fn has_ancestor_of_kind(node: tree_sitter::Node, kind: &str) -> bool {
 
 /// Check if this node is the value of a `case` label (`case N:`).
 fn is_case_label_value(node: tree_sitter::Node) -> bool {
-    if let Some(parent) = node.parent() {
-        if parent.kind() == "case_statement" {
-            // The value is the first named child
-            if let Some(first) = parent.named_child(0) {
-                return first.id() == node.id();
-            }
+    if let Some(parent) = node.parent()
+        && parent.kind() == "case_statement"
+    {
+        // The value is the first named child
+        if let Some(first) = parent.named_child(0) {
+            return first.id() == node.id();
         }
     }
     false
@@ -847,12 +851,11 @@ fn is_case_label_value(node: tree_sitter::Node) -> bool {
 fn is_inside_obf_declaration(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut ancestor = node.parent();
     while let Some(a) = ancestor {
-        if a.kind() == "declaration" || a.kind() == "init_declarator" {
-            if let Ok(text) = a.utf8_text(source) {
-                if text.contains("__obf_c") {
-                    return true;
-                }
-            }
+        if (a.kind() == "declaration" || a.kind() == "init_declarator")
+            && let Ok(text) = a.utf8_text(source)
+            && text.contains("__obf_c")
+        {
+            return true;
         }
         ancestor = a.parent();
     }
@@ -875,6 +878,80 @@ fn find_containing_statement(node: tree_sitter::Node) -> Option<tree_sitter::Nod
     None
 }
 
+/// Known protection macros to inline before const obfuscation.
+/// Ordered longest-first so `p_RWX` is processed before `p_RW`.
+const PROTECTION_MACROS: &[&str] = &["p_RWX", "p_RX", "p_RW"];
+
+/// Inline protection macros so their values become number literals
+/// that const_obfuscation can process.
+///
+/// 1. Parse `#define p_RW 0x04` etc. from source
+/// 2. Remove those #define lines
+/// 3. Replace identifier usages with literal values
+fn inline_protection_macros(source: &str) -> String {
+    let mut macros: Vec<(&str, String)> = Vec::new();
+    let mut kept_lines: Vec<&str> = Vec::new();
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+        let mut matched = false;
+        for &name in PROTECTION_MACROS {
+            let prefix = format!("#define {}", name);
+            if trimmed.starts_with(&prefix) {
+                let value = trimmed[prefix.len()..].trim().to_string();
+                if !value.is_empty() {
+                    macros.push((name, value));
+                    matched = true;
+                    break;
+                }
+            }
+        }
+        if !matched {
+            kept_lines.push(line);
+        }
+    }
+
+    if macros.is_empty() {
+        return source.to_string();
+    }
+
+    let mut result = kept_lines.join("\n");
+    // Replace identifiers with values (word-boundary aware)
+    for (name, value) in &macros {
+        result = replace_word(&result, name, value);
+    }
+    result
+}
+
+/// Replace all word-boundary-delimited occurrences of `word` with `replacement`.
+fn replace_word(source: &str, word: &str, replacement: &str) -> String {
+    let mut result = String::with_capacity(source.len());
+    let bytes = source.as_bytes();
+    let word_bytes = word.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if i + word_bytes.len() <= bytes.len() && &bytes[i..i + word_bytes.len()] == word_bytes {
+            let before_ok = i == 0 || !is_word_char(bytes[i - 1]);
+            let after_pos = i + word_bytes.len();
+            let after_ok = after_pos >= bytes.len() || !is_word_char(bytes[after_pos]);
+
+            if before_ok && after_ok {
+                result.push_str(replacement);
+                i = after_pos;
+                continue;
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
+fn is_word_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
 /// Extract the indentation (whitespace prefix) of the line containing `byte_offset`.
 fn calculate_indent(source: &str, byte_offset: usize) -> String {
     // Find the start of the line containing byte_offset
@@ -893,7 +970,7 @@ fn calculate_indent(source: &str, byte_offset: usize) -> String {
 /// Supports: `0x3000`, `0X3000`, `0777`, `0b1010`, `42`, `42u`, `42ULL`, etc.
 fn parse_c_integer(text: &str) -> Option<u64> {
     // Strip common C suffixes: u, U, l, L, ll, LL, ull, ULL, etc.
-    let stripped = text.trim_end_matches(|c: char| c == 'u' || c == 'U' || c == 'l' || c == 'L');
+    let stripped = text.trim_end_matches(['u', 'U', 'l', 'L']);
 
     if stripped.is_empty() {
         return None;
@@ -1569,6 +1646,63 @@ void setup(int mode) {
             !out.contains("xor_str_"),
             "string XOR should not be applied"
         );
+    }
+
+    // ── inline_protection_macros tests ─────────────────────────────────
+
+    #[test]
+    fn test_const_obfuscation_inlines_protection_macros() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "\
+#define p_RW  0x04
+#define p_RX  0x20
+#define p_RWX 0x40
+void f() {
+    VirtualAlloc(NULL, PAYLOAD_LEN, 0x3000, p_RW);
+    VirtualProtect(buf, PAYLOAD_LEN, p_RX, &old_prot);
+}";
+        let spec = make_spec("ast.const_obfuscation", &[]);
+        let (out, _) = ast.apply(source, &[&spec]).unwrap();
+
+        // #define lines should be removed
+        assert!(!out.contains("#define p_RW"));
+        assert!(!out.contains("#define p_RX"));
+        assert!(!out.contains("#define p_RWX"));
+        // Macro identifiers should no longer appear
+        assert!(!out.contains("p_RW"));
+        assert!(!out.contains("p_RX"));
+        // Values should be obfuscated (not plaintext)
+        assert!(!out.contains("0x04"));
+        assert!(!out.contains("0x20"));
+        // Obfuscation variables should exist
+        assert!(out.contains("__obf_c"));
+    }
+
+    #[test]
+    fn test_const_obfuscation_after_protection_transition() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "\
+#define p_RW  0x04
+#define p_RX  0x20
+#define p_RWX 0x40
+void f() {
+    char *buf = (char*)VirtualAlloc(NULL, PAYLOAD_LEN, 0x3000, p_RW);
+    // @MUTATE:protection_transition
+    VirtualProtect(buf, PAYLOAD_LEN, p_RX, &old_prot);
+}";
+        let specs = [
+            make_spec("ast.protection_transition", &[("pattern", "rw_rwx")]),
+            make_spec("ast.const_obfuscation", &[]),
+        ];
+        let spec_refs: Vec<&MutationSpec> = specs.iter().collect();
+        let (out, applied) = ast.apply(source, &spec_refs).unwrap();
+
+        assert!(applied.contains(&"ast.protection_transition".to_string()));
+        assert!(applied.contains(&"ast.const_obfuscation".to_string()));
+        // p_RWX (from protection_transition replacing p_RX) should now be obfuscated
+        assert!(!out.contains("p_RWX"));
+        assert!(!out.contains("0x40"));
+        assert!(out.contains("__obf_c"));
     }
 
     #[test]

@@ -393,7 +393,7 @@ fn test_const_obfuscation_preserves_payload_array() {
 }
 
 #[test]
-fn test_const_obfuscation_preserves_preprocessor_defines() {
+fn test_const_obfuscation_inlines_protection_macros_pipeline() {
     let modules = ModuleSelection::new();
     let payload = common::payload_small();
     let mutations = vec![MutationSpec {
@@ -403,14 +403,19 @@ fn test_const_obfuscation_preserves_preprocessor_defines() {
 
     let out = common::run_pipeline(modules, &payload, EncodingType::Xor, &mutations).unwrap();
 
-    // #define constants (p_RW, p_RX, etc.) should be preserved
+    // Protection macros (p_RW, p_RX, p_RWX) should be inlined and obfuscated
     assert!(
-        out.final_source.contains("p_RW"),
-        "#define p_RW should survive const_obfuscation"
+        !out.final_source.contains("#define p_RW"),
+        "#define p_RW should be removed by inline_protection_macros"
     );
     assert!(
-        out.final_source.contains("p_RX"),
-        "#define p_RX should survive const_obfuscation"
+        !out.final_source.contains("#define p_RX"),
+        "#define p_RX should be removed by inline_protection_macros"
+    );
+    // The macro identifiers should be replaced with obfuscated values
+    assert!(
+        out.final_source.contains("__obf_c"),
+        "Protection values should be obfuscated"
     );
 }
 
