@@ -78,6 +78,10 @@ pub struct SubmitJobRequest {
     /// Cache encoded payload across rounds (default: true)
     #[serde(default = "default_true")]
     pub cache_payload: bool,
+
+    /// Use MSVC link.exe instead of lld-link (default: false)
+    #[serde(default)]
+    pub msvc_compat: bool,
 }
 
 fn default_true() -> bool {
@@ -263,6 +267,7 @@ pub async fn submit_job(
             fixed_mutations: payload.fixed_mutations,
             sc_checkpoint_count: payload.sc_checkpoint_count,
             cache_payload: payload.cache_payload,
+            msvc_compat: payload.msvc_compat,
         })
         .await
     {

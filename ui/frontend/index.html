@@ -819,6 +819,14 @@
                                 <input type="checkbox" id="jobStopOnEvasion"> Stop on first evasion
                             </label>
                         </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="jobMsvcCompat"> Use MSVC linker (link.exe)
+                            </label>
+                            <div class="muted" style="font-size: 0.75rem; margin-top: 2px;">
+                                Produces genuine MSVC PE metadata (Rich header, linker version). Requires VS Build Tools on host.
+                            </div>
+                        </div>
                     </div>
                     <button type="submit" class="btn-primary">Submit Job</button>
                 </form>
@@ -1189,6 +1197,7 @@
                 mutation_targets: mutTargets,
                 sc_checkpoint_count: parseInt(document.getElementById('jobScCheckpoints').value) || 0,
                 cache_payload: document.getElementById('jobCachePayload').checked,
+                msvc_compat: document.getElementById('jobMsvcCompat').checked,
             };
 
             try {
