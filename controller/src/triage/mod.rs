@@ -148,6 +148,9 @@ fn default_mutation_pool() -> Vec<String> {
         "ast.protection_transition",
         "ast.const_obfuscation",
         "ast.string_xor",
+        "ast.benign_syscall_insert",
+        "ast.benign_preamble",
+        "ast.api_sequence_obfuscation",
     ]
     .into_iter()
     .map(String::from)

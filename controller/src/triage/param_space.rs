@@ -301,6 +301,61 @@ pub fn default_registry() -> Vec<MutationParamSpace> {
             }],
         },
         MutationParamSpace {
+            mutation_id: "ast.benign_syscall_insert".to_string(),
+            params: vec![
+                ParamDef::Categorical {
+                    name: "groups".to_string(),
+                    options: vec![
+                        "system_query".to_string(),
+                        "system_query,file_io".to_string(),
+                        "system_query,registry_io".to_string(),
+                        "system_query,file_io,registry_io".to_string(),
+                    ],
+                    default: "system_query,file_io,registry_io".to_string(),
+                },
+                ParamDef::IntRange {
+                    name: "count".to_string(),
+                    min: 1,
+                    max: 9,
+                    default: 4,
+                },
+                ParamDef::FloatRange {
+                    name: "density".to_string(),
+                    min: 0.1,
+                    max: 1.0,
+                    default: 0.5,
+                },
+                ParamDef::Categorical {
+                    name: "target_fn".to_string(),
+                    options: vec![
+                        "carrier".to_string(),
+                        "deconditioner".to_string(),
+                        "antiemulation".to_string(),
+                        "guardrail".to_string(),
+                    ],
+                    default: "carrier".to_string(),
+                },
+            ],
+        },
+        MutationParamSpace {
+            mutation_id: "ast.benign_preamble".to_string(),
+            params: vec![ParamDef::IntRange {
+                name: "count".to_string(),
+                min: 1,
+                max: 3,
+                default: 2,
+            }],
+        },
+        MutationParamSpace {
+            mutation_id: "ast.api_sequence_obfuscation".to_string(),
+            params: vec![ParamDef::IntRange {
+                name: "count".to_string(),
+                min: 1,
+                max: 3,
+                default: 2,
+            }],
+        },
+        MutationParamSpace {
             mutation_id: "llvm.nop_insert".to_string(),
             params: vec![ParamDef::FloatRange {
                 name: "density".to_string(),
