@@ -235,6 +235,7 @@ pub fn parse_payload_len(header: &str) -> usize {
 pub fn count_hex_bytes_in_array(header: &str) -> usize {
     let start = header
         .find("supermega_payload[PAYLOAD_LEN] = {")
+        .or_else(|| header.find("supermega_payload[ENCODED_PAYLOAD_LEN] = {"))
         .or_else(|| header.find("supermega_payload[1] = {"))
         .expect("supermega_payload array not found");
     let after_brace = header[start..].find('{').unwrap() + start + 1;

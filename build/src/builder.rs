@@ -147,6 +147,7 @@ pub fn prepare_payload(
             EncodingType::Xor => "XOR",
             EncodingType::English => "English",
             EncodingType::None => "None",
+            EncodingType::SubByte => "SubByte",
         }
     );
 

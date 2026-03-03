@@ -148,6 +148,22 @@ fn test_encoding_type_from_str() {
         EncodingType::from_str("ENGLISH").unwrap(),
         EncodingType::English
     );
+    assert_eq!(
+        EncodingType::from_str("subbyte").unwrap(),
+        EncodingType::SubByte
+    );
+    assert_eq!(
+        EncodingType::from_str("SUBBYTE").unwrap(),
+        EncodingType::SubByte
+    );
+    assert_eq!(
+        EncodingType::from_str("sub_byte").unwrap(),
+        EncodingType::SubByte
+    );
+    assert_eq!(
+        EncodingType::from_str("nibble").unwrap(),
+        EncodingType::SubByte
+    );
     assert!(EncodingType::from_str("aes").is_err());
     assert!(EncodingType::from_str("").is_err());
 }
@@ -156,6 +172,7 @@ fn test_encoding_type_from_str() {
 fn test_encoding_type_decoder_module() {
     assert_eq!(EncodingType::Xor.decoder_module(), "xor");
     assert_eq!(EncodingType::English.decoder_module(), "english");
+    assert_eq!(EncodingType::SubByte.decoder_module(), "subbyte");
 }
 
 #[test]
@@ -268,6 +285,18 @@ fn test_c_header_balanced_braces() {
         "English header has unbalanced braces: {} open, {} close",
         open_en, close_en
     );
+
+    // SubByte header
+    let encoded_sb = encoder.encode(&payload, EncodingType::SubByte);
+    let header_sb = encoder.generate_c_header(&encoded_sb);
+
+    let open_sb = header_sb.matches('{').count();
+    let close_sb = header_sb.matches('}').count();
+    assert_eq!(
+        open_sb, close_sb,
+        "SubByte header has unbalanced braces: {} open, {} close",
+        open_sb, close_sb
+    );
 }
 
 #[test]
@@ -275,7 +304,11 @@ fn test_c_header_has_include_guard() {
     let encoder = PayloadEncoder::new();
     let payload = common::payload_small();
 
-    for encoding in &[EncodingType::Xor, EncodingType::English] {
+    for encoding in &[
+        EncodingType::Xor,
+        EncodingType::English,
+        EncodingType::SubByte,
+    ] {
         let encoded = encoder.encode(&payload, *encoding);
         let header = encoder.generate_c_header(&encoded);
 
@@ -331,5 +364,213 @@ fn test_c_header_deterministic() {
     assert_eq!(
         header1, header2,
         "Same payload should produce identical headers"
+    );
+}
+
+// ── Sub-byte encoding tests ──────────────────────────────────────────────
+
+/// Helper: decode sub-byte encoded data back to original using reverse lookup
+fn subbyte_decode(encoded: &[u8], mapping: &[u8; 16]) -> Vec<u8> {
+    let mut reverse = [0u8; 256];
+    for (i, &v) in mapping.iter().enumerate() {
+        reverse[v as usize] = i as u8;
+    }
+    let mut decoded = Vec::with_capacity(encoded.len() / 2);
+    for chunk in encoded.chunks_exact(2) {
+        let high = reverse[chunk[0] as usize];
+        let low = reverse[chunk[1] as usize];
+        decoded.push((high << 4) | low);
+    }
+    decoded
+}
+
+#[test]
+fn test_subbyte_roundtrip_multiple_payloads() {
+    let default_mapping: [u8; 16] = [0, 2, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 20];
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("empty", common::payload_empty()),
+        ("tiny", common::payload_tiny()),
+        ("small", common::payload_small()),
+        ("typical", common::payload_typical()),
+        ("large", common::payload_large()),
+        ("all_zeros", common::payload_all_zeros()),
+        ("all_ff", common::payload_all_ff()),
+        ("sequential", common::payload_sequential()),
+    ];
+    let encoder = PayloadEncoder::new();
+    for (name, payload) in &cases {
+        let encoded = encoder.encode(payload, EncodingType::SubByte);
+        let decoded = subbyte_decode(&encoded.data, &default_mapping);
+        assert_eq!(
+            payload,
+            &decoded,
+            "FAILED sub-byte roundtrip for '{}' (len={})",
+            name,
+            payload.len()
+        );
+    }
+}
+
+#[test]
+fn test_subbyte_encoded_size_is_double() {
+    let encoder = PayloadEncoder::new();
+    let sizes = [0, 1, 4, 64, 256, 1000, 8192];
+
+    for &sz in &sizes {
+        let payload: Vec<u8> = (0..sz).map(|i| (i % 256) as u8).collect();
+        let encoded = encoder.encode(&payload, EncodingType::SubByte);
+        assert_eq!(
+            encoded.data.len(),
+            payload.len() * 2,
+            "Encoded size should be 2x original for size {}",
+            sz
+        );
+    }
+}
+
+#[test]
+fn test_subbyte_all_encoded_bytes_in_mapping() {
+    let default_mapping: [u8; 16] = [0, 2, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 20];
+    let encoder = PayloadEncoder::new();
+    let payload = common::payload_sequential(); // all 256 byte values
+
+    let encoded = encoder.encode(&payload, EncodingType::SubByte);
+    let mapping_set: std::collections::HashSet<u8> = default_mapping.iter().copied().collect();
+
+    for (i, &b) in encoded.data.iter().enumerate() {
+        assert!(
+            mapping_set.contains(&b),
+            "Encoded byte at index {} (0x{:02X}) is not in the mapping set",
+            i,
+            b
+        );
+    }
+}
+
+#[test]
+fn test_subbyte_custom_mapping() {
+    let custom_mapping: [u8; 16] = [
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x41, 0x42, 0x43, 0x44, 0x45,
+        0x46,
+    ];
+    let encoder = PayloadEncoder::with_subbyte_mapping(custom_mapping);
+    let payload = vec![0xAB, 0xCD, 0xEF, 0x01, 0x23];
+
+    let encoded = encoder.encode(&payload, EncodingType::SubByte);
+    let decoded = subbyte_decode(&encoded.data, &custom_mapping);
+    assert_eq!(payload, decoded, "Custom mapping roundtrip failed");
+
+    // Verify all encoded bytes are in the custom mapping
+    let mapping_set: std::collections::HashSet<u8> = custom_mapping.iter().copied().collect();
+    for &b in &encoded.data {
+        assert!(mapping_set.contains(&b));
+    }
+}
+
+#[test]
+fn test_c_header_subbyte_structure() {
+    let encoder = PayloadEncoder::new();
+    let payload = common::payload_small(); // 4 bytes
+    let encoded = encoder.encode(&payload, EncodingType::SubByte);
+    let header = encoder.generate_c_header(&encoded);
+
+    assert!(
+        header.contains("#define SUBBYTE_ENCODING"),
+        "Missing SUBBYTE_ENCODING define"
+    );
+    assert!(
+        header.contains("#define PAYLOAD_LEN 4"),
+        "PAYLOAD_LEN should be original payload size"
+    );
+    assert!(
+        header.contains("#define ENCODED_PAYLOAD_LEN 8"),
+        "ENCODED_PAYLOAD_LEN should be 2x original"
+    );
+    assert!(
+        header.contains("SUBBYTE_MAPPING[16]"),
+        "Missing SUBBYTE_MAPPING array"
+    );
+    assert!(
+        header.contains("supermega_payload[ENCODED_PAYLOAD_LEN]"),
+        "Missing supermega_payload with ENCODED_PAYLOAD_LEN size"
+    );
+}
+
+#[test]
+fn test_subbyte_header_payload_len_is_original() {
+    let encoder = PayloadEncoder::new();
+    let sizes = [1, 10, 64, 256, 1000];
+
+    for &sz in &sizes {
+        let payload: Vec<u8> = (0..sz).map(|i| (i % 256) as u8).collect();
+        let encoded = encoder.encode(&payload, EncodingType::SubByte);
+        let header = encoder.generate_c_header(&encoded);
+
+        let defined_len = common::parse_payload_len(&header);
+        assert_eq!(
+            defined_len, sz as usize,
+            "SubByte PAYLOAD_LEN should be original size, not encoded size, for size {}",
+            sz
+        );
+
+        // Also verify ENCODED_PAYLOAD_LEN is present and correct
+        let expected = format!("#define ENCODED_PAYLOAD_LEN {}", sz * 2);
+        assert!(
+            header.contains(&expected),
+            "Missing or incorrect ENCODED_PAYLOAD_LEN for size {}",
+            sz
+        );
+    }
+}
+
+#[test]
+fn test_subbyte_header_array_count_matches_encoded_len() {
+    let encoder = PayloadEncoder::new();
+    let sizes = [1, 4, 12, 100, 256];
+
+    for &sz in &sizes {
+        let payload: Vec<u8> = (0..sz).map(|i| (i % 256) as u8).collect();
+        let encoded = encoder.encode(&payload, EncodingType::SubByte);
+        let header = encoder.generate_c_header(&encoded);
+
+        let hex_count = common::count_hex_bytes_in_array(&header);
+        assert_eq!(
+            hex_count,
+            (sz * 2) as usize,
+            "Hex byte count should equal ENCODED_PAYLOAD_LEN (2x) for size {}",
+            sz
+        );
+    }
+}
+
+#[test]
+fn test_encoding_type_from_str_subbyte() {
+    // All aliases should parse to SubByte
+    for alias in &[
+        "subbyte", "sub_byte", "nibble", "SUBBYTE", "SUB_BYTE", "NIBBLE",
+    ] {
+        assert_eq!(
+            EncodingType::from_str(alias).unwrap(),
+            EncodingType::SubByte,
+            "'{}' should parse to SubByte",
+            alias
+        );
+    }
+}
+
+#[test]
+fn test_subbyte_deterministic() {
+    let encoder = PayloadEncoder::new();
+    let payload = common::payload_typical();
+
+    let encoded1 = encoder.encode(&payload, EncodingType::SubByte);
+    let header1 = encoder.generate_c_header(&encoded1);
+
+    let encoded2 = encoder.encode(&payload, EncodingType::SubByte);
+    let header2 = encoder.generate_c_header(&encoded2);
+
+    assert_eq!(
+        header1, header2,
+        "Same payload should produce identical SubByte headers"
     );
 }
