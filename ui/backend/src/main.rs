@@ -36,17 +36,19 @@ mod grpc_client;
 
 use api::{ApiResponse, HealthResponse};
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::State,
     http::{Method, header},
     routing::{get, post},
 };
+use elasticsearch::Elasticsearch;
+use elasticsearch::http::transport::Transport;
 use grpc_client::{ControllerConfig, ControllerGrpcClient};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
-use tracing::{Level, info};
+use tracing::{Level, info, warn};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -72,6 +74,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         address: controller_addr,
         timeout_secs: 30,
     }));
+
+    // Create Elasticsearch client (optional — token endpoint degrades gracefully)
+    let es_url =
+        std::env::var("ELASTICSEARCH_URL").unwrap_or_else(|_| "http://localhost:9200".to_string());
+    let es_client: Option<Arc<Elasticsearch>> = match Transport::single_node(&es_url) {
+        Ok(transport) => {
+            info!("  Elasticsearch: {}", es_url);
+            Some(Arc::new(Elasticsearch::new(transport)))
+        }
+        Err(e) => {
+            warn!("Elasticsearch not available ({}): {}", es_url, e);
+            None
+        }
+    };
 
     // CORS configuration - allow all origins for development
     let cors = CorsLayer::new()
@@ -123,7 +139,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Query endpoints
         .route("/api/query", post(api::query::query_results))
         .route("/api/triage", post(api::query::submit_triage))
+        // Token endpoints (ES direct)
+        .route(
+            "/api/jobs/:job_id/rounds/:round_id/tokens",
+            get(api::tokens::get_round_tokens),
+        )
         // Middleware
+        .layer(Extension(es_client))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         // State

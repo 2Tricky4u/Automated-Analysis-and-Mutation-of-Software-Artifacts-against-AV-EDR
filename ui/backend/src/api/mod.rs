@@ -4,6 +4,7 @@
 
 pub mod jobs;
 pub mod query;
+pub mod tokens;
 pub mod workers;
 
 use axum::{

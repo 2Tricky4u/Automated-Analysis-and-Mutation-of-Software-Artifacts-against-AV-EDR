@@ -535,6 +535,63 @@
         .round-link:hover {
             text-decoration: underline;
         }
+
+        /* Token pill styles */
+        .token-pill {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.7rem;
+            font-family: 'Consolas', monospace;
+            margin: 2px 3px 2px 0;
+            border: 1px solid transparent;
+            cursor: default;
+        }
+
+        .token-pill.cat-module { background: #1e3a5f; color: #93c5fd; border-color: #2563eb44; }
+        .token-pill.cat-mutation { background: #2d1b4e; color: #c084fc; border-color: #7c3aed44; }
+        .token-pill.cat-api { background: #14532d; color: #86efac; border-color: #16a34a44; }
+        .token-pill.cat-api_arg { background: #451a03; color: #fbbf24; border-color: #d9770644; }
+        .token-pill.cat-seq2 { background: #4a1942; color: #f9a8d4; border-color: #db277744; }
+        .token-pill.cat-image { background: #164e63; color: #67e8f9; border-color: #0891b244; }
+        .token-pill.cat-etw { background: #3f3f00; color: #d9f99d; border-color: #84cc1644; }
+        .token-pill.cat-other { background: #1f2937; color: #9ca3af; border-color: #4b556344; }
+
+        .token-category-header {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #8b949e;
+            margin: 8px 0 4px 0;
+            font-weight: 600;
+        }
+
+        .token-category-header:first-child {
+            margin-top: 0;
+        }
+
+        .token-summary {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+            padding: 6px 10px;
+            background: #0d1117;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            color: #8b949e;
+        }
+
+        .token-summary-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .token-summary-count {
+            font-weight: 700;
+            color: #ccc;
+        }
     </style>
 </head>
 <body>
@@ -845,25 +902,6 @@
                 <div class="response-box mt-10" id="queryResponse">Enter filters and click Query</div>
             </div>
 
-            <!-- Triage Card -->
-            <div class="card">
-                <h2>Submit Triage</h2>
-                <div class="form-group">
-                    <label>Job ID</label>
-                    <input type="text" id="triageJobId" placeholder="job-123">
-                </div>
-                <div class="form-group">
-                    <label>AV Product</label>
-                    <input type="text" id="triageAvProduct" placeholder="Windows Defender">
-                </div>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="triageDetected"> Detected
-                    </label>
-                </div>
-                <button class="btn-secondary" onclick="submitTriage()">Submit Triage</button>
-                <div class="response-box mt-10 hidden" id="triageResponse"></div>
-            </div>
         </div>
     </div>
 
@@ -1453,9 +1491,65 @@
                     html += '</div>';
                 }
 
+                // Token results placeholder (populated asynchronously)
+                html += '<div id="tokenResults"></div>';
+
                 responseBox.innerHTML = html;
+
+                // Fetch tokens asynchronously (silent on failure)
+                fetchRoundTokens(parsed.jobId, parsed.roundId);
             } catch (e) {
                 responseBox.textContent = `Error: ${e.message}`;
+            }
+        }
+
+        // ================================================================
+        // Token Visualization
+        // ================================================================
+
+        async function fetchRoundTokens(jobId, roundId) {
+            const container = document.getElementById('tokenResults');
+            if (!container) return;
+
+            try {
+                const resp = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/rounds/${encodeURIComponent(roundId)}/tokens`);
+                if (resp.status === 404) return; // No tokens yet — silent
+                if (!resp.ok) return;
+
+                const data = await resp.json();
+                const d = data.data;
+                if (!d || !d.tokens || d.tokens.length === 0) return;
+
+                const categories = d.token_categories || {};
+                const catNames = Object.keys(categories).sort();
+
+                // Summary bar
+                let summaryHtml = '<div class="token-summary">';
+                summaryHtml += `<span class="token-summary-item"><span class="token-summary-count">${d.token_count}</span> tokens</span>`;
+                catNames.forEach(cat => {
+                    const count = categories[cat].length;
+                    summaryHtml += `<span class="token-summary-item"><span class="token-pill cat-${cat}" style="padding:1px 5px;margin:0;">${escapeHtml(cat)}</span><span class="token-summary-count">${count}</span></span>`;
+                });
+                if (d.evasion_score > 0) {
+                    summaryHtml += `<span class="token-summary-item">Evasion: <span class="token-summary-count">${d.evasion_score.toFixed(2)}</span></span>`;
+                }
+                summaryHtml += '</div>';
+
+                // Categorized pills
+                let pillsHtml = summaryHtml;
+                catNames.forEach(cat => {
+                    pillsHtml += `<div class="token-category-header">${escapeHtml(cat)} (${categories[cat].length})</div>`;
+                    categories[cat].forEach(token => {
+                        // Strip category prefix for display, keep full token in tooltip
+                        const display = token.includes(':') ? token.substring(token.indexOf(':') + 1) : token;
+                        const catCls = `cat-${cat}`;
+                        pillsHtml += `<span class="token-pill ${catCls}" title="${escapeHtml(token)}">${escapeHtml(display)}</span>`;
+                    });
+                });
+
+                container.innerHTML = collapsibleSection('sec-tokens', `Triage Tokens (${d.token_count})`, pillsHtml, false);
+            } catch (e) {
+                // Silent failure — tokens are optional
             }
         }
 
@@ -1606,18 +1700,29 @@
                 if (d.results && d.results.length > 0) {
                     html += `<table style="margin-top: 8px;">
                         <thead><tr>
+                            <th>Run ID</th>
                             <th>Job ID</th>
                             <th>Detected</th>
-                            <th>Detection Rate</th>
-                            <th>Techniques</th>
+                            <th>Verdict</th>
+                            <th>Elapsed</th>
+                            <th>VM</th>
+                            <th>Timestamp</th>
                         </tr></thead><tbody>`;
 
                     d.results.forEach(r => {
+                        const ts = r.telemetry_summary || {};
+                        const runId = ts.run_id || r.artifact_hash || '-';
+                        const elapsed = ts.elapsed_ms ? `${ts.elapsed_ms}ms` : '-';
+                        const vm = ts.vm_id || '-';
+                        const timestamp = ts.timestamp ? ts.timestamp.replace('T', ' ').substring(0, 19) : '-';
                         html += `<tr>
+                            <td style="font-family:Consolas,monospace;font-size:0.75rem;">${escapeHtml(runId)}</td>
                             <td>${escapeHtml(r.job_id)}</td>
                             <td>${detectedBadge(r.detected)}</td>
                             <td>${escapeHtml(r.detection_rate || '-')}</td>
-                            <td>${escapeHtml((r.evasion_techniques || []).join(', ') || '-')}</td>
+                            <td>${escapeHtml(elapsed)}</td>
+                            <td>${escapeHtml(vm)}</td>
+                            <td style="color:#8b949e;font-size:0.75rem;">${escapeHtml(timestamp)}</td>
                         </tr>`;
                     });
 
@@ -1632,36 +1737,6 @@
             }
         }
 
-        // ================================================================
-        // Submit Triage
-        // ================================================================
-
-        async function submitTriage() {
-            const jobId = document.getElementById('triageJobId').value;
-            if (!jobId) return alert('Enter a Job ID');
-
-            const payload = {
-                job_id: jobId,
-                detected: document.getElementById('triageDetected').checked,
-                av_product: document.getElementById('triageAvProduct').value
-            };
-
-            const responseBox = document.getElementById('triageResponse');
-            responseBox.classList.remove('hidden');
-            responseBox.textContent = 'Submitting...';
-
-            try {
-                const resp = await fetch(`${API_BASE}/api/triage`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const data = await resp.json();
-                responseBox.textContent = JSON.stringify(data, null, 2);
-            } catch (e) {
-                responseBox.textContent = `Error: ${e.message}`;
-            }
-        }
 
         // ================================================================
         // Worker Admin Commands

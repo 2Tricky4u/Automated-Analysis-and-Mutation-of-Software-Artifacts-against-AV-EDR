@@ -70,13 +70,39 @@ pub async fn query_results(
 
     let results: Vec<AnalysisResult> = docs
         .iter()
-        .map(|doc| AnalysisResult {
-            job_id: doc["job_id"].as_str().unwrap_or("").to_string(),
-            artifact_hash: doc["artifact_id"].as_str().unwrap_or("").to_string(),
-            detected: doc["detected"].as_bool().unwrap_or(false),
-            detection_rate: doc["detection_verdict"].as_str().unwrap_or("").to_string(),
-            evasion_techniques: vec![],
-            telemetry_summary: Default::default(),
+        .map(|doc| {
+            let mut summary = std::collections::HashMap::new();
+            let fields = [
+                ("run_id", "run_id"),
+                ("round_id", "round_id"),
+                ("elapsed_ms", "elapsed_ms"),
+                ("vm_id", "vm_id"),
+                ("exit_code", "exit_code"),
+                ("run_type", "run_type"),
+                ("timestamp", "@timestamp"),
+            ];
+            for (key, doc_field) in &fields {
+                let val = if *doc_field == "elapsed_ms" || *doc_field == "exit_code" {
+                    // Numeric fields: try as number first, then as string
+                    doc[doc_field]
+                        .as_i64()
+                        .map(|n| n.to_string())
+                        .or_else(|| doc[doc_field].as_str().map(|s| s.to_string()))
+                } else {
+                    doc[doc_field].as_str().map(|s| s.to_string())
+                };
+                if let Some(v) = val {
+                    summary.insert(key.to_string(), v);
+                }
+            }
+            AnalysisResult {
+                job_id: doc["job_id"].as_str().unwrap_or("").to_string(),
+                artifact_hash: doc["artifact_id"].as_str().unwrap_or("").to_string(),
+                detected: doc["detected"].as_bool().unwrap_or(false),
+                detection_rate: doc["detection_verdict"].as_str().unwrap_or("").to_string(),
+                evasion_techniques: vec![],
+                telemetry_summary: summary,
+            }
         })
         .collect();
 

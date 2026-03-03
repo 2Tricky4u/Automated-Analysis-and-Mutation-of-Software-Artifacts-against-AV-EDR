@@ -6,6 +6,7 @@ use super::{ApiError, ApiResponse};
 use crate::grpc_client::ControllerGrpcClient;
 use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error};
 
@@ -39,6 +40,7 @@ pub struct AnalysisResultInfo {
     pub detected: bool,
     pub detection_rate: String,
     pub evasion_techniques: Vec<String>,
+    pub telemetry_summary: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,6 +94,7 @@ pub async fn query_results(
                     detected: r.detected,
                     detection_rate: r.detection_rate,
                     evasion_techniques: r.evasion_techniques,
+                    telemetry_summary: r.telemetry_summary,
                 })
                 .collect();
 
