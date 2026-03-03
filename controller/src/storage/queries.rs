@@ -258,7 +258,7 @@ pub async fn query_analysis_results(
         if !date_to.is_empty() {
             range.insert("lte".to_string(), json!(date_to));
         }
-        filters.push(json!({ "range": { "@timestamp": range } }));
+        filters.push(json!({ "range": { "timestamp": range } }));
     }
 
     let query = if filters.is_empty() {
@@ -271,7 +271,7 @@ pub async fn query_analysis_results(
         .search(SearchParts::Index(&["runs-*"]))
         .body(json!({
             "query": query,
-            "sort": [{ "@timestamp": "desc" }],
+            "sort": [{ "timestamp": "desc" }],
             "size": 100
         }))
         .send()

@@ -902,6 +902,16 @@
                 <div class="response-box mt-10" id="queryResponse">Enter filters and click Query</div>
             </div>
 
+            <!-- Triage Tokens Card -->
+            <div class="card">
+                <h2>Triage Tokens</h2>
+                <div class="flex-row mb-10">
+                    <input type="text" id="tokenRoundId" placeholder="job-xxx-round-1" class="flex-grow">
+                    <button class="btn-secondary" onclick="lookupTokens()">Lookup</button>
+                </div>
+                <div class="response-box" id="tokenResponse">Enter a Round ID and click Lookup</div>
+            </div>
+
         </div>
     </div>
 
@@ -1491,13 +1501,7 @@
                     html += '</div>';
                 }
 
-                // Token results placeholder (populated asynchronously)
-                html += '<div id="tokenResults"></div>';
-
                 responseBox.innerHTML = html;
-
-                // Fetch tokens asynchronously (silent on failure)
-                fetchRoundTokens(parsed.jobId, parsed.roundId);
             } catch (e) {
                 responseBox.textContent = `Error: ${e.message}`;
             }
@@ -1507,49 +1511,66 @@
         // Token Visualization
         // ================================================================
 
-        async function fetchRoundTokens(jobId, roundId) {
-            const container = document.getElementById('tokenResults');
-            if (!container) return;
+        function renderTokenPills(d) {
+            const categories = d.token_categories || {};
+            const catNames = Object.keys(categories).sort();
+
+            // Summary bar
+            let html = '<div class="token-summary">';
+            html += `<span class="token-summary-item"><span class="token-summary-count">${d.token_count}</span> tokens</span>`;
+            catNames.forEach(cat => {
+                const count = categories[cat].length;
+                html += `<span class="token-summary-item"><span class="token-pill cat-${cat}" style="padding:1px 5px;margin:0;">${escapeHtml(cat)}</span><span class="token-summary-count">${count}</span></span>`;
+            });
+            if (d.evasion_score > 0) {
+                html += `<span class="token-summary-item">Evasion: <span class="token-summary-count">${d.evasion_score.toFixed(2)}</span></span>`;
+            }
+            html += '</div>';
+
+            // Categorized pills
+            catNames.forEach(cat => {
+                html += `<div class="token-category-header">${escapeHtml(cat)} (${categories[cat].length})</div>`;
+                categories[cat].forEach(token => {
+                    const display = token.includes(':') ? token.substring(token.indexOf(':') + 1) : token;
+                    const catCls = `cat-${cat}`;
+                    html += `<span class="token-pill ${catCls}" title="${escapeHtml(token)}">${escapeHtml(display)}</span>`;
+                });
+            });
+
+            return html;
+        }
+
+        async function lookupTokens() {
+            const roundIdRaw = document.getElementById('tokenRoundId').value.trim();
+            if (!roundIdRaw) return alert('Enter a Round ID');
+
+            const parsed = parseRoundId(roundIdRaw);
+            if (!parsed) return alert('Invalid Round ID format. Expected: {job_id}-round-{N}');
+
+            const responseBox = document.getElementById('tokenResponse');
+            responseBox.textContent = 'Loading...';
 
             try {
-                const resp = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/rounds/${encodeURIComponent(roundId)}/tokens`);
-                if (resp.status === 404) return; // No tokens yet — silent
-                if (!resp.ok) return;
+                const resp = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(parsed.jobId)}/rounds/${encodeURIComponent(parsed.roundId)}/tokens`);
+                if (resp.status === 404) {
+                    responseBox.textContent = 'No tokens found for this round';
+                    return;
+                }
+                if (!resp.ok) {
+                    responseBox.textContent = `Error: ${resp.status} ${resp.statusText}`;
+                    return;
+                }
 
                 const data = await resp.json();
                 const d = data.data;
-                if (!d || !d.tokens || d.tokens.length === 0) return;
-
-                const categories = d.token_categories || {};
-                const catNames = Object.keys(categories).sort();
-
-                // Summary bar
-                let summaryHtml = '<div class="token-summary">';
-                summaryHtml += `<span class="token-summary-item"><span class="token-summary-count">${d.token_count}</span> tokens</span>`;
-                catNames.forEach(cat => {
-                    const count = categories[cat].length;
-                    summaryHtml += `<span class="token-summary-item"><span class="token-pill cat-${cat}" style="padding:1px 5px;margin:0;">${escapeHtml(cat)}</span><span class="token-summary-count">${count}</span></span>`;
-                });
-                if (d.evasion_score > 0) {
-                    summaryHtml += `<span class="token-summary-item">Evasion: <span class="token-summary-count">${d.evasion_score.toFixed(2)}</span></span>`;
+                if (!d || !d.tokens || d.tokens.length === 0) {
+                    responseBox.textContent = 'No tokens found for this round';
+                    return;
                 }
-                summaryHtml += '</div>';
 
-                // Categorized pills
-                let pillsHtml = summaryHtml;
-                catNames.forEach(cat => {
-                    pillsHtml += `<div class="token-category-header">${escapeHtml(cat)} (${categories[cat].length})</div>`;
-                    categories[cat].forEach(token => {
-                        // Strip category prefix for display, keep full token in tooltip
-                        const display = token.includes(':') ? token.substring(token.indexOf(':') + 1) : token;
-                        const catCls = `cat-${cat}`;
-                        pillsHtml += `<span class="token-pill ${catCls}" title="${escapeHtml(token)}">${escapeHtml(display)}</span>`;
-                    });
-                });
-
-                container.innerHTML = collapsibleSection('sec-tokens', `Triage Tokens (${d.token_count})`, pillsHtml, false);
+                responseBox.innerHTML = renderTokenPills(d);
             } catch (e) {
-                // Silent failure — tokens are optional
+                responseBox.textContent = `Error: ${e.message}`;
             }
         }
 
