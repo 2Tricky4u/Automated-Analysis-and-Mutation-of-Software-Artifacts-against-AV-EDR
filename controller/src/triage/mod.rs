@@ -16,6 +16,7 @@ pub mod param_space;
 pub mod random_selector;
 pub mod scorer;
 pub mod source_resolver;
+pub mod token_diff;
 pub mod token_selector;
 
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};

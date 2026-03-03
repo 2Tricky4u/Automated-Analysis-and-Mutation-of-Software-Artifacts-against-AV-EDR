@@ -11,12 +11,12 @@ pub mod worker;
 
 use crate::automutate::common::TelemetryData;
 use crate::automutate::controller::{
-    BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse, DeployRequest,
-    DeployResponse, DisconnectAllWorkersRequest, DisconnectAllWorkersResponse,
-    DisconnectWorkerRequest, DisconnectWorkerResponse, GetAvailableWorkersRequest,
-    GetAvailableWorkersResponse, GetOrchestratorStatusRequest, GetOrchestratorStatusResponse,
-    GetPoolMetricsRequest, GetPoolMetricsResponse, GetRoundRequest, GetRoundResponse,
-    GetTraceLinesRequest, GetTraceLinesResponse, GetWorkerMetadataRequest,
+    BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse, CompareTokensRequest,
+    CompareTokensResponse, DeployRequest, DeployResponse, DisconnectAllWorkersRequest,
+    DisconnectAllWorkersResponse, DisconnectWorkerRequest, DisconnectWorkerResponse,
+    GetAvailableWorkersRequest, GetAvailableWorkersResponse, GetOrchestratorStatusRequest,
+    GetOrchestratorStatusResponse, GetPoolMetricsRequest, GetPoolMetricsResponse, GetRoundRequest,
+    GetRoundResponse, GetTraceLinesRequest, GetTraceLinesResponse, GetWorkerMetadataRequest,
     GetWorkerMetadataResponse, GetWorkerRequest, GetWorkerResponse, JobProgressRequest,
     JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
     ListWorkersRequest, ListWorkersResponse, PingRequest, PingResponse, PingWorkerRequest,
@@ -165,6 +165,13 @@ impl Controller for SchedulerService {
         request: Request<CompareRunsRequest>,
     ) -> Result<Response<CompareRunsResponse>, Status> {
         job::compare_runs(self, request).await
+    }
+
+    async fn compare_tokens(
+        &self,
+        request: Request<CompareTokensRequest>,
+    ) -> Result<Response<CompareTokensResponse>, Status> {
+        job::compare_tokens(self, request).await
     }
 
     async fn get_trace_lines(

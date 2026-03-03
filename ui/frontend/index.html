@@ -1663,37 +1663,132 @@
             responseBox.textContent = 'Loading...';
 
             try {
-                const resp = await fetch(`${API_BASE}/api/runs/compare?baseline=${baseline}&instrumented=${instrumented}`);
-                const data = await resp.json();
-                const d = data.data;
+                // Fire both requests in parallel
+                const [runsResp, tokensResp] = await Promise.all([
+                    fetch(`${API_BASE}/api/runs/compare?baseline=${baseline}&instrumented=${instrumented}`),
+                    fetch(`${API_BASE}/api/tokens/compare?run_a=${baseline}&run_b=${instrumented}`)
+                ]);
 
-                if (!d) {
-                    responseBox.textContent = 'No comparison data returned';
-                    return;
+                const runsData = await runsResp.json();
+                const d = runsData.data;
+
+                let html = '';
+
+                if (d) {
+                    const matchBadge = d.outcome_match
+                        ? '<span class="badge badge-match">MATCH</span>'
+                        : '<span class="badge badge-mismatch">MISMATCH</span>';
+
+                    html += `
+                        <div class="stat-line"><strong>Outcome:</strong> ${matchBadge}</div>
+                        <div class="stat-line"><strong>Baseline:</strong> ${detectedBadge(d.baseline_detected)}</div>
+                        <div class="stat-line"><strong>Instrumented:</strong> ${detectedBadge(d.instrumented_detected)}</div>
+                    `;
+
+                    if (d.differences && d.differences.length > 0) {
+                        html += '<div style="margin-top: 6px;"><strong>Differences:</strong></div><ul>';
+                        d.differences.forEach(diff => {
+                            html += `<li>${escapeHtml(diff)}</li>`;
+                        });
+                        html += '</ul>';
+                    }
+                } else {
+                    html += '<div class="stat-line">No behavioral comparison data returned</div>';
                 }
 
-                const matchBadge = d.outcome_match
-                    ? '<span class="badge badge-match">MATCH</span>'
-                    : '<span class="badge badge-mismatch">MISMATCH</span>';
-
-                let html = `
-                    <div class="stat-line"><strong>Outcome:</strong> ${matchBadge}</div>
-                    <div class="stat-line"><strong>Baseline:</strong> ${detectedBadge(d.baseline_detected)}</div>
-                    <div class="stat-line"><strong>Instrumented:</strong> ${detectedBadge(d.instrumented_detected)}</div>
-                `;
-
-                if (d.differences && d.differences.length > 0) {
-                    html += '<div style="margin-top: 6px;"><strong>Differences:</strong></div><ul>';
-                    d.differences.forEach(diff => {
-                        html += `<li>${escapeHtml(diff)}</li>`;
-                    });
-                    html += '</ul>';
+                // Token comparison
+                if (tokensResp.ok) {
+                    const tokensData = await tokensResp.json();
+                    const tc = tokensData.data;
+                    if (tc) {
+                        html += renderTokenComparison(tc);
+                    }
+                } else {
+                    html += '<div style="margin-top: 10px; color: #888;">Token comparison not available</div>';
                 }
 
                 responseBox.innerHTML = html;
             } catch (e) {
                 responseBox.textContent = `Error: ${e.message}`;
             }
+        }
+
+        function renderTokenComparison(tc) {
+            let html = '<hr style="margin: 12px 0; border-color: #333;">';
+            html += '<h3 style="margin: 8px 0 4px;">Token Comparison</h3>';
+
+            // Summary stats
+            const commonCount = tc.common ? tc.common.length : 0;
+            html += `
+                <div class="stat-line"><strong>Run A tokens:</strong> ${tc.count_a} &nbsp; <strong>Run B tokens:</strong> ${tc.count_b} &nbsp; <strong>Common:</strong> ${commonCount}</div>
+                <div class="stat-line"><strong>Jaccard distance:</strong> ${tc.jaccard_distance.toFixed(3)}</div>
+            `;
+
+            // Mutation distances table
+            if (tc.mutation_comparisons && tc.mutation_comparisons.length > 0) {
+                html += '<h4 style="margin: 10px 0 4px;">Mutation Parameter Distances</h4>';
+                html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+                html += '<tr style="background:#1a1a2e;"><th style="text-align:left;padding:4px;">Mutation</th><th style="text-align:left;padding:4px;">Param</th><th style="text-align:left;padding:4px;">Run A</th><th style="text-align:left;padding:4px;">Run B</th><th style="text-align:left;padding:4px;">Range</th><th style="text-align:right;padding:4px;">Distance</th></tr>';
+
+                for (const mc of tc.mutation_comparisons) {
+                    if (mc.presence !== 'both') {
+                        const badge = mc.presence === 'only_a'
+                            ? '<span style="color:#f39c12;">only Run A</span>'
+                            : '<span style="color:#3498db;">only Run B</span>';
+                        html += `<tr style="border-bottom:1px solid #333;"><td style="padding:4px;" colspan="5">${escapeHtml(mc.mutation_id)} — ${badge}</td><td style="text-align:right;padding:4px;">${distanceBadge(1.0)}</td></tr>`;
+                        continue;
+                    }
+                    if (mc.params && mc.params.length > 0) {
+                        for (let i = 0; i < mc.params.length; i++) {
+                            const p = mc.params[i];
+                            const mutCol = i === 0 ? escapeHtml(mc.mutation_id) : '';
+                            html += `<tr style="border-bottom:1px solid #222;"><td style="padding:4px;">${mutCol}</td><td style="padding:4px;">${escapeHtml(p.name)}</td><td style="padding:4px;">${escapeHtml(p.value_a)}</td><td style="padding:4px;">${escapeHtml(p.value_b)}</td><td style="padding:4px;font-size:11px;color:#888;">${escapeHtml(p.range_info)}</td><td style="text-align:right;padding:4px;">${distanceBadge(p.normalized_distance)}</td></tr>`;
+                        }
+                    } else {
+                        html += `<tr style="border-bottom:1px solid #222;"><td style="padding:4px;">${escapeHtml(mc.mutation_id)}</td><td colspan="4" style="padding:4px;color:#888;">no params</td><td style="text-align:right;padding:4px;">${distanceBadge(0)}</td></tr>`;
+                    }
+                }
+                html += '</table>';
+            }
+
+            // Collapsible token lists
+            if (tc.only_in_a && tc.only_in_a.length > 0) {
+                html += renderTokenList('Only in Run A', tc.only_in_a, '#f39c12');
+            }
+            if (tc.only_in_b && tc.only_in_b.length > 0) {
+                html += renderTokenList('Only in Run B', tc.only_in_b, '#3498db');
+            }
+            if (tc.common && tc.common.length > 0) {
+                html += renderTokenList('Common', tc.common, '#888');
+            }
+
+            return html;
+        }
+
+        function distanceBadge(d) {
+            const pct = (d * 100).toFixed(0);
+            let color;
+            if (d < 0.1) color = '#2ecc71';
+            else if (d < 0.5) color = '#f39c12';
+            else color = '#e74c3c';
+            return `<span style="color:${color};font-weight:bold;">${pct}%</span>`;
+        }
+
+        function renderTokenList(title, tokens, color) {
+            // Group by prefix
+            const groups = {};
+            for (const t of tokens) {
+                const prefix = t.split(':')[0] || 'other';
+                if (!groups[prefix]) groups[prefix] = [];
+                groups[prefix].push(t);
+            }
+            let inner = '';
+            for (const [prefix, toks] of Object.entries(groups).sort()) {
+                inner += `<div style="margin-left:8px;"><strong style="color:${color};">${escapeHtml(prefix)}</strong> (${toks.length}): `;
+                inner += toks.map(t => `<code style="font-size:11px;">${escapeHtml(t)}</code>`).join(', ');
+                inner += '</div>';
+            }
+            return `<details style="margin-top:6px;"><summary style="cursor:pointer;color:${color};"><strong>${escapeHtml(title)}</strong> (${tokens.length})</summary>${inner}</details>`;
         }
 
         // ================================================================

@@ -348,6 +348,38 @@ pub async fn query_token_sets(es: &Elasticsearch, job_id: &str) -> Vec<Value> {
     extract_sources(response).await
 }
 
+/// Query a single token set document by job_id + round_id from `tokens-*`.
+///
+/// Returns the `_source` document containing `tokens[]`, `detected`, `evasion_score`, etc.
+pub async fn query_token_set_by_round_id(
+    es: &Elasticsearch,
+    job_id: &str,
+    round_id: &str,
+) -> Option<Value> {
+    let response = es
+        .search(SearchParts::Index(&["tokens-*"]))
+        .body(json!({
+            "query": {
+                "bool": {
+                    "must": [
+                        { "term": { "job_id": job_id } },
+                        { "term": { "round_id": round_id } }
+                    ]
+                }
+            },
+            "size": 1
+        }))
+        .send()
+        .await
+        .ok()?;
+
+    let body = response.json::<Value>().await.ok()?;
+    body["hits"]["hits"]
+        .as_array()
+        .and_then(|h| h.first())
+        .map(|hit| hit["_source"].clone())
+}
+
 // ---------------------------------------------------------------------------
 // Checkpoint event queries (triage)
 // ---------------------------------------------------------------------------

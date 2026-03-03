@@ -139,11 +139,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Query endpoints
         .route("/api/query", post(api::query::query_results))
         .route("/api/triage", post(api::query::submit_triage))
-        // Token endpoints (ES direct)
+        // Token endpoints
         .route(
             "/api/jobs/:job_id/rounds/:round_id/tokens",
             get(api::tokens::get_round_tokens),
         )
+        .route("/api/tokens/compare", get(api::tokens::compare_tokens))
         // Middleware
         .layer(Extension(es_client))
         .layer(TraceLayer::new_for_http())

@@ -191,6 +191,14 @@ impl EsStorage {
         queries::query_token_sets(&self.client, job_id).await
     }
 
+    pub async fn query_token_set_by_round_id(
+        &self,
+        job_id: &str,
+        round_id: &str,
+    ) -> Option<serde_json::Value> {
+        queries::query_token_set_by_round_id(&self.client, job_id, round_id).await
+    }
+
     pub async fn index_token_set(&self, doc: serde_json::Value) -> anyhow::Result<()> {
         let index = helpers::es_index_name("tokens");
         let response = self

@@ -10,11 +10,12 @@ use super::extract::{
 use crate::api::SchedulerService;
 use crate::automutate::common::JobId;
 use crate::automutate::controller::{
-    BehaviorComparisonProto, CompareRunsRequest, CompareRunsResponse, FunctionCoverageProto,
-    GetRoundRequest, GetRoundResponse, GetTraceLinesRequest, GetTraceLinesResponse,
-    JobProgressRequest, JobProgressResponse, JobRequest, JobResponse, JobStatusRequest,
-    JobStatusResponse, ModuleSelection, RoundSummaryProto, RunResultProto, StatusAck, StatusReport,
-    StopJobRequest, StopJobResponse, TraceLine,
+    BehaviorComparisonProto, CompareRunsRequest, CompareRunsResponse, CompareTokensRequest,
+    CompareTokensResponse, FunctionCoverageProto, GetRoundRequest, GetRoundResponse,
+    GetTraceLinesRequest, GetTraceLinesResponse, JobProgressRequest, JobProgressResponse,
+    JobRequest, JobResponse, JobStatusRequest, JobStatusResponse, ModuleSelection,
+    MutationComparisonProto, ParamComparisonProto, RoundSummaryProto, RunResultProto, StatusAck,
+    StatusReport, StopJobRequest, StopJobResponse, TokenSetComparisonProto, TraceLine,
 };
 use crate::dispatch::{
     JobControlCommand, JobId as DispatchJobId, JobSession, ModularBuildSpec, ModuleSelectionSpec,
@@ -493,6 +494,140 @@ pub async fn compare_runs(
             confidence,
             differential_category,
         }),
+    }))
+}
+
+/// Compare token sets between two runs
+pub async fn compare_tokens(
+    service: &SchedulerService,
+    request: Request<CompareTokensRequest>,
+) -> Result<Response<CompareTokensResponse>, Status> {
+    use crate::triage::param_space::default_registry;
+    use crate::triage::token_diff;
+
+    let req = request.get_ref();
+    debug!(
+        "[RPC] CompareTokens: run_a={}, run_b={}",
+        req.run_id_a, req.run_id_b
+    );
+
+    // Look up both run docs to get job_id + round_id
+    let runs = service
+        .storage
+        .query_runs_by_ids(&[&req.run_id_a, &req.run_id_b])
+        .await;
+
+    let mut run_a_info: Option<(String, String)> = None;
+    let mut run_b_info: Option<(String, String)> = None;
+    for run in &runs {
+        let rid = str_field(run, "run_id");
+        let job_id = str_field(run, "job_id");
+        let round_id = str_field(run, "round_id");
+        if rid == req.run_id_a {
+            run_a_info = Some((job_id, round_id));
+        } else if rid == req.run_id_b {
+            run_b_info = Some((job_id, round_id));
+        }
+    }
+
+    let (job_a, round_a) = match run_a_info {
+        Some(info) => info,
+        None => {
+            return Ok(Response::new(CompareTokensResponse {
+                comparison: None,
+                error: format!("Run {} not found", req.run_id_a),
+            }));
+        }
+    };
+    let (job_b, round_b) = match run_b_info {
+        Some(info) => info,
+        None => {
+            return Ok(Response::new(CompareTokensResponse {
+                comparison: None,
+                error: format!("Run {} not found", req.run_id_b),
+            }));
+        }
+    };
+
+    // Query token docs for both rounds in parallel
+    let (token_doc_a, token_doc_b) = tokio::join!(
+        service
+            .storage
+            .query_token_set_by_round_id(&job_a, &round_a),
+        service
+            .storage
+            .query_token_set_by_round_id(&job_b, &round_b),
+    );
+
+    let extract_tokens = |doc: Option<Value>| -> Vec<String> {
+        doc.and_then(|d| d["tokens"].as_array().cloned())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let tokens_a = extract_tokens(token_doc_a);
+    let tokens_b = extract_tokens(token_doc_b);
+
+    if tokens_a.is_empty() && tokens_b.is_empty() {
+        return Ok(Response::new(CompareTokensResponse {
+            comparison: None,
+            error: "No token data found for either run".to_string(),
+        }));
+    }
+
+    // Compare
+    let registry = default_registry();
+    let cmp = token_diff::compare_token_sets(&tokens_a, &tokens_b, &registry);
+
+    // Convert to proto
+    let mutation_comparisons: Vec<MutationComparisonProto> = cmp
+        .mutation_comparisons
+        .iter()
+        .map(|mc| {
+            let params: Vec<ParamComparisonProto> = mc
+                .param_comparison
+                .as_ref()
+                .map(|pc| {
+                    pc.param_distances
+                        .iter()
+                        .map(|pd| ParamComparisonProto {
+                            name: pd.name.clone(),
+                            value_a: pd.value_a.clone(),
+                            value_b: pd.value_b.clone(),
+                            param_type: pd.distance.param_type.clone(),
+                            normalized_distance: pd.distance.normalized,
+                            range_info: pd.distance.range_info.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            MutationComparisonProto {
+                mutation_id: mc.mutation_id.clone(),
+                presence: mc.presence.clone(),
+                token_a: mc.token_a.clone(),
+                token_b: mc.token_b.clone(),
+                params,
+                overall_distance: mc.overall_distance,
+            }
+        })
+        .collect();
+
+    Ok(Response::new(CompareTokensResponse {
+        comparison: Some(TokenSetComparisonProto {
+            only_in_a: cmp.only_in_a,
+            only_in_b: cmp.only_in_b,
+            common: cmp.common,
+            mutation_comparisons,
+            jaccard_distance: cmp.jaccard_distance,
+            count_a: cmp.count_a as u32,
+            count_b: cmp.count_b as u32,
+        }),
+        error: String::new(),
     }))
 }
 
