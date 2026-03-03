@@ -47,25 +47,20 @@ impl TokenSelector {
         Self
     }
 
-    fn pseudo_random(n: usize) -> usize {
-        if n == 0 {
-            return 0;
-        }
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos();
-        nanos as usize % n
-    }
-
-    fn sample_mutation_params(mutation_id: &str) -> Option<serde_json::Value> {
-        let registry = default_registry();
+    fn make_rng() -> crate::triage::param_space::SeededRng {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .subsec_nanos() as u64;
-        let mut rng = crate::triage::param_space::SeededRng::from_raw(nanos.max(1));
-        find_param_space(&registry, mutation_id).and_then(|ps| ps.sample_params(&mut rng))
+        crate::triage::param_space::SeededRng::from_raw(nanos.max(1))
+    }
+
+    fn sample_mutation_params(
+        mutation_id: &str,
+        rng: &mut crate::triage::param_space::SeededRng,
+    ) -> Option<serde_json::Value> {
+        let registry = default_registry();
+        find_param_space(&registry, mutation_id).and_then(|ps| ps.sample_params(rng))
     }
 
     /// Token-guided module selection for deconditioner.
@@ -80,6 +75,7 @@ impl TokenSelector {
         default_modules: &ModuleSelectionSpec,
         history: &BTreeMap<u32, RoundSummary>,
         guidance: &TriageGuidance,
+        rng: &mut crate::triage::param_space::SeededRng,
     ) -> (ModuleSelectionSpec, String) {
         if !search_space
             .variable_categories
@@ -138,9 +134,8 @@ impl TokenSelector {
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Epsilon-greedy
-        let coin = Self::pseudo_random(100) as f64 / 100.0;
-        let (chosen, rationale) = if coin < EPSILON {
-            let idx = Self::pseudo_random(scored.len());
+        let (chosen, rationale) = if rng.coin(EPSILON) {
+            let idx = rng.next_usize(scored.len());
             let variant = &scored[idx].0;
             (
                 variant.clone(),
@@ -171,6 +166,7 @@ impl TokenSelector {
         search_space: &SearchSpace,
         history: &BTreeMap<u32, RoundSummary>,
         guidance: &TriageGuidance,
+        rng: &mut crate::triage::param_space::SeededRng,
     ) -> (Vec<MutationSpec>, String) {
         let avoid_set: HashSet<&str> = guidance.avoid_tokens.iter().map(|s| s.as_str()).collect();
         let seek_set: HashSet<&str> = guidance.seek_tokens.iter().map(|s| s.as_str()).collect();
@@ -181,7 +177,7 @@ impl TokenSelector {
             .iter()
             .map(|id| MutationSpec {
                 id: id.clone(),
-                params: Self::sample_mutation_params(id),
+                params: Self::sample_mutation_params(id, rng),
             })
             .collect();
 
@@ -257,9 +253,8 @@ impl TokenSelector {
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Epsilon-greedy
-        let coin = Self::pseudo_random(100) as f64 / 100.0;
-        let (chosen, rationale) = if coin < EPSILON {
-            let idx = Self::pseudo_random(scored.len());
+        let (chosen, rationale) = if rng.coin(EPSILON) {
+            let idx = rng.next_usize(scored.len());
             (
                 scored[idx].0.clone(),
                 format!(
@@ -276,8 +271,8 @@ impl TokenSelector {
         };
 
         mutations.push(MutationSpec {
-            id: chosen,
-            params: Self::sample_mutation_params(&scored[0].0),
+            id: chosen.clone(),
+            params: Self::sample_mutation_params(&chosen, rng),
         });
 
         (
@@ -329,10 +324,11 @@ impl Selector for TokenSelector {
         };
 
         // Token-guided selection
+        let mut rng = Self::make_rng();
         match search_space.strategy {
             VariationStrategy::MutationOnly => {
                 let (mutations, rationale) =
-                    self.token_guided_mutations(search_space, history, guidance);
+                    self.token_guided_mutations(search_space, history, guidance, &mut rng);
                 Selection {
                     modules: default_modules.clone(),
                     mutations,
@@ -340,10 +336,15 @@ impl Selector for TokenSelector {
                 }
             }
             VariationStrategy::Full => {
-                let (modules, module_rationale) =
-                    self.token_guided_modules(search_space, default_modules, history, guidance);
+                let (modules, module_rationale) = self.token_guided_modules(
+                    search_space,
+                    default_modules,
+                    history,
+                    guidance,
+                    &mut rng,
+                );
                 let (mutations, mutation_rationale) =
-                    self.token_guided_mutations(search_space, history, guidance);
+                    self.token_guided_mutations(search_space, history, guidance, &mut rng);
                 Selection {
                     modules,
                     mutations,
@@ -484,10 +485,10 @@ mod tests {
 
         let search_space = SearchSpace::default();
 
-        // Run multiple times
+        // Run multiple times (100 iterations for statistical stability)
         let mut fill_pattern_count = 0;
         let mut decon_rounds_count = 0;
-        for _ in 0..30 {
+        for _ in 0..100 {
             let selection = selector
                 .select(
                     "job-1",
@@ -514,10 +515,11 @@ mod tests {
             }
         }
 
-        // fill_pattern should be favored over decon_rounds
+        // fill_pattern should be strongly favored over decon_rounds
+        // Expected: ~74 fill_pattern vs ~4 decon_rounds (with ε=0.3, 7-item pool)
         assert!(
-            fill_pattern_count > decon_rounds_count,
-            "fill_pattern ({}) should be favored over decon_rounds ({})",
+            fill_pattern_count > decon_rounds_count * 2,
+            "fill_pattern ({}) should be strongly favored over decon_rounds ({})",
             fill_pattern_count,
             decon_rounds_count,
         );
