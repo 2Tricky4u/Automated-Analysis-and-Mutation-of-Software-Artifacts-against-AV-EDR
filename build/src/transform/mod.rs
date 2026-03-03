@@ -3,6 +3,7 @@
 //! Provides AST-level, LLVM IR-level, and post-link binary PE transformations.
 
 pub mod ast_mutator;
+pub mod benign_catalog;
 pub mod binary_data;
 pub mod binary_mutator;
 pub mod ir_mutator;

