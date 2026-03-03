@@ -281,7 +281,11 @@ impl ArtifactBuilder {
         }
 
         let use_clang_cl = self.config.msvc_compat.is_some();
-        let compiler = "clang";
+        let compiler = if use_clang_cl {
+            "clang (driver-mode=cl)"
+        } else {
+            "clang"
+        };
 
         debug!(
             "Compiling sc_checkpoint_runtime.o (with generated table header, compiler={})...",
@@ -607,7 +611,7 @@ impl ArtifactBuilder {
         // The target triple x86_64-pc-windows-msvc already defines _MSC_VER and
         // enables MSVC ABI — driver mode only affects flag syntax and is
         // incompatible with -S -emit-llvm (driver-mode=cl's /c forces -emit-obj).
-        let mut args = vec!["--target=x86_64-pc-windows-msvc"];
+        let mut args = vec!["-target", "x86_64-pc-windows-msvc"];
         args.extend(xwin.include_args());
         args.extend_from_slice(&[
             "-I",
@@ -637,7 +641,7 @@ impl ArtifactBuilder {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("clang IR generation failed:\n{}", stderr);
+            anyhow::bail!("Clang IR generation failed:\n{}", stderr);
         }
 
         Ok(())
@@ -686,7 +690,8 @@ impl ArtifactBuilder {
     async fn compile_ir_to_object(&self, ir_path: &Path, obj_path: &Path) -> Result<()> {
         let output = tokio::process::Command::new("clang")
             .args([
-                "--target=x86_64-pc-windows-msvc",
+                "-target",
+                "x86_64-pc-windows-msvc",
                 "-c", // Compile only, don't link
                 "-o",
                 obj_path.to_str().context("Invalid obj path")?,
@@ -1061,7 +1066,11 @@ impl ArtifactBuilder {
     /// Compile instrumentation runtime C file to object file
     async fn compile_runtime(&self, runtime_src: &Path, runtime_obj: &Path) -> Result<()> {
         let use_clang_cl = self.config.msvc_compat.is_some();
-        let compiler = "clang";
+        let compiler = if use_clang_cl {
+            "clang (driver-mode=cl)"
+        } else {
+            "clang"
+        };
 
         let mut cmd = tokio::process::Command::new("clang");
 
