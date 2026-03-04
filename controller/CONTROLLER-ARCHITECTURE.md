@@ -18,8 +18,8 @@
           │                     │ │                     │ │                     │
           │ Owns:               │ │ Owns:               │ │ Owns:               │
           │ • targets: DashMap  │ │ • pending: DashMap  │ │ • job_workers: Map  │
-          │ • events_tx         │ │ • by_os: DashMap    │ │ • vms: Map          │
-          │                     │ │ • result_routers    │ │ • channels (4)      │
+          │ • events_tx         │ │ • by_os: DashMap    │ │ • channels (5)      │
+          │                     │ │ • result_routers    │ │                     │
           │ Spawns:             │ │ • job_registry      │ │                     │
           │ • VMExecutor        │ │ • shutdown_token    │ │ Spawns:             │
           │ • StreamHandler     │ │                     │ │ • JobWorker         │
@@ -73,13 +73,13 @@
 │  │    ④job_event_rx ──────────── JobWorker completions                      │   │
 │  │                                                                          │   │
 │  │  Sends:                                                                  │   │
-│  │    ④job_event_tx ──────────── To spawned JobWorkers                      │   │
+│  │    correction_tx ────────── To JobWorker (CoverageCorrection)          │   │
 │  │                                                                          │   │
 │  └──────────────────────────────────┬──────────────────────────────────────┘   │
 │                                     │                                           │
 │         ┌───────────────────────────┼───────────────────────────┐               │
 │         │                           │                           │               │
-│         │④job_event_tx              │③events_tx                │               │
+│         │④event_tx(JW→Orch)        │③events_tx                │               │
 │         ▼                           │                           ▼               │
 │  ┌─────────────────┐                │                ┌─────────────────┐        │
 │  │   JobWorker-1   │                │                │  TargetManager  │        │
@@ -135,6 +135,8 @@
 | ⑤ | result_tx/rx | 64/job | `JobRunResult` | RunPool.route | JobWorker |
 | ⑥ | stream_tx (remote_tx) | 128 | `ControllerMessage` | VMExecutor, Heartbeat | StreamHandler→VM |
 | ⑦ | result_tx (remote) | 128 | `RemoteRunResult` | StreamHandler | VMExecutor |
+| ⑧ | correction_tx/rx | per-job | CoverageCorrection | Orchestrator | JobWorker |
+| ⑨ | guidance_tx/rx | per-job | TriageGuidance | Triage spawn | JobWorker |
 
 ---
 
@@ -186,7 +188,7 @@
 │  │ can_produce_round()?                                          │               │
 │  │   • current_round < max_rounds                                │               │
 │  │   • in_flight_rounds < MAX_IN_FLIGHT (5)                      │               │
-│  │   • pending_runs < MAX_PENDING (10)                           │               │
+│  │   • pending_runs < MAX_PENDING_RUNS (9)  [3 rounds × 3 runs] │               │
 │  └──────────────────────────────────────────────────────────────┘               │
 │                          │                                                      │
 │                          ▼ YES                                                  │
@@ -195,20 +197,26 @@
 │  │                                                               │               │
 │  │   1. job.start_round() → (round_number, round_id)             │               │
 │  │                                                               │               │
-│  │   2. Build artifacts:                                         │               │
-│  │      ┌────────────────────────────────────────────────┐       │               │
-│  │      │ BASELINE                   │ INSTRUMENTED      │       │               │
-│  │      │ trace_mode = "off"         │ trace_mode = "lines"│     │               │
-│  │      │ run_type = Baseline        │ run_type = Instrumented │ │               │
-│  │      │ run_id = {round_id}-base   │ run_id = {round_id}-inst │ │              │
-│  │      └────────────────────────────────────────────────┘       │               │
+│  │   2. Selector.select(history, guidance) → mutations + modules │               │
 │  │                                                               │               │
-│  │   3. Create RoundAgg (join state):                            │               │
+│  │   3. Build artifacts:                                         │               │
+│  │      ┌──────────────────┬──────────────────┬──────────────┐   │               │
+│  │      │ BASELINE         │ INSTRUMENTED     │ DRYRUN       │   │               │
+│  │      │ trace = "off"    │ trace = "lines"  │ trace = "off" │   │               │
+│  │      │ type = Baseline  │ type = Instr.    │ type = DryRun│   │               │
+│  │      │ id = {r}-base    │ id = {r}-inst    │ id = {r}-dry │   │               │
+│  │      └──────────────────┴──────────────────┴──────────────┘   │               │
+│  │                                                               │               │
+│  │   4. Static Defender scan → if detected: StaticDetection,     │               │
+│  │      skip VM dispatch                                         │               │
+│  │                                                               │               │
+│  │   5. Create RoundAgg (join state):                            │               │
 │  │      • spec: RoundSpec                                        │               │
-│  │      • baseline_run_id, instrumented_run_id                   │               │
-│  │      • baseline: None, instrumented: None                     │               │
+│  │      • baseline_run_id, instrumented_run_id, dryrun_run_id    │               │
+│  │      • baseline: None, instrumented: None, dryrun: None       │               │
+│  │      • dryrun_deadline: None (set on grace period start)      │               │
 │  │                                                               │               │
-│  │   4. run_pool.add_runs(vec![baseline_env, instrumented_env])  │               │
+│  │   6. run_pool.add_runs(vec![base_env, inst_env, dry_env])     │               │
 │  │      • Stored in pending: DashMap<RunId, RunEnvelope>         │               │
 │  │      • Sharded into by_os[required_os].queue                  │               │
 │  │      • runs_available.notify_waiters()                        │               │
@@ -266,7 +274,8 @@
 │  │  3. Clear in_flight                                           │               │
 │  │  4. Build JobRunResult:                                       │               │
 │  │     • run_id, job_id, round_id                                │               │
-│  │     • RunOutcome { detected, exit_code, error }               │               │
+│  │     • RunOutcome { detected, exit_code, error, success,       │               │
+│  │       elapsed_ms, detection_verdict, last_checkpoint }          │               │
 │  │     • vm_id                                                   │               │
 │  │  5. run_pool.route_result(job_result)                         │               │
 │  │     → Looks up result_routers[job_id]                         │               │
@@ -288,36 +297,48 @@
 │  │     let agg = round_aggs.get_mut(&result.round_id)            │               │
 │  │                                                               │               │
 │  │  2. Update join state:                                        │               │
-│  │     if result.run_id == agg.baseline_run_id {                 │               │
-│  │         agg.baseline = Some(result.outcome)                   │               │
-│  │     } else {                                                  │               │
-│  │         agg.instrumented = Some(result.outcome)               │               │
+│  │     match result.run_id against agg:                          │               │
+│  │       baseline_run_id → agg.baseline = Some(outcome)          │               │
+│  │       instrumented_run_id → agg.instrumented = Some(outcome)  │               │
+│  │       dryrun_run_id → agg.dryrun = Some(outcome)              │               │
 │  │     }                                                         │               │
 │  │                                                               │               │
 │  │  3. Check if round complete:                                  │               │
-│  │     if agg.is_complete() {                                    │               │
-│  │         finalize_round(round_id)                              │               │
-│  │     }                                                         │               │
+│  │     if baseline && instrumented both present:                 │               │
+│  │       if dryrun present → finalize_round() immediately         │               │
+│  │       else → start dryrun grace period (5s deadline)            │               │
+│  │     (production tick checks deadline, finalizes if expired)   │               │
 │  └──────────────────────────────────────────────────────────────┘               │
 │                                                                                 │
 │  finalize_round(round_id):                                                      │
 │                                                                                 │
 │  ┌──────────────────────────────────────────────────────────────┐               │
-│  │  1. Compute RoundSummary from RoundAgg:                       │               │
-│  │     • detected = baseline.detected || instrumented.detected   │               │
-│  │     • behavior_match = baseline.exit == instrumented.exit     │               │
-│  │     • evasion_score = if !detected { 1.0 } else { 0.0 }       │               │
+│  │  1. Compute DifferentialCategory from RoundAgg:               │               │
+│  │     If dryrun available → override_with_dryrun():             │               │
+│  │       • dryrun crash → MutationFailed or PayloadFailed        │               │
+│  │       • dryrun timeout → MutationFailed                       │               │
+│  │       • dryrun clean, baseline detected → RealDetection        │               │
+│  │     Else two-run differential:                                │               │
+│  │       • Both detected → RealDetection                         │               │
+│  │       • Only instr. detected → InstrumentationArtifact        │               │
+│  │       • Only baseline detected → Flaky                         │               │
+│  │       • Neither detected → Evasion                             │               │
+│  │     Static scan hit → StaticDetection                         │               │
 │  │                                                               │               │
-│  │  2. Record in job:                                            │               │
-│  │     job.rounds[round_number] = summary                        │               │
-│  │     job.last_round = Some(summary)                            │               │
+│  │  2. Compute evasion_score (per-category ranges):              │               │
+│  │     Evasion=0.6–1.0, InstrArtifact=0.5–0.7,                   │               │
+│  │     RealDetection=0.0–0.4, Flaky=0.0–0.3,                    │               │
+│  │     Static/MutFailed/PayFailed=0.0                            │               │
 │  │                                                               │               │
-│  │  3. Update RunPool:                                           │               │
-│  │     run_pool.update_job_progress(&job)                        │               │
+│  │  3. Record in job + emit RoundCompleted to Orchestrator       │               │
+│  │     → Orchestrator: index round+runs to ES                    │               │
+│  │     → Orchestrator: compute_round_coverage() → blended score  │               │
+│  │     → Orchestrator: send CoverageCorrection → JobWorker       │               │
 │  │                                                               │               │
-│  │  4. Emit event:                                               │               │
-│  │     event_tx.send(JobWorkerEvent::RoundCompleted { ... })     │               │
-│  │     → Orchestrator receives, indexes to ES                    │               │
+│  │  4. Spawn extract_and_score() background task:                │               │
+│  │     → Extract tokens (9 categories) from telemetry            │               │
+│  │     → Score tokens (lift × confidence)                        │               │
+│  │     → Build TriageGuidance (avoid/seek) → guidance_rx         │               │
 │  │                                                               │               │
 │  │  5. Remove from round_aggs                                    │               │
 │  └──────────────────────────────────────────────────────────────┘               │
@@ -378,7 +399,7 @@
 │  │                                                                         │   │
 │  │   RunEnvelope {                                                         │   │
 │  │     run_id, job_id, round_id, round_number,                             │   │
-│  │     run_type: Baseline | Instrumented,                                  │   │
+│  │     run_type: Baseline | Instrumented | DryRun,                         │   │
 │  │     artifact: { path, sha256 },                                         │   │
 │  │     mutations: Vec<String>,                                             │   │
 │  │     timeout_seconds,                                                    │   │
@@ -395,6 +416,7 @@
 │  │   "linux"   ──► Mutex ──► [run-2, run-5, run-8, ...]                    │   │
 │  │   "macos"   ──► Mutex ──► [run-3, run-6, run-9, ...]                    │   │
 │  │                                                                         │   │
+│  │   Dryrun guard: dryrun VMs only take dryrun runs, others skip them     │   │
 │  │   Benefits:                                                             │   │
 │  │   • VM1 taking from "windows" only locks windows queue                  │   │
 │  │   • VM2 can take from "linux" concurrently                              │   │
@@ -522,16 +544,23 @@
 │  │     spec: RoundSpec { id, job_id, round_number, mutations },            │   │
 │  │     baseline_run_id: RunId,                                             │   │
 │  │     instrumented_run_id: RunId,                                         │   │
+│  │     dryrun_run_id: RunId,                                               │   │
 │  │     baseline: Option<RunOutcome>,      // Set when baseline completes   │   │
 │  │     instrumented: Option<RunOutcome>,  // Set when instrumented completes│   │
+│  │     dryrun: Option<RunOutcome>,        // Set when dryrun completes     │   │
+│  │     dryrun_deadline: Option<Instant>,  // Grace period for late dryrun  │   │
+│  │     baseline_vm_id, instrumented_vm_id, dryrun_vm_id                    │   │
 │  │   }                                                                     │   │
 │  │                                                                         │   │
 │  │   is_complete() = baseline.is_some() && instrumented.is_some()          │   │
+│  │   (dryrun has 5s grace period; finalized without it if late)            │   │
 │  └─────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                 │
 │  Channels:                                                                      │
-│    result_rx ← Receives JobRunResult from RunPool                              │
-│    event_tx  → Sends JobWorkerEvent to Orchestrator                            │
+│    result_rx     ← Receives JobRunResult from RunPool                          │
+│    event_tx      → Sends JobWorkerEvent to Orchestrator                        │
+│    correction_rx ← Receives CoverageCorrection from Orchestrator               │
+│    guidance_rx   ← Receives TriageGuidance from triage spawn                   │
 │                                                                                 │
 │  Shutdown:                                                                      │
 │    shutdown_token: CancellationToken (stored in Orchestrator.job_workers)      │
@@ -566,10 +595,12 @@
 │  │      • Routes Telemetry → events_tx → Orchestrator                     │    │
 │  │      • Routes Status → events_tx → Orchestrator                        │    │
 │  │                                                                        │    │
-│  │   4. Spawn VMExecutor task:                                            │    │
-│  │      • remote_tx = stream_tx.clone()                                   │    │
-│  │      • result_rx = result_rx (receives from StreamHandler)             │    │
-│  │      • Enters main run loop                                            │    │
+│  │   4. Wait for Registration message (15s timeout):                      │    │
+│  │      • Deferred spawn avoids capability mismatch                       │    │
+│  │      • On Registration → spawn VMExecutor task:                        │    │
+│  │        remote_tx = stream_tx.clone()                                   │    │
+│  │        result_rx = result_rx (receives from StreamHandler)             │    │
+│  │        Enters main run loop                                            │    │
 │  │                                                                        │    │
 │  │   5. Spawn Heartbeat task:                                             │    │
 │  │      • Every 30 seconds, send Heartbeat via stream_tx                  │    │
@@ -710,10 +741,10 @@
 │  │   }                                                                     │   │
 │  └─────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                 │
-│  MISSING (per ES schema TODOs):                                                 │
-│    • round_id  ← Need active_runs[worker_id] → run_id → RunEnvelope            │
-│    • run_id    ← Need active_runs[worker_id]                                   │
-│    • vm_id     ← Known from StreamHandler context                              │
+│  CORRELATION (via TelemetryContext, now implemented):                            │
+│    • vm_id     ← From StreamHandler context (always present)                   │
+│    • run_id    ← From VMExecutor in-flight tracking (Optional)                 │
+│    • round_id  ← From RunEnvelope via in-flight tracking (Optional)            │
 │    • source    ← Constant "worker"                                             │
 │                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────┘
@@ -743,7 +774,7 @@
 │    │   }                                                                    │  │
 │    │                                                                        │  │
 │    │   Benefits:                                                            │  │
-│    │   • No mutex needed for job_workers, vms maps                          │  │
+│    │   • No mutex needed for job_workers map (single-threaded access)       │  │
 │    │   • All state transitions serialized                                   │  │
 │    │   • Easy to reason about                                               │  │
 │    └────────────────────────────────────────────────────────────────────────┘  │
@@ -801,7 +832,9 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                    PRODUCERS (JobWorkers)                                   │
+│                            PRODUCERS (JobWorkers)                                           │
+│  Note: Each round produces 3 runs (baseline + instrumented + dryrun).                         │
+│  Dryrun runs are dispatched to dryrun-capable VMs only (bidirectional guard).                 │
 ├─────────────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                             │
 │  ┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐              │
@@ -815,8 +848,8 @@
 │             │                          │                          │                        │
 │             │ add_runs([               │ add_runs([               │ add_runs([             │
 │             │   baseline,              │   baseline,              │   baseline,            │
-│             │   instrumented           │   instrumented           │   instrumented         │
-│             │ ])                       │ ])                       │ ])                     │
+│             │   instrumented,          │   instrumented,          │   instrumented,        │
+│             │   dryrun])               │   dryrun])               │   dryrun])             │
 │             │                          │                          │                        │
 │             ▼                          ▼                          ▼                        │
 │  ┌──────────────────────────────────────────────────────────────────────────────────────┐  │
@@ -936,7 +969,8 @@ JobWorker-1                    JobWorker-2                    JobWorker-3
 (Job: mut-01, os: windows)     (Job: mut-02, os: windows)     (Job: mut-03, os: linux)
      │                              │                              │
      │                              │                              │
-t=0  │ add_runs([r1-base, r1-inst]) │                              │
+t=0  │ add_runs([r1-base,r1-inst,   │                              │
+     │  r1-dry])                    │                              │
      │ ─────────────────────────────┼──────────────────────────────┼─────────►  Pool
      │                              │                              │            (windows queue grows)
      │                              │                              │
@@ -951,7 +985,8 @@ t=1  │                              │                              │      
      │                              │                              │           → gets r1-base (caps match)
      │                              │                              │           → dispatches to VM
      │                              │                              │
-     │                              │ add_runs([r2-base, r2-inst]) │
+     │                              │ add_runs([r2-base,r2-inst,   │
+     │                              │  r2-dry])                    │
      │                              │ ─────────────────────────────┼─────────►  Pool
      │                              │                              │            notify_waiters()
      │                              │                              │
@@ -961,7 +996,8 @@ t=2  │                              │                              │      
      │                              │                              │           → gets r2-base (caps match)
      │                              │                              │           → dispatches to VM
      │                              │                              │
-     │                              │                              │ add_runs([r3-base, r3-inst])
+     │                              │                              │ add_runs([r3-base,r3-inst,
+     │                              │                              │  r3-dry])
      │                              │                              │ ─────────────────────────────►  Pool
      │                              │                              │                (linux queue grows)
      │                              │                              │                notify_waiters()
@@ -997,39 +1033,39 @@ t=5  │                              │                              │      
 │                                                                                        │
 │  t=0 (after JobWorker-1 adds runs):                                                    │
 │                                                                                        │
-│    windows: [r1-base, r1-inst]                                                         │
+│    windows: [r1-base, r1-inst, r1-dry]                                                         │
 │    linux:   []                                                                         │
-│    pending: { r1-base: {...}, r1-inst: {...} }                                         │
+│    pending: { r1-base: {...}, r1-inst: {...}, r1-dry: {...} }                                         │
 │                                                                                        │
 │  t=1 (after VMExecutor-1 takes r1-base):                                               │
 │                                                                                        │
-│    windows: [r1-inst]                    ◄── r1-base removed                           │
+│    windows: [r1-inst, r1-dry]            ◄── r1-base removed                           │
 │    linux:   []                                                                         │
-│    pending: { r1-inst: {...} }           ◄── r1-base removed                           │
+│    pending: { r1-inst, r1-dry }          ◄── r1-base removed                           │
 │                                                                                        │
 │  t=1.5 (after JobWorker-2 adds runs):                                                  │
 │                                                                                        │
-│    windows: [r1-inst, r2-base, r2-inst]  ◄── new runs appended                         │
+│    windows: [r1-inst, r1-dry, r2-base, r2-inst, r2-dry]  ◄── new runs appended         │
 │    linux:   []                                                                         │
-│    pending: { r1-inst, r2-base, r2-inst }                                              │
+│    pending: { r1-inst, r1-dry, r2-base, r2-inst, r2-dry }                              │
 │                                                                                        │
 │  t=2 (after VMExecutor-2 takes r2-base, skipping r1-inst):                             │
 │                                                                                        │
-│    windows: [r1-inst, r2-inst]           ◄── r2-base removed, r1-inst stays            │
+│    windows: [r1-inst, r1-dry, r2-inst, r2-dry] ◄── r2-base removed                    │
 │    linux:   []                               (VMExecutor-2 lacks defender cap)         │
-│    pending: { r1-inst, r2-inst }                                                       │
+│    pending: { r1-inst, r1-dry, r2-inst, r2-dry }                                       │
 │                                                                                        │
 │  t=2.5 (after JobWorker-3 adds linux runs):                                            │
 │                                                                                        │
-│    windows: [r1-inst, r2-inst]                                                         │
-│    linux:   [r3-base, r3-inst]           ◄── new queue created for linux               │
-│    pending: { r1-inst, r2-inst, r3-base, r3-inst }                                     │
+│    windows: [r1-inst, r1-dry, r2-inst, r2-dry]                                         │
+│    linux:   [r3-base, r3-inst, r3-dry]   ◄── new queue created for linux               │
+│    pending: { r1-inst, r1-dry, r2-inst, r2-dry, r3-base, r3-inst, r3-dry }             │
 │                                                                                        │
 │  t=3 (after VMExecutor-3 takes r3-base):                                               │
 │                                                                                        │
-│    windows: [r1-inst, r2-inst]           ◄── unchanged (different OS)                  │
-│    linux:   [r3-inst]                    ◄── r3-base removed                           │
-│    pending: { r1-inst, r2-inst, r3-inst }                                              │
+│    windows: [r1-inst, r1-dry, r2-inst, r2-dry]  ◄── unchanged (different OS)           │
+│    linux:   [r3-inst, r3-dry]            ◄── r3-base removed                           │
+│    pending: { r1-inst, r1-dry, r2-inst, r2-dry, r3-inst, r3-dry }                      │
 │                                                                                        │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1080,7 +1116,7 @@ t=5  │                              │                              │      
 |----------|---------------|---------|
 | **Sharded by OS** | `by_os: DashMap<OS, Mutex<Queue>>` | No global lock; VMs only lock their OS queue |
 | **Result routing** | `result_routers: HashMap<JobId, Sender>` | Jobs decoupled from VMs; dynamic routing |
-| **Round aggregation** | `RoundAgg { baseline, instrumented }` | Wait for both runs; handle out-of-order |
+| **Round aggregation** | `RoundAgg { baseline, instrumented, dryrun }` | Wait for 2-3 runs; dryrun has 5s grace period |
 | **Single coordinator** | Orchestrator `select!` loop | Serialize state changes; no mutex needed |
 | **Fire-and-forget indexing** | `tokio::spawn(index_telemetry)` | Non-blocking telemetry ingestion |
 | **Capability filtering** | `take_run(os, caps)` checks capabilities | Only compatible VMs get matching runs |
