@@ -717,12 +717,14 @@ impl ArtifactBuilder {
     ///
     /// When `msvc_compat` is enabled, uses MSVC `link.exe` instead of `lld-link`.
     async fn link_baseline_exe(&self, obj_path: &Path, output_exe: &Path) -> Result<()> {
-        // ALWAYS link minimal_runtime.o (provides __runtime_exit)
-        let minimal_runtime_obj = self.ensure_minimal_runtime().await?;
+        // Baseline binaries must NOT link minimal_runtime.o — it introduces
+        // direct-syscall patterns, ntdll string references, and unnecessary
+        // imports (Sleep, OutputDebugStringA) that contaminate the baseline
+        // and can trigger EDR heuristics.  The baseline exits via CRT exit().
 
         if let Some(ref msvc) = self.config.msvc_compat {
             // ===== MSVC link.exe mode =====
-            let objects = vec![obj_path.to_path_buf(), minimal_runtime_obj];
+            let objects = vec![obj_path.to_path_buf()];
             let libs = vec!["kernel32.lib", "advapi32.lib", "libcmt.lib", "libucrt.lib"];
 
             msvc_compat::invoke_msvc_link(&msvc.vcvarsall_path, &objects, output_exe, &libs, &[])
@@ -737,7 +739,6 @@ impl ArtifactBuilder {
 
             let mut cmd = tokio::process::Command::new(lld_link_path);
             cmd.arg(obj_path)
-                .arg(&minimal_runtime_obj)
                 .arg("/out:".to_owned() + output_exe.to_str().unwrap())
                 .arg("/subsystem:console")
                 .arg("/machine:x64")

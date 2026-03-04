@@ -70,17 +70,6 @@ extern void __artifact_failure(const char* message, int error_code);
 
 #endif // ENABLE_INSTRUMENTATION
 
-// Legacy compatibility: also provide lowercase extern declarations
-// (for code that uses extern declarations directly)
-#ifdef ENABLE_INSTRUMENTATION
-// Already declared above
-#else
-// Provide stub inline functions to avoid linker errors
-static inline void __artifact_checkpoint(const char* checkpoint_name) { (void)checkpoint_name; }
-static inline void __artifact_success(const char* message) { (void)message; }
-static inline void __artifact_failure(const char* message, int error_code) { (void)message; (void)error_code; }
-#endif
-
 #ifdef __cplusplus
 }
 #endif
