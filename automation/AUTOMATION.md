@@ -227,6 +227,10 @@ PowerShell module imported by all scripts. Provides:
 
 ## Network Topology
 
+### Local Mode (Hyper-V)
+
+All components on a single Windows 11 host. VMs communicate through an internal Hyper-V switch. The host controls all network access (NAT, egress filtering, VM isolation).
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  Windows 11 Host                                             │
@@ -248,8 +252,104 @@ PowerShell module imported by all scripts. Provides:
 │  host:9200 → WSL:9200                                        │
 │  host:5601 → WSL:5601                                        │
 │  IP forwarding: WSL ↔ VMs                                    │
+│                                                              │
+│  Security controls (host-enforced):                          │
+│  ├─ toggle-vm-internet.ps1   NAT kill switch                 │
+│  ├─ manage-egress-filter.ps1 default-deny + whitelist        │
+│  └─ toggle-vm-isolation.ps1  block VM-to-VM traffic          │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+### Remote Mode (VPN / External VMs)
+
+Controller stays on the local host (WSL2). Workers run on remote machines (Azure, AWS, bare metal, remote Hyper-V hosts) reachable over a VPN or routable network. The controller **dials workers** (Phase 1 architecture) — workers listen on `:50052`, the controller connects to them.
+
+```
+┌─────────────────────────────────────┐
+│  Windows 11 Host (controller)       │
+│                                     │
+│  ┌───────────────────────────┐      │
+│  │  WSL2 Ubuntu              │      │
+│  │                           │      │
+│  │  Controller gRPC :50051   │      │      VPN / Routable Network
+│  │  Elasticsearch  :9200     │      │     ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+│  │  Kibana         :5601     │      │    │
+│  └───────────────────────────┘      │
+│                                     │    │  Controller dials workers
+│  deploy-remote-worker.ps1 ─── SSH ──┼──────────────┐
+│                                     │    │          │
+│  Controller connects via gRPC ──────┼──────────┐   │
+│                                     │    │     │   │
+└─────────────────────────────────────┘         │   │
+                                           │     │   │
+       ┌─────────────────────────────────────────┼───┼──────────────────┐
+       │                                   │     │   │                  │
+       │  ┌──────────────────────────┐     │  ┌──┼───┼───────────────┐  │
+       │  │  Remote Worker 1         │        │  │   │               │  │
+       │  │  172.21.107.15           │     │  │  ▼   ▼               │  │
+       │  │                          │        │  Agent :50052        │  │
+       │  │  Agent listens :50052  ◄─┼─ gRPC  │  ├─ RunSample       │  │
+       │  │  RedEDR :8081 (local)    │     │  │  ├─ SendArtifact    │  │
+       │  │  Defender (real EDR)     │        │  ├─ GetTelemetry     │  │
+       │  │                          │     │  │  └─ HealthCheck     │  │
+       │  │  SSH :22 ◄───────────────┼─deploy  │                    │  │
+       │  │  SCP: agent + config     │     │  │  RedEDR :8081       │  │
+       │  └──────────────────────────┘        │  Defender            │  │
+       │                                   │  └─────────────────────┘  │
+       │  ┌──────────────────────────┐        ┌─────────────────────┐  │
+       │  │  Remote Worker 2         │     │  │  Remote Worker 2    │  │
+       │  │  172.21.107.17           │        │  Agent :50052       │  │
+       │  │  (same layout)           │     │  │  RedEDR + Defender  │  │
+       │  └──────────────────────────┘        └─────────────────────┘  │
+       │                                   │                           │
+       │         Remote Network                                        │
+       └─────────────────────────────────────────────────────────────── ┘
+```
+
+**Key differences from local mode:**
+
+| Aspect | Local (Hyper-V) | Remote (VPN) |
+|--------|----------------|--------------|
+| Connection direction | Controller dials `10.200.200.x:50052` | Controller dials `<vpn_ip>:50052` |
+| Deployment | PowerShell Direct (no network) | SSH + SCP over VPN |
+| NAT / egress control | Host-enforced via IsolationSwitch | **Not enforced** — remote VM manages its own firewall |
+| VM-to-VM isolation | Host firewall rules on switch | **Not enforced** — VMs may be on same remote LAN |
+| ES access | Port-proxy `10.200.200.1:9200 → WSL` | Controller pushes to ES locally; workers don't contact ES directly |
+| Telemetry path | Controller pulls from `10.200.200.x:50052` | Controller pulls from `<vpn_ip>:50052` (over VPN tunnel) |
+| Artifact transfer | gRPC `SendArtifact` over local switch | gRPC `SendArtifact` over VPN (bandwidth-dependent) |
+| Security controls | `toggle-vm-internet.ps1`, `manage-egress-filter.ps1`, `toggle-vm-isolation.ps1` | Worker-side only: `block_internet`, `allow_controller_only` in worker.toml (Windows Firewall on remote VM) |
+| SSH keys | `automation/ssh-keys/<worker-id>/id_ed25519` | Same — generated by `deploy-remote-worker.ps1` |
+| Checkpoint/revert | Hyper-V snapshots (`05-create-baseline.ps1`) | **Not available** — no Hyper-V control over remote VMs |
+
+**Traffic flows (remote mode):**
+
+```
+Deployment (one-time):
+  Host ── SSH/SCP ──► Remote VM
+  Transfers: worker-agent.exe, worker.toml, worker-init.ps1, RedEdr.zip
+
+Runtime (per mutation round):
+  Controller ── gRPC ──► Worker:50052  SendArtifact (stream .exe chunks)
+  Controller ── gRPC ──► Worker:50052  RunSample (execute + collect)
+  Controller ── gRPC ──► Worker:50052  GetTelemetry (pull ETW/logs/coverage)
+  Controller ── gRPC ──► Worker:50052  HealthCheck (periodic)
+
+  Controller ── HTTP ──► localhost:9200  Store telemetry in Elasticsearch
+  Browser   ── HTTP ──► localhost:5601  Kibana dashboards
+```
+
+**Worker security (remote mode):**
+
+The worker.toml `[security]` section is the only enforcement point for remote workers. These settings are applied by the worker agent on the remote VM's own Windows Firewall:
+
+```toml
+[security]
+block_internet = true          # Block outbound internet (disable for VPN setups
+                                # where the worker needs VPN connectivity)
+allow_controller_only = true   # Only accept inbound from controller IP
+```
+
+> **Note:** For remote workers behind a VPN, you may need `block_internet = false` if the VPN tunnel itself requires internet access. The `allow_controller_only` flag remains useful — it restricts inbound connections to the controller's VPN IP only.
 
 ---
 
