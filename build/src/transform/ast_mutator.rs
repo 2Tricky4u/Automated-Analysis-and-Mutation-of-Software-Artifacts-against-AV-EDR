@@ -960,6 +960,7 @@ impl AstMutator {
     /// Insert 1-2 benign calls at a `@MUTATE:api_sequence_obfuscation` marker.
     ///
     /// Picks from all groups to maximize diversity of inserted tokens.
+    /// If PEB-walk is detected, restricts to SystemQuery to avoid IAT asymmetry.
     fn apply_api_sequence_obfuscation(
         &self,
         source: &str,
@@ -981,11 +982,19 @@ impl AstMutator {
             })
             .unwrap_or(0xBE41);
 
-        let groups = vec![
-            BehaviorGroup::SystemQuery,
-            BehaviorGroup::FileIo,
-            BehaviorGroup::RegistryIo,
-        ];
+        // Detect PEB-walk: restrict to SystemQuery to avoid IAT asymmetry
+        let is_peb_walk =
+            source.contains("get_func_by_name") || source.contains("get_module_by_name");
+        let groups = if is_peb_walk {
+            warn!("api_sequence_obfuscation: PEB-walk detected, restricting to system_query");
+            vec![BehaviorGroup::SystemQuery]
+        } else {
+            vec![
+                BehaviorGroup::SystemQuery,
+                BehaviorGroup::FileIo,
+                BehaviorGroup::RegistryIo,
+            ]
+        };
         let (declarations, statements) = benign_catalog::generate_insertion(&groups, count, seed);
 
         if statements.is_empty() {
@@ -2556,6 +2565,39 @@ void f() {
         );
         assert!(out.contains("decode_payload"));
         assert!(out.contains("VirtualProtect"));
+    }
+
+    #[test]
+    fn test_api_sequence_obfuscation_peb_walk_restricts() {
+        let mut ast = AstMutator::new().unwrap();
+        let source = r#"LPVOID get_func_by_name(LPVOID m, char* n) { return NULL; }
+int carrier() {
+    decode_payload(dest, PAYLOAD_LEN);
+    // @MUTATE:api_sequence_obfuscation
+    myVirtualProtect(dest, PAYLOAD_LEN, p_RX, &result);
+    return 0;
+}"#;
+        let spec = make_spec(
+            "ast.api_sequence_obfuscation",
+            &[("count", "3"), ("seed", "42")],
+        );
+        let (out, applied) = ast.apply(source, &[&spec]).unwrap();
+
+        assert!(applied.contains(&"ast.api_sequence_obfuscation".to_string()));
+        // PEB-walk detected → should restrict to SystemQuery only
+        assert!(
+            !out.contains("CreateFileA"),
+            "FileIo should NOT be inserted in PEB-walk source, got:\n{out}"
+        );
+        assert!(
+            !out.contains("RegOpenKeyExA"),
+            "RegistryIo should NOT be inserted in PEB-walk source, got:\n{out}"
+        );
+        // SystemQuery calls should still be present
+        assert!(
+            out.contains("__be_"),
+            "SystemQuery calls should still be inserted, got:\n{out}"
+        );
     }
 
     // ── benign_syscall_insert edge case tests ─────────────────────────────
