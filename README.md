@@ -12,6 +12,9 @@
 <!-- PROJECT LOGO -->
 <br />
 <div align="center">
+  <a href="https://github.com/2Tricky4u/Automated-Analysis-and-Mutation-of-Software-Artifacts-against-AV-EDR">
+    <img src="docs/images/hierarchy.png" alt="Logo" width="200">
+  </a>
 
 <h3 align="center">AutoMutate++</h3>
 
