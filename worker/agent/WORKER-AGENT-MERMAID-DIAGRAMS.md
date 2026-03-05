@@ -157,75 +157,201 @@ graph LR
 
 ---
 
-## 4. RunSample — Detailed Flow (Two Entry Points)
+## 4. RunSample — Detailed Sequence
 
-The complete lifecycle of a RunSample request from arrival to response. Two entry points (unary RPC and stream command) converge on the same execution engine.
+The complete lifecycle of a RunSample request from arrival through all 10 execution phases to response delivery. Two entry points (unary RPC and stream command) converge on the same execution engine.
 
 ```mermaid
-flowchart TD
-    subgraph UnaryPath["Entry Point 1 — Unary RPC (api/run.rs)"]
-        U1(["Controller calls RunSample RPC"])
-        U1 --> U2["Extract SampleRequest"]
-        U2 --> U3["Resolve run_id:<br/>prefer stream worker_state.current_run_id<br/>fallback UUID v4"]
-        U3 --> U4["Build RunRequest + RunContext<br/>├ artifact_id → artifact_name<br/>├ config.storage.artifacts_path<br/>└ worker_id"]
+sequenceDiagram
+    autonumber
+    participant C as Controller
+    participant SH as StreamHandler
+    participant U as api/run.rs
+    participant L as ExecutionState lock
+    participant S as ControlPlaneSink
+    participant E as execute_run engine
+    participant RE as RedEDR collector
+    participant T as TraceCollector
+    participant P as Artifact process
+    participant M as ExecutionMonitor
+    participant FS as Telemetry pipeline
+
+    %% ─── ENTRY POINTS ───
+    alt Bidirectional stream path
+        C->>SH: ControllerMessage RunSampleCommand
+        SH->>C: send_ack(request_id, success=true)
+        SH->>SH: tokio::spawn (non-blocking, stream loop continues)
+        SH->>SH: Update WorkerState (current_job_id, current_run_id)
+        SH->>L: state.acquire(job_id, artifact_name, run_id)
+        alt Already Running
+            L-->>SH: error
+            SH->>C: WorkerMessage SampleResponse (error)
+            SH->>SH: Clear WorkerState
+        else Idle → Running
+            L-->>SH: ExecutionLockGuard created
+            SH->>S: build_sink(Some(tx))
+            SH->>E: execute_run(RunRequest, RunContext, sink)
+        end
+    else Unary RPC path
+        C->>U: RunSample(SampleRequest)
+        U->>U: resolve_run_id (worker_state.current_run_id or UUID v4)
+        U->>L: state.acquire(job_id, artifact_name, run_id)
+        alt Already Running
+            L-->>U: error
+            U-->>C: Status RESOURCE_EXHAUSTED
+        else Idle → Running
+            L-->>U: ExecutionLockGuard created
+            U->>S: build_sink(stream_handler.sender() or None)
+            U->>E: execute_run(RunRequest, RunContext, sink)
+        end
     end
 
-    subgraph StreamPath["Entry Point 2 — Stream Command (stream_handler.rs)"]
-        S1(["ControllerMessage with RunSampleCommand"])
-        S1 --> S2["Parse RunSampleCommand<br/>extract request_id + SampleRequest"]
-        S2 --> S3["Send immediate Ack<br/>via tx channel"]
-        S3 --> S4["tokio::spawn async task<br/>(does NOT block stream loop)"]
-        S4 --> S5["Update WorkerState:<br/>current_job_id = job_id<br/>current_run_id = request_id"]
-        S5 --> S6["Build RunRequest + RunContext"]
+    %% ─── PHASE 1: VALIDATE ───
+    Note over E: Phase 1 — Validate
+    E->>E: Check artifact_path.exists()
+
+    %% ─── PHASE 2: REDEDR SETUP ───
+    Note over E,RE: Phase 2 — RedEDR Setup
+    E->>RE: RedEdrCollector::new(config)
+    Note over E,RE: RedEdrGuard created (reset_on_drop=true)
+    E->>RE: collect_all("sanity-check")
+    RE-->>E: Vec events
+
+    alt >1 stale events + strict_mode
+        E-->>SH: RunError FailedPrecondition
+    else clean (0-1 events)
+        E->>RE: start_trace([artifact.exe])
+        RE->>RE: POST /api/trace/start
     end
 
-    U4 --> Lock
-    S6 --> Lock
+    %% ─── PHASE 3: ENVIRONMENT ───
+    Note over E,FS: Phase 3 — Prepare Environment
+    E->>FS: prepare_telemetry_dir() (remove stale + create fresh)
+    E->>T: TraceCollector::new(event_tx, capacity=100K)
+    E->>T: spawn start_server() (named pipe \\.\pipe\rededr_trace)
+    E->>FS: spawn streaming_writer (trace_rx → BufWriter 256KB → trace_events.jsonl)
 
-    Lock{"Acquire execution_lock<br/>Mutex ExecutionState"}
-    Lock -->|"Already Running"| Reject
-    Lock -->|"Idle → Running"| Acquired
+    %% ─── PHASE 4: SPAWN ───
+    Note over E,P: Phase 4 — Spawn Process
+    E->>P: spawn_artifact(artifact_path, telemetry_dir)
+    Note over E,P: ProcessGuard created (should_kill=true)
+    P-->>E: PID
 
-    Reject["REJECTED<br/>Status: RESOURCE_EXHAUSTED"]
-    Reject -->|"unary"| UReject(["Return gRPC error"])
-    Reject -->|"stream"| SReject["Send error SampleResponse<br/>via tx channel<br/>Clear WorkerState"]
+    %% ─── PHASE 5: MONITORING ───
+    Note over E,M: Phase 5 — Start Monitoring
+    E->>E: spawn capture_stream(stdout)
+    E->>E: spawn capture_stream(stderr)
+    E->>M: ExecutionMonitor::new(config, sink)
+    E->>M: spawn monitor.start(stop_rx, event_tx)
+    Note over E,M: MonitorGuard created (stop_tx, handle, event_consumer)
+    M->>S: send_status("started", initial ExecutionStatusReport)
+    S->>C: WorkerMessage ExecutionStatus (or dropped by NullSink)
 
-    Acquired["ExecutionLockGuard created (RAII)<br/>State = Running job_id, artifact, run_id"]
-    Acquired --> BuildSink
+    %% ─── CONCURRENT EXECUTION ───
+    par Artifact executes
+        P->>P: PE artifact running (payload logic)
+        P->>T: writes trace data to named pipe
+        T->>T: auto-detect binary (ISTR) or Base64 protocol
+        T->>FS: TraceEvent → trace_tx channel → trace_events.jsonl
+    and Monitor polls every 3 seconds
+        loop Every MONITOR_POLL_INTERVAL_SECS (3s)
+            M->>P: is_process_alive(pid)
+            M->>M: get_process_metrics(pid) via sysinfo
+            M->>RE: GET /api/stats (events_count only)
+            M->>M: idle detection (cpu<5% + no new events for 3 cycles)
+            M->>M: timeout check (within 5s of deadline)
+            M->>S: send_status(heartbeat | telemetry_idle | approaching_timeout)
+            S->>C: WorkerMessage ExecutionStatus
+        end
+    end
 
-    BuildSink["Build ControlPlaneSink"]
-    BuildSink -->|"stream active"| StreamSink["StreamSink<br/>wraps tx channel"]
-    BuildSink -->|"no stream"| NullSink["NullSink<br/>silent no-op"]
+    %% ─── PHASE 6: WAIT ───
+    Note over E,P: Phase 6 — Wait for Completion or Timeout
+    E->>E: tokio::time::timeout(duration, child.wait())
 
-    StreamSink --> DryrunCheck
-    NullSink --> DryrunCheck
+    alt Process exits normally
+        P-->>E: exit status
+        E->>E: exit_code = status.code() or EXIT_NO_CODE (-2)
+    else Timeout fires
+        E->>E: sleep 100ms (race window)
+        E->>P: try_wait()
+        alt Exited during race window
+            P-->>E: real exit code
+        else Still alive
+            E->>P: kill_process_tree() (taskkill /F /T + child.kill)
+            E->>P: is_process_alive(pid) verify kill
+            E->>E: exit_code = EXIT_TIMEOUT (-3)
+        end
+    else wait() system call error
+        E->>E: exit_code = EXIT_WAIT_FAILED (-1)
+    end
 
-    DryrunCheck{"is_dryrun?"}
-    DryrunCheck -->|"yes"| Dryrun["engine::execute_dryrun()<br/>6 phases, no RedEDR"]
-    DryrunCheck -->|"no"| FullRun["engine::execute_run()<br/>10-phase pipeline<br/>(see Execution Pipeline diagram)"]
+    E->>E: ProcessGuard.disarm() (takes Child, should_kill=false)
 
-    Dryrun --> Outcome
-    FullRun --> Outcome
+    %% ─── CLEANUP MONITORING ───
+    Note over E,M: Cleanup — Drain concurrent tasks
+    E->>E: await stdout_handle, stderr_handle
+    E->>M: MonitorGuard.stop() (stop_tx → abort consumer → await handle 10s)
+    M-->>E: monitor stopped
+    E->>E: sleep 500ms (trace pipe flush)
+    E->>T: abort trace_handle
+    E->>T: drop trace_tx (closes channel)
+    E->>FS: await streaming_handle (CLEANUP_TIMEOUT_SECS)
+    FS-->>E: trace_events.jsonl finalized
 
-    Outcome["RunOutcome<br/>├ exit_code, timed_out<br/>├ stdout, stderr<br/>├ telemetry_events<br/>├ detection_verdict<br/>├ last_checkpoint<br/>└ phase_timings"]
-    Outcome --> Format["format_output()<br/>human-readable summary"]
-    Format --> MapResponse["sample_response_ok()<br/>→ SampleResponse protobuf"]
+    %% ─── PHASE 7: COLLECT TELEMETRY ───
+    Note over E,FS: Phase 7 — Collect Telemetry (5 sources)
+    E->>RE: collect_all(job_id)
+    RE->>RE: GET /api/logs/rededr
+    RE-->>E: Vec TelemetryData (ETW events)
+    E->>FS: package_trace_log(trace_events.jsonl)
+    FS->>FS: deduplicate by (file,line,func) ~95% reduction
+    FS->>FS: if >3.5MB: progressive tail truncation (binary search halving)
+    FS-->>E: trace_log event
+    E->>FS: collect_trace_log_binary(trace.log)
+    FS-->>E: binary trace events
+    E->>FS: collect_bb_coverage(coverage_bbs.txt)
+    FS-->>E: CoverageEvent
+    E->>FS: collect_api_checkpoints(checkpoints.log)
+    FS-->>E: Vec CheckpointEvent
 
-    MapResponse -->|"unary path"| UResponse(["Return Response SampleResponse"])
-    MapResponse -->|"stream path"| SResponse["Send SampleResponse<br/>via tx channel as<br/>WorkerMessage::SampleResponse"]
-    SResponse --> SClear["Clear WorkerState:<br/>current_job_id = None<br/>current_run_id = None"]
+    %% ─── PHASE 7B: CLASSIFY ───
+    Note over E: Phase 7b — Classify Detection Outcome
+    E->>E: extract_evidence (scan checkpoints for has_launched, last_checkpoint)
+    E->>E: classify_outcome (11-step decision tree)
+    E->>E: detection_verdict + last_checkpoint
+    E->>E: add phase_timings as telemetry event
 
-    Note1["ExecutionLockGuard drops here<br/>→ tokio::spawn state.release()<br/>→ ExecutionState back to Idle"]
+    %% ─── PHASE 8: STREAM TELEMETRY ───
+    Note over E,C: Phase 8 — Stream Telemetry to Controller
+    E->>S: send_telemetry(TelemetryBatch is_final=true)
+    S->>C: WorkerMessage Telemetry (or dropped by NullSink)
 
-    style UnaryPath fill:#1e3a5f,stroke:#3b82f6,color:#fff
-    style StreamPath fill:#4a2c17,stroke:#f59e0b,color:#fff
-    style Lock fill:#7c3aed,color:#fff
-    style Reject fill:#dc2626,color:#fff
-    style Acquired fill:#15803d,color:#fff
-    style Outcome fill:#0f3460,color:#fff
-    style StreamSink fill:#0d9488,color:#fff
-    style NullSink fill:#4b5563,color:#fff
-    style Note1 fill:#1e3a5f,stroke:#3b82f6,color:#fff
+    %% ─── PHASE 9: RESET REDEDR ───
+    Note over E,RE: Phase 9 — Reset RedEDR
+    E->>RE: reset_now()
+    RE->>RE: POST /api/trace/reset
+    Note over E,RE: RedEdrGuard disarmed (reset_on_drop=false)
+
+    %% ─── PHASE 10: CLEANUP ───
+    Note over E,FS: Phase 10 — Cleanup
+    E->>FS: cleanup_run_artifacts (remove artifact.exe + telemetry_dir)
+
+    E-->>E: Return RunOutcome
+
+    %% ─── RESPONSE ───
+    alt Stream path response
+        E-->>SH: RunOutcome
+        SH->>SH: format_output() + sample_response_ok()
+        SH->>C: WorkerMessage SampleResponse via tx
+        SH->>SH: Clear WorkerState (job_id=None, run_id=None)
+    else Unary path response
+        E-->>U: RunOutcome
+        U->>U: format_output() + sample_response_ok()
+        U-->>C: Response SampleResponse
+    end
+
+    Note over L: ExecutionLockGuard Drop → tokio::spawn state.release() → Idle
 ```
 
 **Key differences between paths:**
@@ -308,7 +434,7 @@ flowchart TD
 
 ---
 
-## 5. Detection Classifier — 11-Step Decision Tree
+## 6. Detection Classifier — 11-Step Decision Tree
 
 The `classify_run()` function that produces one of 7 verdicts from local signals.
 
@@ -371,7 +497,7 @@ flowchart TD
 
 ---
 
-## 6. Telemetry Architecture — 6 Sources
+## 7. Telemetry Architecture — 6 Sources
 
 Data flow from artifact execution through the 6 telemetry collection paths into the final `TelemetryBatch`.
 
@@ -441,7 +567,7 @@ flowchart LR
 
 ---
 
-## 7. Communication Architecture — Unary vs Bidirectional Stream
+## 8. Communication Architecture — Unary vs Bidirectional Stream
 
 Two coexisting gRPC communication models sharing the same execution engine.
 
@@ -499,7 +625,7 @@ flowchart TB
 
 ---
 
-## 8. Stream Handler Lifecycle
+## 9. Stream Handler Lifecycle
 
 How the bidirectional gRPC stream session is established, used, and replaced on reconnection.
 
@@ -537,7 +663,7 @@ flowchart TD
 
 ---
 
-## 9. RAII Guard System
+## 10. RAII Guard System
 
 Three guard types that guarantee resource cleanup on all exit paths, including panics.
 
@@ -581,7 +707,7 @@ flowchart TB
 
 ---
 
-## 10. Shared State & Concurrency Model
+## 11. Shared State & Concurrency Model
 
 How the `WorkerAgentService` struct's shared state is accessed by concurrent tasks.
 
@@ -627,7 +753,7 @@ flowchart TB
 
 ---
 
-## 11. Execution Lock State Machine
+## 12. Execution Lock State Machine
 
 The single-execution guarantee enforced by the `ExecutionState` enum.
 
@@ -655,7 +781,7 @@ flowchart LR
 
 ---
 
-## 12. Execution Monitor Poll Loop
+## 13. Execution Monitor Poll Loop
 
 The `ExecutionMonitor` that runs every 3 seconds during artifact execution.
 
@@ -702,7 +828,7 @@ flowchart TD
 
 ---
 
-## 13. Artifact Transfer Flow
+## 14. Artifact Transfer Flow
 
 Chunked PE binary transfer with SHA-256 integrity verification.
 
@@ -733,7 +859,7 @@ sequenceDiagram
 
 ---
 
-## 14. Capability Detection at Startup
+## 15. Capability Detection at Startup
 
 Environment probing that runs once at startup and is cached for the process lifetime.
 
@@ -771,7 +897,7 @@ flowchart TD
 
 ---
 
-## 15. Dryrun Path — Lightweight 6-Phase Execution
+## 16. Dryrun Path — Lightweight 6-Phase Execution
 
 Simplified execution for ground-truth behavior on clean VMs (no instrumentation, no monitoring).
 
@@ -796,7 +922,7 @@ flowchart LR
 
 ---
 
-## 16. ControlPlaneSink — Strategy Pattern
+## 17. ControlPlaneSink — Strategy Pattern
 
 Transport abstraction that decouples the execution engine from gRPC.
 
@@ -839,7 +965,7 @@ classDiagram
 
 ---
 
-## 17. Trace Collector — Protocol Auto-Detection
+## 18. Trace Collector — Protocol Auto-Detection
 
 Named pipe server that accepts line traces from the instrumented artifact, supporting two wire formats.
 
@@ -881,7 +1007,7 @@ flowchart TD
 
 ---
 
-## 18. Concurrency — Task Tree for One Execution
+## 19. Concurrency — Task Tree for One Execution
 
 All async tasks spawned during a single `execute_run()` invocation.
 
@@ -911,7 +1037,7 @@ flowchart TD
 
 ---
 
-## 19. Two-Run Differential Protocol
+## 20. Two-Run Differential Protocol
 
 How the worker agent supports the two-run differential that distinguishes real detections from instrumentation artifacts.
 
