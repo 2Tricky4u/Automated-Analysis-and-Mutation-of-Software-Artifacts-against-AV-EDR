@@ -1,23 +1,6 @@
-# Worker Agent Architecture
+# Worker Agent — Corrected Diagrams
 
-Deep analysis of every `.rs` file in `worker/agent/`, reflecting the current implementation.
-
----
-
-## Table of Contents
-
-1. [Module Hierarchy](#1-module-hierarchy)
-2. [Component Hierarchy & Ownership](#2-component-hierarchy--ownership)
-3. [Channel Architecture](#3-channel-architecture)
-4. [Execution Lifecycle](#4-execution-lifecycle)
-5. [State Machines](#5-state-machines)
-6. [Telemetry Collection](#6-telemetry-collection)
-7. [RAII Guard System](#7-raii-guard-system)
-8. [Control Plane Sink](#8-control-plane-sink)
-9. [Struct Reference](#9-struct-reference)
-10. [Concurrency Model](#10-concurrency-model)
-11. [Capability Detection](#11-capability-detection)
-12. [Key Design Decisions](#12-key-design-decisions)
+All diagrams from the original WORKER-AGENT-ARCHITECTURE.md, corrected to match the actual implementation.
 
 ---
 
@@ -31,6 +14,7 @@ worker/agent/
 │   ├── main.rs                           # Entry point: config, logging, gRPC server
 │   ├── lib.rs                            # WorkerAgentService struct + proto re-exports
 │   ├── capabilities.rs                   # Auto-detection: RedEDR, Defender, MDE, Cortex XDR
+│   ├── constants.rs                      # Tuning parameters (6 constants)
 │   │
 │   ├── api/                              # gRPC RPC handler layer (thin adapters)
 │   │   ├── mod.rs                        # WorkerAgent trait impl (dispatches to handlers)
@@ -39,14 +23,16 @@ worker/agent/
 │   │   ├── info.rs                       # ping(), health_check(), get_worker_info(), get_telemetry()
 │   │   └── stream.rs                     # establish_stream() - bidirectional stream setup
 │   │
-│   ├── dispatch/                         # Execution orchestration (core logic)
+│   ├── execution/                        # Execution orchestration (core logic)
 │   │   ├── mod.rs                        # Module declarations
-│   │   ├── engine.rs                     # execute_run() - 9-phase execution pipeline
+│   │   ├── engine.rs                     # execute_run() - 10-phase execution pipeline
+│   │   ├── classifier.rs                 # classify_run() - 7-verdict detection classifier
 │   │   ├── guards.rs                     # RAII guards: RedEdr, Process, Monitor
 │   │   ├── monitor.rs                    # ExecutionMonitor: polls process + RedEDR every 3s
 │   │   ├── sink.rs                       # ControlPlaneSink trait (StreamSink / NullSink)
 │   │   ├── state.rs                      # ExecutionState enum + ExecutionLockGuard
-│   │   └── types.rs                      # RunRequest, RunContext, RunOutcome, RunPhaseTimings
+│   │   └── types.rs                      # RunRequest, RunContext, RunOutcome, RunPhaseTimings,
+│   │                                     #   exit codes, SampleResponse builders
 │   │
 │   ├── session/                          # Stream session and worker runtime state
 │   │   ├── mod.rs                        # Module declarations
@@ -55,14 +41,14 @@ worker/agent/
 │   │
 │   ├── infra/                            # OS + side effects (pluggable boundary)
 │   │   ├── mod.rs                        # Module declarations
-│   │   ├── helpers.rs                    # BB coverage + API checkpoint file parsers
 │   │   ├── process.rs                    # spawn, kill, verify, capture (Windows-specific)
-│   │   └── system.rs                     # Telemetry directory management
+│   │   ├── system.rs                     # System metrics, telemetry dir, artifact cleanup
+│   │   └── time.rs                       # Unix timestamp wrapper (chrono)
 │   │
 │   └── telemetry/                        # Telemetry collection and compression
 │       ├── mod.rs                        # Module declarations
-│       ├── pipeline.rs                   # Trace packaging: size → compress → batch
-│       ├── trace_compressor.rs           # CLP + MatrixProfile + Sequitur compression
+│       ├── pipeline.rs                   # Trace dedup, packaging, BB coverage, checkpoints
+│       ├── trace_compressor.rs           # CLP + MatrixProfile + Sequitur compression (experimental)
 │       └── collectors/
 │           ├── mod.rs                    # Module declarations
 │           ├── rededr.rs                 # RedEDR HTTP API collector (ETW/kernel events)
@@ -71,37 +57,6 @@ worker/agent/
 └── tests/
     └── test_trace_pipe.rs                # Integration test: named pipe Base64 trace flow
 ```
-
-### File Sizes
-
-| File | Lines | Role |
-|------|------:|------|
-| `dispatch/engine.rs` | 698 | Core 9-phase execution pipeline |
-| `telemetry/collectors/trace.rs` | 599 | Named pipe binary/text protocol, auto-detection |
-| `session/stream_handler.rs` | 520 | Bidirectional stream message loop + heartbeat |
-| `telemetry/trace_compressor.rs` | 504 | 3-stage trace compression pipeline (experimental) |
-| `telemetry/pipeline.rs` | 444 | Trace packaging: size check → compress → batch |
-| `dispatch/monitor.rs` | 414 | Process monitoring, stuck/timeout detection |
-| `telemetry/collectors/rededr.rs` | 411 | RedEDR HTTP polling, event transform |
-| `capabilities.rs` | 312 | System detection (EDR products, hardware metadata) |
-| `api/info.rs` | 261 | Health, telemetry pull, worker info RPCs |
-| `api/run.rs` | 235 | Unary RunSample RPC entry point |
-| `tests/test_trace_pipe.rs` | 158 | Integration test for named pipe trace |
-| `dispatch/guards.rs` | 156 | RAII guards with Drop impls |
-| `infra/helpers.rs` | 124 | BB coverage + API checkpoint parsers |
-| `dispatch/state.rs` | 122 | ExecutionState enum + lock guard |
-| `dispatch/sink.rs` | 105 | ControlPlaneSink trait + StreamSink/NullSink |
-| `session/worker_state.rs` | 97 | WorkerState struct, HealthMetrics |
-| `main.rs` | 89 | Entry point |
-| `api/artifacts.rs` | 84 | Chunked file transfer with integrity check |
-| `infra/process.rs` | 81 | Process spawn, kill tree, verify alive, capture stream |
-| `api/stream.rs` | 78 | Stream establishment, registration |
-| `lib.rs` | 75 | Central struct, proto includes |
-| `api/mod.rs` | 73 | WorkerAgent trait impl (dispatch table) |
-| `dispatch/types.rs` | 52 | Typed domain types for execution |
-| `build.rs` | 29 | Proto compilation |
-| `infra/system.rs` | 15 | Telemetry directory management |
-| **Total** | **~5,700** | |
 
 ---
 
@@ -114,30 +69,31 @@ main.rs
     ├── config: WorkerConfig              ← TOML file (C:\AutoMutate\worker.toml)
     ├── system_info: Arc<Mutex<System>>   ← sysinfo for health metrics
     ├── execution_lock: Arc<Mutex<ExecutionState>>  ← ONE run at a time
-    └── stream_handler: Arc<RwLock<Option<Arc<StreamHandler>>>>
-                                          ← Set on EstablishStream, used by run_sample
+    ├── stream_handler: Arc<RwLock<Option<Arc<StreamHandler>>>>
+    │                                      ← Set on EstablishStream, used by run_sample
+    ├── heartbeat_handle: Arc<RwLock<Option<JoinHandle<()>>>>
+    │                                      ← Background heartbeat task (aborted on reconnect)
+    └── capabilities: Arc<WorkerCapabilities>
+                                           ← Detected tools + metadata (cached at startup)
+
         StreamHandler [no Arc<WorkerAgentService> back-ref]
         ├── worker_state: Arc<RwLock<WorkerState>>
+        │   ├── worker_id: String
         │   ├── capabilities: Vec<String>
         │   ├── metadata: HashMap<String, String>
+        │   ├── tools: Option<ToolVersions>
         │   ├── health: HealthMetrics
         │   ├── current_job_id: Option<String>
         │   ├── current_run_id: Option<String>  ← Correlates telemetry
+        │   ├── last_controller_heartbeat: Option<i64>
         │   ├── controller_disconnected: bool
+        │   ├── disconnect_reason: Option<String>
         │   └── reconnect_allowed: bool
-        ├── tx: mpsc::Sender<WorkerMessage>     ← 100-capacity channel
+        ├── tx: mpsc::Sender<Result<WorkerMessage, Status>>  ← 100-capacity channel
         ├── worker_id: String                   ← Cloned from service
         ├── config: WorkerConfig                ← Cloned from service
         └── execution_lock: Arc<Mutex<ExecutionState>>  ← Shared with service
 ```
-
-### Ownership Rules
-
-1. `WorkerAgentService` is `Clone` (all fields are `Arc`-wrapped)
-2. `StreamHandler` is created lazily on first `EstablishStream` RPC
-3. **No Arc cycle**: `StreamHandler` does NOT hold `Arc<WorkerAgentService>`; it clones individual fields (`worker_id`, `config`, `execution_lock`) to break the reference cycle
-4. `ExecutionState` mutex enforces one-at-a-time execution
-5. `WorkerState` is the mutable runtime state (capabilities, health, job tracking)
 
 ---
 
@@ -161,8 +117,8 @@ main.rs
          │               │             ▲
          ├── RunSample ──┼─────→ SampleResponse
          ├── HealthCheck ┼─────→ StatusReport
-         ├── Heartbeat   ┼─────→ (no reply)
-         ├── Disconnect  ┼─────→ (no reply)
+         ├── Heartbeat   ┼─────→ (no reply; updates worker_state.last_controller_heartbeat)
+         ├── Disconnect  ┼─────→ (no reply; sets controller_disconnected=true)
          └── Ack         │             │
                          │             │
                          │      ┌──────┤
@@ -171,16 +127,7 @@ main.rs
                     Batch      Status
 ```
 
-### Channel Types
-
-| Channel | Type | Capacity | Source → Sink |
-|---------|------|----------|---------------|
-| **gRPC outbound** | `mpsc::Sender<Result<WorkerMessage, Status>>` | 100 | StreamHandler / Sink → Controller |
-| **Trace events** | `mpsc::Sender<TraceEvent>` | 100,000 | TraceCollector → Streaming file writer |
-| **Monitor events** | `mpsc::Sender<MonitorEvent>` | 100 | ExecutionMonitor → Event logger |
-| **Monitor stop** | `watch::Sender<bool>` | 1 | engine → ExecutionMonitor |
-
-### Message Types (Outbound to Controller)
+### Outbound Message Types (Worker → Controller)
 
 ```
 WorkerMessage.payload = oneof {
@@ -193,7 +140,7 @@ WorkerMessage.payload = oneof {
 }
 ```
 
-### Message Types (Inbound from Controller)
+### Inbound Message Types (Controller → Worker)
 
 ```
 ControllerMessage.payload = oneof {
@@ -208,14 +155,46 @@ ControllerMessage.payload = oneof {
 
 ---
 
-## 4. Execution Lifecycle
+## 4. Execution Pipeline Overview (10 Phases)
 
-The core pipeline is `dispatch::engine::execute_run()` (~698 lines). Two entry points invoke it:
+```
+Phase 1 ─ Validate ──► Phase 2 ─ RedEDR Setup ──► Phase 3 ─ Environment
+   │                       │                           │
+   │ Check artifact        │ Create collector           │ Create telemetry dir
+   │ exists on disk        │ Sanity check (0 events?)  │ Start trace collector
+   │                       │ Start tracing target       │ (named pipe server)
+   ▼                       ▼                           ▼
+Phase 4 ─ Spawn ──────► Phase 5 ─ Monitor ──────► Phase 6 ─ Wait
+   │                       │                           │
+   │ spawn_artifact()      │ Capture stdout/stderr     │ timeout(duration, wait)
+   │ ProcessGuard (RAII)   │ ExecutionMonitor start    │ ├─ Normal exit → code
+   │ Extract PID           │ 3s poll: alive? CPU?      │ ├─ Timeout → kill tree (-3)
+   │                       │ RedEDR event count        │ └─ Wait error → -1
+   ▼                       ▼                           ▼
+Phase 7 ─ Collect ─────────────────────────────► Phase 7b ─ Classify
+   │                                                │
+   │ Stop monitor                                   │ classify_run()
+   │ Drain trace pipe (500ms)                       │ exit_code × timed_out
+   │ Collect from 5 sources:                        │ × checkpoints
+   │ ├─ RedEDR events (HTTP collect_all)            │ → DetectionVerdict
+   │ ├─ Trace JSONL (dedup + package)               │   (7 verdicts)
+   │ ├─ Trace binary (parse trace.log)              │
+   │ ├─ BB coverage (coverage_bbs.txt)              │
+   │ └─ Checkpoints (checkpoints.log)               │
+   ▼                                                ▼
+Phase 8 ─ Stream telemetry ──► Phase 9 ─ Reset RedEDR ──► Phase 10 ─ Cleanup
+   │                              │                            │
+   │ TelemetryBatch (is_final)    │ rededr_guard.reset_now()  │ Delete artifact.exe
+   │ sink.send_telemetry()        │ (disarms Drop guard)      │ Delete telemetry dir
+   │ ├─ StreamSink → stream       │                            │
+   │ └─ NullSink → /dev/null      │                            │
+   ▼                              ▼                            ▼
+                              Return RunOutcome
+```
 
-1. **Unary RPC** (`api/run.rs`): `run_sample()` acquires the lock, builds `RunRequest`/`RunContext`, calls `execute_run()`
-2. **Stream command** (`session/stream_handler.rs`): `handle_run_sample()` spawns a task that does the same
+---
 
-Both paths share the same engine. The engine is transport-agnostic via `ControlPlaneSink`.
+## 5. Per-Phase Diagrams
 
 ### Phase 1: Validate Artifact
 
@@ -294,14 +273,18 @@ Both paths share the same engine. The engine is transport-agnostic via `ControlP
                   ▼
             ProcessGuard (RAII kill)
                   │
-                  ├── Get PID
-                  ├── capture_stream(stdout)
-                  └── capture_stream(stderr)
+                  └── Get PID
 ```
 
 ### Phase 5: Start Monitoring
 
 ```
+    ┌─────────────────────────────────┐
+    │  capture_stream(stdout)          │
+    │  capture_stream(stderr)          │
+    │  (spawned async tasks)           │
+    └─────────────┬───────────────────┘
+                  │
     ┌─────────────────────────────────┐
     │  Create ExecutionMonitor         │
     │  (run_id, job_id, pid, timeout,  │
@@ -327,19 +310,25 @@ Both paths share the same engine. The engine is transport-agnostic via `ControlP
          │        │        │
     Process    Wait()    Timeout
     exited     failed    fired
-    (code)     (-1)        │
+    (code or   (-1)        │
+     -2 if
+     no code)
          │        │        ▼
          │        │   try_wait() race check
-         │        │   ├── Exited naturally → not timeout
+         │        │   ├── Exited naturally → use real exit code
          │        │   └── Still running:
          │        │       infra::process::kill_process_tree()
          │        │       infra::process::is_process_alive()
+         │        │       exit_code = EXIT_TIMEOUT (-3)
          ▼        ▼
+    ProcessGuard.disarm() (process handled, prevent kill-on-drop)
     exit_code resolution:
-     0    = success
-    -1    = timeout or wait() failure
-    -2    = externally terminated (no exit code, likely AV/EDR kill)
-    other = NTSTATUS interpretation (Windows-specific)
+     0    = success (clean exit)
+    -1    = EXIT_WAIT_FAILED (wait() system call failed)
+    -2    = EXIT_NO_CODE (externally terminated, no exit code — likely AV/EDR kill)
+    -3    = EXIT_TIMEOUT (timeout expired, process killed)
+    -4    = EXIT_INFRA (never reached execution — spawn/setup failure)
+    other = NTSTATUS interpretation (Windows-specific, e.g. 0xC0000005)
 ```
 
 ### Phase 7: Collect Telemetry
@@ -359,8 +348,8 @@ Both paths share the same engine. The engine is transport-agnostic via `ControlP
   RedEDR       Trace Log       BB Coverage      API Checkpoints
   collect_all  package_         collect_bb_      collect_api_
   (HTTP API)   trace_log()      coverage()       checkpoints()
-    │             │              (coverage.bin    (checkpoints.log)
-    │             │               +bbs.txt)        JSON lines
+    │             │              (coverage_       (checkpoints.log)
+    │             │               bbs.txt)        JSON lines
     │         ┌───┼───┐           │                │
     │     <=2MB   │  >2MB         │                │
     │     single  │  last 2MB     │                │
@@ -369,7 +358,74 @@ Both paths share the same engine. The engine is transport-agnostic via `ControlP
     ▼             ▼               ▼                ▼
     └─────────── telemetry_events[] ───────────────┘
                       │
+                      + trace.log binary event
                       + phase_timings event
+```
+
+### Phase 7b: Classify Detection Outcome
+
+```
+    ┌─────────────────────────────────┐
+    │  classifier::classify_run()      │
+    │                                  │
+    │  Inputs:                         │
+    │  ├── exit_code                   │
+    │  ├── timed_out                   │
+    │  └── telemetry_events[]          │
+    │      (scans for checkpoints:     │
+    │       has_launched, last_chkpt)  │
+    └─────────────┬───────────────────┘
+                  │
+                  ▼
+    ┌─────────────────────────────────────────────────┐
+    │            Decision Tree (11 steps)               │
+    │                                                   │
+    │  1. exit_code == -4 (EXIT_INFRA)?                 │
+    │     └── yes → InfraError                          │
+    │                                                   │
+    │  2. exit_code == -1 (EXIT_WAIT_FAILED)?           │
+    │     └── yes → InfraError                          │
+    │                                                   │
+    │  3. exit_code in [10,20) (guardrail codes)?       │
+    │     └── yes → InfraError                          │
+    │                                                   │
+    │  4. exit_code == 0?                               │
+    │     └── yes → Evasion                             │
+    │                                                   │
+    │  5. timed_out + has_launched?                      │
+    │     └── yes → Evasion                             │
+    │  6. timed_out + !has_launched?                     │
+    │     └── yes → Stalled                             │
+    │                                                   │
+    │  5b. exit_code == -3 (EXIT_TIMEOUT, defensive)?   │
+    │      ├── has_launched → Evasion                    │
+    │      └── !has_launched → Stalled                   │
+    │                                                   │
+    │  7. exit_code == -2 (EXIT_NO_CODE)?               │
+    │     └── yes → Detected                            │
+    │                                                   │
+    │  8. AV NTSTATUS (0xC0000906, 0xC0000907)?         │
+    │     └── yes → Detected                            │
+    │                                                   │
+    │  9. Crash NTSTATUS (0xC0000005, 0xC0000409,       │
+    │     0xC00000FD, 0xC0000374, 0xC0000094)?          │
+    │     └── yes → Ambiguous                           │
+    │                                                   │
+    │  10. exit_code in [30,40) (carrier codes)?        │
+    │      └── yes → Ambiguous                          │
+    │                                                   │
+    │  11. Other nonzero                                │
+    │      └── Ambiguous                                │
+    └─────────────────────────────────────────────────┘
+
+    7 Verdicts:
+    ├── Evasion        (is_detected = false)
+    ├── Detected       (is_detected = true)
+    ├── Ambiguous      (is_detected = true, conservative)
+    ├── Stalled        (is_detected = false)
+    ├── InfraError     (is_detected = false)
+    ├── MutationFailed (is_detected = false, controller-side only)
+    └── Anomaly        (is_detected = false, controller-side only)
 ```
 
 ### Phase 8: Stream Telemetry to Controller
@@ -385,28 +441,58 @@ Both paths share the same engine. The engine is transport-agnostic via `ControlP
     └─────────────────────────────────┘
 ```
 
-### Phase 9: Cleanup
+### Phase 9: Reset RedEDR
 
 ```
     ┌─────────────────────────────────┐
     │  rededr_guard.reset_now()        │
-    │  (explicit reset for next run)   │
-    │  ProcessGuard.disarm()           │
-    │  ExecutionLockGuard drops        │
+    │  (explicit reset, disarms Drop)  │
+    └─────────────────────────────────┘
+    Note: ProcessGuard was already disarmed in Phase 6.
+    ExecutionLockGuard is managed by the caller (api/run.rs
+    or stream_handler.rs), not by the engine.
+```
+
+### Phase 10: Cleanup
+
+```
+    ┌─────────────────────────────────┐
+    │  infra::system::cleanup_run_     │
+    │  artifacts()                     │
+    │  ├── remove_file(artifact.exe)   │
+    │  └── remove_dir_all(telemetry_   │
+    │      dir)                        │
+    │  (non-fatal: warns on failure)   │
     └─────────────┬───────────────────┘
                   │
                   ▼
     Return RunOutcome {
       exit_code, timed_out, stdout, stderr,
-      telemetry_events, elapsed, phase_timings
+      telemetry_events, elapsed, phase_timings,
+      detection_verdict, last_checkpoint
     }
+```
+
+### Dryrun Path (Lightweight, 6 Phases)
+
+```
+Phase 1 ─ Validate ──► Phase 2 ─ Spawn ──► Phase 3 ─ Wait ──► Phase 4 ─ Classify
+   │                     │                    │                    │
+   │ artifact exists?    │ spawn_artifact()   │ timeout + wait()   │ classify_run()
+   │                     │ (no RedEDR)        │ (no monitor)       │ (empty telemetry)
+   ▼                     │ (no trace pipe)    │ (no capture)       ▼
+                         ▼                    ▼              Phase 5 ─ Cleanup
+                                                               │
+                                                               │ remove artifact file
+                                                               ▼
+                                                          Phase 6 ─ Return RunOutcome
 ```
 
 ---
 
-## 5. State Machines
+## 6. State Machines
 
-### 5.1 Execution State (`dispatch/state.rs`)
+### 6.1 Execution State (`execution/state.rs`)
 
 ```
     IDLE ──────────────────→ RUNNING ──────────────────→ IDLE
@@ -419,29 +505,26 @@ Both paths share the same engine. The engine is transport-agnostic via `ControlP
     Cleanup: ExecutionLockGuard Drop impl (spawns async release)
 ```
 
-`ExecutionState` is an enum (not separate bool + Option fields), ensuring state consistency:
-
-```rust
-pub enum ExecutionState {
-    Idle,
-    Running { job_id: String, artifact: String, run_id: String },
-}
-```
-
-### 5.2 Stream Handler Lifecycle
+### 6.2 Stream Handler Lifecycle
 
 ```
-    NULL ──→ ACTIVE ──→ DISCONNECTED ──→ RECONNECTED ──→ ACTIVE
-     │         │              │                │
-     │    EstablishStream  controller_        heartbeat
-     │    RPC called       disconnected=true  succeeds
-     │                                        → reset flag
+    Per-connection lifecycle (each EstablishStream creates a NEW StreamHandler):
+
+    NULL ──→ ACTIVE ──→ stream drops ──→ NULL
+     │         │              │
+     │    EstablishStream     │  StreamHandler is dropped
+     │    RPC called          │  (previous heartbeat_handle aborted,
+     │                        │   worker_state remains in Arc)
+     │                        │
+     │                        └──→ New EstablishStream → NEW StreamHandler → ACTIVE
+     │                             (not a state transition — a fresh instance)
      │
      stream_handler = Arc<RwLock<Option<Arc<StreamHandler>>>>
      None until first EstablishStream
+     On reconnect: old StreamHandler replaced, new one created with fresh tx channel
 ```
 
-### 5.3 Execution Monitor States (`dispatch/monitor.rs`)
+### 6.3 Execution Monitor States (`execution/monitor.rs`)
 
 ```
     STARTED ──→ HEARTBEAT ──→ HEARTBEAT ──→ ...
@@ -457,28 +540,16 @@ pub enum ExecutionState {
                       TERMINATED
                      (process dead)
 
-    Poll interval: 3 seconds
-    Idle: 3+ cycles with no new events AND cpu_percent <= 5%
-    Timeout warning: within 5 seconds of timeout_seconds
+    Poll interval: 3 seconds (MONITOR_POLL_INTERVAL_SECS)
+    Idle: 3+ cycles (IDLE_COUNT_THRESHOLD) with no new events AND cpu <= 5% (CPU_IDLE_THRESHOLD)
+    Timeout warning: within 5 seconds (TIMEOUT_APPROACH_SECS) of timeout_seconds
 ```
-
-### 5.4 Monitor Event Types
-
-| Event | Condition | Severity |
-|-------|-----------|----------|
-| `started` | Initial event on monitor start | Info |
-| `heartbeat` | Process alive, events growing or CPU active | Info |
-| `telemetry_idle` | Process alive, no new events for 3+ cycles AND low CPU | Warn |
-| `approaching_timeout` | Process alive, elapsed >= timeout - 5s | Warn |
-| `terminated` | Process no longer alive (PID check fails) | Info |
-
-The monitor distinguishes true idle (no events + low CPU) from busy-but-silent (no events + high CPU). The latter resets the idle counter.
 
 ---
 
-## 6. Telemetry Collection
+## 7. Telemetry Architecture
 
-### 6.1 Five Telemetry Sources
+### 7.1 Six Telemetry Sources (2 Real-Time + 5 Batch in Phase 7, with overlap)
 
 ```
     ┌───────────────────────────────────────────────────────────────┐
@@ -486,9 +557,9 @@ The monitor distinguishes true idle (no events + low CPU) from busy-but-silent (
     │                                                               │
     │  ┌─────────┐  ┌─────────┐  ┌────────┐  ┌──────────────────┐ │
     │  │ stdout  │  │ stderr  │  │coverage│  │ checkpoints.log  │ │
-    │  │ (piped) │  │ (piped) │  │.bin    │  │ (JSON lines)     │ │
-    │  └────┬────┘  └────┬────┘  │+bbs.txt│  │ checkpoints +    │ │
-    │       │            │       └───┬────┘  │ status events    │ │
+    │  │ (piped) │  │ (piped) │  │_bbs.txt│  │ (JSON lines)     │ │
+    │  └────┬────┘  └────┬────┘  └───┬────┘  │ checkpoints +    │ │
+    │       │            │           │       │ status events    │ │
     │       │            │           │       └────────┬─────────┘ │
     └───────┼────────────┼───────────┼────────────────┼───────────┘
             │            │           │                │
@@ -505,7 +576,7 @@ The monitor distinguishes true idle (no events + low CPU) from busy-but-silent (
     │         │                                            │ │
     │         │  + RedEDR events (HTTP /api/logs/rededr)   │ │
     │         │  + trace_log (named pipe → JSONL)          │ │
-    │         │  + trace.log (binary protocol fallback)    │ │
+    │         │  + trace.log (binary protocol)             │ │
     │         │  + coverage (typed CoverageEvent)          │ │
     │         │  + checkpoints (typed CheckpointEvent)     │ │
     │         │  + artifact status (success/failure)       │ │
@@ -533,7 +604,37 @@ The monitor distinguishes true idle (no events + low CPU) from busy-but-silent (
     └────────────────────────────────────────────────────────┘
 ```
 
-### 6.2 RedEDR Collector (`telemetry/collectors/rededr.rs`)
+### 7.2 Real-Time vs Batch Collection
+
+```
+During execution (real-time):
+    RedEDR start() poll ──► mpsc channel ──► gRPC stream ──► controller
+      (ExecutionMonitor calls rededr.start() which polls
+       GET /api/logs/rededr every flush_interval_ms=1000,
+       deduplicates via seen_trace_ids HashSet,
+       sends new events via monitor's event_tx channel)
+    Named pipe trace ──► mpsc channel ──► disk file (trace_events.jsonl)
+
+After execution (batch, Phase 7):
+    trace_events.jsonl ──► deduplicate ──► package_trace_log() ──┐
+    trace.log (binary) ──► parse ──► collect_trace_log_binary() ─┤
+    coverage_bbs.txt ──► parse ──► collect_bb_coverage() ────────┤
+    checkpoints.log ──► parse ──► collect_api_checkpoints() ─────┤
+    RedEDR events ──► collect_all() (second pass, full batch) ───┤
+                                                                  ▼
+                                                        Vec<TelemetryData>
+                                                                  │
+                                                        sink.send_telemetry()
+                                                                  │
+                                                                  ▼
+                                                            controller
+
+Note: RedEDR events are collected TWICE — once real-time via start()
+during execution (streamed to controller), and once via collect_all()
+in Phase 7 (included in the final telemetry batch).
+```
+
+### 7.3 RedEDR Collector (`telemetry/collectors/rededr.rs`)
 
 ```
 RedEdrCollector
@@ -558,11 +659,7 @@ Event Transform:
   TelemetryData {job_id, event_type, timestamp, payload: JSON bytes, metadata}
 ```
 
-Two collection modes:
-- **Polling** (`start()`): Continuous polling loop with dedup via `seen_trace_ids` — sends events to mpsc channel
-- **Batch** (`collect_all()`): Single fetch of all events — used by the engine after execution completes
-
-### 6.3 Trace Collector (`telemetry/collectors/trace.rs`)
+### 7.4 Trace Collector (`telemetry/collectors/trace.rs`)
 
 ```
 TraceCollector
@@ -589,33 +686,35 @@ Protocol Auto-Detection (first 4 bytes):
     Decoded: "line:file.c:42:main"
 ```
 
-**Streaming writer** receives events from the TraceCollector via the 100K-capacity mpsc channel, writes JSONL with 256KB buffered I/O, and elides `thread_id` when unchanged (compression optimization).
-
-### 6.4 Telemetry Pipeline (`telemetry/pipeline.rs`)
-
-Two-phase approach for trace logs:
+### 7.5 Telemetry Pipeline (`telemetry/pipeline.rs`)
 
 ```
-    Trace file size check
-         │
-    ┌────┼────────────┐
-    │                  │
-  <= 2MB             > 2MB
-    │                  │
-    ├── <= 4MB:       ├── Immediate: last 2MB (complete JSONL lines)
-    │   send whole    │   → "trace_log" event in main batch
-    │                  │
-    └── > 4MB:        └── Async: full trace compression (tokio::spawn)
-        truncate          ├── compress_trace_log() fits in 4MB → send
-        tail              ├── + gzip fits → send as base64
-                          └── Still too big → first/last 100 lines
+    package_trace_log() flow:
+    ┌──────────────────────────────────────────────────┐
+    │  1. Read trace_events.jsonl                       │
+    │  2. deduplicate_trace_jsonl()                     │
+    │     Key: (file, line, func)                       │
+    │     Keep: highest seq per key, add count: N        │
+    │     Output: ~200 unique lines (95%+ reduction)     │
+    │  3. Serialize to JSON                              │
+    │  4. Size check: ≤ MAX_SERIALIZED_PAYLOAD (3.5MB)? │
+    │     ├── YES → ship full content as trace_log event │
+    │     └── NO  → progressive tail truncation:         │
+    │               ├── Cut slice in half                │
+    │               ├── Advance to next \n boundary      │
+    │               ├── Re-serialize, re-check size      │
+    │               ├── Repeat until fits                │
+    │               └── Ship TAIL (most recent lines —   │
+    │                   where detection happens)         │
+    └──────────────────────────────────────────────────┘
+
+    collect_trace_log_binary() — separate path:
+    Parses trace.log (ISTR binary format) directly,
+    extracts line traces only. Checkpoint events (types 2-4)
+    are warned+ignored if found in trace.log.
 ```
 
-Binary protocol trace.log (`collect_trace_log_binary()`): Parses the ISTR binary format directly from file, extracting line traces only. Artifact status events (types 2-4) are now expected in `checkpoints.log` and are warned+ignored if found in trace.log.
-
-### 6.5 Trace Compression (`telemetry/trace_compressor.rs`)
-
-Three-stage pipeline (experimental, marked "NOT WORKING" in source):
+### 7.6 Trace Compression (`telemetry/trace_compressor.rs` — experimental, NOT integrated)
 
 ```
     Raw JSONL trace
@@ -636,15 +735,11 @@ Three-stage pipeline (experimental, marked "NOT WORKING" in source):
                 "@RULE_0 @RULE_0 L50 @RULE_0"
 ```
 
-Also provides `gzip_compress()` for when grammar compression is insufficient.
-
 ---
 
-## 7. RAII Guard System
+## 8. RAII Guard System
 
-All guards use `Drop` implementations for cleanup on any exit path (success, error, panic).
-
-### 7.1 Guard Hierarchy
+### Guard Hierarchy
 
 ```
     execute_run() scope
@@ -656,371 +751,108 @@ All guards use `Drop` implementations for cleanup on any exit path (success, err
     └── ExecutionLockGuard   ← Releases execution_lock on drop
 ```
 
-### 7.2 Guard Details
+### Drop Behavior
 
-| Guard | Protects | Normal Exit | Drop Exit (error/panic path) |
-|-------|----------|-------------|------------------------------|
-| `ExecutionLockGuard` | `Arc<Mutex<ExecutionState>>` | Implicit drop | `tokio::spawn` → `state.release()` |
-| `RedEdrGuard` | RedEDR HTTP state | `reset_now()` (explicit, prevents double reset) | `Handle::try_current()` → spawn cleanup on existing runtime |
-| `ProcessGuard` | `tokio::process::Child` | `disarm()` (takes child ownership) | `child.start_kill()` (synchronous kill signal) |
-| `MonitorGuard` | monitor task + event consumer | `stop()` (graceful: signal + wait) | Send stop signal + abort consumer |
-
-### 7.3 Drop Cleanup Patterns
-
-**ProcessGuard** uses synchronous `start_kill()` which sends the kill signal without needing an async runtime:
-
-```rust
-impl Drop for ProcessGuard {
-    fn drop(&mut self) {
-        if self.should_kill {
-            if let Some(ref mut child) = self.child {
-                if let Err(e) = child.start_kill() { /* log */ }
-            }
-        }
-    }
-}
 ```
+    RedEdrGuard Drop:
+    ├── reset_on_drop == true?
+    │   ├── Handle::try_current() → spawn async POST /api/trace/reset
+    │   └── No runtime? → eprintln warning (RedEDR may be contaminated)
+    └── reset_on_drop == false → no-op (already reset via reset_now())
 
-**RedEdrGuard** uses the existing tokio runtime via `Handle::try_current()` instead of creating a new one:
+    ProcessGuard Drop:
+    ├── should_kill == true?
+    │   └── child.start_kill() (synchronous signal, no runtime needed)
+    └── should_kill == false → no-op (already disarmed)
 
-```rust
-impl Drop for RedEdrGuard {
-    fn drop(&mut self) {
-        if self.reset_on_drop {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move { /* POST /api/trace/reset */ });
-            } else {
-                eprintln!("WARNING: RedEDR may be contaminated for the next run");
-            }
-        }
-    }
-}
-```
+    MonitorGuard Drop:
+    ├── stop_tx.take() → send(true) (stop signal)
+    └── event_consumer.take() → abort() (kill consumer task)
 
-**MonitorGuard** is already synchronous — sends stop signal and aborts the consumer task:
-
-```rust
-impl Drop for MonitorGuard {
-    fn drop(&mut self) {
-        if let Some(tx) = self.stop_tx.take() { let _ = tx.send(true); }
-        if let Some(consumer) = self.event_consumer.take() { consumer.abort(); }
-    }
-}
+    ExecutionLockGuard Drop:
+    └── tokio::spawn → state.release() (Idle)
 ```
 
 ---
 
-## 8. Control Plane Sink (`dispatch/sink.rs`)
+## 9. Shared State Model
 
-The execution engine is transport-agnostic. It sends status updates and telemetry through the `ControlPlaneSink` trait rather than holding a reference to `StreamHandler`.
-
-```rust
-#[tonic::async_trait]
-pub trait ControlPlaneSink: Send + Sync {
-    async fn send_status(&self, status: ExecutionStatusReport) -> Result<()>;
-    async fn send_telemetry(&self, batch: TelemetryBatch) -> Result<()>;
-    async fn send_ack(&self, request_id: &str, success: bool, error: &str) -> Result<()>;
-}
 ```
+┌─────────────────────────────────────────────────────────────────┐
+│                    WorkerAgentService                             │
+│                                                                   │
+│  ┌────────────────────────────┐   ┌────────────────────────┐    │
+│  │ execution_lock             │   │ stream_handler         │    │
+│  │ Arc<Mutex<ExecutionState>> │   │ Arc<RwLock<Option<     │    │
+│  │                            │   │   Arc<StreamHandler>>>> │    │
+│  │ States:                    │   │                        │    │
+│  │ ├── Idle                   │   │ Contains:              │    │
+│  │ └── Running {              │   │ ├── worker_state       │    │
+│  │       job_id,              │   │ │   (Arc<RwLock>)      │    │
+│  │       artifact,            │   │ ├── tx channel         │    │
+│  │       run_id               │   │ └── execution_lock     │    │
+│  │     }                      │   │     (same Arc ↑)       │    │
+│  └─────────┬──────────────────┘   └─────────┬──────────────┘    │
+│            │                                │                    │
+│            │  shared by:                    │  shared by:        │
+│            │  ├── api/run.rs               │  ├── api/run.rs    │
+│            │  ├── api/stream.rs            │  ├── api/stream.rs │
+│            │  └── stream_handler.rs        │  └── heartbeat_loop│
+│            │                                │                    │
+│  ┌────────────────────────────┐   ┌────────────────────────┐    │
+│  │ system_info                │   │ capabilities           │    │
+│  │ Arc<Mutex<System>>         │   │ Arc<WorkerCapabilities>│    │
+│  │                            │   │                        │    │
+│  │ Used by: api/info.rs       │   │ Immutable after startup│    │
+│  └────────────────────────────┘   └────────────────────────┘    │
+│                                                                   │
+│  ┌────────────────────────────┐                                  │
+│  │ heartbeat_handle           │                                  │
+│  │ Arc<RwLock<Option<         │                                  │
+│  │   JoinHandle<()>>>>        │                                  │
+│  │                            │                                  │
+│  │ Aborted on stream reconnect│                                  │
+│  └────────────────────────────┘                                  │
+└─────────────────────────────────────────────────────────────────┘
 
-### Implementations
-
-| Impl | When used | Behavior |
-|------|-----------|----------|
-| `StreamSink` | Stream is active (bidirectional mode) | Wraps `mpsc::Sender<WorkerMessage>` — sends to controller |
-| `NullSink` | No stream available (standalone mode) | No-op — all sends succeed silently |
-
-### Factory
-
-```rust
-pub fn build_sink(
-    tx: Option<&mpsc::Sender<Result<WorkerMessage, Status>>>,
-) -> Arc<dyn ControlPlaneSink>
-```
-
-Called by both `api/run.rs` (extracts tx from stream_handler) and `session/stream_handler.rs` (passes tx directly).
-
----
-
-## 9. Struct Reference
-
-### Core Structs
-
-```rust
-// lib.rs
-#[derive(Clone)]
-pub struct WorkerAgentService {
-    pub(crate) worker_id: String,
-    pub(crate) config: WorkerConfig,
-    pub(crate) system_info: Arc<Mutex<System>>,
-    pub(crate) execution_lock: Arc<Mutex<ExecutionState>>,
-    pub(crate) stream_handler: Arc<RwLock<Option<Arc<StreamHandler>>>>,
-}
-```
-
-### Execution Domain Types (`dispatch/types.rs`)
-
-```rust
-pub struct RunRequest {
-    pub job_id: String,
-    pub artifact_id: String,
-    pub timeout_seconds: u32,
-    pub run_id: String,                   // From controller request_id or UUID
-}
-
-pub struct RunContext {
-    pub worker_id: String,
-    pub config: WorkerConfig,
-    pub telemetry_dir: PathBuf,           // Derived from config.storage.artifacts_path
-    pub artifact_path: PathBuf,           // Derived from config.storage.artifacts_path
-    pub artifact_name: String,
-}
-
-pub struct RunOutcome {
-    pub exit_code: i32,
-    pub timed_out: bool,
-    pub stdout: String,
-    pub stderr: String,
-    pub telemetry_events: Vec<TelemetryData>,
-    pub elapsed: Duration,
-    pub phase_timings: RunPhaseTimings,
-}
-
-#[derive(Debug, Default)]
-pub struct RunPhaseTimings {
-    pub rededr_setup_ms: u64,
-    pub process_spawn_ms: u64,
-    pub process_wait_ms: u64,
-    pub telemetry_collect_ms: u64,
-    pub rededr_reset_ms: u64,
-}
-```
-
-### Execution State (`dispatch/state.rs`)
-
-```rust
-#[derive(Debug, Clone)]
-pub enum ExecutionState {
-    Idle,
-    Running { job_id: String, artifact: String, run_id: String },
-}
-
-pub struct ExecutionBusyError {
-    pub current_job_id: String,
-    pub current_artifact: String,
-}
-
-pub struct ExecutionLockGuard {
-    lock: Arc<Mutex<ExecutionState>>,
-}
-```
-
-### Stream & Communication
-
-```rust
-// session/stream_handler.rs
-pub struct StreamHandler {
-    pub worker_state: Arc<RwLock<WorkerState>>,
-    tx: mpsc::Sender<Result<WorkerMessage, Status>>,
-    worker_id: String,                    // Cloned, not Arc ref
-    config: WorkerConfig,                 // Cloned, not Arc ref
-    execution_lock: Arc<Mutex<ExecutionState>>,
-}
-```
-
-### Capabilities & State
-
-```rust
-// capabilities.rs
-pub struct WorkerCapabilities {
-    pub capabilities: Vec<String>,         // ["rededr", "mde", "cortex"]
-    pub tools: HashMap<String, String>,    // {"rededr_version": "1.2.3"}
-    pub metadata: HashMap<String, String>, // {"hostname", "cpu_cores", "os_key"}
-}
-
-pub struct WindowsVersionInfo {
-    pub product_name: Option<String>,
-    pub edition_id: Option<String>,
-    pub display_version: Option<String>,
-    pub release_id: Option<String>,
-    pub build: Option<u32>,
-    pub ubr: Option<u32>,
-    pub is_windows_11: Option<bool>,
-}
-
-// session/worker_state.rs
-pub struct WorkerState {
-    pub worker_id: String,
-    pub capabilities: Vec<String>,
-    pub metadata: HashMap<String, String>,
-    pub tools: Option<ToolVersions>,
-    pub health: HealthMetrics,
-    pub current_job_id: Option<String>,
-    pub current_run_id: Option<String>,
-    pub last_controller_heartbeat: Option<i64>,
-    pub controller_disconnected: bool,
-    pub disconnect_reason: Option<String>,
-    pub reconnect_allowed: bool,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct HealthMetrics {
-    pub cpu_percent: i32,
-    pub memory_percent: i32,
-    pub disk_percent: i32,
-    pub active_jobs: i32,
-    pub uptime_seconds: i64,
-}
-```
-
-### Telemetry Structs
-
-```rust
-// telemetry/collectors/rededr.rs
-pub struct RedEdrCollectorConfig {
-    pub base_url: String,
-    pub flush_interval_ms: u64,
-    pub job_id: String,
-    pub run_id: String,
-}
-
-pub struct RedEdrCollector {
-    config: RedEdrCollectorConfig,
-    client: reqwest::Client,              // 5s timeout
-    seen_trace_ids: HashSet<u64>,
-}
-
-pub struct RedEdrEvent {
-    pub date: Option<String>,
-    pub r#type: Option<String>,
-    pub trace_id: Option<u64>,
-    pub target: Option<String>,
-    pub func: Option<String>,
-    pub pid: Option<u32>,
-    pub tid: Option<u32>,
-    pub provider: Option<String>,
-    pub event_id: Option<u32>,
-    pub callstack: Option<serde_json::Value>,
-    pub stack_trace: Option<Vec<StackTraceEntry>>,
-    pub targets: Option<Vec<String>>,
-    pub extra: serde_json::Map<String, serde_json::Value>,
-}
-
-// telemetry/collectors/trace.rs
-pub struct TraceEvent {
-    pub seq: u32,
-    pub thread_id: u32,
-    pub file: String,
-    pub line: u32,
-    pub func: String,
-    pub ts_us: u64,
-}
-
-pub struct TraceCollector {
-    pipe_name: String,                     // "\\.\pipe\rededr_trace"
-    event_tx: mpsc::Sender<TraceEvent>,    // 100K capacity
-    sequence_counter: Arc<AtomicU32>,
-}
-
-#[repr(C, packed)]
-struct InstRecordHeader {                  // 32 bytes
-    magic: u32,                            // 0x49535452
-    version: u16,
-    event_type: u16,                       // 1=line, 2=checkpoint, 3=success, 4=failure
-    thread_id: u32,
-    seq_no: u64,
-    ts_us: u64,
-    payload_len: u32,
-}
-```
-
-### Execution Monitor
-
-```rust
-// dispatch/monitor.rs
-pub struct ExecutionMonitor {
-    pub run_id: String,
-    pub job_id: String,
-    pub worker_id: String,
-    pub worker_ip: String,
-    pub artifact_name: String,
-    pub pid: u32,
-    pub rededr_base_url: String,
-    pub sink: Arc<dyn ControlPlaneSink>,   // Stream or Null
-    pub start_time: Instant,
-    pub timeout_seconds: i32,
-    client: reqwest::Client,              // 3s timeout for /api/stats
-    sys: Arc<Mutex<sysinfo::System>>,     // Per-PID process metrics
-}
-```
-
-### RAII Guards
-
-```rust
-// dispatch/guards.rs
-pub struct RedEdrGuard {
-    collector: RedEdrCollector,
-    reset_on_drop: bool,
-}
-
-pub struct MonitorGuard {
-    stop_tx: Option<watch::Sender<bool>>,
-    handle: Option<JoinHandle<()>>,
-    event_consumer: Option<JoinHandle<()>>,
-}
-
-pub struct ProcessGuard {
-    child: Option<tokio::process::Child>,
-    should_kill: bool,
-}
-```
-
-### Compression
-
-```rust
-// telemetry/trace_compressor.rs
-pub struct CompressedTrace {
-    pub original_size: usize,
-    pub compressed_size: usize,
-    pub content: String,
-    pub compression_ratio: f64,
-    pub statistics: CompressionStatistics,
-}
-
-pub struct CompressionStatistics {
-    pub original_events: usize,
-    pub unique_files: usize,
-    pub unique_functions: usize,
-    pub patterns_found: usize,
-    pub max_pattern_length: usize,
-    pub total_pattern_occurrences: usize,
-    pub grammar_rules: usize,
-}
-```
-
-### Infrastructure (`infra/`)
-
-```rust
-// infra/process.rs
-pub fn spawn_artifact(artifact_path: &Path, working_dir: &Path) -> io::Result<Child>;
-pub async fn kill_process_tree(child: &mut Child, pid: Option<u32>);
-pub fn is_process_alive(pid: u32) -> bool;           // Windows: OpenProcess, other: false
-pub fn capture_stream<R: AsyncRead>(stream: Option<R>) -> JoinHandle<String>;
-
-// infra/system.rs
-pub fn prepare_telemetry_dir(dir: &Path) -> io::Result<()>;
-
-// infra/helpers.rs
-pub fn extract_filename(path: &str) -> String;
-pub async fn collect_bb_coverage(...) -> Result<TelemetryData>;
-pub async fn collect_api_checkpoints(...) -> Result<Vec<TelemetryData>>;
+Arc-cycle prevention:
+    WorkerAgentService → stream_handler → WorkerAgentService  (CYCLE — prevented)
+    StreamHandler clones worker_id, config; shares execution_lock by Arc
 ```
 
 ---
 
-## 10. Concurrency Model
+## 10. Control Plane Sink (`execution/sink.rs`)
 
-### Thread/Task Breakdown for One Execution
+```
+    ┌─────────────────────────────────────────────┐
+    │  trait ControlPlaneSink: Send + Sync          │
+    │  ├── send_status(ExecutionStatusReport)       │
+    │  ├── send_telemetry(TelemetryBatch)           │
+    │  └── send_ack(request_id, success, error)     │
+    └─────────────────┬───────────────────────────┘
+                      │
+            ┌─────────┼─────────┐
+            │                   │
+            ▼                   ▼
+    ┌──────────────┐    ┌──────────────┐
+    │  StreamSink  │    │  NullSink    │
+    │              │    │              │
+    │  Wraps mpsc  │    │  All sends   │
+    │  Sender →    │    │  succeed     │
+    │  controller  │    │  silently    │
+    │              │    │  (no stream) │
+    └──────────────┘    └──────────────┘
+
+    Factory: build_sink(Option<&Sender>) → Arc<dyn ControlPlaneSink>
+    Called by: api/run.rs, session/stream_handler.rs
+```
+
+---
+
+## 11. Concurrency Model
+
+### Task Tree for One Execution
 
 ```
     Tokio Runtime (main)
@@ -1043,18 +875,6 @@ pub async fn collect_api_checkpoints(...) -> Result<Vec<TelemetryData>>;
         └── event_consumer      ← Log monitor events
 ```
 
-### Synchronization Primitives
-
-| Primitive | Location | Protects |
-|-----------|----------|----------|
-| `Arc<Mutex<ExecutionState>>` | WorkerAgentService + StreamHandler | One-at-a-time execution |
-| `Arc<Mutex<System>>` | WorkerAgentService | sysinfo refresh (health check) |
-| `Arc<RwLock<Option<Arc<StreamHandler>>>>` | WorkerAgentService | Lazy stream handler init |
-| `Arc<RwLock<WorkerState>>` | StreamHandler | Mutable runtime state |
-| `Arc<Mutex<sysinfo::System>>` | ExecutionMonitor | Per-PID process metrics |
-| `AtomicU32` | TraceCollector | Sequence counter for text traces |
-| `watch::Sender<bool>` | MonitorGuard | Stop signal for monitor |
-
 ### Critical Section: Execution Lock
 
 ```
@@ -1068,13 +888,9 @@ pub async fn collect_api_checkpoints(...) -> Result<Vec<TelemetryData>>;
             Drop: ExecutionLockGuard → tokio::spawn → state.release()
 ```
 
-**Why single execution?** RedEDR captures kernel-level ETW events for a target process. Running multiple artifacts simultaneously would cause telemetry cross-contamination — events from one artifact attributed to another.
-
 ---
 
-## 11. Capability Detection (`capabilities.rs`)
-
-### Detection Methods
+## 12. Capability Detection (`capabilities.rs`)
 
 ```
     detect_capabilities() ─────────────────────────────────────┐
@@ -1103,70 +919,9 @@ pub async fn collect_api_checkpoints(...) -> Result<Vec<TelemetryData>>;
     ────────────────────────────────────────────────────────────┘
 ```
 
-### Capability Strings
-
-| Capability | Detection Method | Notes |
-|------------|-----------------|-------|
-| `rededr` | HTTP health check to localhost:8081 | Required for ETW telemetry |
-| `mde` | Registry key present + non-empty OnboardedInfo | Microsoft Defender for Endpoint |
-| `cortex` | Registry service OR filesystem footprint | Palo Alto Cortex XDR |
-| (defender) | Service running | Detected but NOT added to capabilities list |
-
-### OS Key Format
-
-```
-os_key = "win{10|11}-build-{build_number}"
-```
-
-- Build >= 22000 = Windows 11
-- Build < 22000 = Windows 10
-- Used by controller for capability matching
-
 ---
 
-## 12. Key Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| **Single execution lock** | RedEDR ETW capture is per-machine; concurrent artifacts contaminate telemetry |
-| **RAII guards for all resources** | Artifact execution can fail at any point; guards ensure cleanup |
-| **No `Arc<WorkerAgentService>` in StreamHandler** | Breaks reference cycle; StreamHandler clones individual fields instead |
-| **`ControlPlaneSink` trait** | Decouples engine from transport; same code works with stream or standalone |
-| **`start_kill()` in ProcessGuard Drop** | Synchronous kill signal — no runtime needed in Drop path |
-| **`Handle::try_current()` in RedEdrGuard Drop** | Reuses existing tokio runtime instead of creating a new one; fallback logs warning |
-| **`ExecutionState` as enum** | Prevents desync between `busy` flag and job metadata; Idle vs Running{..} |
-| **Named pipe auto-detection** | Support both old IR (Base64) and new AST (binary ISTR) trace formats |
-| **100K trace channel** | Line-level tracing in tight loops generates very high event rates |
-| **Streaming writer with 256KB buffer** | Reduce I/O syscalls during high-frequency tracing |
-| **Thread-ID elision** | Only write thread_id to JSONL when it changes (compression optimization) |
-| **Two-phase trace sending** | Immediate last-2MB for quick analysis + async compressed full trace |
-| **Sanity check before each run** | Detect RedEDR contamination from previous run's incomplete cleanup |
-| **30s heartbeat loop** | Keep stream alive, auto-detect controller reconnection |
-| **`try_wait()` on timeout** | Handle race condition: process exits exactly as timeout fires |
-| **NTSTATUS interpretation** | Windows exit codes are often NTSTATUS (0xC0000005 = ACCESS_VIOLATION) |
-| **Artifacts path from config** | `config.storage.artifacts_path` (default `C:\AutoMutate\artifacts`) used everywhere |
-| **Process ops in `infra/process.rs`** | Windows-specific `#[cfg]` code isolated from engine orchestration |
-| **Stream handler lazy init** | Worker can run without controller stream (standalone mode) |
-| **Artifact-specific telemetry dirs** | `telemetry_{artifact_id}/` prevents file collision between runs |
-| **Monitor CPU-aware idle detection** | High CPU + no events = busy (not idle); prevents false stuck warnings |
-
----
-
-## Appendix A: RPC Interface
-
-The `WorkerAgent` gRPC service (defined in `api/mod.rs`):
-
-| RPC | Handler | Direction | Description |
-|-----|---------|-----------|-------------|
-| `Ping` | `api::info::ping` | Unary | Liveness check |
-| `RunSample` | `api::run::run_sample` | Unary | Execute artifact (legacy, see stream) |
-| `HealthCheck` | `api::info::health_check` | Unary | CPU/mem/busy status |
-| `SendArtifact` | `api::artifacts::send_artifact` | Client streaming | Chunked binary + SHA256 verify |
-| `GetWorkerInfo` | `api::info::get_worker_info` | Unary | Capabilities, tools, metadata |
-| `GetTelemetry` | `api::info::get_telemetry` | Server streaming | Pull telemetry on demand |
-| `EstablishStream` | `api::stream::establish_stream` | Bidirectional | Real-time controller <-> worker |
-
-### Artifact Transfer Flow
+## 13. Artifact Transfer Flow
 
 ```
     Controller                          Worker
@@ -1190,55 +945,129 @@ The `WorkerAgent` gRPC service (defined in `api/mod.rs`):
 
 ---
 
-## Appendix B: Configuration
+## 14. Inter-Module Dependency Graph
 
-The worker reads `WorkerConfig` from TOML (typically `C:\AutoMutate\worker.toml`).
-
-Key fields used by the agent:
-
-| Config Path | Used In | Purpose |
-|------------|---------|---------|
-| `worker.worker_id` | lib.rs, stream_handler | Worker identity |
-| `worker.ip_address` | stream, monitor | Registration, status reports |
-| `worker.listen_port` | main.rs | gRPC server bind address |
-| `worker.os_version` | stream, info | Registration metadata |
-| `storage.artifacts_path` | api/run, api/artifacts, stream_handler | Base path for artifact storage + telemetry dirs |
-| `telemetry.rededr.base_url` | engine, monitor | RedEDR HTTP API endpoint |
-| `telemetry.rededr.strict_contamination_check` | engine | Fail on leftover events vs. force-reset |
-| `logging.level` | main.rs | Log verbosity (TRACE/DEBUG/INFO/WARN/ERROR) |
+```
+main.rs
+  │
+  ├──► capabilities.rs ──► reqwest, winreg, sysinfo
+  │
+  └──► lib.rs (WorkerAgentService)
+        │
+        ├──► api/mod.rs ──► api/run.rs ────────────────┐
+        │                   api/artifacts.rs             │
+        │                   api/info.rs ──► infra/      │
+        │                   api/stream.rs ──► session/  │
+        │                                               │
+        ├──► execution/engine.rs ◄──────────────────────┘
+        │    │                              (both api/run.rs and
+        │    │                               session/stream_handler.rs
+        │    │                               call execute_run/dryrun)
+        │    │
+        │    ├──► execution/classifier.rs
+        │    ├──► execution/guards.rs ──► telemetry/collectors/rededr.rs
+        │    ├──► execution/monitor.rs ──► infra/process.rs
+        │    ├──► execution/sink.rs
+        │    ├──► execution/state.rs
+        │    ├──► execution/types.rs
+        │    │
+        │    ├──► telemetry/pipeline.rs
+        │    ├──► telemetry/collectors/rededr.rs
+        │    └──► telemetry/collectors/trace.rs
+        │
+        ├──► session/stream_handler.rs ──► execution/engine.rs
+        │    session/worker_state.rs                 execution/state.rs
+        │                                            execution/sink.rs
+        │                                            execution/types.rs
+        │
+        └──► infra/process.rs
+             infra/system.rs
+             infra/time.rs
+```
 
 ---
 
-## Appendix C: Test Coverage
+## 15. Layered Architecture
 
-| Test File | Tests | What's tested |
-|-----------|------:|---------------|
-| `telemetry/collectors/trace.rs` | 3 | Base64 text protocol parsing (IR + AST formats) |
-| `telemetry/collectors/rededr.rs` | 1 | Event transform (RedEdrEvent → TelemetryData) |
-| `telemetry/trace_compressor.rs` | 3 | Columnar decomposition, pattern detection, full pipeline |
-| `dispatch/monitor.rs` | 1 | Monitor construction with NullSink |
-| `tests/test_trace_pipe.rs` | 1 | End-to-end named pipe: artifact writes Base64 → collector parses → channel receives |
-| **Total** | **9** | |
-
-All tests pass on Windows. The named pipe integration test uses Win32 `CreateFileA`/`WriteFile` to simulate an artifact connecting to the trace pipe.
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 0: main.rs                                                    │
+│  Startup, config loading, capability detection, gRPC server launch   │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │ creates
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 1: lib.rs — WorkerAgentService                                │
+│  Central struct, shared state (execution_lock, stream_handler, etc.) │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │ dispatches to
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 2: api/                                                       │
+│  gRPC thin adapters — 7 RPCs of WorkerAgent service                  │
+│  mod.rs → run.rs, artifacts.rs, info.rs, stream.rs                   │
+│                                                                      │
+│  558 lines │ 7 functions │ Zero business logic                       │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │ delegates to
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 3: Domain Logic                                               │
+│                                                                      │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
+│  │  execution/   │  │  session/    │  │  telemetry/              │  │
+│  │               │  │              │  │                          │  │
+│  │  engine.rs    │  │  stream_     │  │  collectors/rededr.rs    │  │
+│  │  classifier   │  │  handler.rs  │  │  collectors/trace.rs     │  │
+│  │  guards.rs    │  │  worker_     │  │  pipeline.rs             │  │
+│  │  monitor.rs   │  │  state.rs    │  │  trace_compressor.rs     │  │
+│  │  sink.rs      │  │              │  │  (not integrated)        │  │
+│  │  state.rs     │  │              │  │                          │  │
+│  │  types.rs     │  │              │  │                          │  │
+│  │               │  │              │  │                          │  │
+│  │  2272 lines   │  │  495 lines   │  │  1935 lines              │  │
+│  └──────┬───────┘  └──────┬───────┘  └──────────┬───────────────┘  │
+│         │                 │                      │                   │
+└─────────┼─────────────────┼──────────────────────┼───────────────────┘
+          │                 │                      │
+          ▼                 ▼                      ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 4: infra/                                                     │
+│  OS boundary — process management, filesystem, metrics, time         │
+│  process.rs, system.rs, time.rs                                      │
+│                                                                      │
+│  137 lines │ 8 functions │ Zero business logic                       │
+└─────────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+    Windows API, filesystem, sysinfo, chrono
+```
 
 ---
 
-## Appendix D: Dependencies
+## 16. Communication Architecture
 
-| Crate | Version | Purpose |
-|-------|---------|---------|
-| `automutate-config` | workspace | Shared TOML configuration |
-| `tokio` | workspace | Async runtime |
-| `tonic` / `prost` | workspace | gRPC framework + protobuf |
-| `reqwest` | 0.13 | HTTP client for RedEDR API |
-| `serde` / `serde_json` | workspace | JSON serialization |
-| `chrono` | 0.4 | Timestamps |
-| `sysinfo` | 0.37 | CPU/memory metrics, per-PID monitoring |
-| `sha2` | 0.10 | Artifact integrity verification |
-| `base64` | 0.22 | Trace protocol encoding |
-| `flate2` | 1.1 | Gzip compression for large traces |
-| `uuid` | 1.19 | Run ID generation |
-| `regex` | 1.12 | RedEDR version parsing |
-| `windows` | 0.62 | Win32 API (process, file, threading) |
-| `winreg` | 0.55 | Registry access (MDE, Cortex, OS info) |
+### Phase 1 — Unary RPCs (Original)
+
+```
+Controller ──RunSample──►  Worker ──SampleResponse──► Controller
+Controller ──SendArtifact──► Worker ──TransferAck──► Controller
+Controller ──HealthCheck──► Worker ──HealthResponse──► Controller
+Controller ──GetTelemetry──► Worker ══TelemetryData══► Controller (stream)
+```
+
+### Phase 2 — Bidirectional Stream (Current)
+
+```
+Controller ══════ EstablishStream (bidi gRPC) ══════ Worker
+                         │
+           ┌─────────────┼──────────────┐
+           ▼             ▼              ▼
+    ControllerMessage          WorkerMessage
+    ├── RunSample              ├── Registration
+    ├── HealthCheck            ├── Status
+    ├── Heartbeat              ├── Ack
+    ├── Disconnect             ├── SampleResponse
+    ├── Ack                    ├── Telemetry
+    └── ArtifactChunks         └── ExecutionStatus
+```
