@@ -28,10 +28,10 @@
 /// This module is intended for future structural loop analysis and triage token
 /// extraction from execution patterns.
 ///
-/// Three-stage pipeline:
-/// 1. CLP-inspired columnar decomposition (extract line numbers, deduplicate strings)
-/// 2. Matrix Profile pattern detection (find recurring motifs in line sequences)
-/// 3. Sequitur-like grammar induction (hierarchical compression of patterns)
+/// Three-stage compression pipeline:
+/// - **CLP-inspired columnar decomposition**: extract line numbers, deduplicate strings
+/// - **Matrix Profile pattern detection**: find recurring motifs in line sequences
+/// - **Sequitur-like grammar induction**: hierarchical compression of repeated patterns
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -72,8 +72,7 @@ struct TraceEvent {
     ts_us: u64,
 }
 
-/// Step 1: CLP-inspired columnar decomposition
-/// Extract dense integer arrays and string dictionaries
+/// CLP-inspired columnar decomposition of trace events into dense arrays and string dictionaries.
 struct ColumnarTrace {
     line_sequence: Vec<u32>,  // Dense array of line numbers
     file_dict: Vec<String>,   // Dictionary of unique file names
@@ -139,8 +138,7 @@ impl ColumnarTrace {
     }
 }
 
-/// Step 2: Matrix Profile - Find recurring patterns (motifs) in line sequence
-/// Simplified Matrix Profile using sliding windows and distance computation
+/// Matrix Profile — finds recurring patterns (motifs) in a line-number sequence using sliding-window hashing.
 struct MatrixProfile {
     motifs: Vec<Motif>,
 }
@@ -205,8 +203,7 @@ impl MatrixProfile {
     }
 }
 
-/// Step 3: Sequitur-like Grammar Induction
-/// Build a hierarchical grammar that represents the trace structure
+/// Sequitur-like grammar induction for hierarchical trace compression.
 #[derive(Debug, Clone)]
 struct Grammar {
     rules: Vec<GrammarRule>,
@@ -369,7 +366,7 @@ pub fn compress_trace_log(content: &str, min_loop_iterations: usize) -> Compress
         };
     }
 
-    // Stage 1: CLP-inspired columnar decomposition
+    // Columnar decomposition (CLP-inspired)
     let columnar = match ColumnarTrace::from_jsonl(content) {
         Ok(c) => c,
         Err(e) => {
@@ -383,7 +380,7 @@ pub fn compress_trace_log(content: &str, min_loop_iterations: usize) -> Compress
 
     let original_events = columnar.line_sequence.len();
 
-    // Stage 2: Matrix Profile - Find recurring patterns
+    // Pattern detection (Matrix Profile)
     let min_window = 2;
     let max_window = 50.min(columnar.line_sequence.len() / 3);
     let matrix_profile = MatrixProfile::compute(
@@ -393,7 +390,7 @@ pub fn compress_trace_log(content: &str, min_loop_iterations: usize) -> Compress
         min_loop_iterations,
     );
 
-    // Stage 3: Sequitur-like grammar induction
+    // Grammar induction (Sequitur-like)
     let grammar =
         Grammar::from_sequence_and_motifs(&columnar.line_sequence, &matrix_profile.motifs);
 

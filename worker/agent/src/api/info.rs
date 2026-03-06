@@ -1,3 +1,7 @@
+//! Worker information and health reporting handlers.
+//!
+//! Provides ping, health check, worker metadata, and on-demand telemetry pull RPCs.
+
 use crate::automutate::common::TelemetryData;
 use crate::automutate::worker::{HealthRequest, HealthResponse, PingRequest, PingResponse};
 use crate::{WorkerAgentService, telemetry};

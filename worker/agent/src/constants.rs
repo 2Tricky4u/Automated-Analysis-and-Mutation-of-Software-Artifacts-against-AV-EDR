@@ -1,3 +1,5 @@
+//! Compile-time constants for the worker agent.
+
 /// Timeout for cleanup operations in Drop (seconds)
 pub const CLEANUP_TIMEOUT_SECS: u64 = 10;
 

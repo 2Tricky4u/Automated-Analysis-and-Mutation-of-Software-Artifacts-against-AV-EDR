@@ -1,10 +1,6 @@
-/// Telemetry collectors
-///
-/// Modules that collect telemetry from various sources:
-/// - RedEDR HTTP API (rededr)
-/// - Line-level tracing via named pipe (trace)
-/// - ETW (future)
-/// - Event Logs (future)
-/// - Defender alerts (future)
+//! Telemetry collector implementations.
+//!
+//! Each collector targets a specific telemetry source and normalizes events
+//! into the common [`TelemetryData`](crate::automutate::common::TelemetryData) protobuf envelope.
 pub mod rededr;
 pub mod trace;

@@ -1,7 +1,10 @@
-/// Worker agent library - exposes modules for testing and reuse
-///
-/// This allows integration tests to access internal modules like
-/// telemetry collectors without duplicating code.
+//! Worker agent library for the AutoMutate++ EDR evaluation framework.
+//!
+//! Exposes the core [`WorkerAgentService`] and all internal modules for
+//! integration testing and reuse. The agent runs on Windows worker VMs and
+//! provides gRPC endpoints for artifact reception, monitored execution,
+//! telemetry collection, and detection outcome classification.
+
 pub mod automutate {
     pub mod common {
         tonic::include_proto!("automutate.common");
@@ -14,7 +17,6 @@ pub mod automutate {
     }
 }
 
-// New module structure
 pub mod api;
 pub mod capabilities;
 pub mod constants;

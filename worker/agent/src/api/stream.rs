@@ -1,3 +1,8 @@
+//! Bidirectional stream establishment handler.
+//!
+//! Creates a [`StreamHandler`](crate::session::stream_handler::StreamHandler) for real-time controller communication,
+//! spawns the incoming-message processor and heartbeat background task.
+
 use crate::automutate::common::{ControllerMessage, WorkerMessage};
 use crate::{WorkerAgentService, session};
 use std::sync::Arc;

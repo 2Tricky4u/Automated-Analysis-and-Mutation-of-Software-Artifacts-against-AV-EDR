@@ -1,4 +1,10 @@
-/// Capability detection for worker self-registration
+//! Capability detection for worker self-registration.
+//!
+//! Probes the host environment at startup to identify available security
+//! tools (RedEDR, Defender, MDE, Cortex XDR) and system metadata (OS build,
+//! CPU cores, RAM). Results are cached in [`WorkerCapabilities`] and reported
+//! to the controller during stream registration.
+
 use anyhow::Result;
 use regex::Regex;
 use std::collections::HashMap;
@@ -226,6 +232,7 @@ fn is_cortex_xdr_present() -> bool {
 }
 
 #[cfg(windows)]
+/// Read Windows version details from the registry.
 pub fn get_windows_version_info() -> WindowsVersionInfo {
     use winreg::RegKey;
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
@@ -277,6 +284,7 @@ pub fn get_windows_version_info() -> WindowsVersionInfo {
 }
 
 #[cfg(not(windows))]
+/// Stub — returns empty version info on non-Windows platforms.
 pub fn get_windows_version_info() -> WindowsVersionInfo {
     WindowsVersionInfo {
         product_name: None,

@@ -1,7 +1,11 @@
+//! Worker agent entry point.
+//!
+//! Loads configuration, detects host capabilities (RedEDR, Defender, MDE, Cortex),
+//! and starts the gRPC server that accepts controller commands.
+
 use tonic::transport::Server;
 use tracing::info;
 
-// Use modules from lib
 use worker_agent::{WorkerAgentService, automutate, capabilities};
 
 use automutate::worker::worker_agent_server::WorkerAgentServer;
