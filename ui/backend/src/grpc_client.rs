@@ -1,6 +1,35 @@
-//! gRPC Client wrapper for Controller service.
+//! gRPC client wrapper for the Controller service.
 //!
-//! Provides typed methods for all Controller gRPC endpoints.
+//! Provides typed, async methods for every Controller RPC endpoint used by the
+//! REST layer. The underlying [`tonic`] channel is created lazily on first use
+//! and cached behind an [`Arc<RwLock>`] so that all Axum handlers share a
+//! single connection.
+//!
+//! ## Connection Strategy
+//!
+//! - **Lazy connect:** No TCP connection is attempted until the first RPC call.
+//! - **Double-checked locking:** [`get_client`](ControllerGrpcClient::get_client)
+//!   acquires a read lock first; only if no connection exists does it upgrade to
+//!   a write lock and re-check before connecting. This avoids contention on the
+//!   hot path.
+//! - **Reconnection:** Call [`disconnect`](ControllerGrpcClient::disconnect) to
+//!   clear the cached channel; the next RPC call will transparently reconnect.
+//!   On RPC failure the caller (REST handler) returns `SERVICE_UNAVAILABLE` and
+//!   the frontend retries.
+//!
+//! ## RPC Method Groups
+//!
+//! | Group              | Methods                                                                 |
+//! |--------------------|-------------------------------------------------------------------------|
+//! | Health             | `ping`, `is_healthy`                                                    |
+//! | Jobs               | `schedule_job`, `get_job_status`, `get_job_progress`, `stop_job`, `get_round` |
+//! | Runs               | `compare_runs`, `get_trace_lines`                                       |
+//! | Tokens             | `compare_tokens`                                                        |
+//! | Workers            | `list_workers`, `get_worker_metadata`, `get_available_workers`, `ping_worker`, `disconnect_worker`, `disconnect_all_workers` |
+//! | Orchestrator       | `get_orchestrator_status`                                               |
+//! | Artifacts          | `build_artifact`, `deploy_artifact` (unused by UI)                      |
+//! | Query & Triage     | `query_results`, `submit_triage`                                        |
+//! | Streaming          | `get_streaming_client` (reserved for future WebSocket bridge)           |
 
 use crate::generated::controller::{
     BuildRequest, BuildResponse, CompareRunsRequest, CompareRunsResponse, CompareTokensRequest,
@@ -20,10 +49,13 @@ use tokio::sync::RwLock;
 use tonic::transport::Channel;
 use tracing::{debug, info};
 
-/// Configuration for Controller gRPC connection
+/// Configuration for the Controller gRPC connection.
 #[derive(Clone, Debug)]
 pub struct ControllerConfig {
+    /// gRPC endpoint URI, e.g. `"http://10.200.200.1:50051"`.
     pub address: String,
+    /// Per-RPC deadline in seconds. Applied to the [`tonic`] channel at
+    /// construction time.
     pub timeout_secs: u64,
 }
 
@@ -36,28 +68,57 @@ impl Default for ControllerConfig {
     }
 }
 
-/// Parameters for scheduling a new job.
+/// Parameters for scheduling a new mutation job.
+///
+/// Maps 1-to-1 to the protobuf `JobRequest` message. Fields use Rust-native
+/// types; the [`schedule_job`](ControllerGrpcClient::schedule_job) method
+/// converts them to proto before sending.
 pub struct ScheduleJobParams {
+    /// Path to the raw shellcode `.bin` file on the build host.
     pub source: String,
+    /// Upper bound on mutation rounds. The job stops early if
+    /// `stop_on_evasion` is set and evasion is achieved.
     pub max_rounds: u32,
+    /// Target OS filter, e.g. `"win10"`, `"win11"`. Empty means any.
     pub target_os: Option<String>,
+    /// Required worker capabilities (e.g. `["defender", "rededr"]`).
     pub required_capabilities: Vec<String>,
+    /// Explicit loader module selection. `None` lets the controller pick
+    /// defaults.
     pub modules: Option<ModuleSelection>,
+    /// Payload encoding: `"xor"`, `"english"`, `"subbyte"`, or `"none"`.
     pub encoding: Option<String>,
+    /// Stop the job after the first round that achieves full evasion.
     pub stop_on_evasion: bool,
+    /// Instrumented-run trace granularity. Valid: `"off"`, `"api"`, `"bb"`,
+    /// `"api+bb"`, `"lines"`, `"all"`.
     pub trace_mode: Option<String>,
+    /// Selector algorithm: `"coverage"` (default) or `"fuzzer"`.
     pub selector_type: Option<String>,
+    /// Module categories the selector may vary across rounds.
     pub variable_categories: Vec<String>,
+    /// Variation strategy: `"mutation"` (default) or `"full"`.
     pub variation_strategy: Option<String>,
+    /// Mutation IDs to explore. Empty means the full catalogue.
     pub mutation_pool: Vec<String>,
+    /// Module names to apply mutations to. Empty means all modules.
     pub mutation_targets: Vec<String>,
+    /// Mutations always applied every round after the baseline.
     pub fixed_mutations: Vec<String>,
+    /// Number of INT3 shellcode checkpoints (`0` = disabled).
     pub sc_checkpoint_count: u32,
+    /// Cache the encoded payload across rounds instead of re-encoding.
     pub cache_payload: bool,
+    /// Use MSVC `link.exe` instead of `lld-link` for the final link step.
     pub msvc_compat: bool,
 }
 
-/// gRPC client wrapper with connection management
+/// Thread-safe gRPC client wrapper with lazy connection management.
+///
+/// Cheaply cloneable (`Arc` interior) and safe to share across Axum handlers.
+/// The inner [`tonic`] `ControllerClient` is stored behind
+/// `Arc<RwLock<Option<...>>>` so that connection establishment is serialized
+/// while concurrent reads proceed without contention.
 #[derive(Clone)]
 pub struct ControllerGrpcClient {
     config: ControllerConfig,
@@ -65,7 +126,9 @@ pub struct ControllerGrpcClient {
 }
 
 impl ControllerGrpcClient {
-    /// Create new client with config
+    /// Create a new client from the given config.
+    ///
+    /// No connection is opened until the first RPC call.
     pub fn new(config: ControllerConfig) -> Self {
         Self {
             config,
@@ -73,13 +136,22 @@ impl ControllerGrpcClient {
         }
     }
 
-    /// Create with default config (localhost:50051)
+    /// Create a client targeting `localhost:50051` with a 30 s timeout.
     #[allow(dead_code)]
     pub fn default_local() -> Self {
         Self::new(ControllerConfig::default())
     }
 
-    /// Get or create gRPC client connection
+    /// Return an existing connection or create a new one.
+    ///
+    /// Uses double-checked locking: a read lock is tried first, and only if the
+    /// cached client is `None` does the method upgrade to a write lock and
+    /// re-check before dialling.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the TCP/HTTP2 connection to the Controller cannot be
+    /// established (network unreachable, DNS failure, TLS mismatch, etc.).
     async fn get_client(&self) -> Result<ControllerClient<Channel>> {
         // Check if we have a connection
         {
@@ -112,7 +184,7 @@ impl ControllerGrpcClient {
         Ok(client)
     }
 
-    /// Clear cached connection (for reconnect)
+    /// Clear the cached connection so the next RPC call reconnects.
     #[allow(dead_code)]
     pub async fn disconnect(&self) {
         let mut guard = self.client.write().await;
@@ -124,7 +196,12 @@ impl ControllerGrpcClient {
     // Health Check
     // ========================================================================
 
-    /// Ping the controller
+    /// Send a `Ping` RPC to the Controller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection cannot be established or the
+    /// Controller does not respond within the configured timeout.
     pub async fn ping(&self) -> Result<PingResponse> {
         let mut client = self.get_client().await?;
         let response = client
@@ -136,7 +213,7 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Check if controller is healthy
+    /// Return `true` if a `Ping` RPC succeeds within the timeout.
     pub async fn is_healthy(&self) -> bool {
         self.ping().await.is_ok()
     }
@@ -145,7 +222,16 @@ impl ControllerGrpcClient {
     // Job Management
     // ========================================================================
 
-    /// Schedule a new job
+    /// Schedule a new mutation job on the Controller.
+    ///
+    /// Converts [`ScheduleJobParams`] to a protobuf `JobRequest` and sends
+    /// `ScheduleJob`. The Controller validates the request, enqueues the job,
+    /// and returns a `job_id` on acceptance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if the Controller rejects the
+    /// request (invalid source, no available workers, etc.).
     pub async fn schedule_job(&self, params: ScheduleJobParams) -> Result<JobResponse> {
         let mut client = self.get_client().await?;
 
@@ -178,7 +264,11 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Get job status
+    /// Fetch the current status of a job.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if the job ID is unknown.
     pub async fn get_job_status(&self, job_id: &str) -> Result<JobStatusResponse> {
         let mut client = self.get_client().await?;
 
@@ -194,7 +284,11 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Get detailed job progress with rounds
+    /// Fetch detailed job progress including per-round summaries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if the job ID is unknown.
     pub async fn get_job_progress(&self, job_id: &str) -> Result<JobProgressResponse> {
         let mut client = self.get_client().await?;
 
@@ -210,7 +304,13 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Stop a running job
+    /// Request the Controller to stop a running job.
+    ///
+    /// Idempotent — stopping an already-stopped job is not an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if the job ID is unknown.
     pub async fn stop_job(&self, job_id: &str) -> Result<StopJobResponse> {
         let mut client = self.get_client().await?;
 
@@ -226,7 +326,12 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Get round details
+    /// Fetch full details for a single round within a job.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if the job/round ID pair is
+    /// unknown.
     pub async fn get_round(&self, job_id: &str, round_id: &str) -> Result<GetRoundResponse> {
         let mut client = self.get_client().await?;
 
@@ -243,7 +348,12 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Compare baseline vs instrumented runs
+    /// Compare a baseline (trace-off) run against an instrumented (trace-on)
+    /// run from the same round, implementing the two-run differential protocol.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if either run ID is unknown.
     pub async fn compare_runs(
         &self,
         baseline_run_id: &str,
@@ -264,7 +374,14 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Compare token sets between two runs
+    /// Compute the symmetric token-set difference between two runs.
+    ///
+    /// Returns tokens only in A, only in B, in common, per-mutation parameter
+    /// distances, and a Jaccard distance metric.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if either run ID is unknown.
     pub async fn compare_tokens(
         &self,
         run_id_a: &str,
@@ -285,7 +402,14 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Get trace lines for a run
+    /// Retrieve the most recent trace lines for a run.
+    ///
+    /// `last` controls how many lines to return (most recent N). Pass `0` to
+    /// use the server default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if the run ID is unknown.
     pub async fn get_trace_lines(&self, run_id: &str, last: u32) -> Result<GetTraceLinesResponse> {
         let mut client = self.get_client().await?;
 
@@ -306,7 +430,11 @@ impl ControllerGrpcClient {
     // Workers
     // ========================================================================
 
-    /// List connected workers
+    /// List all workers currently registered with the Controller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure.
     pub async fn list_workers(&self) -> Result<ListWorkersResponse> {
         let mut client = self.get_client().await?;
 
@@ -320,7 +448,12 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Get orchestrator status (active jobs, queue depth, pool metrics)
+    /// Fetch aggregated orchestrator metrics: active jobs, queue depth, and
+    /// worker pool utilization.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure.
     pub async fn get_orchestrator_status(&self) -> Result<GetOrchestratorStatusResponse> {
         let mut client = self.get_client().await?;
 
@@ -334,7 +467,14 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Get enhanced worker metadata (health, tools, last_seen)
+    /// Fetch enhanced metadata for a worker (health, tool versions, last_seen).
+    ///
+    /// Pass an empty `worker_id` to retrieve metadata for **all** workers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if the specified worker ID is
+    /// unknown.
     pub async fn get_worker_metadata(&self, worker_id: &str) -> Result<GetWorkerMetadataResponse> {
         let mut client = self.get_client().await?;
 
@@ -350,7 +490,13 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Get available workers filtered by OS and capabilities
+    /// Return workers that match the given OS and capability filters.
+    ///
+    /// Pass empty strings / vectors to skip filtering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure.
     pub async fn get_available_workers(
         &self,
         target_os: &str,
@@ -371,7 +517,11 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Ping a specific worker
+    /// Ping a specific worker through the Controller relay.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if the worker is unreachable.
     pub async fn ping_worker(&self, worker_id: &str) -> Result<PingWorkerResponse> {
         let mut client = self.get_client().await?;
 
@@ -387,7 +537,14 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Disconnect a specific worker
+    /// Ask the Controller to disconnect a specific worker.
+    ///
+    /// `reason` is stored in the worker's disconnect log. The worker may or
+    /// may not be allowed to reconnect depending on Controller policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if the worker ID is unknown.
     pub async fn disconnect_worker(
         &self,
         worker_id: &str,
@@ -408,7 +565,14 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Disconnect all workers
+    /// Ask the Controller to disconnect every registered worker.
+    ///
+    /// `reason` is logged for each disconnection. When `reconnect_allowed` is
+    /// `true`, workers may re-register after the disconnect.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure.
     pub async fn disconnect_all_workers(
         &self,
         reason: &str,
@@ -433,7 +597,15 @@ impl ControllerGrpcClient {
     // Artifacts
     // ========================================================================
 
-    /// Build artifact from template
+    /// Build an artifact from a template via the Controller.
+    ///
+    /// Not currently used by the UI — the build pipeline is triggered
+    /// internally by the job worker. Retained for future direct-build
+    /// workflows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or build failure.
     #[allow(dead_code)]
     pub async fn build_artifact(
         &self,
@@ -458,7 +630,14 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Deploy artifact to worker
+    /// Deploy an already-built artifact to a worker VM.
+    ///
+    /// Not currently used by the UI — deployment is handled by the job worker.
+    /// Retained for future direct-deploy workflows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or deployment failure.
     #[allow(dead_code)]
     pub async fn deploy_artifact(
         &self,
@@ -484,7 +663,12 @@ impl ControllerGrpcClient {
     // Query & Triage
     // ========================================================================
 
-    /// Query Elasticsearch results
+    /// Query ElasticSearch analysis results through the Controller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if the ES query fails
+    /// server-side.
     pub async fn query_results(
         &self,
         job_ids: Vec<String>,
@@ -508,7 +692,11 @@ impl ControllerGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// Submit triage request
+    /// Submit a triage verdict for a job.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on connection failure or if the job ID is unknown.
     pub async fn submit_triage(
         &self,
         job_id: &str,
@@ -536,7 +724,14 @@ impl ControllerGrpcClient {
     // Telemetry Streaming
     // ========================================================================
 
-    /// Stream telemetry (returns the raw client for streaming)
+    /// Return the raw [`ControllerClient`] for streaming RPCs.
+    ///
+    /// Reserved for a future WebSocket bridge that streams telemetry events to
+    /// the frontend in real time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection cannot be established.
     #[allow(dead_code)]
     pub async fn get_streaming_client(&self) -> Result<ControllerClient<Channel>> {
         self.get_client().await

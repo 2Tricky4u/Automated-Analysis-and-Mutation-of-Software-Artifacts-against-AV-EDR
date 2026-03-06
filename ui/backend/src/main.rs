@@ -1,34 +1,67 @@
 //! UI Backend REST API Server
 //!
-//! Provides HTTP REST API endpoints that wrap
-//! the Controller gRPC service for frontend integration.
+//! Thin REST-to-gRPC adapter that exposes the Controller service to the
+//! browser-based frontend. Every REST handler deserializes JSON, forwards the
+//! call to the Controller over gRPC, and re-serializes the response as a JSON
+//! envelope (`{"data":...}` on success, `{"error":...,"code":...}` on failure).
+//!
+//! ## Shared State
+//!
+//! - [`Arc<ControllerGrpcClient>`](grpc_client::ControllerGrpcClient) — lazily-connected,
+//!   thread-safe gRPC channel shared by all handlers via Axum `State`.
+//! - `Option<Arc<Elasticsearch>>` — optional ES client injected via Axum `Extension`.
+//!   Only the token endpoint uses it; all other endpoints degrade gracefully when absent.
+//!
+//! ## Environment Variables
+//!
+//! | Variable            | Default                       | Description                          |
+//! |---------------------|-------------------------------|--------------------------------------|
+//! | `CONTROLLER_ADDR`   | `http://10.200.200.1:50051`   | Controller gRPC endpoint             |
+//! | `LISTEN_ADDR`       | `0.0.0.0:3000`                | Address this server listens on       |
+//! | `FRONTEND_DIR`      | `../frontend`                 | Path to static HTML/JS/CSS assets    |
+//! | `ELASTICSEARCH_URL` | `http://localhost:9200`        | ElasticSearch node URL (optional)    |
 //!
 //! ## Endpoints
 //!
 //! ### Health
-//! - GET /health - Health check
-//! - GET /api/health - Detailed health with controller status
+//! - `GET  /health`       — plain-text liveness probe
+//! - `GET  /api/health`   — JSON health with controller connectivity
 //!
 //! ### Jobs
-//! - POST /api/jobs - Submit new job
-//! - GET /api/jobs/:id - Get job status
-//! - GET /api/jobs/:id/progress - Get detailed progress with rounds
-//! - POST /api/jobs/:id/stop - Stop running job
-//! - GET /api/jobs/:job_id/rounds/:round_id - Get round details
+//! - `POST /api/jobs`                              — submit new job
+//! - `GET  /api/jobs/:id`                          — job status
+//! - `GET  /api/jobs/:id/progress`                 — detailed progress with rounds
+//! - `POST /api/jobs/:id/stop`                     — stop running job
+//! - `GET  /api/jobs/:job_id/rounds/:round_id`     — round details
 //!
 //! ### Runs
-//! - GET /api/runs/:run_id/trace?last=N - Get trace lines for a run
-//! - GET /api/runs/compare?baseline=X&instrumented=Y - Compare runs
+//! - `GET  /api/runs/:run_id/trace?last=N`                  — trace lines for a run
+//! - `GET  /api/runs/compare?baseline=X&instrumented=Y`     — compare two runs
 //!
-//! ### Workers
-//! - GET /api/workers - List all workers
+//! ### Workers & Admin
+//! - `GET  /api/workers`                — list all workers
+//! - `GET  /api/workers/metadata`       — enhanced metadata (health, tools, last_seen)
+//! - `GET  /api/workers/available`      — filter by OS / capabilities
+//! - `POST /api/workers/:id/ping`       — ping a specific worker
+//! - `POST /api/workers/:id/disconnect` — disconnect a specific worker
+//! - `POST /api/workers/disconnect-all` — disconnect all workers
 //!
 //! ### Orchestrator
-//! - GET /api/orchestrator/status - Get orchestrator status (active jobs, pending runs)
+//! - `GET  /api/orchestrator/status` — active jobs, queue depth, pool metrics
 //!
-//! ### Query
-//! - POST /api/query - Execute ES query
-//! - POST /api/triage - Submit triage data
+//! ### Tokens
+//! - `GET  /api/jobs/:job_id/rounds/:round_id/tokens` — per-round tokens (ES direct)
+//! - `GET  /api/tokens/compare?run_a=X&run_b=Y`       — token set diff via gRPC
+//!
+//! ### Query & Triage
+//! - `POST /api/query`   — flexible ES query (job IDs + date range)
+//! - `POST /api/triage`  — submit triage verdict
+//!
+//! ## Static File Fallback
+//!
+//! Non-API routes fall through to [`ServeDir`],
+//! which serves the frontend SPA from `FRONTEND_DIR`. This allows the UI to be
+//! served from the same origin without a separate web server.
 
 mod api;
 mod generated;
@@ -163,12 +196,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Simple health check
+/// Returns `"OK"` as a plain-text liveness probe.
+///
+/// Used by load balancers and orchestrators to verify the process is running.
+/// Does not check downstream dependencies.
 async fn health_check() -> &'static str {
     "OK"
 }
 
-/// Detailed health check with controller status
+/// Detailed health check that probes the Controller gRPC connection.
+///
+/// Returns a JSON envelope containing:
+/// - `status` — `"healthy"` when the Controller responds to a ping,
+///   `"degraded"` otherwise.
+/// - `controller_connected` — boolean connectivity flag.
+/// - `version` — crate version from `Cargo.toml`.
 async fn health_detailed(
     State(client): State<Arc<ControllerGrpcClient>>,
 ) -> Json<ApiResponse<HealthResponse>> {

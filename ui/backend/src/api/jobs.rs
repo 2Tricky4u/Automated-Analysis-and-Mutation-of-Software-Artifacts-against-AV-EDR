@@ -1,6 +1,13 @@
-//! Job management REST endpoints
+//! Job management REST endpoints.
 //!
-//! Wraps Controller gRPC job endpoints.
+//! Covers the full job lifecycle: submit → status → progress → stop, plus
+//! per-round inspection, source-level trace retrieval, and the two-run
+//! differential comparison.
+//!
+//! ## Round ID Format
+//!
+//! Round IDs follow the pattern `{job_id}-round-{N}` where `N` is the
+//! 1-based round number (e.g. `abc123-round-3`).
 
 use super::{ApiError, ApiResponse};
 use crate::generated::controller::ModuleSelection;
@@ -17,6 +24,10 @@ use tracing::{debug, error, info};
 // Request/Response Types
 // ============================================================================
 
+/// Request body for `POST /api/jobs`.
+///
+/// Describes the shellcode source, round budget, worker filters, module
+/// selection, and mutation strategy for a new job.
 #[derive(Debug, Deserialize)]
 pub struct SubmitJobRequest {
     /// Path to payload .bin file
@@ -84,14 +95,30 @@ pub struct SubmitJobRequest {
     pub msvc_compat: bool,
 }
 
+/// Serde default that returns `true`. Used for [`SubmitJobRequest::cache_payload`].
 fn default_true() -> bool {
     true
 }
 
+/// Serde default that returns `10`. Used for [`SubmitJobRequest::max_rounds`].
 fn default_max_rounds() -> u32 {
     10
 }
 
+/// Explicit loader module selection for a job.
+///
+/// Each field names a module implementation within its category. Pass `None` to
+/// accept the controller default.
+///
+/// ## Module Categories
+///
+/// - `carrier` — memory allocation and execution strategy
+/// - `decoder` — payload decoding routine
+/// - `antiemulation` — sandbox / emulator detection
+/// - `deconditioner` — pre-execution environment conditioning
+/// - `guardrail` — execution guardrails (keying, environment checks)
+/// - `virtualprotect` — memory permission transition strategy
+/// - `decoy` — benign decoy API calls
 #[derive(Debug, Deserialize)]
 pub struct ModuleSelectionRequest {
     pub carrier: Option<String>,
@@ -103,113 +130,209 @@ pub struct ModuleSelectionRequest {
     pub decoy: Option<String>,
 }
 
+/// Controller acceptance reply after `POST /api/jobs`.
 #[derive(Debug, Serialize)]
 pub struct JobResponse {
+    /// Assigned job ID, or `None` if the job was rejected.
     pub job_id: Option<String>,
+    /// `true` if the Controller accepted the job.
     pub accepted: bool,
+    /// Human-readable acceptance or rejection reason.
     pub message: String,
+    /// Confirmed round budget (may differ from the requested value).
     pub max_rounds: u32,
 }
 
+/// Lightweight job status returned by `GET /api/jobs/:id`.
 #[derive(Debug, Serialize)]
 pub struct JobStatusResponse {
+    /// Job identifier.
     pub job_id: String,
+    /// Current status: `"pending"`, `"running"`, `"completed"`, `"failed"`,
+    /// `"stopped"`.
     pub status: String,
+    /// Completion percentage (0–100).
     pub progress_percent: i32,
+    /// Human-readable phase label, e.g. `"building round 3"`.
     pub current_phase: String,
 }
 
+/// Detailed job progress with per-round summaries.
+///
+/// Returned by `GET /api/jobs/:id/progress`.
 #[derive(Debug, Serialize)]
 pub struct JobProgressResponse {
+    /// Job identifier.
     pub job_id: String,
+    /// Current status (same values as [`JobStatusResponse::status`]).
     pub status: String,
+    /// Most recently completed or in-progress round number.
     pub current_round: u32,
+    /// Total rounds budgeted for this job.
     pub max_rounds: u32,
+    /// Completion percentage (0–100).
     pub progress_percent: u32,
+    /// Per-round summary records, ordered by `round_number`.
     pub rounds: Vec<RoundSummaryInfo>,
 }
 
+/// One row in the rounds summary table within [`JobProgressResponse`].
 #[derive(Debug, Serialize)]
 pub struct RoundSummaryInfo {
+    /// Round identifier (format: `{job_id}-round-{N}`).
     pub round_id: String,
+    /// 1-based round number.
     pub round_number: u32,
+    /// `true` if the artifact was detected (adjusted by differential protocol).
     pub detected: bool,
+    /// Numeric evasion score (0.0 = fully detected, 1.0 = full evasion).
     pub evasion_score: f64,
+    /// Differential category: `"real_detection"`, `"instrumentation_artifact"`,
+    /// `"full_evasion"`, or `"pending"`.
     pub differential_category: String,
+    /// Round status: `"completed"`, `"running"`, `"failed"`.
     pub status: String,
+    /// Line coverage percentage from the instrumented run.
     pub coverage_percent: f64,
+    /// List of mutation IDs applied in this round.
     pub mutations: Vec<String>,
+    /// Final detection verdict string for display badges.
     pub detection_verdict: String,
 }
 
+/// Response for `POST /api/jobs/:id/stop`.
+///
+/// Idempotent — stopping an already-stopped job returns `stopped: true`
+/// with a descriptive message.
 #[derive(Debug, Serialize)]
 pub struct StopJobResponse {
+    /// `true` if the job is now stopped.
     pub stopped: bool,
+    /// Human-readable result message.
     pub message: String,
 }
 
+/// Per-function line coverage entry within a round.
 #[derive(Debug, Serialize)]
 pub struct FunctionCoverageInfo {
+    /// Function name as it appears in the source.
     pub name: String,
+    /// Total instrumentable lines in the function.
     pub total_lines: u32,
+    /// Lines actually executed during the instrumented run.
     pub executed_lines: u32,
+    /// Coverage percentage (`executed_lines / total_lines × 100`).
     pub percent: f64,
 }
 
+/// Loader module selections used for a round.
+///
+/// Each field names the concrete module implementation selected from its
+/// category (e.g. `carrier: "heap_alloc"`, `decoder: "xor_loop"`).
 #[derive(Debug, Serialize)]
 pub struct ModulesInfo {
+    /// Memory allocation and execution carrier.
     pub carrier: String,
+    /// Payload decoding routine.
     pub decoder: String,
+    /// Anti-emulation / sandbox-detection module.
     pub antiemulation: String,
+    /// Execution guardrail module.
     pub guardrail: String,
+    /// Memory permission transition strategy.
     pub virtualprotect: String,
+    /// Benign decoy API call module.
     pub decoy: String,
+    /// Pre-execution environment conditioning module.
     pub deconditioner: String,
 }
 
+/// A single mutation applied during a round.
 #[derive(Debug, Serialize)]
 pub struct MutationInfo {
+    /// Mutation identifier (e.g. `"antiemulation.loop_randomize"`).
     pub id: String,
+    /// Mutation parameters as key-value pairs.
     pub params: std::collections::HashMap<String, String>,
 }
 
+/// Full round inspection payload returned by
+/// `GET /api/jobs/:job_id/rounds/:round_id`.
+///
+/// Contains both run results (baseline + instrumented), the assembled source
+/// snapshot, coverage data, module selections, and applied mutations.
 #[derive(Debug, Serialize)]
 pub struct RoundDetailResponse {
+    /// Round identifier.
     pub round_id: String,
+    /// Parent job identifier.
     pub job_id: String,
+    /// 1-based round number.
     pub round_number: u32,
+    /// Baseline (trace-off) run result, if completed.
     pub baseline_run: Option<RunResultInfo>,
+    /// Instrumented (trace-on) run result, if completed.
     pub instrumented_run: Option<RunResultInfo>,
+    /// Round status: `"completed"`, `"running"`, `"failed"`.
     pub status: String,
+    /// Full assembled C source snapshot, if available.
     pub assembled_source: Option<String>,
+    /// Overall line coverage percentage.
     pub coverage_percent: f64,
+    /// Source line where execution was cut off (0 if no cutoff).
     pub cutoff_line: u32,
+    /// Function in which execution was cut off.
     pub cutoff_func: String,
+    /// Per-function coverage breakdown.
     pub function_coverage: Vec<FunctionCoverageInfo>,
+    /// Module selections used for this round.
     pub modules: Option<ModulesInfo>,
+    /// Mutations applied in this round.
     pub mutations: Vec<MutationInfo>,
+    /// Total instrumentable source lines.
     pub coverage_total_lines: u32,
+    /// Lines that are executable (excludes blanks, braces, etc.).
     pub coverage_executable_lines: u32,
+    /// Lines actually executed.
     pub coverage_executed_lines: u32,
+    /// Final detection verdict string.
     pub detection_verdict: String,
 }
 
+/// Result of a single run (baseline or instrumented) within a round.
 #[derive(Debug, Serialize)]
 pub struct RunResultInfo {
+    /// Unique run identifier.
     pub run_id: String,
+    /// Adjusted detection flag (after differential protocol).
     pub detected: bool,
+    /// Raw detection flag before differential adjustment.
     pub raw_detected: bool,
+    /// Process exit code.
     pub exit_code: i32,
+    /// Detection outcome: `"MUTATION_FAILED"`, `"MUTATION_SUCCESS"`, or
+    /// `"FULL_EVASION"`.
     pub outcome: String,
+    /// Last INT3 checkpoint reached (e.g. `"sc_cp_3"`), or empty.
     pub last_checkpoint: String,
+    /// Human-readable detection verdict for display.
     pub detection_verdict: String,
 }
 
+/// Result of comparing a baseline run against an instrumented run.
+///
+/// Implements the two-run differential protocol: both runs execute the same
+/// artifact; differences indicate instrumentation artifacts rather than real
+/// detections.
 #[derive(Debug, Serialize)]
 pub struct CompareRunsResponse {
+    /// Whether the baseline (trace-off) run was detected.
     pub baseline_detected: bool,
+    /// Whether the instrumented (trace-on) run was detected.
     pub instrumented_detected: bool,
+    /// `true` if both runs agree on detection outcome.
     pub outcome_match: bool,
+    /// List of observable differences between the two runs.
     pub differences: Vec<String>,
 }
 
@@ -217,7 +340,12 @@ pub struct CompareRunsResponse {
 // Handlers
 // ============================================================================
 
-/// POST /api/jobs - Submit a new job
+/// `POST /api/jobs` — Submit a new mutation job.
+///
+/// # Errors
+///
+/// - `BAD_REQUEST` if `source` is empty or `max_rounds` is zero.
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn submit_job(
     State(client): State<Arc<ControllerGrpcClient>>,
     Json(payload): Json<SubmitJobRequest>,
@@ -292,7 +420,11 @@ pub async fn submit_job(
     }
 }
 
-/// GET /api/jobs/:id - Get job status
+/// `GET /api/jobs/:id` — Get job status.
+///
+/// # Errors
+///
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn get_job_status(
     State(client): State<Arc<ControllerGrpcClient>>,
     Path(job_id): Path<String>,
@@ -316,7 +448,11 @@ pub async fn get_job_status(
     }
 }
 
-/// GET /api/jobs/:id/progress - Get detailed job progress
+/// `GET /api/jobs/:id/progress` — Get detailed job progress with per-round summaries.
+///
+/// # Errors
+///
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn get_job_progress(
     State(client): State<Arc<ControllerGrpcClient>>,
     Path(job_id): Path<String>,
@@ -360,7 +496,13 @@ pub async fn get_job_progress(
     }
 }
 
-/// POST /api/jobs/:id/stop - Stop a running job
+/// `POST /api/jobs/:id/stop` — Stop a running job.
+///
+/// Idempotent — stopping an already-stopped job succeeds silently.
+///
+/// # Errors
+///
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn stop_job(
     State(client): State<Arc<ControllerGrpcClient>>,
     Path(job_id): Path<String>,
@@ -382,7 +524,12 @@ pub async fn stop_job(
     }
 }
 
-/// GET /api/jobs/:job_id/rounds/:round_id - Get round details
+/// `GET /api/jobs/:job_id/rounds/:round_id` — Get full round details.
+///
+/// # Errors
+///
+/// - `NOT_FOUND` if the round does not exist.
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn get_round(
     State(client): State<Arc<ControllerGrpcClient>>,
     Path((job_id, round_id)): Path<(String, String)>,
@@ -483,29 +630,49 @@ pub async fn get_round(
 // Trace Lines Types & Handler
 // ============================================================================
 
+/// A single source-level trace record from an instrumented run.
 #[derive(Debug, Serialize)]
 pub struct TraceLineInfo {
+    /// Global sequence number across all trace events in the run.
     pub seq: u64,
+    /// Source file path (relative to the build root).
     pub file: String,
+    /// 1-based line number in the source file.
     pub line: u32,
+    /// Name of the enclosing function.
     pub func: String,
+    /// Source code text of the executed line.
     pub code: String,
+    /// Timestamp in microseconds since run start.
     pub ts_us: u64,
 }
 
+/// Paginated trace response for `GET /api/runs/:run_id/trace`.
 #[derive(Debug, Serialize)]
 pub struct TraceLinesResponse {
+    /// Run identifier.
     pub run_id: String,
+    /// Trace records (most recent `last` entries).
     pub lines: Vec<TraceLineInfo>,
+    /// Total number of trace events in the run (may exceed `lines.len()`).
     pub total_events: u32,
 }
 
-/// GET /api/runs/:run_id/trace?last=N - Get trace lines for a run
+/// Query parameters for `GET /api/runs/:run_id/trace`.
 #[derive(Debug, Deserialize)]
 pub struct TraceLinesQuery {
+    /// Number of most-recent trace lines to return. Defaults to `50` when
+    /// omitted.
     pub last: Option<u32>,
 }
 
+/// `GET /api/runs/:run_id/trace?last=N` — Get trace lines for a run.
+///
+/// Returns the most recent `last` trace lines (default 50).
+///
+/// # Errors
+///
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn get_trace_lines(
     State(client): State<Arc<ControllerGrpcClient>>,
     Path(run_id): Path<String>,
@@ -545,13 +712,25 @@ pub async fn get_trace_lines(
     }
 }
 
-/// GET /api/runs/compare?baseline=X&instrumented=Y - Compare runs
+/// Query parameters for `GET /api/runs/compare`.
 #[derive(Debug, Deserialize)]
 pub struct CompareRunsQuery {
+    /// Baseline (trace-off) run ID.
     pub baseline: String,
+    /// Instrumented (trace-on) run ID.
     pub instrumented: String,
 }
 
+/// `GET /api/runs/compare?baseline=X&instrumented=Y` — Compare two runs.
+///
+/// Implements the two-run differential protocol to distinguish real detections
+/// from instrumentation artifacts.
+///
+/// # Errors
+///
+/// - `BAD_REQUEST` if either `baseline` or `instrumented` is empty.
+/// - `NOT_FOUND` if comparison data is not available.
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn compare_runs(
     State(client): State<Arc<ControllerGrpcClient>>,
     axum::extract::Query(query): axum::extract::Query<CompareRunsQuery>,

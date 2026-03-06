@@ -1,5 +1,9 @@
+/// Build script for the UI backend crate.
+///
+/// Compiles the Controller and Common protobuf definitions into Rust client
+/// stubs using tonic-prost-build. Only client code is generated — the UI
+/// backend never hosts a gRPC server.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Paths are relative to the crate root where build.rs lives
     let protos = &["../../proto/common.proto", "../../proto/controller.proto"];
     let includes = &["../../proto"];
 

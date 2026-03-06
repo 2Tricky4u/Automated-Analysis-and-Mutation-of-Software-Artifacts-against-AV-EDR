@@ -1237,7 +1237,7 @@
         });
 
         // ================================================================
-        // Job Status (WI-4: formatted output)
+        // Job Status — fetch and render current job state
         // ================================================================
 
         async function getJobStatus() {
@@ -1280,7 +1280,7 @@
         }
 
         // ================================================================
-        // Job Progress (WI-4: formatted rounds table)
+        // Job Progress — fetch and render rounds table with detection badges and coverage
         // ================================================================
 
         async function getJobProgress() {
@@ -1370,7 +1370,7 @@
         }
 
         // ================================================================
-        // Round Details (WI-2: single input, formatted, trace button)
+        // Round Details — parse round ID, fetch full round data, render modules/mutations/coverage
         // ================================================================
 
         function parseRoundId(roundId) {
@@ -1587,7 +1587,7 @@
         }
 
         // ================================================================
-        // Trace Lines Viewer (WI-3)
+        // Trace Lines Viewer — display last executed source lines for a run
         // ================================================================
 
         async function getTrace(runId) {
@@ -1651,7 +1651,7 @@
         }
 
         // ================================================================
-        // Compare Runs (WI-4: formatted output)
+        // Compare Runs — dual-run differential analysis with token comparison
         // ================================================================
 
         async function compareRuns() {
@@ -1792,7 +1792,7 @@
         }
 
         // ================================================================
-        // Query Results (WI-4: formatted table)
+        // Query Results — search ElasticSearch for historical run data
         // ================================================================
 
         async function queryResults() {
