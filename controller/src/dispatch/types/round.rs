@@ -1,4 +1,9 @@
 //! Round types: spec, aggregation, differential protocol, and summary.
+//!
+//! A *round* is the atomic unit of the experiment loop. Each round produces
+//! three correlated runs (baseline, instrumented, dryrun), aggregates their
+//! outcomes via [`RoundAgg`], and yields a [`RoundSummary`] that feeds back
+//! into the [`Selector`](crate::triage::Selector).
 
 use automutate_common::{DetectionVerdict, has_launched};
 use serde::{Deserialize, Serialize};
@@ -102,11 +107,14 @@ pub struct RoundSpec {
 // Run Outcome
 // ============================================================================
 
-/// Minimal outcome from a run
+/// Minimal outcome from a single run execution on a VM.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunOutcome {
+    /// Whether the EDR/Defender flagged the artifact.
     pub detected: bool,
+    /// Process exit code returned by the worker agent.
     pub exit_code: i32,
+    /// Infrastructure error message, if any (e.g. upload failure).
     pub error: Option<String>,
     /// Payload executed to completion (evasion signal from worker)
     pub success: bool,

@@ -10,6 +10,11 @@ use serde_json::json;
 use tracing::info;
 
 /// Index a new job document when a job is submitted.
+///
+/// # Errors
+///
+/// Returns an error if the Elasticsearch index request fails or the response
+/// indicates a non-success status code.
 pub async fn index_job(es: &Elasticsearch, job: &JobSession) -> anyhow::Result<()> {
     let index_name = helpers::es_index_name("jobs");
 
@@ -55,6 +60,10 @@ pub async fn index_job(es: &Elasticsearch, job: &JobSession) -> anyhow::Result<(
 }
 
 /// Update job status to "running" and set started_at.
+///
+/// # Errors
+///
+/// Returns an error if the job document cannot be found or the update request fails.
 pub async fn update_job_started(es: &Elasticsearch, job_id: &str) -> anyhow::Result<()> {
     let doc = json!({
         "doc": {
@@ -69,6 +78,10 @@ pub async fn update_job_started(es: &Elasticsearch, job_id: &str) -> anyhow::Res
 }
 
 /// Update job progress (current_round) after a round completes.
+///
+/// # Errors
+///
+/// Returns an error if the job document cannot be found or the update request fails.
 pub async fn update_job_progress(
     es: &Elasticsearch,
     job_id: &str,
@@ -86,6 +99,10 @@ pub async fn update_job_progress(
 }
 
 /// Update job status (completed, stopped, failed) with optional outcome.
+///
+/// # Errors
+///
+/// Returns an error if the job document cannot be found or the update request fails.
 pub async fn update_job_status(
     es: &Elasticsearch,
     job_id: &str,

@@ -1,5 +1,10 @@
 //! gRPC handlers for worker listing, telemetry streaming, health monitoring,
 //! and administrative commands (ping, disconnect).
+//!
+//! Handles 12 RPCs: `ListWorkers`, `StreamTelemetry`, `GetWorker`,
+//! `GetAvailableWorkers`, `GetWorkerMetadata`, `GetPoolMetrics`,
+//! `GetOrchestratorStatus`, `PingWorker`, `DisconnectWorker`, and
+//! `DisconnectAllWorkers`.
 
 use crate::api::SchedulerService;
 use crate::automutate::common::{ControllerMessage, HealthCheckRequest, controller_message};
@@ -57,7 +62,11 @@ fn target_to_worker_info(w: &crate::vm::Target) -> WorkerInfo {
     }
 }
 
-/// List all registered workers
+/// List all registered workers (running, available, and offline).
+///
+/// # Errors
+///
+/// Always returns `Ok`.
 pub async fn list_workers(
     service: &SchedulerService,
     _request: Request<ListWorkersRequest>,
@@ -70,7 +79,11 @@ pub async fn list_workers(
     }))
 }
 
-/// Stream telemetry from workers
+/// Stream telemetry events from a worker and index them to Elasticsearch.
+///
+/// # Errors
+///
+/// Returns a gRPC error if the client-side stream encounters a transport failure.
 pub async fn stream_telemetry(
     service: &SchedulerService,
     request: Request<tonic::Streaming<TelemetryData>>,
@@ -158,7 +171,11 @@ pub async fn stream_telemetry(
     }))
 }
 
-/// Get a specific worker by ID
+/// Get a specific worker by ID.
+///
+/// # Errors
+///
+/// Always returns `Ok` — sets `found=false` if the worker does not exist.
 pub async fn get_worker(
     service: &SchedulerService,
     request: Request<GetWorkerRequest>,
@@ -178,7 +195,11 @@ pub async fn get_worker(
     }
 }
 
-/// Get available workers (not busy)
+/// Get available workers filtered by OS and capabilities.
+///
+/// # Errors
+///
+/// Always returns `Ok`.
 pub async fn get_available_workers(
     service: &SchedulerService,
     request: Request<GetAvailableWorkersRequest>,
@@ -221,7 +242,11 @@ pub async fn get_available_workers(
     }))
 }
 
-/// Get enhanced worker metadata
+/// Get enhanced worker metadata including health status and connected-at timestamp.
+///
+/// # Errors
+///
+/// Always returns `Ok`.
 pub async fn get_worker_metadata(
     service: &SchedulerService,
     request: Request<GetWorkerMetadataRequest>,
@@ -288,10 +313,13 @@ pub async fn get_worker_metadata(
     }))
 }
 
-/// Get pool metrics
+/// Get pool metrics from the shared [`RunPool`](crate::dispatch::RunPool).
 ///
-/// In the new architecture, there's a single shared RunPool.
-/// Jobs are tracked via Orchestrator, not per-pool.
+/// Reports queue sizes, run/round/job counters, and connected VM count.
+///
+/// # Errors
+///
+/// Always returns `Ok`.
 pub async fn get_pool_metrics(
     service: &SchedulerService,
     request: Request<GetPoolMetricsRequest>,
@@ -327,12 +355,11 @@ pub async fn get_pool_metrics(
     Ok(Response::new(GetPoolMetricsResponse { pools: vec![entry] }))
 }
 
-/// Get orchestrator status
+/// Get orchestrator status: active jobs, VM counts, and pool state.
 ///
-/// In the new architecture:
-/// - There's a single shared RunPool (not per-capability pools)
-/// - Jobs are tracked via Orchestrator's job_workers HashMap
-/// - VMs are tracked via TargetManager
+/// # Errors
+///
+/// Always returns `Ok`.
 pub async fn get_orchestrator_status(
     service: &SchedulerService,
     _request: Request<GetOrchestratorStatusRequest>,
@@ -384,7 +411,11 @@ pub async fn get_orchestrator_status(
 // Admin Commands
 // ============================================================================
 
-/// Ping a worker (send HealthCheckRequest via bidirectional stream)
+/// Ping a worker by sending a `HealthCheckRequest` via its bidirectional stream.
+///
+/// # Errors
+///
+/// Always returns `Ok` — sets `success=false` if the stream send fails.
 pub async fn ping_worker(
     service: &SchedulerService,
     request: Request<PingWorkerRequest>,
@@ -425,7 +456,11 @@ pub async fn ping_worker(
     }
 }
 
-/// Disconnect a specific worker
+/// Disconnect a specific worker by ID.
+///
+/// # Errors
+///
+/// Always returns `Ok` — sets `success=false` if the disconnect fails.
 pub async fn disconnect_worker(
     service: &SchedulerService,
     request: Request<DisconnectWorkerRequest>,
@@ -457,7 +492,11 @@ pub async fn disconnect_worker(
     }
 }
 
-/// Disconnect all workers
+/// Disconnect all connected workers.
+///
+/// # Errors
+///
+/// Always returns `Ok`.
 pub async fn disconnect_all_workers(
     service: &SchedulerService,
     request: Request<DisconnectAllWorkersRequest>,

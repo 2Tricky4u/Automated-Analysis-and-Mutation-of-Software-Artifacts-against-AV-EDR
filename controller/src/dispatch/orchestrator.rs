@@ -33,6 +33,13 @@ struct JobHandle {
     correction_tx: mpsc::Sender<CoverageCorrection>,
 }
 
+/// Central coordinator for the experiment loop.
+///
+/// Runs a single `select!` event loop (biased priority) that multiplexes:
+/// 1. **Job control** — stop commands (highest priority).
+/// 2. **Job submissions** — spawn a [`JobWorker`] per job.
+/// 3. **JobWorker events** — round/job completion → ES indexing.
+/// 4. **Target events** — VM connect/disconnect/telemetry.
 pub struct Orchestrator {
     /// Shared run pool
     run_pool: Arc<RunPool>,
@@ -66,6 +73,7 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
+    /// Create a new orchestrator wired to the given channels and shared state.
     pub fn new(
         events_rx: mpsc::Receiver<TargetEvent>,
         job_submit_rx: mpsc::Receiver<JobSession>,
@@ -89,7 +97,9 @@ impl Orchestrator {
         }
     }
 
-    /// Main orchestrator loop.
+    /// Main orchestrator event loop (runs forever until all channels close).
+    ///
+    /// Uses `biased` select to prioritize control commands over new work.
     pub async fn run(mut self) {
         info!("Orchestrator started");
 
@@ -485,6 +495,7 @@ impl Orchestrator {
     // Public API
     // ========================================================================
 
+    /// Cancel a single job by firing its [`CancellationToken`].
     pub fn shutdown_job(&self, job_id: &JobId) {
         if let Some(handle) = self.job_workers.get(job_id) {
             warn!("[Orchestrator] Shutting down job {}", job_id);
@@ -492,6 +503,7 @@ impl Orchestrator {
         }
     }
 
+    /// Cancel every active job, shut down the pool, and disconnect all VMs.
     #[allow(dead_code)]
     pub fn shutdown_all_jobs(&self) {
         warn!("[Orchestrator] Shutting down all jobs");

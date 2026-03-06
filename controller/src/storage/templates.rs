@@ -8,6 +8,17 @@ use elasticsearch::indices::IndicesPutIndexTemplateParts;
 use serde_json::json;
 use tracing::{info, warn};
 
+/// Create or update all Elasticsearch index templates on startup.
+///
+/// Concurrently ensures templates for `jobs`, `rounds`, `runs`, `telemetry`,
+/// and `tokens` indices. Individual template failures are logged as warnings
+/// but do not abort the overall operation.
+///
+/// # Errors
+///
+/// Currently always returns `Ok(())` because individual template failures
+/// are logged rather than propagated. The `Result` return type is retained
+/// for forward compatibility.
 pub async fn ensure_templates(es: &Elasticsearch) -> anyhow::Result<()> {
     let results = tokio::join!(
         create_jobs_template(es),

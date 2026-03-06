@@ -1,4 +1,6 @@
 //! Utility gRPC handlers: ping, triage submission, and result queries.
+//!
+//! Lightweight RPCs that don't involve the dispatch engine or VM lifecycle.
 
 use crate::api::SchedulerService;
 use crate::automutate::controller::{
@@ -9,6 +11,10 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, info};
 
 /// Respond to a ping request with a pong and the current server timestamp.
+///
+/// # Errors
+///
+/// Always returns `Ok`.
 pub async fn ping(
     _service: &SchedulerService,
     request: Request<PingRequest>,
@@ -25,13 +31,16 @@ pub async fn ping(
     }))
 }
 
-/// Submit triage results.
+/// Submit triage results (backwards-compatibility endpoint).
 ///
-/// The internal triage pipeline (triage::extractor::extract_and_score(), called from
-/// JobWorker::finalize_round()) already handles token extraction, lift/confidence
-/// scoring, and guidance generation from the two-run differential protocol.
-/// This endpoint is kept for backwards compatibility but does not duplicate
-/// that internal pipeline.
+/// The internal triage pipeline ([`extract_and_score`](crate::triage::extractor::extract_and_score),
+/// called from [`JobWorker::finalize_round`](crate::dispatch::job_worker::JobWorker))
+/// already handles token extraction, lift/confidence scoring, and guidance generation.
+/// This endpoint is retained for external callers but does not duplicate that pipeline.
+///
+/// # Errors
+///
+/// Always returns `Ok`.
 pub async fn submit_triage(
     _service: &SchedulerService,
     request: Request<TriageRequest>,
@@ -55,6 +64,10 @@ pub async fn submit_triage(
 ///
 /// Searches `runs-*` index filtered by job_ids and date range,
 /// returning structured results for the UI.
+///
+/// # Errors
+///
+/// Always returns `Ok` — ES query failures produce an empty result set.
 pub async fn query_results(
     service: &SchedulerService,
     request: Request<QueryRequest>,

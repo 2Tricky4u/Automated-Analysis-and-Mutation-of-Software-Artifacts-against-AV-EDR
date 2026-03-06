@@ -1,5 +1,9 @@
 //! gRPC handlers for job scheduling, status queries, round inspection,
 //! run comparison, and token comparison.
+//!
+//! Handles 8+ RPCs defined in `controller.proto`. Each handler receives a
+//! [`SchedulerService`] reference, extracts proto
+//! fields, queries or mutates Elasticsearch, and returns a typed proto response.
 
 use super::extract::{
     bool_field, f64_field, i32_field, parse_date_to_unix_secs, str_field, string_array_field,
@@ -23,7 +27,13 @@ use std::path::PathBuf;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
-/// Schedule a new job via dispatch system
+/// Schedule a new mutation-exploration job via the dispatch system.
+///
+/// # Errors
+///
+/// Returns `Ok` with `accepted=false` if the `source` field is empty or the
+/// job channel is closed. Never returns a gRPC error status — failures are
+/// encoded in the response body.
 pub async fn schedule_job(
     service: &SchedulerService,
     request: Request<JobRequest>,
@@ -158,7 +168,11 @@ pub async fn schedule_job(
     }
 }
 
-/// Get job status
+/// Get job status from Elasticsearch.
+///
+/// # Errors
+///
+/// Returns `Ok` with `status="not_found"` if the job does not exist in ES.
 pub async fn get_job_status(
     service: &SchedulerService,
     request: Request<JobStatusRequest>,
@@ -195,7 +209,11 @@ pub async fn get_job_status(
     }
 }
 
-/// Get detailed job progress
+/// Get detailed job progress including per-round summaries.
+///
+/// # Errors
+///
+/// Returns `Ok` with `status="not_found"` if the job does not exist.
 pub async fn get_job_progress(
     service: &SchedulerService,
     request: Request<JobProgressRequest>,
@@ -236,7 +254,11 @@ pub async fn get_job_progress(
     }))
 }
 
-/// Stop a running job
+/// Stop a running job by sending a control command to the orchestrator.
+///
+/// # Errors
+///
+/// Returns `Ok` with `stopped=false` if the control channel is closed.
 pub async fn stop_job(
     service: &SchedulerService,
     request: Request<StopJobRequest>,
@@ -274,7 +296,11 @@ pub async fn stop_job(
     }
 }
 
-/// Get detailed round information
+/// Get detailed round information including both run results and behavior comparison.
+///
+/// # Errors
+///
+/// Returns `Ok` with `round=None` if the round is not found in ES.
 pub async fn get_round(
     service: &SchedulerService,
     request: Request<GetRoundRequest>,
@@ -391,7 +417,11 @@ pub async fn get_round(
     Ok(Response::new(GetRoundResponse { round: Some(round) }))
 }
 
-/// Compare baseline vs instrumented runs
+/// Compare baseline vs instrumented runs for differential analysis.
+///
+/// # Errors
+///
+/// Returns `Ok` with `comparison=None` if neither run is found in ES.
 pub async fn compare_runs(
     service: &SchedulerService,
     request: Request<CompareRunsRequest>,
@@ -495,7 +525,12 @@ pub async fn compare_runs(
     }))
 }
 
-/// Compare token sets between two runs
+/// Compare triage token sets between two runs.
+///
+/// # Errors
+///
+/// Returns `Ok` with `comparison=None` and a non-empty `error` string if
+/// either run or its token set cannot be found.
 pub async fn compare_tokens(
     service: &SchedulerService,
     request: Request<CompareTokensRequest>,
@@ -629,7 +664,11 @@ pub async fn compare_tokens(
     }))
 }
 
-/// Handle status reports from workers
+/// Handle status reports from workers (execution events, errors, timeouts).
+///
+/// # Errors
+///
+/// Always returns `Ok` — ES indexing failures are logged but not propagated.
 pub async fn report_status(
     service: &SchedulerService,
     request: Request<StatusReport>,
@@ -673,7 +712,14 @@ pub async fn report_status(
     Ok(Response::new(StatusAck { received: true }))
 }
 
-/// Get trace lines for a run (instrumented execution path)
+/// Get trace lines for an instrumented run's execution path.
+///
+/// Resolves source code and function names via [`SourceMap`](crate::triage::source_resolver::SourceMap)
+/// when assembled source is available in the round document.
+///
+/// # Errors
+///
+/// Always returns `Ok` — missing data produces empty results.
 pub async fn get_trace_lines(
     service: &SchedulerService,
     request: Request<GetTraceLinesRequest>,
@@ -773,6 +819,7 @@ pub async fn get_trace_lines(
 // Proto mapping helpers
 // ===========================================================================
 
+/// Convert an ES round `_source` document into a [`RoundSummaryProto`].
 fn round_doc_to_proto(source: &Value) -> RoundSummaryProto {
     RoundSummaryProto {
         round_id: str_field(source, "round_id"),
@@ -791,6 +838,7 @@ fn round_doc_to_proto(source: &Value) -> RoundSummaryProto {
     }
 }
 
+/// Convert an ES run `_source` document into a [`RunResultProto`].
 fn run_doc_to_proto(source: &Value) -> RunResultProto {
     let detected = bool_field(source, "detected");
     let verdict = str_field(source, "detection_verdict");

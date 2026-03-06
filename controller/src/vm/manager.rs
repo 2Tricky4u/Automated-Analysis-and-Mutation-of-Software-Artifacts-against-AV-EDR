@@ -34,10 +34,19 @@ use crate::dispatch::{
 // ============================================================================
 
 /// Lifecycle state of a worker VM target.
+///
+/// State machine transitions:
+/// - `Offline` -> `Available` (on successful stream establishment)
+/// - `Available` -> `Busy` (on job reservation)
+/// - `Busy` -> `Available` (on job release)
+/// - `Available` | `Busy` -> `Offline` (on disconnect or stream failure)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetStatus {
+    /// Target is connected and ready to accept work.
     Available,
+    /// Target is currently executing a job.
     Busy,
+    /// Target is not reachable (no active gRPC stream).
     Offline,
 }
 
@@ -52,9 +61,14 @@ impl std::fmt::Display for TargetStatus {
 }
 
 /// How a target was registered with the controller.
+///
+/// - `Static` — loaded from a TOML file in `automation/generated/` at startup.
+/// - `Dynamic` — registered at runtime via a gRPC registration message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RegistrationType {
+    /// Target was loaded from a TOML configuration file at startup.
     Static,
+    /// Target registered itself via gRPC at runtime.
     Dynamic,
 }
 
@@ -431,7 +445,17 @@ impl TargetManager {
         Ok(channel)
     }
 
-    /// Establish bidirectional stream and spawn Worker task
+    /// Establish a bidirectional gRPC stream with a target and spawn its [`VMExecutor`].
+    ///
+    /// Opens a dedicated channel (without request timeout), starts the stream
+    /// handler for incoming messages, and defers [`VMExecutor`] creation until
+    /// the worker sends its registration message (15 s timeout). A heartbeat
+    /// task is also spawned to keep the stream alive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target is not found, the gRPC endpoint cannot
+    /// be connected, or the bidirectional stream handshake fails.
     pub async fn establish_stream(self: &Arc<Self>, id: impl AsRef<str>) -> Result<()> {
         let id = id.as_ref();
         debug!("Establishing stream with target {}", id);
@@ -727,6 +751,14 @@ impl TargetManager {
     }
 
     /// Send a control message to a specific target's gRPC stream.
+    ///
+    /// If the send fails (channel closed), the target is automatically
+    /// transitioned to [`TargetStatus::Offline`] and a `Disconnected` event
+    /// is emitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target is not connected or the channel send fails.
     pub async fn send_command(&self, id: impl AsRef<str>, msg: ControllerMessage) -> Result<()> {
         let id = id.as_ref();
         let tx = self
@@ -796,7 +828,14 @@ impl TargetManager {
         }
     }
 
-    /// Disconnect a single target by sending DisconnectNotice and marking offline.
+    /// Disconnect a single target by sending a `DisconnectNotice` and marking it offline.
+    ///
+    /// The disconnect notice is sent on a best-effort basis; the target is
+    /// marked offline regardless of whether the send succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target is not found or is already offline.
     pub async fn disconnect_one(&self, id: impl AsRef<str>, reason: &str) -> Result<()> {
         let id = id.as_ref();
         let target = self
@@ -837,6 +876,14 @@ impl TargetManager {
     // ========================================================================
 
     /// Upload an artifact to a target via chunked gRPC streaming.
+    ///
+    /// Reads the file at `path`, splits it into chunks, and streams them to
+    /// the worker's `SendArtifact` RPC endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read, the gRPC channel cannot
+    /// be established, or the streaming upload fails.
     pub async fn send_artifact(
         &self,
         id: impl AsRef<str>,
@@ -870,6 +917,13 @@ impl TargetManager {
     // ========================================================================
 
     /// Query a target for its worker info via unary RPC.
+    ///
+    /// Uses the configured `rpc_timeout` for the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target is not found, the gRPC channel cannot be
+    /// established, the RPC times out, or the remote call returns an error.
     pub async fn get_worker_info(&self, id: impl AsRef<str>) -> Result<WorkerInfoResponse> {
         let id = id.as_ref();
         let channel = self.get_channel(id).await?;
@@ -910,7 +964,11 @@ impl TargetManager {
         results
     }
 
-    /// Discover targets from automation/generated/win*-worker-*.toml files
+    /// Discover and register targets from `automation/generated/win*-worker-*.toml` files.
+    ///
+    /// Scans the `automation/generated/` directory for worker TOML configs,
+    /// validates for duplicate IPs, and registers each unique target. Logs
+    /// warnings for missing directories, parse failures, and duplicates.
     pub async fn discover_and_register_targets(&self) {
         use std::collections::HashMap as StdHashMap;
         use std::path::Path;

@@ -34,6 +34,12 @@ const DECONDITIONER_VARIANTS: &[&str] = &[
 ];
 
 /// Token-guided selector.
+///
+/// Uses [`TriageGuidance`] avoid/seek sets produced by the async triage
+/// pipeline to bias both module variant and mutation selection toward
+/// evasion-correlated configurations. Falls back to
+/// [`CoverageSelector`] when no
+/// guidance is available yet (early rounds before the first triage completes).
 pub struct TokenSelector;
 
 impl Default for TokenSelector {
@@ -43,6 +49,7 @@ impl Default for TokenSelector {
 }
 
 impl TokenSelector {
+    /// Create a new token-guided selector (no internal state).
     pub fn new() -> Self {
         Self
     }

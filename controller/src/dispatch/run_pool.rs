@@ -54,14 +54,20 @@ pub struct RunPool {
     metrics: Mutex<RunPoolMetrics>,
 }
 
-/// Metrics for the run pool
+/// Aggregate counters for the run pool, exposed via the `GetPoolMetrics` RPC.
 #[derive(Debug, Default, Clone)]
 pub struct RunPoolMetrics {
+    /// Runs enqueued since pool creation.
     pub total_runs_added: u64,
+    /// Runs claimed by VMExecutors.
     pub total_runs_taken: u64,
+    /// Results successfully routed back to JobWorkers.
     pub total_results_routed: u64,
+    /// Currently registered (active) jobs.
     pub active_jobs: usize,
+    /// Rounds finalized across all jobs.
     pub total_rounds_completed: u64,
+    /// Jobs that reached a terminal state.
     pub total_jobs_completed: u64,
 }
 

@@ -80,7 +80,13 @@ impl VariantStats {
 
 /// Epsilon-greedy module selection over deconditioner variants.
 ///
-/// Shared by both CoverageSelector and FuzzerSelector.
+/// Shared by both [`CoverageSelector`] and
+/// [`FuzzerSelector`](super::fuzzer_selector::FuzzerSelector).
+///
+/// Examines `history` for trustworthy rounds, groups them by deconditioner
+/// variant, and either explores an untried variant or epsilon-greedy exploits
+/// the best-performing one (highest mean evasion score).
+///
 /// `random_fn` provides random selection: `random_fn(n)` returns a value in `[0, n)`.
 pub fn select_modules(
     search_space: &SearchSpace,
@@ -183,6 +189,7 @@ impl Default for CoverageSelector {
 }
 
 impl CoverageSelector {
+    /// Create a new coverage-driven selector (no internal state).
     pub fn new() -> Self {
         Self
     }
