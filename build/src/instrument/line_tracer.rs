@@ -1,7 +1,12 @@
-/// AST-Level Line Tracing Instrumentation (C/C++ Compatible)
-///
-/// Injects printf/std::cout statements at the source code level (before compilation)
-/// using tree-sitter parser. Works with both C and C++ sources.
+//! AST-level line tracing instrumentation (C/C++ compatible).
+//!
+//! Injects trace calls at the source-code level (before compilation) using the
+//! tree-sitter C++ parser. Works with both C and C++ sources.
+//!
+//! Inside loop bodies, a **deferred-tracing strategy** is used: statements set
+//! a flag (`__seen_L<N> = 1`) inside the loop, and a conditional trace call
+//! fires *after* the loop exits. This ensures each line is reported at most
+//! once, avoiding O(N) trace overhead for hot loops.
 use anyhow::{Context, Result};
 use std::path::Path;
 use tree_sitter::{Node, Parser};
@@ -34,9 +39,18 @@ pub enum TraceFormat {
     Binary,
 }
 
-/// Inject line tracing statements into C/C++ source code
-/// file_path: Optional path to embed in trace metadata (defaults to "source")
-/// format: Trace output format (default: Binary)
+/// Inject line tracing statements into C/C++ source code.
+///
+/// Uses the default file path (`"source"`) and [`TraceFormat::Binary`].
+///
+/// # Arguments
+///
+/// * `source` — C or C++ source code to instrument
+/// * `language` — Source language hint (C or C++; both use the C++ parser internally)
+///
+/// # Errors
+///
+/// Returns an error if tree-sitter fails to parse the source code.
 pub fn inject_line_traces(source: &str, language: SourceLanguage) -> Result<String> {
     inject_line_traces_with_opts(source, language, "source", TraceFormat::default())
 }
@@ -53,7 +67,14 @@ pub fn inject_line_traces_with_path(
 /// Default number of iterations for the instrumentation delay loop
 pub const DEFAULT_DELAY_ITERATIONS: u32 = 0;
 
-/// Inject line tracing statements with all options
+/// Inject line tracing statements with all options.
+///
+/// # Arguments
+///
+/// * `source` — C or C++ source code to instrument
+/// * `language` — Source language hint
+/// * `file_path` — Path string embedded in trace metadata
+/// * `format` — Trace output format ([`TraceFormat::Base64`] or [`TraceFormat::Binary`])
 pub fn inject_line_traces_with_opts(
     source: &str,
     language: SourceLanguage,
@@ -69,7 +90,23 @@ pub fn inject_line_traces_with_opts(
     )
 }
 
-/// Inject line tracing statements with configurable delay loop iterations
+/// Inject line tracing statements with configurable delay loop iterations.
+///
+/// This is the core implementation. All other `inject_line_traces*` functions
+/// delegate here.
+///
+/// # Arguments
+///
+/// * `source` — C or C++ source code to instrument
+/// * `_language` — Source language hint (currently unused; C++ parser handles both)
+/// * `file_path` — Path string embedded in trace metadata
+/// * `format` — Trace output format
+/// * `delay_iterations` — Number of volatile loop iterations inserted after each
+///   trace call (0 = no delay). Used to slow down execution for timing-sensitive analysis.
+///
+/// # Errors
+///
+/// Returns an error if tree-sitter fails to set the C++ language or parse the source.
 pub fn inject_line_traces_with_delay(
     source: &str,
     _language: SourceLanguage,

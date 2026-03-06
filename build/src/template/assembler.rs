@@ -43,7 +43,12 @@ impl ModuleSelection {
         }
     }
 
-    /// Validate that all selected modules exist
+    /// Validate that all selected modules exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any selected module file is not found under
+    /// `template_dir/modules/<category>/`.
     pub fn validate(&self, template_dir: &Path) -> Result<()> {
         let modules_dir = template_dir.join("modules");
 
@@ -116,7 +121,11 @@ pub struct Assembler {
 }
 
 impl Assembler {
-    /// Create a new assembler with the given template directory
+    /// Create a new assembler with the given template directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `template_dir` does not exist on the filesystem.
     pub fn new(template_dir: impl AsRef<Path>) -> Result<Self> {
         let template_dir = template_dir.as_ref().to_path_buf();
 
@@ -135,6 +144,21 @@ impl Assembler {
     /// Each module replacement is wrapped with boundary comments:
     /// `// --- BEGIN MODULE: <category> ---` / `// --- END MODULE: <category> ---`
     /// These enable `strip_markers_outside_targets()` to scope mutations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Module validation fails (a selected module file does not exist)
+    /// - The template file (`loader_template.c`) cannot be read
+    /// - Any module file cannot be read
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let mut asm = Assembler::new("build/templates")?;
+    /// let modules = ModuleSelection::new();
+    /// let source = asm.assemble(&modules, &payload_header)?;
+    /// ```
     pub fn assemble(&mut self, modules: &ModuleSelection, payload_code: &str) -> Result<String> {
         // Validate module selection
         modules.validate(&self.template_dir)?;
@@ -246,7 +270,11 @@ impl Assembler {
         Ok(cleaned)
     }
 
-    /// Get list of available modules for a category
+    /// Get list of available modules for a category.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the category directory does not exist.
     pub fn list_modules(&self, category: &str) -> Result<Vec<String>> {
         let dir_name = match category {
             "guardrail" => "guardrails",

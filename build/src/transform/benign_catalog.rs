@@ -253,6 +253,13 @@ impl BehaviorGraph {
 /// Returns `(declarations, statements)` — deduplicated declarations to place
 /// at the top of the function body, and ordered statements to interleave
 /// between existing code.
+///
+/// # Arguments
+///
+/// * `groups` — Which [`BehaviorGroup`]s to draw from (empty = no output)
+/// * `count` — Maximum number of statements to generate (may return fewer
+///   if the catalog is exhausted)
+/// * `seed` — PRNG seed for deterministic ordering (0 is mapped to 1)
 pub fn generate_insertion(
     groups: &[BehaviorGroup],
     count: usize,

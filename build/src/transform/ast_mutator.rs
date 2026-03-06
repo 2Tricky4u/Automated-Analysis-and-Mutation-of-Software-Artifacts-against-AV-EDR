@@ -1,7 +1,7 @@
 //! AST-level mutations using tree-sitter for structural code transforms.
 //!
 //! Two mutation modes:
-//! - **Marker-based**: MutationSpec { id: "ast.<name>" } → `@MUTATE:<name>` locations
+//! - **Marker-based**: `MutationSpec { id: "ast.<name>" }` → `@MUTATE:<name>` locations
 //! - **Global**: `ast.string_xor` / `ast.const_obfuscation` → all literals (no markers needed)
 //!
 //! Supported mutations:
@@ -24,11 +24,19 @@ use crate::template::assembler::{MutationMarker, extract_mutation_markers};
 use crate::transform::benign_catalog::{self, BehaviorGroup};
 
 /// AST-level mutator backed by tree-sitter.
+///
+/// Parses C source code and applies structural transformations at
+/// `@MUTATE` marker locations or globally (for `string_xor` / `const_obfuscation`).
 pub struct AstMutator {
     parser: Parser,
 }
 
 impl AstMutator {
+    /// Create a new AST mutator with the tree-sitter C language.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if tree-sitter C language initialization fails.
     pub fn new() -> Result<Self> {
         let mut parser = Parser::new();
         let language = tree_sitter_c::LANGUAGE;
@@ -46,6 +54,11 @@ impl AstMutator {
     /// - `const_obfuscation` → global (tree-sitter walk, `number_literal` nodes)
     /// - `string_xor`        → global (tree-sitter walk, `string_literal` nodes)
     /// - All others          → marker-based (`@MUTATE:<name>` comments)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if tree-sitter fails to parse the source or a mutation
+    /// handler encounters an invalid marker context.
     pub fn apply(
         &mut self,
         source: &str,

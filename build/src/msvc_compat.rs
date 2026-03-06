@@ -82,6 +82,14 @@ pub async fn wsl_to_win_path(wsl_path: &Path) -> Result<String> {
 /// ```
 ///
 /// All WSL paths are converted to Windows paths via `wsl_to_win_path()`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - `vcvarsall.bat` is not found at the given WSL path
+/// - Any object file does not exist
+/// - `wslpath` conversion fails for any path
+/// - `link.exe` exits with a non-zero status
 pub async fn invoke_msvc_link(
     vcvarsall: &Path,
     objects: &[PathBuf],
