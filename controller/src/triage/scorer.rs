@@ -11,14 +11,30 @@ use crate::triage::TriageGuidance;
 use std::collections::HashMap;
 
 /// Per-token statistics from the round matrix.
+///
+/// Computed by [`compute_token_scores`] from a matrix of (tokens, detected)
+/// tuples. Each token that appears in at least one round gets a score entry.
+/// Downstream, [`build_guidance`] classifies tokens into avoid/seek based on
+/// their lift and confidence.
 #[derive(Debug, Clone)]
 pub struct TokenScore {
+    /// Normalized triage token string (e.g. `"api:VirtualProtect"`, `"module:carrier=alloc_rw_rx"`).
     pub token: String,
+    /// Lift = P(detected | token) / P(detected). Values > 1.0 indicate
+    /// positive correlation with detection; values < 1.0 indicate evasion
+    /// correlation.
     pub lift: f64,
+    /// Evidence-based confidence in [0.0, 1.0], calculated as
+    /// `min(1.0, n_total / 5.0)`. Reaches 1.0 once the token has been
+    /// observed in at least 5 rounds.
     pub confidence: f64,
+    /// Composite importance score: `lift * confidence`. Used for ranking
+    /// tokens before avoid/seek classification.
     pub importance: f64,
+    /// Number of rounds where this token appeared **and** detection occurred.
     #[allow(dead_code)]
     pub n_detected: u32,
+    /// Total number of rounds in which this token appeared.
     #[allow(dead_code)]
     pub n_total: u32,
 }

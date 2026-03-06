@@ -36,7 +36,13 @@ fn trace_mode_from_run_type(run_type: &str) -> &str {
 }
 
 /// Index a run result from RoundCompleted event.
+///
 /// This is the PRIMARY path with exit_code, detected, round context.
+///
+/// # Errors
+///
+/// Returns an error if the Elasticsearch index request fails or the response
+/// indicates a non-success status code.
 pub async fn index_run_result(
     es: &Elasticsearch,
     params: &RunIndexParams<'_>,
@@ -103,7 +109,13 @@ pub async fn index_run_result(
 }
 
 /// Index a run status from StatusReport (legacy path).
+///
 /// This path has worker metadata but no exit_code/detected.
+///
+/// # Errors
+///
+/// Returns an error if the Elasticsearch index request fails or the response
+/// status code indicates a server-side failure.
 pub async fn index_run_status(es: &Elasticsearch, report: &StatusReport) -> anyhow::Result<()> {
     let index_name = helpers::es_index_name("runs");
 

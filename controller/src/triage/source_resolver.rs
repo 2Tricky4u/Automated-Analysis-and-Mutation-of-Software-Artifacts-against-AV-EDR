@@ -7,25 +7,46 @@
 use std::collections::HashSet;
 
 /// Per-function coverage statistics.
+///
+/// One entry per detected C function in the assembled source. Line counts
+/// exclude the signature line, lone braces, preprocessor directives, and
+/// comment-only lines (see `is_executable_line`).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FunctionCoverage {
+    /// Function name (heuristic-detected from signature).
     pub name: String,
+    /// 1-based start line (function signature).
     pub start_line: usize,
+    /// 1-based end line (closing brace).
     pub end_line: usize,
+    /// Number of executable body lines in this function.
     pub total_lines: usize,
+    /// Number of those lines that were actually executed.
     pub executed_lines: usize,
+    /// Coverage percentage: `executed_lines / total_lines * 100`.
     pub percent: f64,
 }
 
 /// Aggregate coverage result for an assembled source.
+///
+/// Computed by [`SourceMap::compute_coverage`] from a set of executed line
+/// numbers. Global totals are the sum of per-function stats, so lines outside
+/// any detected function do not inflate the denominator.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CoverageResult {
+    /// Total number of lines in the assembled source (including non-executable).
     pub total_lines: usize,
+    /// Sum of executable body lines across all detected functions.
     pub total_executable: usize,
+    /// Number of executable lines that were actually executed.
     pub executed_lines: usize,
+    /// `executed_lines / total_executable * 100`, or 0.0 if no executable lines.
     pub coverage_percent: f64,
+    /// Highest executed line number (1-based), used as the execution cutoff point.
     pub cutoff_line: Option<usize>,
+    /// Name of the function containing [`cutoff_line`](Self::cutoff_line), if any.
     pub cutoff_func: Option<String>,
+    /// Per-function breakdown of coverage statistics.
     pub functions: Vec<FunctionCoverage>,
 }
 
@@ -176,8 +197,10 @@ fn is_executable_line(line: &str) -> bool {
     true
 }
 
-/// Convenience: resolve one line without building a full SourceMap.
-/// Returns the raw (untrimmed) source line.
+/// Resolve a single 1-based line number to the raw (untrimmed) source text.
+///
+/// Convenience wrapper for one-off lookups without constructing a full
+/// [`SourceMap`]. Returns `None` if `line` is 0 or exceeds the source line count.
 #[allow(dead_code)]
 pub fn resolve_line(source: &str, line: usize) -> Option<&str> {
     if line == 0 {

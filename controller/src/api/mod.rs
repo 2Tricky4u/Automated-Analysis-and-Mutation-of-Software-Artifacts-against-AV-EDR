@@ -34,17 +34,27 @@ use tonic::{Request, Response, Status};
 // SchedulerService
 // ============================================================================
 
-/// Main service struct holding shared state for gRPC handlers
+/// Shared state for all gRPC handlers, cloned into each tonic request.
+///
+/// Acts as the gRPC ingress layer: each RPC method on the [`Controller`] trait
+/// delegates to a typed handler function in a submodule, passing this struct
+/// for access to storage, job channels, target manager, and the run pool.
 #[derive(Clone)]
 pub struct SchedulerService {
+    /// Elasticsearch facade for reads and writes.
     pub storage: Arc<EsStorage>,
+    /// Channel to submit new jobs to the [`Orchestrator`](crate::dispatch::orchestrator::Orchestrator).
     pub job_tx: mpsc::Sender<JobSession>,
+    /// Channel for job control commands (e.g. stop).
     pub job_control_tx: mpsc::Sender<JobControlCommand>,
+    /// VM lifecycle and connection state.
     pub targets: Arc<TargetManager>,
+    /// Shared run pool for dispatch and metrics.
     pub run_pool: Arc<RunPool>,
 }
 
 impl SchedulerService {
+    /// Create a new service instance wired to the given shared state.
     pub fn new(
         storage: Arc<EsStorage>,
         job_tx: mpsc::Sender<JobSession>,

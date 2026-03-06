@@ -103,8 +103,11 @@ impl VMExecutor {
         }
     }
 
-    /// Main executor loop.
-    /// Signal-driven: waits for pool notification, VM result, or shutdown.
+    /// Main executor loop — signal-driven `select!` with biased priority:
+    ///
+    /// 1. **Shutdown** — pool cancellation token.
+    /// 2. **VM result** — when an in-flight run completes.
+    /// 3. **Pool signal** — wake-up when new runs are available (idle only).
     pub async fn run(mut self) {
         info!(
             "[VM:{}] Executor started (os={}, caps={:?})",
@@ -183,7 +186,7 @@ impl VMExecutor {
     // Dispatch
     // ========================================================================
 
-    /// Dispatch a run to the remote VM.
+    /// Dispatch a run to the remote VM: reserve → upload artifact → send command → track.
     async fn dispatch(&mut self, envelope: RunEnvelope) {
         debug!(
             "[VM:{}] Dispatching run {} (type={}, job={})",
@@ -255,7 +258,8 @@ impl VMExecutor {
     // Result Handling
     // ========================================================================
 
-    /// Handle result received from VM.
+    /// Handle a result received from the VM: verify run ID, release the VM,
+    /// and route the outcome back to the originating [`JobWorker`] via [`RunPool`].
     async fn on_result_received(&mut self, result: RemoteRunResult) {
         let in_flight = match self.in_flight.take() {
             Some(f) => f,

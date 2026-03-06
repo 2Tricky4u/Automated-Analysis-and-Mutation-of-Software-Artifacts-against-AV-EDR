@@ -5,30 +5,37 @@
 
 use serde_json::Value;
 
+/// Extract a string field from a JSON value, returning `""` if missing or wrong type.
 pub fn str_field(v: &Value, key: &str) -> String {
     v[key].as_str().unwrap_or("").to_string()
 }
 
+/// Extract a `u32` field, returning `0` if missing or wrong type.
 pub fn u32_field(v: &Value, key: &str) -> u32 {
     v[key].as_u64().unwrap_or(0) as u32
 }
 
+/// Extract a boolean field, returning `false` if missing or wrong type.
 pub fn bool_field(v: &Value, key: &str) -> bool {
     v[key].as_bool().unwrap_or(false)
 }
 
+/// Extract an `f64` field, returning `0.0` if missing or wrong type.
 pub fn f64_field(v: &Value, key: &str) -> f64 {
     v[key].as_f64().unwrap_or(0.0)
 }
 
+/// Extract an `i32` field, returning `0` if missing or wrong type.
 pub fn i32_field(v: &Value, key: &str) -> i32 {
     v[key].as_i64().unwrap_or(0) as i32
 }
 
+/// Extract a `u64` field, returning `0` if missing or wrong type.
 pub fn u64_field(v: &Value, key: &str) -> u64 {
     v[key].as_u64().unwrap_or(0)
 }
 
+/// Extract a JSON array of strings, returning an empty vec if missing or wrong type.
 pub fn string_array_field(v: &Value, key: &str) -> Vec<String> {
     v[key]
         .as_array()

@@ -86,6 +86,12 @@ struct Recipe {
 }
 
 /// Stateless evolutionary selector.
+///
+/// Treats mutation recipes as chromosomes and evolves them across rounds using
+/// tournament selection, crossover, and param/structural mutation operators.
+/// All state is reconstructed from the `history` map on each call, so the
+/// struct itself carries no mutable data. Deterministic given a seeded RNG
+/// derived from `(job_id, round_number)`.
 pub struct FuzzerSelector;
 
 impl Default for FuzzerSelector {
@@ -95,6 +101,7 @@ impl Default for FuzzerSelector {
 }
 
 impl FuzzerSelector {
+    /// Create a new evolutionary selector (no internal state).
     pub fn new() -> Self {
         Self
     }
@@ -366,6 +373,9 @@ impl FuzzerSelector {
 }
 
 /// Baseline selection for round 1 — empty mutations, default modules.
+///
+/// Returns the unmodified `default_modules` with zero mutations so the first
+/// round serves as a control measurement.
 fn baseline_selection(default_modules: &ModuleSelectionSpec) -> Selection {
     Selection {
         modules: default_modules.clone(),

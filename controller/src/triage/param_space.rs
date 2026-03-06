@@ -31,6 +31,7 @@ pub enum ParamDef {
 }
 
 impl ParamDef {
+    /// Return the parameter name, regardless of variant.
     pub fn name(&self) -> &str {
         match self {
             ParamDef::Categorical { name, .. } => name,
@@ -157,35 +158,60 @@ impl ParamDef {
 }
 
 /// Distance result for a single parameter.
+///
+/// Produced by [`ParamDef::distance`]. The `normalized` value is always in
+/// [0.0, 1.0], allowing heterogeneous parameter types to be averaged.
 #[derive(Debug, Clone)]
 pub struct ParamDistance {
+    /// Normalized distance in [0.0, 1.0].
     pub normalized: f64,
+    /// Variant tag: `"int_range"`, `"float_range"`, or `"categorical"`.
     pub param_type: String,
+    /// Human-readable range info (e.g. `"[5, 500]"` or `"[fixed, runtime]"`).
     pub range_info: String,
 }
 
 /// Named parameter distance (includes the actual values).
+///
+/// Wraps a [`ParamDistance`] with the parameter name and the two compared
+/// values, for human-readable reporting in triage diffs.
 #[derive(Debug, Clone)]
 pub struct NamedParamDistance {
+    /// Parameter name (e.g. `"count"`, `"method"`).
     pub name: String,
+    /// Value from set A (or the parameter's default if absent).
     pub value_a: String,
+    /// Value from set B (or the parameter's default if absent).
     pub value_b: String,
+    /// Computed distance between `value_a` and `value_b`.
     pub distance: ParamDistance,
 }
 
 /// Full mutation comparison result.
+///
+/// Produced by [`MutationParamSpace::compare_params`]. Contains per-parameter
+/// distances and an overall mean distance for the mutation.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct MutationComparison {
+    /// Mutation identifier (e.g. `"ast.decon_rounds"`).
     pub mutation_id: String,
+    /// Per-parameter distance breakdown.
     pub param_distances: Vec<NamedParamDistance>,
+    /// Mean of all `param_distances[*].distance.normalized` values.
     pub overall_distance: f64,
 }
 
 /// Full parameter space for one mutation.
+///
+/// Lists every tuneable parameter of a mutation alongside its type and range.
+/// Used by selectors to sample, perturb, and compare parameter configurations.
+/// The canonical registry is built by [`default_registry`].
 #[derive(Debug, Clone)]
 pub struct MutationParamSpace {
+    /// Mutation identifier (e.g. `"ast.decon_rounds"`, `"binary.rich_header"`).
     pub mutation_id: String,
+    /// Ordered list of parameter definitions. Empty for mutations with no tuneable params.
     pub params: Vec<ParamDef>,
 }
 

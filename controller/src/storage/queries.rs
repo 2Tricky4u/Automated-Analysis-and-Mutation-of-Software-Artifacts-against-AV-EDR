@@ -87,6 +87,10 @@ pub async fn query_runs_by_ids(es: &Elasticsearch, run_ids: &[&str]) -> Vec<Valu
 }
 
 /// Best-effort update of a single field on a job document.
+///
+/// # Errors
+///
+/// Returns an error if the job document cannot be found or the update request fails.
 pub async fn update_job_field(
     es: &Elasticsearch,
     job_id: &str,

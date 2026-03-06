@@ -130,10 +130,15 @@ async fn static_defender_scan(artifact_path: &Path) -> bool {
 // JobWorker
 // ============================================================================
 
-/// JobWorker owns the lifecycle of a single job.
+/// Per-job worker that drives the full mutation-exploration lifecycle.
 ///
-/// It produces rounds, builds artifacts, and aggregates results.
-/// Each job gets its own JobWorker instance.
+/// Owns the round-production loop, artifact building, result aggregation, and
+/// triage extraction for a single job. Communicates with the shared
+/// [`RunPool`] via channels and the [`Selector`] to choose mutations.
+///
+/// Backpressure is enforced by two constants:
+/// - `MAX_IN_FLIGHT_ROUNDS` (5) — rounds being aggregated concurrently.
+/// - `MAX_PENDING_RUNS` (9) — pending runs in the pool for this job.
 pub struct JobWorker {
     /// The job being executed
     job: JobSession,
@@ -233,7 +238,13 @@ impl JobWorker {
         self.shutdown_token.clone()
     }
 
-    /// Main loop - produces rounds, receives results, aggregates.
+    /// Main event loop — multiplexes five `select!` branches (biased):
+    ///
+    /// 1. **Shutdown** — cancellation token from orchestrator.
+    /// 2. **Pool shutdown** — global pool teardown.
+    /// 3. **Run results** — outcomes from VMs via [`RunPool`] routing.
+    /// 4. **Coverage corrections** — async blended-score patches.
+    /// 5. **Production tick** — periodic check to produce more rounds.
     pub async fn run(mut self) {
         info!(
             "[JobWorker:{}] Started (max_rounds={}, stop_on_evasion={})",
@@ -402,7 +413,12 @@ impl JobWorker {
     // Round Production
     // ========================================================================
 
-    /// Check if we can produce more rounds.
+    /// Check whether a new round may be produced.
+    ///
+    /// Returns `false` when any of three backpressure conditions hold:
+    /// 1. The job's round budget is exhausted (or stop-on-evasion triggered).
+    /// 2. Too many rounds are in-flight (`>= MAX_IN_FLIGHT_ROUNDS`).
+    /// 3. Too many pending runs in the pool (`>= MAX_PENDING_RUNS`).
     fn can_produce_round(&self) -> bool {
         // Job must want more rounds
         if !self.job.should_continue() {
@@ -423,13 +439,19 @@ impl JobWorker {
         true
     }
 
-    /// Check if the job is complete.
+    /// Returns `true` when the job should exit: no more rounds to produce
+    /// **and** all in-flight round aggregators have been finalized.
     fn is_job_complete(&self) -> bool {
         // No more rounds to produce and all in-flight rounds done
         !self.job.should_continue() && self.round_aggs.is_empty()
     }
 
-    /// Produce a new round (build artifacts, create runs).
+    /// Produce a new round: select mutations, build artifacts, and enqueue runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if artifact building fails (e.g. payload not found,
+    /// Clang/LLVM toolchain error).
     async fn produce_round(&mut self) -> anyhow::Result<()> {
         let (round_num, round_id) = self.job.start_round();
         info!(
@@ -583,7 +605,15 @@ impl JobWorker {
         Ok(())
     }
 
-    /// Build an artifact using the modular template system.
+    /// Build a single artifact using the modular template system.
+    ///
+    /// Caches the raw payload bytes and precomputed payload headers across rounds
+    /// (unless `cache_payload` is disabled). Optionally enables MSVC-compat mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload file cannot be read, the builder config is
+    /// invalid, or the Clang/LLVM build pipeline fails.
     async fn build_artifact(
         &mut self,
         build_spec: &ModularBuildSpec,
@@ -712,7 +742,11 @@ impl JobWorker {
     // Result Handling
     // ========================================================================
 
-    /// Handle a result received from VMExecutor (via RunPool routing).
+    /// Handle a run result received from a VMExecutor (via [`RunPool`] routing).
+    ///
+    /// Performs O(1) round lookup, stores the outcome in the [`RoundAgg`], and
+    /// triggers finalization when core runs (baseline + instrumented) complete.
+    /// A grace period is started for the optional dryrun before finalizing without it.
     async fn on_result(&mut self, result: JobRunResult) {
         debug!(
             "[JobWorker:{}] Run {} completed: detected={}, exit={}, success={}",
@@ -778,7 +812,9 @@ impl JobWorker {
         }
     }
 
-    /// Finalize a completed round.
+    /// Finalize a completed round: compute summary, record in session, spawn
+    /// triage extraction, and emit the [`RoundCompleted`](super::channels::JobWorkerEvent::RoundCompleted)
+    /// event for Elasticsearch indexing.
     async fn finalize_round(&mut self, round_id: &RoundId) {
         let agg = match self.round_aggs.remove(round_id) {
             Some(a) => a,

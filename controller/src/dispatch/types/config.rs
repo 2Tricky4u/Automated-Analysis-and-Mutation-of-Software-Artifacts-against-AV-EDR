@@ -1,4 +1,7 @@
-//! Build configuration types.
+//! Build configuration types for the controller's dispatch layer.
+//!
+//! These types mirror the build crate's module and encoding model but are
+//! serializable for Elasticsearch indexing and gRPC proto conversion.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -7,8 +10,12 @@ use std::path::PathBuf;
 // Module Selection
 // ============================================================================
 
-/// Module selection for modular template assembly
-/// Uses "none" for disabled optional modules (matches build crate)
+/// Module selection for modular template assembly.
+///
+/// Each field names a module variant file under `build/templates/modules/`.
+/// Use `"none"` for disabled optional slots. The seven slots are:
+/// carrier, decoder, antiemulation, deconditioner, guardrail,
+/// virtualprotect, and decoy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModuleSelectionSpec {
     pub carrier: String,
@@ -89,7 +96,11 @@ impl From<ModuleSelectionSpec> for build::ModuleSelection {
 // Build Spec
 // ============================================================================
 
-/// Modular build specification for the @MODULE marker system
+/// Modular build specification for the `@MODULE` marker system.
+///
+/// Combines a module selection, a raw payload file path, and the encoding
+/// type used to generate `payload.h`. Passed from [`JobSession`](super::session::JobSession)
+/// into the build crate for each round's artifact construction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModularBuildSpec {
     /// Module selection for assembly

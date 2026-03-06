@@ -1,4 +1,8 @@
 //! gRPC handlers for artifact building and deployment to worker VMs.
+//!
+//! `build_artifact` invokes the build crate's modular template pipeline and
+//! indexes artifact metadata to Elasticsearch. `deploy_artifact` streams the
+//! built binary to a worker VM via chunked gRPC.
 
 use crate::api::SchedulerService;
 use crate::automutate::controller::{BuildRequest, BuildResponse, DeployRequest, DeployResponse};
@@ -6,6 +10,11 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
 /// Build an artifact using the modular template system and index metadata to Elasticsearch.
+///
+/// # Errors
+///
+/// Returns `Status::invalid_argument` if `modular_build` is missing.
+/// Returns `Status::internal` if the builder or Clang/LLVM pipeline fails.
 pub async fn build_artifact(
     service: &SchedulerService,
     request: Request<BuildRequest>,
@@ -157,6 +166,12 @@ pub async fn build_artifact(
 }
 
 /// Deploy a previously built artifact to a worker VM via chunked gRPC streaming.
+///
+/// # Errors
+///
+/// Returns `Status::not_found` if the artifact file does not exist.
+/// Returns `Status::internal` on SHA-256 mismatch, read failure, or stream error.
+/// Returns `Status::unavailable` if the worker connection fails.
 pub async fn deploy_artifact(
     _service: &SchedulerService,
     request: Request<DeployRequest>,

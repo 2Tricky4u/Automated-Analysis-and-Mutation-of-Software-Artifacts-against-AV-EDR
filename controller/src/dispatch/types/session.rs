@@ -1,4 +1,8 @@
 //! Job session and status types.
+//!
+//! [`JobSession`] holds all ephemeral runtime state for a single job,
+//! including build configuration, selection parameters, round history,
+//! and progress counters. [`JobOutcome`] captures the terminal state.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -13,8 +17,12 @@ use crate::triage::SearchSpace;
 // Job Session (ephemeral runtime state)
 // ============================================================================
 
-/// JobSession is ephemeral runtime state.
-/// State (queued/running/finished) is implied by placement.
+/// Ephemeral runtime state for a single mutation-exploration job.
+///
+/// Owned by a [`JobWorker`](crate::dispatch::job_worker::JobWorker) for
+/// its entire lifetime. Lifecycle state (queued / running / finished) is
+/// implied by placement in the orchestrator's data structures, not stored
+/// here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobSession {
     pub id: JobId,
@@ -63,6 +71,7 @@ pub struct JobSession {
 }
 
 impl JobSession {
+    /// Create a new job session with default selection and progress state.
     pub fn new(id: impl Into<String>, max_rounds: u32, build_spec: ModularBuildSpec) -> Self {
         Self {
             id: JobId(id.into()),
@@ -86,6 +95,7 @@ impl JobSession {
         }
     }
 
+    /// Builder-pattern setter for OS and capability constraints.
     #[allow(dead_code)]
     pub fn with_constraints(mut self, os: Option<String>, caps: Vec<String>) -> Self {
         self.target_os = os;
@@ -93,12 +103,18 @@ impl JobSession {
         self
     }
 
+    /// Record the job start timestamp (idempotent — only the first call takes effect).
     pub fn mark_started(&mut self) {
         if self.started_at.is_none() {
             self.started_at = Some(SystemTime::now());
         }
     }
 
+    /// Returns `true` if the job should produce more rounds.
+    ///
+    /// Returns `false` when any of these conditions hold:
+    /// 1. `current_round >= max_rounds` — round budget exhausted.
+    /// 2. `stop_on_evasion` is set and the last round achieved full evasion.
     pub fn should_continue(&self) -> bool {
         if self.current_round >= self.max_rounds {
             return false;
@@ -113,12 +129,14 @@ impl JobSession {
         true
     }
 
+    /// Increment the round counter and return `(round_number, round_id)`.
     pub fn start_round(&mut self) -> (u32, super::ids::RoundId) {
         self.current_round += 1;
         let rid = super::ids::RoundId(format!("{}-round-{}", self.id.0, self.current_round));
         (self.current_round, rid)
     }
 
+    /// Record a completed round summary into the in-memory history.
     pub fn record_round_summary(&mut self, summary: RoundSummary) {
         self.rounds.insert(summary.round_number, summary.clone());
         self.last_round = Some(summary);
@@ -163,6 +181,7 @@ impl std::fmt::Display for JobStatus {
     }
 }
 
+/// Terminal outcome of a job after its [`JobWorker`](crate::dispatch::job_worker::JobWorker) exits.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum JobOutcome {
     Completed { rounds_completed: u32 },

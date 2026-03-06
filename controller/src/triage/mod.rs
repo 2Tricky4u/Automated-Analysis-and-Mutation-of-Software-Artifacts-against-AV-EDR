@@ -29,6 +29,14 @@ use async_trait::async_trait;
 use std::collections::BTreeMap;
 
 /// Selector output for one round.
+///
+/// Produced by a [`Selector`] implementation and consumed by
+/// [`JobWorker`](crate::dispatch::job_worker::JobWorker) to configure
+/// the next round's build.
+///
+/// - `modules` — which template modules to assemble.
+/// - `mutations` — AST/IR/binary mutations to apply.
+/// - `rationale` — human-readable explanation for logging.
 #[derive(Debug, Clone)]
 pub struct Selection {
     pub modules: ModuleSelectionSpec,
@@ -50,6 +58,10 @@ pub enum SelectorType {
 }
 
 impl SelectorType {
+    /// Parse a selector type from a string, defaulting to `Coverage`.
+    ///
+    /// Recognized values: `"fuzzer"`, `"token"`, `"random"`.
+    /// Any other input (including empty) maps to `Coverage`.
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "fuzzer" => Self::Fuzzer,
@@ -59,6 +71,7 @@ impl SelectorType {
         }
     }
 
+    /// Return the canonical string representation of this selector type.
     #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -82,6 +95,9 @@ pub enum VariationStrategy {
 }
 
 impl VariationStrategy {
+    /// Parse a variation strategy from a string, defaulting to `MutationOnly`.
+    ///
+    /// Recognized value: `"full"`. Any other input maps to `MutationOnly`.
     pub fn from_str_or_default(s: &str) -> Self {
         match s {
             "full" => Self::Full,
@@ -89,6 +105,7 @@ impl VariationStrategy {
         }
     }
 
+    /// Return the canonical string representation of this strategy.
     #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -98,7 +115,11 @@ impl VariationStrategy {
     }
 }
 
-/// Which module categories the selector may vary + mutation exploration config.
+/// Configuration for the mutation search space explored by a [`Selector`].
+///
+/// Controls which module categories may vary across rounds, which AST/IR/binary
+/// mutations are eligible for selection, and which mutations are always applied
+/// after round 1 (the `fixed_mutations` list).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchSpace {
     /// Which selector algorithm to use: Coverage (default) or Fuzzer.
@@ -192,6 +213,14 @@ pub struct TriageGuidance {
 /// token-level avoid/seek sets from the async triage pipeline when available.
 #[async_trait]
 pub trait Selector: Send + Sync {
+    /// Choose modules and mutations for the next round.
+    ///
+    /// * `job_id` — owning job, used for logging and seed derivation.
+    /// * `round_number` — 1-based round index within the job.
+    /// * `search_space` — eligible mutations and module categories.
+    /// * `default_modules` — job-level default module selection.
+    /// * `history` — completed round summaries keyed by round number.
+    /// * `guidance` — optional token-level avoid/seek sets from async triage.
     async fn select(
         &self,
         job_id: &str,

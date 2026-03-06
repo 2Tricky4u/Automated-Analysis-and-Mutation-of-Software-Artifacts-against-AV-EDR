@@ -105,6 +105,10 @@ pub fn extract_round_tokens(summary: &RoundSummary) -> Vec<String> {
 ///
 /// Queries all non-trace telemetry sorted by `payload_id` and delegates to
 /// [`extract_tokens_from_docs`] for the pure extraction logic.
+///
+/// # Errors
+///
+/// Returns an error if the ES query fails.
 pub async fn extract_telemetry_tokens(
     storage: &EsStorage,
     _job_id: &str,
@@ -205,6 +209,10 @@ pub fn extract_tokens_from_docs(docs: &[Value]) -> Vec<String> {
 ///
 /// Queries all checkpoint events, deduplicates by name (lowercased), and returns
 /// tokens in the order they were first observed.
+///
+/// # Errors
+///
+/// Returns an error if the ES query fails.
 pub async fn extract_checkpoint_tokens(
     storage: &EsStorage,
     run_id: &str,
@@ -231,6 +239,21 @@ pub async fn extract_checkpoint_tokens(
 ///
 /// Called by `finalize_round()` via `tokio::spawn`. Non-fatal — errors are logged
 /// and the guidance channel simply doesn't receive an update.
+///
+/// Steps:
+/// 1. Extract in-memory tokens (`module:*`, `mutation:*`) from the round summary.
+/// 2. Fetch ES telemetry tokens (`api:*`, `seq2:*`, `etw:*`, `image:*`) and
+///    checkpoint tokens (`checkpoint:*`).
+/// 3. Index the combined token set to the `tokens-YYYY.MM` ES index.
+/// 4. Build a token-round matrix from all trustworthy prior rounds plus the
+///    current one, then compute [`TokenScore`](super::scorer::TokenScore) lift
+///    values via [`compute_token_scores`](super::scorer::compute_token_scores).
+/// 5. Convert scores into [`TriageGuidance`] avoid/seek sets.
+///
+/// # Errors
+///
+/// Returns an error if the ES token-set indexing fails fatally (though
+/// individual telemetry extraction failures are logged and skipped).
 pub async fn extract_and_score(
     storage: &EsStorage,
     job_id: &str,

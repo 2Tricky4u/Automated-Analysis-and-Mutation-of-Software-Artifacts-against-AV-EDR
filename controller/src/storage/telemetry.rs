@@ -12,6 +12,21 @@ use elasticsearch::{BulkOperation, BulkParts, Elasticsearch};
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
+/// Bulk-index a batch of [`TelemetryData`] events to `telemetry-YYYY.MM.DD`.
+///
+/// Each event is enriched with correlation keys from [`TelemetryContext`],
+/// its payload fields are flattened to top-level `payload_*` keys, and
+/// pointer-sized numeric values are converted to hex strings. Typed proto
+/// variants (`Trace`, `Coverage`, `Checkpoint`) are handled before the
+/// generic payload merge.
+///
+/// Empty batches short-circuit to `Ok(())` immediately.
+///
+/// # Errors
+///
+/// Returns an error if the Elasticsearch bulk request fails at the transport
+/// level. Individual item failures within the bulk response are logged as
+/// warnings but do not cause a top-level error.
 pub async fn index_telemetry_batch(
     es: &Elasticsearch,
     batch: &[TelemetryData],

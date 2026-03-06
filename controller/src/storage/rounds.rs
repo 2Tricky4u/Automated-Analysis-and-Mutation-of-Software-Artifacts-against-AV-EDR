@@ -30,6 +30,11 @@ pub struct RoundIndexParams<'a> {
 }
 
 /// Index a completed round summary with mutation recipe and run IDs.
+///
+/// # Errors
+///
+/// Returns an error if the Elasticsearch index request fails or the response
+/// indicates a non-success status code.
 pub async fn index_round(es: &Elasticsearch, params: &RoundIndexParams<'_>) -> anyhow::Result<()> {
     let index_name = helpers::es_index_name("rounds");
     let summary = params.summary;
@@ -92,6 +97,11 @@ pub async fn index_round(es: &Elasticsearch, params: &RoundIndexParams<'_>) -> a
 }
 
 /// Update an existing round document with computed coverage fields.
+///
+/// # Errors
+///
+/// Returns an error if the round document cannot be located by `round_id`
+/// or the update request fails.
 pub async fn update_round_coverage(
     es: &Elasticsearch,
     job_id: &str,
@@ -135,6 +145,11 @@ pub async fn update_round_coverage(
 }
 
 /// Update an existing round document with a blended evasion score.
+///
+/// # Errors
+///
+/// Returns an error if the round document cannot be located by `round_id`
+/// or the update request fails.
 pub async fn update_round_evasion_score(
     es: &Elasticsearch,
     job_id: &str,

@@ -7,34 +7,65 @@ use std::collections::{HashMap, HashSet};
 use super::param_space::{MutationComparison, MutationParamSpace, find_param_space};
 
 /// A parsed `mutation:id:k=v:k=v` token.
+///
+/// Produced by [`parse_mutation_token`] when a raw token string starts with
+/// `"mutation:"`. The `params` map contains the key-value pairs extracted from
+/// the colon-separated segments after the mutation ID.
 #[derive(Debug, Clone)]
 pub struct ParsedMutationToken {
+    /// Mutation identifier (e.g. `"ast.decon_rounds"`).
     pub mutation_id: String,
+    /// Parameter key-value pairs parsed from `k=v` segments.
     pub params: HashMap<String, String>,
+    /// Original unmodified token string.
     pub raw_token: String,
 }
 
 /// Comparison result for a single mutation across two token sets.
+///
+/// When both sets contain the same `mutation_id`, a per-parameter distance is
+/// computed via the [`MutationParamSpace`]
+/// registry. When the mutation appears in only one set, `overall_distance` is 1.0.
 #[derive(Debug, Clone)]
 pub struct MutationTokenComparison {
+    /// Mutation identifier shared (or unique) across the two sets.
     pub mutation_id: String,
-    /// "both", "only_a", "only_b"
+    /// Presence flag: `"both"`, `"only_a"`, or `"only_b"`.
     pub presence: String,
+    /// Raw mutation token from set A (empty string if absent).
     pub token_a: String,
+    /// Raw mutation token from set B (empty string if absent).
     pub token_b: String,
+    /// Per-parameter distance breakdown, present only when both sets contain
+    /// this mutation **and** a matching [`MutationParamSpace`]
+    /// entry exists in the registry.
     pub param_comparison: Option<MutationComparison>,
+    /// Aggregate distance in [0.0, 1.0]. Mean of per-parameter normalized
+    /// distances when a registry entry exists; 0.0 for identical raw tokens
+    /// or 1.0 for missing/differing tokens without a registry entry.
     pub overall_distance: f64,
 }
 
 /// Full token set comparison result.
+///
+/// Combines set-level differences (Jaccard distance, symmetric difference)
+/// with per-mutation parameter distances. Produced by [`compare_token_sets`].
 #[derive(Debug, Clone)]
 pub struct TokenSetComparison {
+    /// Tokens present in set A but not in set B.
     pub only_in_a: Vec<String>,
+    /// Tokens present in set B but not in set A.
     pub only_in_b: Vec<String>,
+    /// Tokens present in both sets.
     pub common: Vec<String>,
+    /// Per-mutation comparisons (sorted by `mutation_id`).
     pub mutation_comparisons: Vec<MutationTokenComparison>,
+    /// Jaccard distance: `1 - |A ∩ B| / |A ∪ B|`. 0.0 for identical sets,
+    /// 1.0 for completely disjoint sets.
     pub jaccard_distance: f64,
+    /// Total token count in set A.
     pub count_a: usize,
+    /// Total token count in set B.
     pub count_b: usize,
 }
 
