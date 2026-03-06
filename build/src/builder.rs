@@ -1,7 +1,5 @@
 /// Artifact Builder - Clang cross-compilation wrapper
 ///
-/// Implements BUILD-DEPLOY-EXECUTE-PIPELINE.md Section 1: Build on Controller (WSL)
-///
 /// Compiles C templates to Windows PE executables using Clang with xwin SDK.
 /// Uses the same flags and dependencies as corpus/templates/build_all.sh.
 use anyhow::{Context, Result};
@@ -10,7 +8,6 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-// Use modules from crate root
 use crate::msvc_compat::{self, MsvcCompat};
 use crate::mutator;
 use crate::template::assembler::{Assembler, ModuleSelection};
@@ -408,9 +405,9 @@ impl ArtifactBuilder {
         };
 
         if let Some(ref msvc) = self.config.msvc_compat {
-            // ===== MSVC-compat mode: compile with clang-cl, link with link.exe =====
+            // --- MSVC-compat mode: compile with clang-cl, link with link.exe ---
 
-            // Step 1: Compile source → temp .obj
+            // Compile source to object file via clang-cl
             let temp_obj = self.config.output_dir.join(format!(
                 "temp_{}.obj",
                 source.file_stem().unwrap_or_default().to_string_lossy()
@@ -466,7 +463,7 @@ impl ArtifactBuilder {
                 );
             }
 
-            // Step 2: Link via MSVC link.exe
+            // Link via MSVC link.exe
             let mut objects = vec![temp_obj.clone()];
             if let Some(ref minimal_str) = minimal_runtime_str {
                 objects.push(PathBuf::from(minimal_str));
@@ -489,7 +486,7 @@ impl ArtifactBuilder {
             // Clean up temp object
             let _ = tokio::fs::remove_file(&temp_obj).await;
         } else {
-            // ===== Standard mode: single-step clang + lld-link =====
+            // --- Standard mode: single-step clang + lld-link ---
             let mut args = vec!["-target", "x86_64-pc-windows-msvc"];
             args.extend(xwin.include_args());
             args.extend(xwin.lib_args());
@@ -723,14 +720,14 @@ impl ArtifactBuilder {
         // and can trigger EDR heuristics.  The baseline exits via CRT exit().
 
         if let Some(ref msvc) = self.config.msvc_compat {
-            // ===== MSVC link.exe mode =====
+            // --- MSVC link.exe mode ---
             let objects = vec![obj_path.to_path_buf()];
             let libs = vec!["kernel32.lib", "advapi32.lib", "libcmt.lib", "libucrt.lib"];
 
             msvc_compat::invoke_msvc_link(&msvc.vcvarsall_path, &objects, output_exe, &libs, &[])
                 .await
         } else {
-            // ===== Standard lld-link mode =====
+            // --- Standard lld-link mode ---
             let lld_link_path = if cfg!(target_os = "linux") {
                 "/usr/lib/llvm-17/bin/lld-link"
             } else {
@@ -806,7 +803,7 @@ impl ArtifactBuilder {
             return Ok(built);
         }
 
-        // Step 1: Verify source exists
+        // Verify source exists
         if !built.source_path.exists() {
             anyhow::bail!(
                 "Source file not found for instrumentation: {:?}",
@@ -814,7 +811,7 @@ impl ArtifactBuilder {
             );
         }
 
-        // Step 1.5: Apply AST-level line tracing (if enabled)
+        // Apply AST-level line tracing (if enabled)
         let source_for_compilation = if trace_mode == crate::TraceMode::Lines
             || trace_mode == crate::TraceMode::All
         {
@@ -859,7 +856,7 @@ impl ArtifactBuilder {
             built.source_path.clone()
         };
 
-        // Step 2: Compile source -> LLVM IR
+        // Compile source to LLVM IR
         let ir_path = source_for_compilation.with_extension("instrumented.ll");
 
         debug!("Compiling source to LLVM IR for instrumentation...");
@@ -897,7 +894,7 @@ impl ArtifactBuilder {
         .await
         .context("Failed to compile source to IR for instrumentation")?;
 
-        // Step 3: Instrument the IR
+        // Instrument the IR
         let instrumented_ir_path = built.source_path.with_extension("instrumented_final.ll");
 
         debug!("Instrumenting LLVM IR with trace_mode={:?}...", trace_mode);
@@ -915,7 +912,7 @@ impl ArtifactBuilder {
             let _ = tokio::fs::remove_file(&source_for_compilation).await;
         }
 
-        // Step 4: Compile instrumented IR -> object file
+        // Compile instrumented IR to object file
         let obj_path = built.source_path.with_extension("instrumented.o");
 
         debug!("Compiling instrumented IR to object file...");
@@ -926,7 +923,7 @@ impl ArtifactBuilder {
         // Clean up instrumented IR
         let _ = tokio::fs::remove_file(&instrumented_ir_path).await;
 
-        // Step 5: Compile instrumentation runtime to object file (if not already compiled)
+        // Compile instrumentation runtime to object file (if not already compiled)
         let runtime_src = &self.config.runtime_src;
         let runtime_obj = self.config.output_dir.join("instrumentation_runtime.o");
 
@@ -949,7 +946,7 @@ impl ArtifactBuilder {
                 .context("Failed to compile instrumentation runtime")?;
         }
 
-        // Step 5.5: Verify runtime has required symbols for line tracing (non-fatal)
+        // Verify runtime has required symbols for line tracing (non-fatal)
         if (trace_mode == crate::TraceMode::Lines || trace_mode == crate::TraceMode::All)
             && let Err(e) = self.verify_runtime_symbols(&runtime_obj, trace_mode).await
         {
@@ -957,7 +954,7 @@ impl ArtifactBuilder {
             warn!("Build will continue, but linking may fail if symbols are missing");
         }
 
-        // Step 6: Link instrumented object + runtime -> final executable
+        // Link instrumented object + runtime into final executable
         let instrumented_exe_path = built.source_path.with_extension("instrumented.exe");
 
         debug!("Linking instrumented binary with runtime...");
@@ -975,7 +972,7 @@ impl ArtifactBuilder {
         // Clean up object file
         let _ = tokio::fs::remove_file(&obj_path).await;
 
-        // Step 7: Verify instrumented executable exists and has reasonable size
+        // Verify instrumented executable exists and has reasonable size
         if !instrumented_exe_path.exists() {
             anyhow::bail!(
                 "Instrumented executable not found at {:?}",
@@ -1162,7 +1159,7 @@ impl ArtifactBuilder {
         let minimal_runtime_obj = self.ensure_minimal_runtime().await?;
 
         if let Some(ref msvc) = self.config.msvc_compat {
-            // ===== MSVC link.exe mode =====
+            // --- MSVC link.exe mode ---
             let mut objects = vec![
                 obj_path.to_path_buf(),
                 runtime_obj.to_path_buf(),
@@ -1196,7 +1193,7 @@ impl ArtifactBuilder {
             )
             .await?;
         } else {
-            // ===== Standard lld-link mode =====
+            // --- Standard lld-link mode ---
             let lld_link_path = if cfg!(target_os = "linux") {
                 "/usr/lib/llvm-17/bin/lld-link"
             } else {
@@ -1303,7 +1300,7 @@ impl ArtifactBuilder {
         sc_checkpoint_count: Option<u32>,
         precomputed_payload: Option<PreparedPayload>,
     ) -> Result<BuiltArtifact> {
-        // Step 0: Sync decoder module to match encoding type
+        // Sync decoder module to match encoding type
         let expected_decoder = encoding.decoder_module();
         if modules.decoder != expected_decoder {
             info!(
@@ -1313,7 +1310,7 @@ impl ArtifactBuilder {
             modules.decoder = expected_decoder.to_string();
         }
 
-        // Step 1: Encode the payload (or use precomputed header)
+        // Encode the payload (or use precomputed header)
         let (payload_header, sc_header) = if let Some(prepared) = precomputed_payload {
             debug!("Using precomputed payload header (skipping encoding)");
             (prepared.payload_header, prepared.sc_header)
@@ -1322,7 +1319,7 @@ impl ArtifactBuilder {
             (prepared.payload_header, prepared.sc_header)
         };
 
-        // Step 2: Use template directory from config
+        // Resolve template directory from config
         let template_dir = &self.config.modular_template_dir;
 
         if !template_dir.exists() {
@@ -1332,7 +1329,7 @@ impl ArtifactBuilder {
             );
         }
 
-        // Step 3: Assemble the template with selected modules
+        // Assemble the template with selected modules
         let mut assembler = Assembler::new(template_dir).context("Failed to create assembler")?;
 
         let assembled_source = assembler
@@ -1349,7 +1346,7 @@ impl ArtifactBuilder {
             modules.guardrail
         );
 
-        // Step 3b: Scope mutations to targeted modules (strip @MUTATE markers outside targets)
+        // Scope mutations to targeted modules (strip @MUTATE markers outside targets)
         let assembled_source = if !mutation_targets.is_empty() {
             crate::template::assembler::strip_markers_outside_targets(
                 &assembled_source,
@@ -1359,7 +1356,7 @@ impl ArtifactBuilder {
             assembled_source
         };
 
-        // Step 4: Partition mutations into AST and LLVM, apply AST mutations
+        // Partition mutations into AST and LLVM, apply AST mutations
         let ast_mutations: Vec<_> = mutations
             .iter()
             .filter(|m| !m.id.starts_with("llvm."))
@@ -1388,7 +1385,7 @@ impl ArtifactBuilder {
             )
         };
 
-        // Step 5: Build the assembled source
+        // Build the assembled source
         let artifact_name = format!(
             "modular_{}_{}_{}",
             modules.carrier,
@@ -1464,13 +1461,13 @@ impl ArtifactBuilder {
                 .context("Failed to write mutated IR")?;
 
             // Two-step compile+link (mirrors the working instrumented path):
-            // Step 1: IR → object file
+            // Compile IR to object file
             let temp_obj = self.config.output_dir.join(format!("{}.o", artifact_name));
             self.compile_ir_to_object(&temp_ir, &temp_obj)
                 .await
                 .context("Failed to compile mutated IR to object")?;
 
-            // Step 2: object → executable (via lld-link directly)
+            // Link object into executable (via lld-link directly)
             self.link_baseline_exe(&temp_obj, &temp_output)
                 .await
                 .context("Failed to link mutated object to executable")?;
@@ -1496,7 +1493,7 @@ impl ArtifactBuilder {
             .map(|m| m.len())
             .unwrap_or(0);
 
-        // Step 5b: Apply binary mutations (post-link PE transforms)
+        // Apply binary mutations (post-link PE transforms)
         let binary_mutations: Vec<&mutator::MutationSpec> = mutations
             .iter()
             .filter(|m| m.id.starts_with("binary."))
@@ -1524,7 +1521,7 @@ impl ArtifactBuilder {
                 .context("Failed to write binary-mutated PE")?;
         }
 
-        // Step 6: Finalize artifact
+        // Finalize artifact
         let (artifact_id, final_output, size_bytes) = self.finalize_artifact(&temp_output).await?;
 
         info!(
@@ -1545,7 +1542,7 @@ impl ArtifactBuilder {
             Some(final_source.clone()),
         );
 
-        // Step 7: Apply instrumentation if needed
+        // Apply instrumentation if needed
         if needs_runtime {
             if has_llvm_mutations {
                 warn!(
@@ -1595,7 +1592,7 @@ impl ArtifactBuilder {
             // apply_instrumentation() re-compiles from source, producing a
             // fresh PE without the binary-level transforms (size_pad,
             // resource_inject, timestamp, etc.) that were applied to the
-            // baseline in Step 5b.
+            // baseline in the binary mutation phase above.
             if !binary_mutations.is_empty() {
                 let pe_bytes = tokio::fs::read(&instrumented.output_path)
                     .await

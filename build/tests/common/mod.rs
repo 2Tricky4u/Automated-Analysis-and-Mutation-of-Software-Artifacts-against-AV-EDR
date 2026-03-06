@@ -12,7 +12,7 @@ use build::{
 
 // ── Pipeline output types ──────────────────────────────────────────────────
 
-/// Output from running pipeline steps 1–3 (encode → assemble → mutate → strip).
+/// Output from the core pipeline: encode, assemble, mutate, strip.
 #[derive(Debug)]
 pub struct PipelineOutput {
     pub payload_header: String,
@@ -21,7 +21,7 @@ pub struct PipelineOutput {
     pub applied_mutations: Vec<String>,
 }
 
-/// Output from running the full pipeline steps 1–4 (+ line trace injection).
+/// Output from the full pipeline including line trace injection.
 #[derive(Debug)]
 pub struct TracedPipelineOutput {
     pub pipeline: PipelineOutput,
@@ -30,24 +30,24 @@ pub struct TracedPipelineOutput {
 
 // ── Pipeline helpers ───────────────────────────────────────────────────────
 
-/// Run pipeline steps 1–3: encode → assemble → mutate → strip markers.
+/// Run the core pipeline: encode, assemble, mutate, strip markers.
 pub fn run_pipeline(
     modules: ModuleSelection,
     payload: &[u8],
     encoding: EncodingType,
     mutations: &[MutationSpec],
 ) -> anyhow::Result<PipelineOutput> {
-    // Step 1: Encode payload
+    // Encode payload
     let encoder = PayloadEncoder::new();
     let encoded = encoder.encode(payload, encoding);
     let payload_header = encoder.generate_c_header(&encoded);
 
-    // Step 2: Assemble template
+    // Assemble template
     let dir = templates_dir();
     let mut assembler = Assembler::new(&dir)?;
     let assembled_source = assembler.assemble(&modules, &payload_header)?;
 
-    // Step 3: Apply mutations + strip markers
+    // Apply mutations + strip markers
     let (final_source, applied_mutations) = if !mutations.is_empty() {
         let source_bytes = assembled_source.as_bytes().to_vec();
         let (mutated, applied) = build::mutator::Mutator::apply(&source_bytes, mutations)?;
@@ -66,7 +66,7 @@ pub fn run_pipeline(
     })
 }
 
-/// Run the full pipeline steps 1–4: encode → assemble → mutate → strip → trace.
+/// Run the full pipeline: encode, assemble, mutate, strip, trace.
 pub fn run_pipeline_with_tracing(
     modules: ModuleSelection,
     payload: &[u8],
@@ -76,7 +76,7 @@ pub fn run_pipeline_with_tracing(
 ) -> anyhow::Result<TracedPipelineOutput> {
     let pipeline = run_pipeline(modules, payload, encoding, mutations)?;
 
-    // Step 4: Inject line traces
+    // Inject line traces
     let instrumented_source = inject_line_traces_with_opts(
         &pipeline.final_source,
         SourceLanguage::C,

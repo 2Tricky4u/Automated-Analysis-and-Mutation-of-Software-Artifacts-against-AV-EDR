@@ -39,9 +39,7 @@
 
 use serde::{Deserialize, Serialize};
 
-// ============================================================================
-// Submodules (new organization)
-// ============================================================================
+// --- Submodules ---
 
 pub mod builder;
 pub mod instrument;
@@ -50,9 +48,7 @@ pub mod mutator;
 pub mod template;
 pub mod transform;
 
-// ============================================================================
-// Re-exports from submodules
-// ============================================================================
+// --- Re-exports ---
 
 // Transform module
 pub use transform::{AstMutator, BinaryMutator, IrMutator};
@@ -77,11 +73,9 @@ pub use builder::{
 // MSVC compat module
 pub use msvc_compat::MsvcCompat;
 
-// ============================================================================
-// Core Types
-// ============================================================================
+// --- Core Types ---
 
-/// Trace instrumentation mode (CLAUDE.md Section 4)
+/// Trace instrumentation mode for the two-run differential protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TraceMode {

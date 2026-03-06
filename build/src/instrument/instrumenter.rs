@@ -6,10 +6,8 @@
 //! - Line-level tracing (diagnostic mode, Base64-encoded to named pipe)
 //! - Checkpoint markers for key operations
 //!
-//! Architecture:
-//!   1. Use LLVM's `opt` tool with SanitizerCoverage pass for BB coverage
-//!   2. Parse LLVM IR for API tracing injection (text-based, selective)
-//!   3. Link with runtime library (instrumentation_runtime.obj)
+//! Architecture: LLVM SanitizerCoverage handles BB coverage via `opt`, API tracing is
+//! injected by parsing LLVM IR text, and the result links against instrumentation_runtime.obj.
 //!
 //! BB Coverage uses LLVM SanitizerCoverage (industry standard, used by AFL++/libFuzzer):
 //!   - Accurate: Uses proper LLVM BasicBlock API (not text parsing)
@@ -105,11 +103,6 @@ impl Instrumenter {
         Ok(())
     }
 
-    // REMOVED: inject_bb_coverage_naive() - deprecated text-based BB injection
-    // Replaced by inject_bb_coverage_sancov() which uses LLVM SanitizerCoverage
-    // Old implementation had ~30% BB detection miss rate (implicit BBs without labels)
-    // See BB-COVERAGE-IMPROVEMENT.md for detailed comparison
-
     /// Inject API tracing instrumentation
     fn inject_api_tracing(ir: &str, line_counter: &mut u32) -> Result<String> {
         debug!("Injecting API tracing instrumentation");
@@ -195,9 +188,6 @@ impl Instrumenter {
 
         result
     }
-
-    // REMOVED: inject_line_tracing (IR-level)
-    // Line tracing is now done at AST/source level using tree-sitter (see ast_line_tracer.rs)
 
     /// Add runtime function declarations to IR
     fn add_runtime_declarations(ir: &str, trace_mode: crate::TraceMode) -> Result<String> {
@@ -294,14 +284,6 @@ mod tests {
         assert_eq!(base64_str("loader.c"), "bG9hZGVyLmM=");
     }
 
-    // NOTE: BB coverage testing now requires LLVM opt tool
-    // SanitizerCoverage is applied via external process, not text parsing
-    // Integration tests in build/emitter/tests/ validate full pipeline
-    //
-    // To test manually:
-    // 1. Create test.ll with simple function
-    // 2. Run: opt -passes=sancov -sanitizer-coverage-level=3 test.ll -o test_instrumented.ll
-    // 3. Verify: grep -c "__sanitizer_cov_trace_pc_guard" test_instrumented.ll
-    //
-    // Old naive test removed - see git history for reference
+    // BB coverage testing requires LLVM opt tool (SanitizerCoverage is applied via
+    // external process). Integration tests in build/emitter/tests/ validate the full pipeline.
 }

@@ -6,9 +6,7 @@
 //! - Application manifest template
 //! - Version info helpers
 
-// ============================================================================
-// Rich Header Donor Profiles
-// ============================================================================
+// --- Rich Header Donor Profiles ---
 
 /// A single Rich header compiler/tool record
 pub struct RichRecord {
@@ -144,10 +142,9 @@ pub fn get_rich_profile(name: &str) -> &'static RichProfile {
 
 /// Compute the Rich header checksum from DOS header bytes and Rich records.
 ///
-/// This is the documented Rich header checksum algorithm:
-/// 1. Start with e_lfanew
-/// 2. For each byte at position i (0..0x3C) in the DOS header: checksum += rotl32(byte, i)
-/// 3. For each Rich record: checksum += rotl32(comp_id, count)
+/// Starts with e_lfanew, then accumulates rotl32(byte, position) for each
+/// byte in the DOS header up to offset 0x3C, and rotl32(comp_id, count)
+/// for each Rich record.
 pub fn compute_rich_checksum(dos_header: &[u8], e_lfanew: u32, records: &[RichRecord]) -> u32 {
     let mut cs = e_lfanew;
     let end = 0x3C.min(dos_header.len());
@@ -197,9 +194,7 @@ pub fn encode_rich_header(records: &[RichRecord], checksum: u32) -> Vec<u8> {
     data
 }
 
-// ============================================================================
-// Benign Import Pool
-// ============================================================================
+// --- Benign Import Pool ---
 
 /// A DLL and its benign exported functions with approximate import hints.
 ///
@@ -344,9 +339,7 @@ pub static BENIGN_IMPORTS: &[BenignImport] = &[
     },
 ];
 
-// ============================================================================
-// Application Manifest
-// ============================================================================
+// --- Application Manifest ---
 
 pub static MANIFEST_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
@@ -378,9 +371,7 @@ pub fn build_manifest(product_name: &str, company_name: &str) -> String {
         .replace("{DESCRIPTION}", product_name)
 }
 
-// ============================================================================
-// VS_VERSIONINFO Builder
-// ============================================================================
+// --- VS_VERSIONINFO Builder ---
 
 /// Build a complete VS_VERSIONINFO resource structure
 ///
@@ -561,9 +552,7 @@ pub(crate) fn align_up(val: u64, align: u64) -> u64 {
     (val + align - 1) & !(align - 1)
 }
 
-// ============================================================================
-// MSVC Standard Section Names
-// ============================================================================
+// --- MSVC Standard Section Names ---
 
 /// Standard MSVC section names — don't rename these
 pub static MSVC_STANDARD_SECTIONS: &[&[u8; 8]] = &[
@@ -581,16 +570,12 @@ pub static MSVC_STANDARD_SECTIONS: &[&[u8; 8]] = &[
     b".CRT\0\0\0\0",
 ];
 
-// ============================================================================
-// Debug Directory Defaults
-// ============================================================================
+// --- Debug Directory Defaults ---
 
 // PDB path is now generated per-artifact in apply_consolidated_padding()
 // using a hash-based directory variant (build/work/dev/proj/src/out).
 
-// ============================================================================
-// Resource Inject Defaults
-// ============================================================================
+// --- Resource Inject Defaults ---
 
 /// Default company name for resource_inject — generic, non-impersonating
 pub const DEFAULT_COMPANY: &str = "Application Software Inc.";
@@ -598,9 +583,7 @@ pub const DEFAULT_COMPANY: &str = "Application Software Inc.";
 /// Default product name for resource_inject — bland, nondescript
 pub const DEFAULT_PRODUCT: &str = "Application Service";
 
-// ============================================================================
-// Benign Strings
-// ============================================================================
+// --- Benign Strings ---
 
 // KNOWN ISSUE: These exact strings could become a YARA signature if
 // the tool becomes known. Consider rotating/expanding the pool over time.
@@ -637,9 +620,7 @@ pub static BENIGN_STRINGS: &[&str] = &[
     "Windows is checking for a solution to the problem...",
 ];
 
-// ============================================================================
-// Low-Entropy Padding Generator
-// ============================================================================
+// --- Low-Entropy Padding Generator ---
 
 /// Format strings that appear in typical compiled applications
 static FORMAT_STRINGS: &[&str] = &[

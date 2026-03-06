@@ -1,10 +1,9 @@
 //! Template Assembler
 //!
 //! Assembles modular C templates by replacing @MODULE markers with selected module code.
-//! This is the first phase of the build pipeline:
-//!   1. Assembler replaces @MODULE markers → single .c file
-//!   2. AST Mutator transforms @MUTATE markers
-//!   3. Compiler produces final artifact
+//! First phase of the build pipeline: assembler replaces @MODULE markers into a single .c
+//! file, then the AST mutator transforms @MUTATE markers, and finally the compiler
+//! produces the final artifact.
 
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;

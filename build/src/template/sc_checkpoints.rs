@@ -368,9 +368,7 @@ mod tests {
         }
     }
 
-    // ======================================================================
-    // Even spacing verification
-    // ======================================================================
+    // --- Even spacing verification ---
 
     /// Core promise: checkpoints are evenly spaced, not clustered at the start.
     #[test]
@@ -439,9 +437,7 @@ mod tests {
         );
     }
 
-    // ======================================================================
-    // progress_pct correctness
-    // ======================================================================
+    // --- progress_pct correctness ---
 
     /// progress_pct should reflect position within the body (0–100).
     #[test]
@@ -500,9 +496,7 @@ mod tests {
         );
     }
 
-    // ======================================================================
-    // No duplicate offsets
-    // ======================================================================
+    // --- No duplicate offsets ---
 
     /// No two checkpoints should land on the same offset.
     #[test]
@@ -537,9 +531,7 @@ mod tests {
         }
     }
 
-    // ======================================================================
-    // count = usable (max saturation)
-    // ======================================================================
+    // --- count = usable (max saturation) ---
 
     /// When count equals usable boundaries, every usable slot is patched.
     #[test]
@@ -557,9 +549,7 @@ mod tests {
         assert_eq!(patched.bytes[0], 0x90);
     }
 
-    // ======================================================================
-    // Realistic multi-byte instruction mix
-    // ======================================================================
+    // --- Realistic multi-byte instruction mix ---
 
     /// Realistic x64 prologue + body: variable-length instructions with
     /// RIP-relative LEA, branches, and multi-byte MOV.
@@ -654,9 +644,7 @@ mod tests {
         }
     }
 
-    // ======================================================================
-    // Recursive descent behavior
-    // ======================================================================
+    // --- Recursive descent behavior ---
 
     /// Inline data after an unconditional jump is NOT treated as instructions.
     #[test]

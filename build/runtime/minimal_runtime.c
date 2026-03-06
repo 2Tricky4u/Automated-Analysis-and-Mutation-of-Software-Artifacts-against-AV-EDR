@@ -124,10 +124,8 @@ static NTSTATUS DirectSyscall2(DWORD syscall_number, ULONG_PTR arg1, ULONG_PTR a
  * - Non-instrumented artifacts (just exits cleanly)
  * - RedEDR observation (bypasses hooked exit functions)
  *
- * Flush order (when instrumentation enabled):
- * 1. Coverage bitmap (BB execution map)
- * 2. Trace events (line-level execution)
- * 3. Checkpoints (API call markers)
+ * Flush order (when instrumentation enabled): coverage bitmap first, then
+ * trace events, then checkpoints.
  *
  * Usage:
  *   #include "instrumentation.h"
