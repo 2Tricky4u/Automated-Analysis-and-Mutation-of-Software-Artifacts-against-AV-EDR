@@ -1,10 +1,15 @@
-#!/bin/bash
-# Reset Job & Run Drill-Down Dashboard
-# Deletes all 22 saved objects and optionally re-creates them.
+#!/usr/bin/env bash
+# -----------------------------------------------------------------------
+# reset-job-run-dashboard.sh -- Delete (and optionally recreate) the Job & Run drill-down dashboard
 #
-# Usage:
-#   ./reset-job-run-dashboard.sh          # delete + recreate
-#   ./reset-job-run-dashboard.sh --delete  # delete only (no recreate)
+# Removes all 22 saved objects (1 dashboard, 9 visualizations,
+# 9 saved searches, 3 index patterns) then delegates to
+# create-job-run-dashboard.sh unless --delete is passed.
+#
+# Usage:  ./reset-job-run-dashboard.sh [--delete]
+# Prerequisites: curl, running Kibana + Elasticsearch
+# Called by: standalone
+# -----------------------------------------------------------------------
 
 set -e
 

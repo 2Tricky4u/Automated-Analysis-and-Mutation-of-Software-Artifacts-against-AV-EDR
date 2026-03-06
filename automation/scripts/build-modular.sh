@@ -1,6 +1,20 @@
 #!/bin/bash
-# Build an artifact using the modular template system
-# Usage: ./build-modular.sh --carrier <carrier> --decoder <decoder> [options]
+# -----------------------------------------------------------------------
+# build-modular.sh -- Build single artifact via BuildArtifact gRPC endpoint
+#
+# Assembles a modular loader from gene modules (carrier, decoder,
+# anti-emulation, guardrail, decoy) and submits the build request to the
+# controller's BuildArtifact RPC. Returns the artifact ID on success.
+#
+# Usage:  ./build-modular.sh [--carrier <name>] [--decoder <name>]
+#                            [--antiemulation <name>] [--guardrail <name>]
+#                            [--virtualprotect <name>] [--decoy <name>]
+#                            [--encoding <type>] [--trace <mode>]
+#                            [--payload <string> | --payload-file <path>]
+#                            [--controller <addr>]
+# Prerequisites: grpcurl, jq, base64, proto/ directory with controller.proto
+# Called by: standalone or test-full-pipeline.sh
+# -----------------------------------------------------------------------
 
 set -e
 

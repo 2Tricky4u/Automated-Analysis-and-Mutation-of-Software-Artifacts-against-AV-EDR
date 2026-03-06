@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
-# WSL2 Bootstrap: Install Rust, protoc, Elasticsearch, build Controller
+# -----------------------------------------------------------------------
+# 02-wsl-bootstrap.sh -- Bootstrap WSL2 Ubuntu as controller host — Rust, protoc, Docker, ES+Kibana
+#
+# Prepares a fresh WSL2 Ubuntu instance as the AutoMutate++ controller
+# host. Installs Rust toolchains, protoc, grpcurl, Docker Engine, and
+# spins up Elasticsearch + Kibana via Docker Compose with a persistent
+# systemd service.
+#
+# Usage:  ./02-wsl-bootstrap.sh [project-root]
+# Prerequisites: WSL2 Ubuntu, internet access, sudo
+# Called by: standalone (one-time setup)
+# -----------------------------------------------------------------------
 set -euo pipefail
 
-# --- WSL systemd and networking setup ---
-# Enable systemd in WSL2
+# Configure WSL2 for systemd boot and localhost forwarding so Docker
+# and Elastic services are reachable from the Windows host.
 echo "[i] Configuring WSL2 systemd and networking..."
 if [ -f /etc/wsl.conf ]; then
   # Update existing file: ensure systemd and networking sections

@@ -1,4 +1,33 @@
-<#  (truncated header unchanged)  #>
+<#
+.SYNOPSIS
+    Worker VM post-install initialization (standalone variant).
+.DESCRIPTION
+    Configures a fresh Windows VM as an AutoMutate++ worker: system settings
+    (hostname, timezone, execution policy, UAC), network (static IP, firewall),
+    privacy/telemetry suppression, Windows Defender exclusions, dev tools
+    (Git, Python, VS Build Tools), RedEDR agent and drivers, audit policy,
+    and a verification pass. This is the standalone version invoked directly
+    inside the VM (as opposed to 04-vm-init.ps1 which is invoked remotely).
+.PARAMETER StaticIP
+    Static IPv4 address for the isolated lab network.
+.PARAMETER WorkerName
+    Hostname to assign to the VM.
+.PARAMETER Gateway
+    Default gateway (default: 10.200.200.1).
+.PARAMETER Prefix
+    Subnet prefix length (default: 24).
+.PARAMETER RedEDRPort
+    Port the RedEDR agent listens on (default: 8081).
+.PARAMETER SkipReboot
+    Skip the final reboot (useful when chaining scripts).
+.PARAMETER DisableEtwTi
+    Disable ETW Threat-Intelligence provider registration.
+.EXAMPLE
+    .\worker-init.ps1 -StaticIP "10.200.200.11" -WorkerName "win10-worker-1"
+.NOTES
+    Requires: Administrator privileges, network access to file shares.
+    Called by: initialize-worker.ps1 or standalone execution inside the VM.
+#>
 
 [CmdletBinding()]
 param(
@@ -34,7 +63,7 @@ Write-Host "`n+================================================================+
 Write-Host "|          Worker VM Initialization                              |" -ForegroundColor Cyan
 Write-Host "+================================================================+`n" -ForegroundColor Cyan
 
-# ===================== PRE-SECTION: Disable Defender for Automation ==========
+# --- Temporarily suppress Defender during setup ---
 Write-Info "[0/10] Disabling Windows Defender for automation directories..."
 
 try {
@@ -77,34 +106,34 @@ try {
     Write-Info "This may cause script execution to be blocked"
 }
 
-# ===================== SECTION 1: System Configuration =====================
+# --- System configuration (hostname, timezone, exec policy, UAC) ---
 Write-Info "[1/10] System-level configuration..."
 
-# 1b. Timezone to UTC
+# Set timezone to UTC for consistent timestamp correlation across runs
 $currentTZ = (Get-TimeZone).Id
 if ($currentTZ -ne "UTC") { Set-TimeZone -Id "UTC" -ErrorAction SilentlyContinue; Write-Success "Timezone set to UTC" }
 else { Write-Success "Timezone already UTC" }
 
-# 1c. Execution policy
+# Allow locally-authored scripts to run without individual signing
 $execPolicy = Get-ExecutionPolicy
 if ($execPolicy -eq "Restricted" -or $execPolicy -eq "Undefined") {
     Set-ExecutionPolicy RemoteSigned -Scope LocalMachine -Force
     Write-Success "Execution policy set to RemoteSigned"
 } else { Write-Success "Execution policy already configured: $execPolicy" }
 
-# 1d. Disable UAC for lab
+# Disable UAC so automated artifact execution is not blocked by elevation prompts
 $uacKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
 $currentUAC = (Get-ItemProperty -Path $uacKey -Name "EnableLUA" -ErrorAction SilentlyContinue).EnableLUA
 if ($currentUAC -ne 0) { Set-ItemProperty -Path $uacKey -Name "EnableLUA" -Value 0 -Force; Write-Success "UAC disabled" }
 else { Write-Success "UAC already disabled" }
 
-# 1e. Windows Update auto-restart
+# Prevent Windows Update from rebooting mid-experiment
 $auKey = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
 if (-not (Test-Path $auKey)) { New-Item -Path $auKey -Force | Out-Null }
 Set-ItemProperty -Path $auKey -Name "NoAutoRebootWithLoggedOnUsers" -Value 1 -Force
 Write-Success "Windows Update auto-restart disabled"
 
-# ===================== SECTION 3: Privacy & Telemetry ===========
+# --- Privacy and telemetry suppression ---
 Write-Info "[3/10] Privacy & telemetry configuration..."
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" -Name "AllowTelemetry" -Value 0 -Force -ErrorAction SilentlyContinue
 Write-Success "Windows telemetry disabled"
@@ -113,15 +142,15 @@ if (-not (Test-Path $cortanaKey)) { New-Item -Path $cortanaKey -Force | Out-Null
 Set-ItemProperty -Path $cortanaKey -Name "AllowCortana" -Value 0 -Force
 Write-Success "Cortana disabled"
 
-# ===================== SECTION 4: Defender Baseline ========================
+# --- Windows Defender configuration ---
 Write-Info "[4/10] Windows Defender configuration (keep enabled for baseline)..."
 Write-Success "Windows Defender remains ENABLED"
 Write-Info "To disable for specific experiments: Set-MpPreference -DisableRealtimeMonitoring `$true"
 
-# ===================== SECTION 5: Dev Tools & Runtimes =====================
+# --- Developer tools (Git, Python, VS Build Tools) ---
 Write-Info "[5/10] Installing development tools & runtimes..."
 
-# 5a. Chocolatey
+# Install Chocolatey package manager for unattended tool provisioning
 if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
     Write-Info "Installing Chocolatey..."
     Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -133,7 +162,7 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
     if ($ok) { Write-Success "Chocolatey installed" } else { Write-Warn "Chocolatey install failed; continuing" }
 } else { Write-Success "Chocolatey already installed" }
 
-# 5b. Install Rust
+# Install Rust toolchain (needed to compile the worker agent on the VM)
 if (-not (Test-Path "$env:USERPROFILE\.cargo\bin\rustc.exe")) {
     Write-Info "Installing Rust toolchain..."
     $rustExe = "$env:TEMP\rustup-init.exe"
@@ -170,7 +199,7 @@ if (-not (Test-Path "$env:USERPROFILE\.cargo\bin\rustc.exe")) {
     Write-Success "Rust already installed"
 }
 
-# 5c. Install protoc
+# Install Protocol Buffers compiler (required for gRPC code generation)
 if (-not (Test-Path "C:\protoc\bin\protoc.exe")) {
     Write-Info "Installing protoc 25.1..."
     $zip = "$env:TEMP\protoc.zip"
@@ -211,7 +240,7 @@ if (-not (Test-Path "C:\protoc\bin\protoc.exe")) {
     Write-Success "protoc already installed"
 }
 
-# 5d. VC++ Runtime
+# Install Visual C++ redistributables (runtime dependency for compiled artifacts)
 try {
     if (-not (Get-Command choco -ErrorAction SilentlyContinue)) { Write-Warn "Skipping vcredist install (choco missing)" }
     else {
@@ -221,7 +250,7 @@ try {
     }
 } catch { Write-Warn "VC++ runtime install failed: $($_.Exception.Message)" }
 
-# 5e. Visual Studio 2022
+# Install VS 2022 Build Tools (C++ compiler, Windows SDK, MSBuild, CMake)
 $vsInstallPath = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools"
 $vsInstallerPath = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 
@@ -357,7 +386,7 @@ if (-not (Test-Path $vsInstallerPath) -and -not (Test-Path $vsInstallPath)) {
 }
 
 
-# ===================== SECTION 6: AutoMutate Dirs =============
+# --- Workspace setup and final verification ---
 Write-Info "[6/10] Creating AutoMutate project directories..."
 
 $projectDirs = @(
@@ -375,7 +404,7 @@ foreach ($dir in $projectDirs) {
 }
 
 
-# ===================== SECTION 7: RedEdr ==============
+# --- RedEDR agent deployment ---
 Write-Info "[7/10] RedEdr setup (extract from local zip)..."
 
 # RedEdr zip should be pre-staged in the project's telemetry folder
@@ -569,7 +598,7 @@ try {
     Write-Success "Firewall rule OK for TCP $RedEDRPort"
 } catch { Write-Warn "Firewall rule failed: $($_.Exception.Message)" }
 
-# ===================== SECTION 8: Boot Config for Test-Signed Drivers ======
+# --- Test-signing and driver verification ---
 Write-Info "[8/10] Kernel driver allowances (testsigning, debug)..."
 # Required for RedEdr kernel callbacks / KAPC injection / ETW-TI PPL via ELAM
 try {
@@ -591,7 +620,7 @@ try {
     Write-Info "Disabled VBS/HVCI policy (effective after reboot) if it was on."
 } catch { Write-Warn "Could not adjust DeviceGuard/HVCI: $($_.Exception.Message)" }
 
-# ===================== SECTION 9: Telemetry: Audit Policy for ETW ==========
+# --- Audit policy (process creation, logon, privilege use) ---
 Write-Info "[9/10] Enabling audit policies for Security-Auditing ETW (MAXIMUM TELEMETRY)..."
 # Some Microsoft-Windows-Security-Auditing events require audit categories enabled and SYSTEM token
 # ( PsExec -i -s cmd.exe)
@@ -600,7 +629,7 @@ Write-Info "[9/10] Enabling audit policies for Security-Auditing ETW (MAXIMUM TE
 # Group Policy overrides local settings, so we must write to the registry locations
 # that Group Policy uses for Advanced Audit Policy Configuration
 
-# Step 1: Force use of Advanced Audit Policy (disable legacy audit policy)
+# Advanced Audit Policy provides per-subcategory control; legacy policy is too coarse
 $auditPolicyKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa"
 if (-not (Test-Path $auditPolicyKey)) {
     New-Item -Path $auditPolicyKey -Force | Out-Null
@@ -609,7 +638,7 @@ if (-not (Test-Path $auditPolicyKey)) {
 Set-ItemProperty -Path $auditPolicyKey -Name "SCENoApplyLegacyAuditPolicy" -Value 1 -Type DWord -Force
 Write-Success "Enabled Advanced Audit Policy mode (disabled legacy audit policy)"
 
-# Step 2: Configure Advanced Audit Policy via registry
+# Enable all audit categories so Security-Auditing ETW emits full telemetry
 # The Group Policy settings for Advanced Audit Policy are stored in:
 # HKLM:\SECURITY\Policy\PolAdtEv (binary format, requires special handling)
 #
@@ -704,7 +733,7 @@ foreach($subcat in $subcategories){
     }
 }
 
-# Step 3: Backup current audit policy to a file and force it into Local Group Policy
+# Persist auditpol settings into the Local Group Policy database so they survive gpupdate
 Write-Info "Backing up audit policy configuration to Local Group Policy..."
 $auditBackupPath = "$env:TEMP\audit-policy-backup.csv"
 try {
@@ -719,7 +748,7 @@ try {
     Write-Warn "Could not backup/restore audit policy: $($_.Exception.Message)"
 }
 
-# Step 4: Force Group Policy refresh to apply changes
+# Force Group Policy refresh so the new audit settings take effect immediately
 Write-Info "Forcing Group Policy update to apply audit settings..."
 try {
     & gpupdate /force | Out-Null
@@ -767,7 +796,7 @@ Write-Success "Audit policy updated (success+failure) for ALL categories and cri
 Write-Success "Enabled: Command-line logging, PowerShell script block logging, module logging, transcription"
 Write-Info "For Security-Auditing ETW, start RedEdr as SYSTEM when needed."
 
-# ===================== SECTION 10: Drivers/Services from Release ===========
+# --- RedEDR kernel drivers ---
 Write-Info "[10/10] Installing RedEdr drivers & services (ETW, Kernel, ETW-TI/PPL)..."
 
 # Attempt to install any driver *.inf shipped inside the release
@@ -962,7 +991,7 @@ try {
     Write-Info "Right-click shortcut -> Run as Administrator to start RedEDR"
 } catch { Write-Warn "Could not create desktop shortcut: $($_.Exception.Message)" }
 
-# ===================== VERIFICATION & SUMMARY ==========
+# --- Post-setup verification ---
 Write-Info "[Verification] Summaries..."
 
 $verificationResults = @()

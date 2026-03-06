@@ -72,7 +72,7 @@ Write-Info "VM: $VMName"
 Write-Info "IP: $IPAddress"
 Write-Info ""
 
-# Step 1: Ensure VM is stopped
+# Secure Boot changes require VM to be off
 if ($vm.State -ne "Off") {
     Write-Info "VM is currently $($vm.State). Stopping VM..."
     Stop-VM -Name $VMName -Force -ErrorAction SilentlyContinue
@@ -82,7 +82,7 @@ if ($vm.State -ne "Off") {
     Write-Success "VM already stopped"
 }
 
-# Step 2: Disable Secure Boot
+# Disable Secure Boot (required for test-signed RedEDR drivers)
 Write-Info "Disabling Secure Boot..."
 try {
     Set-VMFirmware -VMName $VMName -EnableSecureBoot Off
@@ -101,7 +101,7 @@ if ($firmware.SecureBoot -eq "Off") {
     exit 1
 }
 
-# Step 3: Start VM
+# Boot VM so PowerShell Direct can connect for provisioning
 Write-Info "Starting VM..."
 Start-VM -Name $VMName
 Write-Success "VM started"
@@ -130,7 +130,7 @@ if ($waited -ge $maxWait) {
     exit 1
 }
 
-# Step 4: Prepare build package for VM
+# Bundle minimal workspace (agent source, protos, config) so the VM can build locally
 Write-Host ""
 Write-Info "Preparing worker agent build package..."
 
@@ -242,12 +242,12 @@ thiserror = "2.0.17"
     exit 1
 }
 
-# Step 5: Get credentials
+# Prompt for VM admin password (needed by PowerShell Direct sessions below)
 Write-Host ""
 Write-Info "Enter VM credentials for PowerShell Direct..."
 $cred = Get-Credential -UserName $Username -Message "Enter password for $Username"
 
-# Step 6: Copy build package to VM
+# Transfer build package into VM via PowerShell Direct (no network needed)
 Write-Host ""
 Write-Info "Copying build package to VM..."
 
@@ -274,7 +274,7 @@ try {
     exit 1
 }
 
-# Step 7: Run 04-vm-init.ps1 via PowerShell Direct
+# Execute in-guest provisioning (installs deps, RedEDR, configures networking)
 Write-Host ""
 Write-Info "Running 04-vm-init.ps1 inside VM via PowerShell Direct..."
 Write-Info "This will take several minutes (dependencies, RedEDR, configuration)..."

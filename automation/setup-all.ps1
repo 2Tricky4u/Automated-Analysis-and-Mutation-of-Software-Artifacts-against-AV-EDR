@@ -73,6 +73,7 @@ if (-not (Test-Path $ConfigPath)) {
 
 Write-Info "Using configuration: $ConfigPath"
 
+# Disabled: Config validation bypassed; Read-AutoMutateConfig not yet implemented in shared module
 # Validate config can be parsed
 # try {
 #     # $Config = Read-AutoMutateConfig -ConfigPath $ConfigPath
@@ -94,6 +95,7 @@ if (-not (Test-Path $GenerateConfigScript)) {
 
 & $GenerateConfigScript -ConfigPath $ConfigPath -Force
 
+# Disabled: generate-configs.ps1 does not set LASTEXITCODE reliably; guard removed to avoid false failures
 #if ($LASTEXITCODE -ne 0) {
 #    Write-Error "Failed to generate configs"
 #    exit 1
@@ -167,7 +169,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Success "WSL2 Controller bootstrap complete"
-Write-Info "Elasticsearch: http://localhost:9200" #TODO make the port read from config
+Write-Info "Elasticsearch: http://localhost:9200" # TODO: Read ES port from config instead of hardcoding
 Write-Info "Kibana: http://localhost:5601"
 
 # Step 3: Create Worker VMs

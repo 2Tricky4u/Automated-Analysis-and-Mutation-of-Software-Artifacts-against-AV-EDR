@@ -1,7 +1,16 @@
-#!/bin/bash
-# Automated Kibana Dashboard Setup Script
-# Creates index patterns, saved searches, and dashboard
-# Based on ELASTICSEARCH-DATA-SCHEMA.md (verified against controller/src/main.rs)
+#!/usr/bin/env bash
+# -----------------------------------------------------------------------
+# create-kibana-dashboard.sh -- Provision Kibana index patterns, saved searches, and dashboard
+#
+# Creates the "Artifact Execution Analysis" dashboard with three data
+# tables (Run Results, Coverage Events, All Telemetry).  Field names and
+# time fields are aligned to ELASTICSEARCH-DATA-SCHEMA.md and verified
+# against controller/src/main.rs.
+#
+# Usage:  ./create-kibana-dashboard.sh
+# Prerequisites: curl, jq, running Kibana + Elasticsearch
+# Called by: reset-kibana-dashboard.sh or standalone
+# -----------------------------------------------------------------------
 
 set -e
 
@@ -21,7 +30,9 @@ fi
 KIBANA_VERSION=$(curl -s "$KIBANA_URL/api/status" | jq -r '.version.number')
 echo "[+] Kibana accessible (version: $KIBANA_VERSION)"
 
-# Step 1: Create Index Patterns with CORRECT time fields per schema
+# Each index uses a different time field: telemetry uses indexed_at (ingest time),
+# runs uses timestamp (execution time).  These must match the schema or Kibana
+# time-range filters will silently return zero results.
 echo ""
 echo "=== Step 1: Creating Index Patterns ==="
 
@@ -53,7 +64,8 @@ curl -X POST "$KIBANA_URL/api/saved_objects/index-pattern/runs-star" \
 
 echo "[+] Index pattern runs-* created (time field: timestamp)"
 
-# Step 2: Create Saved Searches with CORRECT field names per schema
+# Saved searches define the column sets users see in the dashboard tables.
+# Column order matters for usability: identifiers first, then outcome, then timing.
 echo ""
 echo "=== Step 2: Creating Saved Searches ==="
 
@@ -123,7 +135,8 @@ curl -X POST "$KIBANA_URL/api/saved_objects/search/all-telemetry-search" \
 
 echo "[+] Saved search created: All Telemetry"
 
-# Step 3: Create Dashboard with Data Tables
+# Compose the three saved searches into a two-row dashboard layout.
+# Row 1: Run Results (left) + Coverage Events (right); Row 2: All Telemetry (full width).
 echo ""
 echo "=== Step 3: Creating Dashboard ==="
 
@@ -160,7 +173,8 @@ curl -X POST "$KIBANA_URL/api/saved_objects/dashboard/artifact-execution-dashboa
 
 echo "[+] Dashboard created: Artifact Execution Analysis"
 
-# Step 4: Summary
+# Print a reference summary so operators can verify field mappings and
+# use the quick-filter examples without consulting the schema doc.
 echo ""
 echo "=== Dashboard Setup Complete! ==="
 echo ""

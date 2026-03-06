@@ -531,7 +531,7 @@ try {
     $vmSecurity = Get-VM -Name $WorkerName | Select-Object -ExpandProperty VMId
     $tpmState = (Get-VM -Name $WorkerName).TpmEnabled 2>$null
 
-    # alter:Try Enable-VMTPM with -Passthru to see current state
+    # Enable TPM; -Passthru returns current state for verification
     $tpmCheck = Enable-VMTPM -VMName $WorkerName -Passthru -ErrorAction SilentlyContinue 2>$null
 
     if ($tpmCheck -or $tpmState) {
