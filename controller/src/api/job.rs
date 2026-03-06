@@ -1,7 +1,5 @@
-//! Job handlers - dispatch-based job management
-//!
-//! Thin gRPC handlers: validate request, call storage, map to proto response.
-//! All ES logic lives in storage/ — handlers never touch SearchParts or json!({}).
+//! gRPC handlers for job scheduling, status queries, round inspection,
+//! run comparison, and token comparison.
 
 use super::extract::{
     bool_field, f64_field, i32_field, parse_date_to_unix_secs, str_field, string_array_field,

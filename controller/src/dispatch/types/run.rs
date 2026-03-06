@@ -9,6 +9,7 @@ use super::ids::{JobId, RoundId, RunId, WorkerId};
 // Run Type
 // ============================================================================
 
+/// Classifies an execution run within the two-run differential protocol.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RunType {
     Baseline,
@@ -48,6 +49,7 @@ impl std::fmt::Display for RunType {
 // Artifact Reference
 // ============================================================================
 
+/// Reference to a built artifact on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactRef {
     pub path: PathBuf,
@@ -77,6 +79,7 @@ pub struct RunEnvelope {
 // Worker / VM Info
 // ============================================================================
 
+/// Basic identity and capabilities of a connected worker.
 #[derive(Debug, Clone)]
 pub struct WorkerInfo {
     pub id: WorkerId,

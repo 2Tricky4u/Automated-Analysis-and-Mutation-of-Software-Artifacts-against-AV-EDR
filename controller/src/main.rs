@@ -1,11 +1,8 @@
-//! Scheduler main - JobWorker architecture
+//! Controller entry point.
 //!
-//! Flow:
-//! 1. Load config, init logging, create ES client
-//! 2. Create EsStorage + TargetManager + Orchestrator
-//! 3. Establish streams with targets (spawns VMExecutors)
-//! 4. gRPC server accepts job submissions -> Orchestrator
-//! 5. Orchestrator spawns JobWorkers and handles all events
+//! Initializes configuration, logging, Elasticsearch storage, the target
+//! manager, and the orchestrator, then starts the gRPC server that accepts
+//! job submissions and management commands.
 
 use automutate_config::ControllerConfig;
 use elasticsearch::Elasticsearch;

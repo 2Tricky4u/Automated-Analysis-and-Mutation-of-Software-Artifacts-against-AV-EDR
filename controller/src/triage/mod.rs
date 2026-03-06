@@ -1,13 +1,17 @@
-//! Triage module — mutation selection strategies.
+//! Mutation selection strategies and triage token analysis.
 //!
-//! The `Selector` trait abstracts how round N+1's module configuration
-//! is chosen based on rounds 1..N. Two planned implementations:
+//! The [`Selector`] trait abstracts how each round's module and mutation
+//! configuration is chosen. Four implementations are provided:
 //!
-//! - `CoverageSelector` (v0): epsilon-greedy over deconditioner variants,
-//!   using in-memory round outcomes (evasion_score + DifferentialCategory).
-//!
-//! - `TokenSelector` (future): uses avoid/seek token sets from async triage,
-//!   queries ES for token-level data.
+//! - [`CoverageSelector`](coverage_selector::CoverageSelector): epsilon-greedy
+//!   over module variants using in-memory evasion scores and differential
+//!   categories.
+//! - [`FuzzerSelector`](fuzzer_selector::FuzzerSelector): evolutionary/genetic
+//!   algorithm with parameter-space exploration and crossover.
+//! - [`TokenSelector`](token_selector::TokenSelector): token-guided selection
+//!   using avoid/seek sets from async triage extraction.
+//! - [`RandomSelector`](random_selector::RandomSelector): uniform random
+//!   baseline for controlled evaluation.
 
 pub mod coverage_selector;
 pub mod extractor;
@@ -182,11 +186,10 @@ pub struct TriageGuidance {
     pub seek_tokens: Vec<String>,
 }
 
-/// Trait for selection strategies.
+/// Trait for mutation selection strategies.
 ///
-/// `history` is the job's completed rounds (from JobSession.rounds).
-/// CoverageSelector uses it directly; future TokenSelector may ignore it
-/// and query ES for token-level data instead.
+/// `history` contains the job's completed round summaries. `guidance` carries
+/// token-level avoid/seek sets from the async triage pipeline when available.
 #[async_trait]
 pub trait Selector: Send + Sync {
     async fn select(

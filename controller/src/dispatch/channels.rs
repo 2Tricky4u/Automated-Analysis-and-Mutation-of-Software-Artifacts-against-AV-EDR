@@ -1,14 +1,7 @@
-//! Channel types and events for dispatch system.
+//! Channel message types for the dispatch system.
 //!
-//! Defines the messages that flow between:
-//! - VMExecutor -> RunPool -> JobWorker (run results)
-//! - JobWorker -> Orchestrator (job lifecycle events)
-//! - Service -> Orchestrator (job control commands)
-//!
-//! Architecture:
-//! - JobWorker: Spawned per job, owns job lifecycle, builds artifacts, aggregates results
-//! - RunPool: Shared queue where all jobs put runs, VMExecutors take from it
-//! - VMExecutor: Thin dispatcher per VM, takes runs, routes results back
+//! Defines the typed messages exchanged between the gRPC service layer,
+//! the orchestrator, job workers, and VM executors.
 
 use std::time::SystemTime;
 

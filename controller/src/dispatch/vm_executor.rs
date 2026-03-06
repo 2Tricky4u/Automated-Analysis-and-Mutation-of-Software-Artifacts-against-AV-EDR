@@ -1,15 +1,10 @@
-//! VMExecutor - thin dispatcher that executes runs on a VM.
+//! Stateless per-VM run dispatcher.
 //!
-//! Architecture:
-//! - Pulls runs from shared RunPool (capability-filtered)
-//! - Reserves VM via TargetManager before dispatch
-//! - Uploads artifacts to VM
-//! - Dispatches execution commands to VM
-//! - Routes results back to originating JobWorker via RunPool
-//! - Releases VM after result received
-//!
-//! VMExecutor is "dumb" - it doesn't know about jobs or rounds,
-//! it just takes runs and returns results.
+//! Pulls capability-filtered runs from the shared [`RunPool`], uploads
+//! artifacts, dispatches execution commands, and routes results back to
+//! the originating [`JobWorker`](super::job_worker::JobWorker). Operates
+//! purely at the individual-run level with no awareness of job or round
+//! semantics.
 
 use std::path::Path;
 use std::sync::Arc;

@@ -1,3 +1,5 @@
+//! Utility gRPC handlers: ping, triage submission, and result queries.
+
 use crate::api::SchedulerService;
 use crate::automutate::controller::{
     AnalysisResult, PingRequest, PingResponse, QueryRequest, QueryResponse, TriageRequest,
@@ -6,6 +8,7 @@ use crate::automutate::controller::{
 use tonic::{Request, Response, Status};
 use tracing::{debug, info};
 
+/// Respond to a ping request with a pong and the current server timestamp.
 pub async fn ping(
     _service: &SchedulerService,
     request: Request<PingRequest>,

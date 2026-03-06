@@ -1,10 +1,9 @@
-//! Orchestrator - central coordinator for jobs, VMs, and telemetry.
+//! Central coordinator for job scheduling, VM lifecycle, and telemetry routing.
 //!
-//! Responsibilities:
-//! - Spawns JobWorkers for job submissions
-//! - Handles VM lifecycle (connect/disconnect) via TargetEvent
-//! - Routes telemetry to ES indexing
-//! - Manages shared RunPool
+//! Runs a single event loop that multiplexes job submissions, job worker
+//! events, target connect/disconnect notifications, and telemetry batches.
+//! Spawns a [`JobWorker`] for each submitted job and indexes completed
+//! round data to Elasticsearch.
 
 use super::channels::{CoverageCorrection, JobControlCommand, JobWorkerEvent, RoundCompletedData};
 use super::job_worker::JobWorker;

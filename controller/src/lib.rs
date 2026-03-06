@@ -1,9 +1,8 @@
-// Scheduler library - JobWorker architecture
-//
-// Core modules:
-// - dispatch: JobWorker-based job execution (JobWorker, RunPool, VMExecutor, Orchestrator)
-// - vm: Connection management and VMExecutor spawning
-// - api: gRPC handler implementations
+//! Controller library for the AutoMutate++ EDR evaluation framework.
+//!
+//! Provides the dispatch engine (job orchestration, run pooling, VM execution),
+//! gRPC API handlers, Elasticsearch storage, triage token analysis, and
+//! VM connection management.
 
 pub mod api;
 pub mod dispatch;

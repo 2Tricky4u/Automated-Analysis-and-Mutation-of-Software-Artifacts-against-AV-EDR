@@ -1,17 +1,11 @@
-//! JobWorker - owns job lifecycle, builds artifacts, aggregates rounds.
+//! Per-job worker that owns the full lifecycle of a mutation exploration job.
 //!
-//! Architecture:
-//! - Spawned per job submission by Orchestrator
-//! - Produces runs into shared RunPool
-//! - Receives results back and aggregates rounds
-//! - Reports round/job completion to Orchestrator
-//!
-//! Responsibilities:
-//! - Build artifacts for each round (baseline + instrumented)
-//! - Create RunEnvelopes and add to RunPool
-//! - Track in-flight rounds via RoundAgg
-//! - Aggregate results and compute RoundSummary
-//! - Emit events for ES indexing
+//! Builds baseline, instrumented, and dryrun artifacts for each round,
+//! submits runs to the shared [`RunPool`], aggregates results into
+//! [`RoundSummary`](super::types::RoundSummary) records, and emits
+//! completion events for Elasticsearch indexing. Consults the configured
+//! [`Selector`] to choose mutations for each
+//! successive round.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
