@@ -1,6 +1,9 @@
-//! Worker management REST endpoints
+//! Worker pool management REST endpoints.
 //!
-//! Wraps Controller gRPC worker endpoints.
+//! Provides listing, metadata inspection, availability filtering, and
+//! administrative commands (ping, disconnect) for the worker VM pool.
+//! Also exposes the orchestrator status endpoint that aggregates active jobs,
+//! queue depth, and pool utilization metrics.
 
 use super::{ApiError, ApiResponse};
 use crate::grpc_client::ControllerGrpcClient;
@@ -16,108 +19,183 @@ use tracing::{debug, error};
 // Response Types
 // ============================================================================
 
+/// Worker list with aggregated status counts.
+///
+/// Returned by `GET /api/workers`.
 #[derive(Debug, Serialize)]
 pub struct WorkersListResponse {
+    /// All registered workers.
     pub workers: Vec<WorkerInfo>,
+    /// Total number of workers.
     pub total: usize,
+    /// Workers in `"available"` status.
     pub available: usize,
+    /// Workers in `"busy"` status.
     pub busy: usize,
+    /// Workers in `"offline"` status.
     pub offline: usize,
 }
 
+/// Basic worker state snapshot.
 #[derive(Debug, Serialize)]
 pub struct WorkerInfo {
+    /// Unique worker identifier.
     pub id: String,
+    /// Network address (host:port) of the worker agent.
     pub address: String,
+    /// Windows version string (e.g. `"Windows 10 21H2"`).
     pub os_version: String,
+    /// Advertised capabilities (e.g. `["defender", "rededr", "etw"]`).
     pub capabilities: Vec<String>,
+    /// Current status: `"available"`, `"busy"`, or `"offline"`.
     pub status: String,
+    /// Job ID currently assigned to this worker, if any.
     pub current_job: Option<String>,
 }
 
+/// Aggregated orchestrator metrics.
+///
+/// Returned by `GET /api/orchestrator/status`.
 #[derive(Debug, Serialize)]
 pub struct OrchestratorStatusResponse {
+    /// Number of jobs waiting in the queue.
     pub pending_jobs: u32,
+    /// Number of active worker pools.
     pub active_pools: u32,
+    /// Total registered workers (all statuses).
     pub total_workers: u32,
+    /// Workers currently in `"available"` status.
     pub available_workers: u32,
+    /// Workers currently in `"busy"` status.
     pub busy_workers: u32,
+    /// IDs of active worker pools.
     pub pool_ids: Vec<String>,
+    /// Per-job entries for currently active jobs.
     pub active_jobs: Vec<ActiveJobEntry>,
 }
 
+/// Per-job entry in the orchestrator's active-jobs list.
 #[derive(Debug, Serialize)]
 pub struct ActiveJobEntry {
+    /// Job identifier.
     pub job_id: String,
+    /// Worker pool assigned to this job.
     pub pool_id: String,
+    /// Current round number.
     pub current_round: u32,
+    /// Total budgeted rounds.
     pub max_rounds: u32,
+    /// Job status: `"running"`, `"building"`, etc.
     pub status: String,
 }
 
+/// Enhanced worker metadata with health and tool information.
+///
+/// Returned by `GET /api/workers/metadata`.
 #[derive(Debug, Serialize)]
 pub struct WorkerMetadataResponse {
+    /// All workers with extended metadata.
     pub workers: Vec<WorkerMetadataInfo>,
+    /// Total number of workers.
     pub total: usize,
+    /// Workers in `"available"` status.
     pub available: usize,
+    /// Workers in `"busy"` status.
     pub busy: usize,
+    /// Workers in `"offline"` status.
     pub offline: usize,
 }
 
+/// Extended per-worker information including health checks and tool versions.
 #[derive(Debug, Serialize)]
 pub struct WorkerMetadataInfo {
+    /// Unique worker identifier.
     pub id: String,
+    /// Network address (host:port).
     pub address: String,
+    /// Current status: `"available"`, `"busy"`, or `"offline"`.
     pub status: String,
+    /// Windows version string.
     pub os_version: String,
+    /// Advertised capabilities.
     pub capabilities: Vec<String>,
+    /// Installed tool versions on the worker VM, if reported.
     pub tools: Option<ToolVersionsInfo>,
+    /// Seconds since the Controller last received a heartbeat.
     pub last_seen_seconds_ago: i64,
+    /// `true` if the worker passed its most recent health check.
     pub healthy: bool,
+    /// Job ID currently assigned to this worker, if any.
     pub current_job: Option<String>,
+    /// Unix timestamp (seconds) when the worker first connected.
     pub connected_at: i64,
 }
 
+/// Installed tool versions on a worker VM.
 #[derive(Debug, Serialize)]
 pub struct ToolVersionsInfo {
+    /// RedEDR telemetry collector version.
     pub rededr_version: String,
+    /// Windows Defender engine version.
     pub defender_version: String,
+    /// ETW provider version.
     pub etw_version: String,
+    /// LLVM toolchain version (used for IR instrumentation).
     pub llvm_version: String,
 }
 
+/// Filtered worker list.
+///
+/// Returned by `GET /api/workers/available`.
 #[derive(Debug, Serialize)]
 pub struct AvailableWorkersResponse {
+    /// Workers matching the filter criteria.
     pub workers: Vec<WorkerInfo>,
+    /// Count of matching workers.
     pub total_available: i32,
 }
 
+/// Query parameters for `GET /api/workers/available`.
 #[derive(Debug, Deserialize)]
 pub struct AvailableWorkersQuery {
+    /// Target OS filter (e.g. `"win10"`). Empty or absent means any OS.
     pub os: Option<String>,
+    /// Comma-separated required capabilities (e.g. `"defender,rededr"`).
     pub capabilities: Option<String>,
 }
 
+/// Generic success/failure response for admin operations.
 #[derive(Debug, Serialize)]
 pub struct AdminCommandResponse {
+    /// `true` if the operation succeeded.
     pub success: bool,
+    /// Human-readable result message.
     pub message: String,
 }
 
+/// Result of a bulk disconnect operation.
 #[derive(Debug, Serialize)]
 pub struct DisconnectAllResponse {
+    /// Number of workers that were disconnected.
     pub disconnected_count: u32,
+    /// Human-readable summary.
     pub message: String,
 }
 
+/// Optional request body for `POST /api/workers/:id/disconnect`.
 #[derive(Debug, Deserialize)]
 pub struct DisconnectBody {
+    /// Reason for disconnecting. Defaults to `"admin_disconnect"`.
     pub reason: Option<String>,
 }
 
+/// Optional request body for `POST /api/workers/disconnect-all`.
 #[derive(Debug, Deserialize)]
 pub struct DisconnectAllBody {
+    /// Reason for disconnecting all workers. Defaults to
+    /// `"admin_disconnect_all"`.
     pub reason: Option<String>,
+    /// Whether workers may re-register after disconnect. Defaults to `true`.
     pub reconnect_allowed: Option<bool>,
 }
 
@@ -125,7 +203,11 @@ pub struct DisconnectAllBody {
 // Handlers
 // ============================================================================
 
-/// GET /api/workers - List all workers
+/// `GET /api/workers` — List all registered workers with status counts.
+///
+/// # Errors
+///
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn list_workers(
     State(client): State<Arc<ControllerGrpcClient>>,
 ) -> Result<Json<ApiResponse<WorkersListResponse>>, ApiError> {
@@ -173,7 +255,14 @@ pub async fn list_workers(
     }
 }
 
-/// GET /api/workers/metadata - Get enhanced worker metadata (health, tools, last_seen)
+/// `GET /api/workers/metadata` — Get enhanced worker metadata for all workers.
+///
+/// Returns health flags, tool versions, last-seen timestamps, and connection
+/// times in addition to the basic worker state.
+///
+/// # Errors
+///
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn get_worker_metadata(
     State(client): State<Arc<ControllerGrpcClient>>,
 ) -> Result<Json<ApiResponse<WorkerMetadataResponse>>, ApiError> {
@@ -234,7 +323,15 @@ pub async fn get_worker_metadata(
     }
 }
 
-/// GET /api/workers/available?os=X&capabilities=a,b - Get available workers
+/// `GET /api/workers/available?os=X&capabilities=a,b` — Get available workers
+/// matching OS and capability filters.
+///
+/// The `capabilities` query parameter is a comma-separated list; each entry is
+/// trimmed and empty segments are discarded.
+///
+/// # Errors
+///
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn get_available_workers(
     State(client): State<Arc<ControllerGrpcClient>>,
     Query(query): Query<AvailableWorkersQuery>,
@@ -289,7 +386,12 @@ pub async fn get_available_workers(
     }
 }
 
-/// GET /api/orchestrator/status - Get orchestrator status with active jobs
+/// `GET /api/orchestrator/status` — Get orchestrator status with active jobs,
+/// queue depth, and pool metrics.
+///
+/// # Errors
+///
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn get_orchestrator_status(
     State(client): State<Arc<ControllerGrpcClient>>,
 ) -> Result<Json<ApiResponse<OrchestratorStatusResponse>>, ApiError> {
@@ -333,7 +435,13 @@ pub async fn get_orchestrator_status(
 // Admin Command Handlers
 // ============================================================================
 
-/// POST /api/workers/:id/ping - Ping a specific worker
+/// `POST /api/workers/:id/ping` — Ping a specific worker through the
+/// Controller relay.
+///
+/// # Errors
+///
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable or the worker does
+///   not respond.
 pub async fn ping_worker(
     State(client): State<Arc<ControllerGrpcClient>>,
     Path(worker_id): Path<String>,
@@ -355,7 +463,14 @@ pub async fn ping_worker(
     }
 }
 
-/// POST /api/workers/:id/disconnect - Disconnect a specific worker
+/// `POST /api/workers/:id/disconnect` — Disconnect a specific worker.
+///
+/// Accepts an optional JSON body with a `reason` field; defaults to
+/// `"admin_disconnect"` when absent.
+///
+/// # Errors
+///
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn disconnect_worker(
     State(client): State<Arc<ControllerGrpcClient>>,
     Path(worker_id): Path<String>,
@@ -381,7 +496,14 @@ pub async fn disconnect_worker(
     }
 }
 
-/// POST /api/workers/disconnect-all - Disconnect all workers
+/// `POST /api/workers/disconnect-all` — Disconnect all registered workers.
+///
+/// Accepts an optional JSON body with `reason` (defaults to
+/// `"admin_disconnect_all"`) and `reconnect_allowed` (defaults to `true`).
+///
+/// # Errors
+///
+/// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn disconnect_all_workers(
     State(client): State<Arc<ControllerGrpcClient>>,
     body: Option<Json<DisconnectAllBody>>,
