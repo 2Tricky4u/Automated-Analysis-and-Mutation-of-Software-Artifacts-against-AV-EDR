@@ -1,10 +1,14 @@
-// API modules - gRPC handler implementations (thin adapters)
+//! gRPC API handler implementations.
+//!
+//! Thin adapter layer that implements the `WorkerAgent` gRPC trait by
+//! delegating each RPC to its dedicated handler module.
+
 pub mod artifacts;
 pub mod info;
 pub mod run;
 pub mod stream;
 
-use crate::WorkerAgentService; // Now available from lib.rs
+use crate::WorkerAgentService;
 use crate::automutate::common::{
     ArtifactChunk, ControllerMessage, SampleRequest, SampleResponse, TelemetryData, WorkerMessage,
 };

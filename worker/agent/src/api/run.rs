@@ -1,3 +1,9 @@
+//! Unary RPC handler for artifact execution.
+//!
+//! Entry point for the `RunSample` RPC when invoked outside a bidirectional stream.
+//! Acquires the execution lock, delegates to the execution engine, and maps the
+//! outcome to a `SampleResponse`.
+
 use crate::WorkerAgentService;
 use crate::automutate::common::{SampleRequest, SampleResponse};
 use crate::execution::engine;
@@ -8,6 +14,7 @@ use crate::execution::types::{
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
+/// Execute an artifact via the unary RunSample RPC path.
 pub async fn run_sample(
     service: &WorkerAgentService,
     request: Request<SampleRequest>,

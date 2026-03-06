@@ -1,7 +1,8 @@
-/// Execution engine, monitoring, and state management
-///
-/// Provides execution guards, monitoring, typed domain types,
-/// control plane sink, and state management for artifact execution lifecycle.
+//! Execution engine, monitoring, and state management.
+//!
+//! Orchestrates the full artifact execution lifecycle: validation, RedEDR setup,
+//! process spawning, monitoring, telemetry collection, outcome classification,
+//! and cleanup. RAII guards ensure resource safety on all exit paths.
 pub mod classifier;
 pub mod engine;
 pub mod guards;

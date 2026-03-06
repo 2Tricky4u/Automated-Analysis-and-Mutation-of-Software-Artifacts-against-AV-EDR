@@ -1,9 +1,14 @@
+//! Artifact transfer handler — receives compiled PE binaries from the controller.
+//!
+//! Artifacts arrive as a stream of 4 MB chunks with SHA-256 integrity verification.
+
 use crate::WorkerAgentService;
 use crate::automutate::common::ArtifactChunk;
 use crate::automutate::worker::TransferAck;
 use tonic::{Request, Response, Status};
 use tracing::info;
 
+/// Receive a chunked artifact binary, verify SHA-256 integrity, and write to disk.
 pub async fn send_artifact(
     service: &WorkerAgentService,
     request: Request<tonic::Streaming<ArtifactChunk>>,

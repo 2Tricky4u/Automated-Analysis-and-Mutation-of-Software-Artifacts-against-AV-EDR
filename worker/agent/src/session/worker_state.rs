@@ -1,7 +1,7 @@
-/// Worker runtime state and health metrics
-///
-/// Extracted from capabilities.rs to separate runtime state
-/// from capability detection logic.
+//! Worker runtime state and health metrics.
+//!
+//! Tracks mutable session state (current job, health, controller connectivity)
+//! separately from the immutable capability detection in [`crate::capabilities`].
 use std::collections::HashMap;
 
 use crate::automutate::common::ToolVersions;

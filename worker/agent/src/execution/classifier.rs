@@ -84,27 +84,27 @@ fn extract_evidence(telemetry_events: &[TelemetryData]) -> (bool, Option<String>
 /// 10. exit_code 30-39 (carrier codes)             → Ambiguous
 /// 11. Other nonzero                               → Ambiguous
 fn classify_outcome(ev: &ClassificationEvidence) -> DetectionVerdict {
-    // Step 1: Infrastructure error (never executed)
+    // Infrastructure error (process never executed)
     if ev.exit_code == EXIT_INFRA {
         return DetectionVerdict::InfraError;
     }
 
-    // Step 2: Wait failed (spawn-level failure)
+    // Wait failed (spawn-level failure)
     if ev.exit_code == EXIT_WAIT_FAILED {
         return DetectionVerdict::InfraError;
     }
 
-    // Step 3: Guardrail rejection (exit codes 10-19)
+    // Guardrail rejection (exit codes 10-19)
     if (10..20).contains(&ev.exit_code) {
         return DetectionVerdict::InfraError;
     }
 
-    // Step 4: Clean exit
+    // Clean exit (code 0)
     if ev.exit_code == 0 {
         return DetectionVerdict::Evasion;
     }
 
-    // Step 5-6: Timeout
+    // Timeout paths
     if ev.timed_out {
         return if ev.has_launched {
             DetectionVerdict::Evasion
@@ -113,7 +113,7 @@ fn classify_outcome(ev: &ClassificationEvidence) -> DetectionVerdict {
         };
     }
 
-    // Step 5b: EXIT_TIMEOUT without timed_out flag (defensive — shouldn't happen)
+    // EXIT_TIMEOUT without timed_out flag (defensive consistency check)
     if ev.exit_code == EXIT_TIMEOUT {
         return if ev.has_launched {
             DetectionVerdict::Evasion
@@ -122,27 +122,27 @@ fn classify_outcome(ev: &ClassificationEvidence) -> DetectionVerdict {
         };
     }
 
-    // Step 7: EXIT_NO_CODE — process was externally terminated (no exit code)
+    // EXIT_NO_CODE — process was externally terminated (no exit code)
     if ev.exit_code == EXIT_NO_CODE {
         return DetectionVerdict::Detected;
     }
 
-    // Step 8: Known AV NTSTATUS codes
+    // Known AV NTSTATUS codes
     if AV_NTSTATUS_CODES.contains(&ev.exit_code) {
         return DetectionVerdict::Detected;
     }
 
-    // Step 9: Crash NTSTATUS codes → Ambiguous (could be AV or crash)
+    // Crash NTSTATUS codes — could be AV or genuine crash
     if CRASH_NTSTATUS_CODES.contains(&ev.exit_code) {
         return DetectionVerdict::Ambiguous;
     }
 
-    // Step 10: Carrier exit codes (30-39) → Ambiguous (AV can block VirtualAlloc/VirtualProtect)
+    // Carrier exit codes (30-39) — AV can block VirtualAlloc/VirtualProtect
     if (30..40).contains(&ev.exit_code) {
         return DetectionVerdict::Ambiguous;
     }
 
-    // Step 11: Unknown nonzero exit code → Ambiguous
+    // Unknown nonzero exit code — default to ambiguous
     DetectionVerdict::Ambiguous
 }
 
@@ -179,7 +179,7 @@ mod tests {
         }
     }
 
-    // ── Step 1: EXIT_INFRA ────────────────────────────────────────────────
+    // ── EXIT_INFRA ────────────────────────────────────────────────────────
 
     #[test]
     fn test_exit_infra_is_infra_error() {
@@ -188,7 +188,7 @@ mod tests {
         assert!(!DetectionVerdict::InfraError.is_detected());
     }
 
-    // ── Step 2: EXIT_WAIT_FAILED ──────────────────────────────────────────
+    // ── EXIT_WAIT_FAILED ──────────────────────────────────────────────────
 
     #[test]
     fn test_exit_wait_failed_is_infra_error() {
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(classify_outcome(&ev), DetectionVerdict::InfraError);
     }
 
-    // ── Step 3: Guardrail rejection ───────────────────────────────────────
+    // ── Guardrail rejection ───────────────────────────────────────────────
 
     #[test]
     fn test_guardrail_exit_codes_are_infra_error() {
@@ -211,7 +211,7 @@ mod tests {
         }
     }
 
-    // ── Step 4: Clean exit ────────────────────────────────────────────────
+    // ── Clean exit ────────────────────────────────────────────────────────
 
     #[test]
     fn test_clean_exit_is_evasion() {
@@ -220,7 +220,7 @@ mod tests {
         assert!(!DetectionVerdict::Evasion.is_detected());
     }
 
-    // ── Step 5-6: Timeout paths ───────────────────────────────────────────
+    // ── Timeout paths ────────────────────────────────────────────────────
 
     #[test]
     fn test_timeout_with_launching_is_evasion() {
@@ -235,7 +235,7 @@ mod tests {
         assert!(!DetectionVerdict::Stalled.is_detected());
     }
 
-    // ── Step 5b: EXIT_TIMEOUT without timed_out flag (defensive) ─────────
+    // ── EXIT_TIMEOUT without timed_out flag (defensive) ─────────────────
 
     #[test]
     fn test_exit_timeout_without_timed_out_flag_launched() {
@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(classify_outcome(&ev), DetectionVerdict::Stalled);
     }
 
-    // ── Step 7: EXIT_NO_CODE ──────────────────────────────────────────────
+    // ── EXIT_NO_CODE ──────────────────────────────────────────────────────
 
     #[test]
     fn test_exit_no_code_is_detected() {
@@ -264,7 +264,7 @@ mod tests {
         assert_eq!(classify_outcome(&ev), DetectionVerdict::Detected);
     }
 
-    // ── Step 8: AV NTSTATUS codes ─────────────────────────────────────────
+    // ── AV NTSTATUS codes ─────────────────────────────────────────────────
 
     #[test]
     fn test_av_ntstatus_virus_infected_is_detected() {
@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(classify_outcome(&ev), DetectionVerdict::Detected);
     }
 
-    // ── Step 9: Crash NTSTATUS → Ambiguous ────────────────────────────────
+    // ── Crash NTSTATUS → Ambiguous ────────────────────────────────────────
 
     #[test]
     fn test_crash_ntstatus_is_ambiguous() {
@@ -293,7 +293,7 @@ mod tests {
         assert_eq!(classify_outcome(&ev), DetectionVerdict::Ambiguous);
     }
 
-    // ── Step 10: Carrier exit codes (30-39) → Ambiguous ───────────────────
+    // ── Carrier exit codes (30-39) → Ambiguous ────────────────────────────
 
     #[test]
     fn test_carrier_exit_codes_are_ambiguous() {
@@ -308,7 +308,7 @@ mod tests {
         }
     }
 
-    // ── Step 11: Unknown nonzero → Ambiguous ──────────────────────────────
+    // ── Unknown nonzero → Ambiguous ───────────────────────────────────────
 
     #[test]
     fn test_unknown_exit_code_is_ambiguous() {

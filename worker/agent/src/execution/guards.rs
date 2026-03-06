@@ -1,10 +1,11 @@
+//! RAII guards for execution resource cleanup.
+//!
+//! Each guard wraps an OS or infrastructure resource and guarantees cleanup
+//! in its `Drop` implementation, ensuring safety on success, error, and panic paths.
+
 use crate::constants::CLEANUP_TIMEOUT_SECS;
 use crate::telemetry;
 use std::time::Duration;
-
-// ============================================================================
-// RAII Guards for Resource Cleanup
-// ============================================================================
 
 /// RAII guard that ensures RedEDR is reset on drop
 /// This guarantees cleanup on all exit paths (success, error, panic)

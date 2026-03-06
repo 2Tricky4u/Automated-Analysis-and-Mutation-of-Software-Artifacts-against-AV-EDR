@@ -67,7 +67,7 @@ pub async fn execute_dryrun(
         request.job_id, request.artifact_id
     );
 
-    // Phase 1: Validate artifact
+    // Validate artifact
     if !context.artifact_path.exists() {
         return Err(RunError::ArtifactNotFound(format!(
             "Artifact {} not found on worker.",
@@ -75,7 +75,7 @@ pub async fn execute_dryrun(
         )));
     }
 
-    // Phase 2: Spawn process
+    // Spawn process
     let spawn_start = Instant::now();
     let mut child = crate::infra::process::spawn_artifact(
         &context.artifact_path,
@@ -88,7 +88,7 @@ pub async fn execute_dryrun(
 
     let phase_spawn_ms = spawn_start.elapsed().as_millis() as u64;
 
-    // Phase 3: Wait with timeout
+    // Wait with timeout
     let wait_start = Instant::now();
     let timeout_duration = Duration::from_secs(request.timeout_seconds as u64);
     let exit_result = tokio::time::timeout(timeout_duration, child.wait()).await;
@@ -149,19 +149,20 @@ pub async fn execute_dryrun(
     })
 }
 
-/// Execute an artifact run.
+/// Execute a monitored artifact run with full telemetry collection.
 ///
-/// Core execution pipeline:
-/// 1. Validate artifact exists
-/// 2. Setup RedEDR (sanity check, start tracing)
-/// 3. Prepare environment (telemetry dir, trace collectors)
-/// 4. Spawn artifact process
-/// 5. Monitor execution with timeout
-/// 6. Collect all telemetry (RedEDR, trace, coverage, checkpoints)
-/// 7. Stream telemetry to controller via sink
-/// 8. Cleanup (reset RedEDR)
+/// Pipeline stages:
+/// - Validate artifact exists on disk
+/// - Setup RedEDR (contamination check, start tracing)
+/// - Prepare environment (telemetry dir, trace collectors)
+/// - Spawn artifact process with captured stdout/stderr
+/// - Monitor execution (poll every 3s for idle/timeout detection)
+/// - Collect telemetry from all sources (RedEDR, trace, coverage, checkpoints)
+/// - Classify detection outcome
+/// - Stream results to controller via sink
+/// - Reset RedEDR and cleanup artifacts
 ///
-/// Assumes execution lock is already held by caller.
+/// Assumes the execution lock is already held by the caller.
 pub async fn execute_run(
     request: &RunRequest,
     context: &RunContext,
@@ -175,7 +176,7 @@ pub async fn execute_run(
     );
 
     // ====================================================================
-    // Phase 1: Validate artifact
+    // Validate artifact
     // ====================================================================
 
     if !context.artifact_path.exists() {
@@ -188,7 +189,7 @@ pub async fn execute_run(
     info!("Resolved artifact to path: {:?}", context.artifact_path);
 
     // ====================================================================
-    // Phase 2: Setup RedEDR
+    // Setup RedEDR
     // ====================================================================
 
     let rededr_start = Instant::now();
@@ -298,7 +299,7 @@ pub async fn execute_run(
     phase_timings.rededr_setup_ms = rededr_start.elapsed().as_millis() as u64;
 
     // ====================================================================
-    // Phase 3: Prepare environment
+    // Prepare environment
     // ====================================================================
 
     // Create telemetry directory (clean if exists to avoid stale files)
@@ -387,7 +388,7 @@ pub async fn execute_run(
     );
 
     // ====================================================================
-    // Phase 4: Spawn process
+    // Spawn artifact process
     // ====================================================================
 
     let spawn_start = Instant::now();
@@ -421,7 +422,7 @@ pub async fn execute_run(
     let stderr_handle = crate::infra::process::capture_stream(stderr);
 
     // ====================================================================
-    // Phase 5: Start monitoring
+    // Start execution monitoring
     // ====================================================================
 
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
@@ -461,7 +462,7 @@ pub async fn execute_run(
     let mut monitor_guard = Some(MonitorGuard::new(stop_tx, monitor_handle, event_consumer));
 
     // ====================================================================
-    // Phase 6: Wait for process completion or timeout
+    // Wait for process completion or timeout
     // ====================================================================
 
     let wait_start = Instant::now();
@@ -586,7 +587,7 @@ pub async fn execute_run(
     }
 
     // ====================================================================
-    // Phase 7: Collect telemetry
+    // Collect telemetry
     // ====================================================================
 
     let telemetry_start = Instant::now();
@@ -697,7 +698,7 @@ pub async fn execute_run(
     phase_timings.telemetry_collect_ms = telemetry_start.elapsed().as_millis() as u64;
 
     // ====================================================================
-    // Phase 7b: Classify detection outcome
+    // Classify detection outcome
     // ====================================================================
 
     let actual_elapsed =
@@ -729,7 +730,7 @@ pub async fn execute_run(
     let telemetry_count = telemetry_events.len() as i32;
 
     // ====================================================================
-    // Phase 8: Stream telemetry to controller
+    // Stream telemetry to controller
     // ====================================================================
 
     if !telemetry_events.is_empty() {
@@ -772,7 +773,7 @@ pub async fn execute_run(
     }
 
     // ====================================================================
-    // Phase 9: Reset RedEDR
+    // Reset RedEDR
     // ====================================================================
 
     let reset_start = Instant::now();
@@ -787,7 +788,7 @@ pub async fn execute_run(
     phase_timings.rededr_reset_ms = reset_start.elapsed().as_millis() as u64;
 
     // ====================================================================
-    // Phase 10: Cleanup artifacts
+    // Cleanup artifacts
     // ====================================================================
 
     crate::infra::system::cleanup_run_artifacts(&context.artifact_path, &context.telemetry_dir);
