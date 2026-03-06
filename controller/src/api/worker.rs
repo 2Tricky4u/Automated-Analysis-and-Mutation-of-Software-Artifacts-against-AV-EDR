@@ -1,4 +1,5 @@
-//! Worker handlers - worker listing, telemetry streaming, and monitoring
+//! gRPC handlers for worker listing, telemetry streaming, health monitoring,
+//! and administrative commands (ping, disconnect).
 
 use crate::api::SchedulerService;
 use crate::automutate::common::{ControllerMessage, HealthCheckRequest, controller_message};

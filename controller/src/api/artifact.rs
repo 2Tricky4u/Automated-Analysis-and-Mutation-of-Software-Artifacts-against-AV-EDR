@@ -1,8 +1,11 @@
+//! gRPC handlers for artifact building and deployment to worker VMs.
+
 use crate::api::SchedulerService;
 use crate::automutate::controller::{BuildRequest, BuildResponse, DeployRequest, DeployResponse};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
+/// Build an artifact using the modular template system and index metadata to Elasticsearch.
 pub async fn build_artifact(
     service: &SchedulerService,
     request: Request<BuildRequest>,
@@ -153,6 +156,7 @@ pub async fn build_artifact(
     }))
 }
 
+/// Deploy a previously built artifact to a worker VM via chunked gRPC streaming.
 pub async fn deploy_artifact(
     _service: &SchedulerService,
     request: Request<DeployRequest>,
@@ -168,7 +172,7 @@ pub async fn deploy_artifact(
         req.artifact_id, req.worker_address
     );
 
-    // 1. Read artifact from disk
+    // Read artifact from disk
     let builder_config = build::BuilderConfig::default();
     let artifact_path = builder_config
         .output_dir
@@ -191,7 +195,7 @@ pub async fn deploy_artifact(
         artifact_path
     );
 
-    // 2. Verify SHA256 matches artifact_id
+    // Verify SHA256 matches artifact_id
     let mut hasher = Sha256::new();
     hasher.update(&artifact_data);
     let actual_sha256 = format!("{:x}", hasher.finalize());
@@ -203,7 +207,7 @@ pub async fn deploy_artifact(
         )));
     }
 
-    // 3. Connect to worker
+    // Connect to worker
     let worker_url = format!("http://{}", req.worker_address);
     info!("Attempting connection to worker: {}", worker_url);
 
@@ -231,7 +235,7 @@ pub async fn deploy_artifact(
 
     debug!("Successfully connected to worker");
 
-    // 4. Split into chunks (4MB per chunk)
+    // Split into 4MB chunks for streaming
     let chunks = crate::dispatch::types::chunk_artifact(&req.artifact_id, &artifact_data);
 
     info!(
@@ -240,7 +244,7 @@ pub async fn deploy_artifact(
         artifact_data.len()
     );
 
-    // 5. Stream chunks to worker
+    // Stream chunks to worker
     let chunk_stream = stream::iter(chunks.clone());
 
     info!("Calling send_artifact RPC with {} chunks...", chunks.len());

@@ -1,11 +1,9 @@
-// Unified Target Manager - connection management and Worker spawning
-//
-// Handles:
-// - Target registration (from TOML or dynamic)
-// - gRPC connection/stream management
-// - Target state (Available/Busy/Offline)
-// - Spawning Worker tasks on connection
-// - Artifact deployment
+//! Target manager: registration, gRPC streams, state tracking, and artifact deployment.
+//!
+//! Manages the full lifecycle of worker VM targets, from TOML-based
+//! registration through bidirectional gRPC streaming to graceful disconnect.
+//! Spawns a [`VMExecutor`] per connected target
+//! and provides artifact upload via chunked gRPC streaming.
 
 use anyhow::{Result, anyhow};
 use dashmap::DashMap;
@@ -35,6 +33,7 @@ use crate::dispatch::{
 // Types
 // ============================================================================
 
+/// Lifecycle state of a worker VM target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetStatus {
     Available,
@@ -52,6 +51,7 @@ impl std::fmt::Display for TargetStatus {
     }
 }
 
+/// How a target was registered with the controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RegistrationType {
     Static,
@@ -76,6 +76,7 @@ pub enum TargetEvent {
     },
 }
 
+/// Minimal target descriptor used during initial registration.
 #[derive(Debug, Clone)]
 pub struct TargetConfig {
     pub id: TargetId,
@@ -83,6 +84,7 @@ pub struct TargetConfig {
     pub enabled: bool,
 }
 
+/// Runtime representation of a registered worker VM.
 #[derive(Clone, Debug)]
 pub struct Target {
     pub id: TargetId,
@@ -162,6 +164,7 @@ impl Target {
 // TargetManager
 // ============================================================================
 
+/// Thread-safe manager for all registered worker VM targets.
 #[derive(Debug)]
 pub struct TargetManager {
     targets: DashMap<TargetId, Target>,
@@ -171,6 +174,7 @@ pub struct TargetManager {
 }
 
 impl TargetManager {
+    /// Create a new target manager with the given RPC timeout and event channel.
     pub fn new(
         rpc_timeout_secs: u64,
         events_tx: mpsc::Sender<TargetEvent>,
@@ -194,6 +198,7 @@ impl TargetManager {
     // Registration
     // ========================================================================
 
+    /// Register a new target from configuration.
     pub fn register(&self, config: TargetConfig) -> Result<()> {
         let id = config.id.clone();
         let mut target = Target::new(id.clone(), config.address.clone());
@@ -206,6 +211,7 @@ impl TargetManager {
         Ok(())
     }
 
+    /// Register or update a target with full metadata from a worker registration message.
     pub fn register_with_metadata(
         &self,
         id: impl Into<TargetId>,
@@ -243,22 +249,27 @@ impl TargetManager {
     // Queries (public API for management/monitoring)
     // ========================================================================
 
+    /// Look up a target by ID.
     pub fn get(&self, id: impl AsRef<str>) -> Option<Target> {
         self.targets.get(id.as_ref()).map(|t| t.clone())
     }
 
+    /// List all registered target IDs.
     pub fn list_ids(&self) -> Vec<TargetId> {
         self.targets.iter().map(|e| e.key().clone()).collect()
     }
 
+    /// List all registered targets.
     pub fn list_all(&self) -> Vec<Target> {
         self.targets.iter().map(|e| e.clone()).collect()
     }
 
+    /// Return the number of registered targets.
     pub fn count(&self) -> usize {
         self.targets.len()
     }
 
+    /// Return IDs of targets in [`TargetStatus::Available`] state.
     #[allow(dead_code)]
     pub fn get_available(&self) -> Vec<TargetId> {
         self.targets
@@ -268,6 +279,7 @@ impl TargetManager {
             .collect()
     }
 
+    /// Return available targets grouped by OS, filtered by required capabilities.
     pub fn get_available_by_os_and_capabilities(
         &self,
         required_capabilities: &[String],
@@ -300,6 +312,7 @@ impl TargetManager {
     // State Management
     // ========================================================================
 
+    /// Transition a target to [`TargetStatus::Busy`].
     pub fn reserve(&self, id: impl AsRef<str>) -> Result<()> {
         let id = id.as_ref();
         let mut target = self
@@ -318,6 +331,7 @@ impl TargetManager {
         Ok(())
     }
 
+    /// Transition a target back to [`TargetStatus::Available`].
     pub fn release(&self, id: impl AsRef<str>) -> Result<()> {
         let id = id.as_ref();
         let mut target = self
@@ -333,6 +347,7 @@ impl TargetManager {
         Ok(())
     }
 
+    /// Mark a target as connected (transitions from Offline to Available).
     pub fn mark_connected(&self, id: impl AsRef<str>) -> Result<()> {
         let id = id.as_ref();
         let mut target = self
@@ -348,6 +363,7 @@ impl TargetManager {
         Ok(())
     }
 
+    /// Mark a target as offline and clear its connection state.
     pub fn mark_offline(&self, id: impl AsRef<str>) -> Result<()> {
         let id = id.as_ref();
         let mut target = self
@@ -368,6 +384,7 @@ impl TargetManager {
         Ok(())
     }
 
+    /// Record a health heartbeat for a target (updates last-seen timestamp).
     pub fn update_health(&self, id: impl AsRef<str>) -> Result<()> {
         let id = id.as_ref();
         let mut target = self
@@ -660,6 +677,7 @@ impl TargetManager {
         });
     }
 
+    /// Establish gRPC streams for all registered targets.
     pub async fn establish_all_streams(self: &Arc<Self>) -> HashMap<TargetId, Result<()>> {
         let ids = self.list_ids();
         let mut results = HashMap::new();
@@ -708,6 +726,7 @@ impl TargetManager {
         });
     }
 
+    /// Send a control message to a specific target's gRPC stream.
     pub async fn send_command(&self, id: impl AsRef<str>, msg: ControllerMessage) -> Result<()> {
         let id = id.as_ref();
         let tx = self
@@ -736,6 +755,7 @@ impl TargetManager {
         }
     }
 
+    /// Broadcast a control message to all connected targets.
     pub async fn broadcast(&self, msg: ControllerMessage) -> usize {
         let ids = self.list_ids();
         let mut success = 0;
@@ -747,6 +767,7 @@ impl TargetManager {
         success
     }
 
+    /// Disconnect all targets, optionally disabling reconnection.
     pub async fn disconnect_all(&self, reason: &str, reconnect_allowed: bool) {
         info!("Disconnecting all targets: {}", reason);
 
@@ -815,6 +836,7 @@ impl TargetManager {
     // Artifact Operations
     // ========================================================================
 
+    /// Upload an artifact to a target via chunked gRPC streaming.
     pub async fn send_artifact(
         &self,
         id: impl AsRef<str>,
@@ -847,6 +869,7 @@ impl TargetManager {
     // Info Queries
     // ========================================================================
 
+    /// Query a target for its worker info via unary RPC.
     pub async fn get_worker_info(&self, id: impl AsRef<str>) -> Result<WorkerInfoResponse> {
         let id = id.as_ref();
         let channel = self.get_channel(id).await?;
@@ -861,6 +884,7 @@ impl TargetManager {
         Ok(response.into_inner())
     }
 
+    /// Query all registered targets for their worker info.
     pub async fn query_all_info(&self) -> HashMap<TargetId, WorkerInfoResponse> {
         let ids = self.list_ids();
         let mut results = HashMap::new();

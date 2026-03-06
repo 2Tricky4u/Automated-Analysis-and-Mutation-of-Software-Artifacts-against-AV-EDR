@@ -49,14 +49,17 @@ macro_rules! impl_id_type {
 // ID types
 // ============================================================================
 
+/// Unique identifier for a mutation exploration job.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct JobId(pub String);
 impl_id_type!(JobId);
 
+/// Unique identifier for a single mutation round within a job.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RoundId(pub String);
 impl_id_type!(RoundId);
 
+/// Unique identifier for a single artifact execution run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RunId(pub String);
 impl_id_type!(RunId);

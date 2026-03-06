@@ -1,12 +1,9 @@
-//! RunPool - sharded run queue for all jobs.
+//! OS-sharded run pool shared across all jobs and VM executors.
 //!
-//! Architecture:
-//! - Sharded by OS: each OS has its own queue (reduces contention)
-//! - DashMap for lock-free run storage
-//! - Per-OS Mutex for queue ordering
-//! - JobWorkers put runs into the pool via add_runs()
-//! - VMExecutors take runs via take_run(os, caps) - locks only their OS queue
-//! - Results are routed back to originating JobWorker via route_result()
+//! Runs are stored in a lock-free `DashMap` and queued per-OS so that
+//! each [`VMExecutor`](super::VMExecutor) only contends with others targeting
+//! the same operating system. Results are routed back to the originating
+//! [`JobWorker`](super::job_worker::JobWorker) via registered per-job channels.
 
 use dashmap::DashMap;
 use std::collections::{HashMap, VecDeque};

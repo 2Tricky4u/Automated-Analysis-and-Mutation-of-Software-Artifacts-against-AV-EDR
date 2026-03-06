@@ -1,16 +1,10 @@
-//! Dispatch module - JobWorker architecture for job execution.
+//! Dispatch module for concurrent job execution.
 //!
-//! Architecture:
-//! - JobWorker: Spawned per job, owns job lifecycle, builds artifacts, aggregates results
-//! - RunPool: Shared queue where all jobs put runs, VMExecutors take from it
-//! - VMExecutor: Thin dispatcher per VM, takes runs, routes results back
-//! - Orchestrator: Spawns JobWorkers, manages RunPool, tracks VMs
-//!
-//! Key Features:
-//! - Jobs run in parallel (no active_job: Option limit)
-//! - VMs are dumb executors shared across all jobs
-//! - Results route back to originating JobWorker via RunPool
-//! - Signal-driven dispatch (efficient, no polling)
+//! The [`Orchestrator`] spawns a `JobWorker` per job. Each worker produces
+//! [`RunEnvelope`](types::RunEnvelope)s into the shared [`RunPool`], where
+//! [`VMExecutor`]s pull them for remote execution. Results route back through
+//! the pool to the originating worker. All components communicate via async
+//! channels and run in parallel without polling.
 
 pub mod channels;
 pub mod job_worker;

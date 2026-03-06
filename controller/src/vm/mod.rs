@@ -1,11 +1,9 @@
-//! VM module - connection management and artifact transport
+//! VM target management, gRPC connection lifecycle, and artifact transport.
 //!
-//! Handles:
-//! - Target/VM registration (from TOML or dynamic)
-//! - gRPC connection/stream management
-//! - Target state (Available/Busy/Offline)
-//! - Spawning VMExecutor tasks on connection
-//! - Artifact deployment to VMs
+//! Registers targets from TOML configuration or dynamic discovery, maintains
+//! per-target state (available, busy, offline), establishes bidirectional
+//! gRPC streams, spawns [`VMExecutor`](crate::dispatch::VMExecutor) tasks,
+//! and handles artifact deployment.
 
 pub mod manager;
 

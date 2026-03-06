@@ -1,9 +1,8 @@
-//! Telemetry indexing with payload flattening and typed_event handling.
+//! Telemetry indexing with payload field flattening and typed event handling.
 //!
-//! Salvaged from the dead storage/elasticsearch.rs code with improvements:
-//! - TelemetryContext for correlation keys (run_id, round_id, vm_id)
-//! - Smart numeric conversion (pointers→hex, large u64→hex)
-//! - Daily index pattern: telemetry-YYYY.MM.DD
+//! Enriches each event with correlation keys (run_id, round_id, vm_id) from
+//! [`TelemetryContext`] and converts pointer-sized
+//! values to hex strings. Uses daily index pattern: `telemetry-YYYY.MM.DD`.
 
 use super::TelemetryContext;
 use super::helpers;
