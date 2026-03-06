@@ -1,7 +1,7 @@
 //! Control plane sink trait for decoupling execution logic from transport.
 //!
 //! The execution engine sends status updates and telemetry through this trait
-//! rather than directly holding an Arc<StreamHandler>.
+//! rather than directly holding an `Arc<StreamHandler>`.
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ pub trait ControlPlaneSink: Send + Sync {
 }
 
 /// Sink that sends messages directly via the stream's tx channel.
-/// Does NOT hold Arc<StreamHandler>, breaking the reference cycle.
+/// Does NOT hold `Arc<StreamHandler>`, breaking the reference cycle.
 pub struct StreamSink {
     tx: mpsc::Sender<Result<WorkerMessage, Status>>,
 }
@@ -92,10 +92,10 @@ impl ControlPlaneSink for NullSink {
     }
 }
 
-/// Build a ControlPlaneSink from a stream handler's tx channel.
+/// Build a [`ControlPlaneSink`] from a stream handler's tx channel.
 ///
-/// If tx is available (stream mode), creates a StreamSink.
-/// Otherwise creates a NullSink (worker-only mode).
+/// If `tx` is available (stream mode), creates a [`StreamSink`].
+/// Otherwise creates a [`NullSink`] (worker-only mode).
 pub fn build_sink(
     tx: Option<&mpsc::Sender<Result<WorkerMessage, Status>>>,
 ) -> Arc<dyn ControlPlaneSink> {

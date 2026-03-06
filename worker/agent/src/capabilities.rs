@@ -10,21 +10,39 @@ use regex::Regex;
 use std::collections::HashMap;
 use tracing::debug;
 
+/// Detected capabilities of this worker host.
+///
+/// Populated once at startup by [`detect_capabilities`] and cached for the
+/// lifetime of the process. Reported to the controller during stream registration.
 #[derive(Debug, Clone)]
 pub struct WorkerCapabilities {
+    /// Capability tags (e.g. `"rededr"`, `"mde"`, `"cortex"`, `"dryrun"`).
     pub capabilities: Vec<String>,
+    /// Tool name-to-version map (e.g. `"rededr_version" => "0.7.2"`).
     pub tools: HashMap<String, String>,
+    /// Freeform host metadata (hostname, cpu_cores, ram_gb, os_build, os_key).
     pub metadata: HashMap<String, String>,
 }
 
+/// Parsed Windows version metadata from the registry.
+///
+/// Read from `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`.
+/// Used to populate the `os_key` metadata field (e.g. `"win11-build-22631"`).
 #[derive(Debug, Clone)]
 pub struct WindowsVersionInfo {
+    /// e.g. `"Windows 10 Pro"` or `"Windows 11 Enterprise"`.
     pub product_name: Option<String>,
+    /// e.g. `"Professional"`, `"Enterprise"`.
     pub edition_id: Option<String>,
+    /// e.g. `"23H2"`.
     pub display_version: Option<String>,
+    /// Legacy release identifier (e.g. `"2009"`).
     pub release_id: Option<String>,
+    /// `CurrentBuildNumber` (e.g. `22631`).
     pub build: Option<u32>,
+    /// Update Build Revision (minor patch level).
     pub ubr: Option<u32>,
+    /// `true` when `build >= 22000`.
     pub is_windows_11: Option<bool>,
 }
 
@@ -48,7 +66,11 @@ impl WorkerCapabilities {
     }
 }
 
-/// Detect worker capabilities by checking for installed tools
+/// Detect worker capabilities by checking for installed tools.
+///
+/// # Errors
+///
+/// Returns an error if the HTTP client for RedEDR probing cannot be built.
 pub async fn detect_capabilities() -> Result<WorkerCapabilities> {
     let mut capabilities = Vec::new();
     let mut tools = HashMap::new();

@@ -1,73 +1,96 @@
-/// RedEDR HTTP API Collector
-///
-/// Polls the RedEDR HTTP API and transforms events to gRPC TelemetryData
-/// for streaming to the controller.
-///
-/// Architecture:
-/// 1. Polls GET /api/logs/rededr at flush_interval (1000ms default)
-/// 2. Tracks last_seen event index to avoid duplicates
-/// 3. Transforms RedEDR JSON events to protobuf TelemetryData
-/// 4. Sends to mpsc channel for gRPC streaming
+//! RedEDR HTTP API collector.
+//!
+//! Polls the RedEDR HTTP API and transforms events to gRPC
+//! [`TelemetryData`](crate::automutate::common::TelemetryData)
+//! for streaming to the controller.
+//!
+//! **Architecture:**
+//! - Polls `GET /api/logs/rededr` at `flush_interval` (1000 ms default)
+//! - Tracks last-seen event index to avoid duplicates via `trace_id`
+//! - Transforms RedEDR JSON events to protobuf `TelemetryData`
+//! - Sends to `mpsc` channel for gRPC streaming
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, info, warn};
 
-/// Stack trace entry structure (from RedEDR stack_trace field)
+/// Stack trace entry structure (from RedEDR `stack_trace` field).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackTraceEntry {
+    /// Absolute address of this stack frame.
     #[serde(default)]
     pub addr: Option<u64>,
+    /// Symbolic information for the address (module + offset or function name).
     #[serde(default)]
     pub addr_info: Option<String>,
+    /// Zero-based frame index (0 = top of stack).
     #[serde(default)]
     pub idx: Option<u32>,
 }
 
-/// RedEDR event structure (from HTTP API /api/logs/rededr)
+/// RedEDR event structure (from HTTP API `/api/logs/rededr`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedEdrEvent {
+    /// Timestamp string (e.g. `"2025-11-02-15-30-00"`).
     #[serde(default)]
     pub date: Option<String>,
+    /// Event type (e.g. `"etw"`, `"dll"`, `"kernel_callback"`).
     #[serde(default)]
     pub r#type: Option<String>,
+    /// Unique event sequence number used for deduplication.
     #[serde(default)]
     pub trace_id: Option<u64>,
+    /// Target process or module name.
     #[serde(default)]
     pub target: Option<String>,
+    /// API or kernel function name.
     #[serde(default)]
     pub func: Option<String>,
+    /// Process ID of the traced artifact.
     #[serde(default)]
     pub pid: Option<u32>,
+    /// Thread ID that generated the event.
     #[serde(default)]
     pub tid: Option<u32>,
+    /// ETW provider name (if event source is ETW).
     #[serde(default)]
     pub provider: Option<String>,
+    /// ETW event ID.
     #[serde(default)]
     pub event_id: Option<u32>,
+    /// Raw callstack (polymorphic JSON — may be `Vec<String>` or `Vec<Object>`).
     #[serde(default)]
-    pub callstack: Option<serde_json::Value>, // Can be Vec<String> or Vec<Object>, let it be flexible
-    // Complex fields that need explicit typing
+    pub callstack: Option<serde_json::Value>,
+    /// Parsed stack trace entries.
     #[serde(default)]
     pub stack_trace: Option<Vec<StackTraceEntry>>,
+    /// List of trace target names.
     #[serde(default)]
     pub targets: Option<Vec<String>>,
-    // Flexible metadata for other fields
+    /// Flexible metadata for fields not covered by explicit struct members.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// RedEDR collector configuration
+/// RedEDR collector configuration.
 #[derive(Debug, Clone)]
 pub struct RedEdrCollectorConfig {
+    /// Base URL of the RedEDR HTTP API (e.g. `"http://localhost:8081"`).
     pub base_url: String,
+    /// Poll interval in milliseconds for streaming mode.
     pub flush_interval_ms: u64,
+    /// Controller-assigned job identifier (attached to every telemetry event).
     pub job_id: String,
+    /// Run identifier (used for correlation).
     pub run_id: String,
 }
 
-/// RedEDR HTTP collector
+/// RedEDR HTTP collector.
+///
+/// Polls the RedEDR API and transforms events into
+/// [`TelemetryData`](crate::automutate::common::TelemetryData) protobuf messages.
 pub struct RedEdrCollector {
     config: RedEdrCollectorConfig,
     client: reqwest::Client,
@@ -75,6 +98,7 @@ pub struct RedEdrCollector {
 }
 
 impl RedEdrCollector {
+    /// Create a new collector with the given configuration.
     pub fn new(config: RedEdrCollectorConfig) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
@@ -93,7 +117,12 @@ impl RedEdrCollector {
         &self.config
     }
 
-    /// Start polling RedEDR HTTP API and send events to channel
+    /// Start polling RedEDR HTTP API and send events to channel.
+    ///
+    /// # Errors
+    ///
+    /// This method runs an infinite loop and never returns `Ok`; it only
+    /// returns `Err` if the loop is broken by a fatal channel or HTTP error.
     pub async fn start(
         mut self,
         tx: Sender<crate::automutate::common::TelemetryData>,
@@ -224,7 +253,11 @@ impl RedEdrCollector {
         Ok(())
     }
 
-    /// Collect all events (call AFTER artifact execution completes)
+    /// Collect all events (call AFTER artifact execution completes).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or JSON parsing fails.
     pub async fn collect_all(
         &self,
         job_id: &str,
@@ -245,7 +278,12 @@ impl RedEdrCollector {
         Ok(telemetry_events)
     }
 
-    /// Reset RedEDR state for next run
+    /// Reset RedEDR state for next run.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP POST to `/api/trace/reset` fails or
+    /// returns a non-success status code.
     pub async fn reset(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/api/trace/reset", self.config.base_url);
 

@@ -9,6 +9,7 @@ use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tonic::{Request, Response, Status};
 use tracing::{error, info, warn};
 
+/// Handle a Ping RPC — returns a pong with worker ID and timestamp.
 pub async fn ping(
     service: &WorkerAgentService,
     request: Request<PingRequest>,
@@ -25,6 +26,7 @@ pub async fn ping(
     }))
 }
 
+/// Handle a HealthCheck RPC — reports CPU/memory and execution state.
 pub async fn health_check(
     service: &WorkerAgentService,
     request: Request<HealthRequest>,
