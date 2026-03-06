@@ -5,7 +5,7 @@
 //! - Controller -> Worker: commands (run sample, health checks, heartbeats)
 //! - Worker -> Controller: registration, status updates, telemetry, results
 //!
-//! NOTE: This struct does NOT hold Arc<WorkerAgentService> to avoid a reference
+//! NOTE: This struct does NOT hold `Arc<WorkerAgentService>` to avoid a reference
 //! cycle (WorkerAgentService -> StreamHandler -> WorkerAgentService).
 //! Instead it stores the individual fields it needs.
 
@@ -387,7 +387,11 @@ impl StreamHandler {
     }
 }
 
-/// Background task to send periodic heartbeat status updates
+/// Background task that sends periodic heartbeat status updates.
+///
+/// Ticks every `interval_secs` seconds. If the send fails after a controller
+/// disconnect, the loop continues retrying; a subsequent successful send
+/// clears the `controller_disconnected` flag in [`WorkerState`].
 pub async fn heartbeat_loop(handler: Arc<StreamHandler>, interval_secs: u64) {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
 

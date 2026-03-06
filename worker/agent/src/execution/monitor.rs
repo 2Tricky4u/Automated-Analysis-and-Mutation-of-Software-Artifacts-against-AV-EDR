@@ -1,13 +1,15 @@
-/// Execution Monitor - Lightweight Status Tracking
-///
-/// Monitors artifact execution without streaming full telemetry.
-/// Polls RedEDR /api/stats every 2-5 seconds to track:
-/// - Event count (detect stuck: no growth)
-/// - Process status (alive/dead)
-/// - Resource usage (CPU, memory)
-///
-/// Sends status updates via ControlPlaneSink (StreamSink in stream mode,
-/// NullSink in worker-only mode).
+//! Execution monitor — lightweight status tracking.
+//!
+//! Monitors artifact execution without streaming full telemetry.
+//! Polls RedEDR `/api/stats` every 3 seconds to track:
+//! - Event count (detect stuck: no growth)
+//! - Process status (alive/dead)
+//! - Resource usage (CPU, memory)
+//!
+//! Sends status updates via [`ControlPlaneSink`]
+//! ([`StreamSink`](crate::execution::sink::StreamSink) in stream mode,
+//! [`NullSink`](crate::execution::sink::NullSink) in worker-only mode).
+
 use crate::automutate::common::ExecutionStatusReport;
 use crate::automutate::worker::{ExecutionStatus, MonitorEvent};
 use crate::constants::{
@@ -19,18 +21,31 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, info, warn};
 
-/// Configuration for creating an ExecutionMonitor (groups identity/config fields).
+/// Configuration for creating an [`ExecutionMonitor`] (groups identity/config fields).
 pub struct MonitorConfig {
+    /// Unique run identifier for this execution.
     pub run_id: String,
+    /// Controller-assigned job identifier.
     pub job_id: String,
+    /// Identity of the worker running the artifact.
     pub worker_id: String,
+    /// IP address of the worker (included in status reports).
     pub worker_ip: String,
+    /// Filename of the artifact being executed.
     pub artifact_name: String,
+    /// OS process ID of the spawned artifact.
     pub pid: u32,
+    /// Base URL for the RedEDR HTTP API (e.g. `"http://localhost:8081"`).
     pub rededr_base_url: String,
+    /// Maximum execution time in seconds before timeout is reported.
     pub timeout_seconds: i32,
 }
 
+/// Lightweight execution monitor that polls RedEDR and process metrics.
+///
+/// Runs as a background tokio task, sending periodic
+/// [`ExecutionStatusReport`]
+/// messages via the [`ControlPlaneSink`].
 pub struct ExecutionMonitor {
     config: MonitorConfig,
     sink: Arc<dyn ControlPlaneSink>,
@@ -40,6 +55,7 @@ pub struct ExecutionMonitor {
 }
 
 impl ExecutionMonitor {
+    /// Create a new monitor with the given configuration and control-plane sink.
     pub fn new(config: MonitorConfig, sink: Arc<dyn ControlPlaneSink>) -> Self {
         use sysinfo::System;
 

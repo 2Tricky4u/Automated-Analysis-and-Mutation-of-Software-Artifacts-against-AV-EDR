@@ -1,3 +1,10 @@
+//! Shared types for the execution subsystem.
+//!
+//! Defines [`RunRequest`], [`RunContext`], [`RunOutcome`], and [`RunPhaseTimings`] —
+//! the value objects that flow through the execution engine pipeline. Also defines
+//! synthetic exit code constants and [`SampleResponse`]
+//! builder functions used by both the unary RPC and stream handler paths.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -10,30 +17,41 @@ use automutate_config::WorkerConfig;
 // Real Windows exit codes are >= 0 and passed through verbatim.
 // ============================================================================
 
-/// OS error on child.wait()
+/// OS error on `child.wait()`.
 pub const EXIT_WAIT_FAILED: i32 = -1;
-/// Process exited but status.code() == None (externally terminated)
+/// Process exited but `status.code() == None` (externally terminated).
 pub const EXIT_NO_CODE: i32 = -2;
-/// Timeout expired, process killed
+/// Timeout expired, process killed.
 pub const EXIT_TIMEOUT: i32 = -3;
-/// Never reached execution (spawn/setup failure)
+/// Never reached execution (spawn/setup failure).
 pub const EXIT_INFRA: i32 = -4;
 
-/// Typed request for executing an artifact run
+/// Typed request for executing an artifact run.
+///
+/// Passed to [`execute_run`](crate::execution::engine::execute_run) and
+/// [`execute_dryrun`](crate::execution::engine::execute_dryrun).
 pub struct RunRequest {
+    /// Controller-assigned job identifier.
     pub job_id: String,
+    /// Artifact identifier (used to derive the `.exe` filename).
     pub artifact_id: String,
+    /// Maximum execution time before the process is killed.
     pub timeout_seconds: u32,
-    /// Resolved run_id (from controller's request_id or generated UUID)
+    /// Resolved run_id (from controller's `request_id` or generated UUID).
     pub run_id: String,
 }
 
-/// Context for a run (worker-level state, not per-request)
+/// Context for a run (worker-level state, not per-request).
 pub struct RunContext {
+    /// Identity of this worker (used for status reports).
     pub worker_id: String,
+    /// Worker configuration (paths, telemetry settings, etc.).
     pub config: WorkerConfig,
+    /// Directory where telemetry files are written during the run.
     pub telemetry_dir: PathBuf,
+    /// Full filesystem path to the artifact `.exe` on disk.
     pub artifact_path: PathBuf,
+    /// Filename of the artifact (e.g. `"artifact-001.exe"`).
     pub artifact_name: String,
 }
 
@@ -52,28 +70,45 @@ impl RunContext {
     }
 }
 
-/// Outcome of a completed run
+/// Outcome of a completed run.
+///
+/// Returned by [`execute_run`](crate::execution::engine::execute_run) and
+/// converted into a [`SampleResponse`]
+/// via [`sample_response_ok`].
 pub struct RunOutcome {
+    /// Process exit code (may be a synthetic constant like [`EXIT_INFRA`]).
     pub exit_code: i32,
+    /// `true` if the process was killed because the timeout expired.
     pub timed_out: bool,
+    /// Captured standard output of the artifact process.
     pub stdout: String,
+    /// Captured standard error of the artifact process.
     pub stderr: String,
+    /// All telemetry events collected during the run.
     pub telemetry_events: Vec<TelemetryData>,
+    /// Wall-clock time from spawn to process exit.
     pub elapsed: Duration,
+    /// Per-phase timing breakdown for observability.
     pub phase_timings: RunPhaseTimings,
-    /// Fine-grained classifier verdict string (e.g. "killed_pre_payload")
+    /// Fine-grained [`DetectionVerdict`](automutate_common::DetectionVerdict) string
+    /// (e.g. `"detected"`, `"evasion"`).
     pub detection_verdict: String,
-    /// Last checkpoint reached before exit (e.g. "Launching")
+    /// Last checkpoint reached before exit (e.g. `"Launching"`).
     pub last_checkpoint: String,
 }
 
-/// Timing breakdown for each execution phase
+/// Timing breakdown for each execution phase.
 #[derive(Debug, Default)]
 pub struct RunPhaseTimings {
+    /// Time spent configuring RedEDR (contamination check, start tracing).
     pub rededr_setup_ms: u64,
+    /// Time spent spawning the artifact process.
     pub process_spawn_ms: u64,
+    /// Time spent waiting for the process to exit (or timeout).
     pub process_wait_ms: u64,
+    /// Time spent collecting telemetry after process exit.
     pub telemetry_collect_ms: u64,
+    /// Time spent resetting RedEDR state for the next run.
     pub rededr_reset_ms: u64,
 }
 
@@ -93,7 +128,9 @@ impl RunPhaseTimings {
     }
 }
 
-/// Build a SampleResponse for a failed execution.
+/// Build a [`SampleResponse`] for a failed execution.
+///
+/// Sets `exit_code` to [`EXIT_INFRA`] and `detection_verdict` to `"infra_error"`.
 pub fn sample_response_error(
     job_id: &str,
     run_id: &str,
@@ -114,7 +151,10 @@ pub fn sample_response_error(
     }
 }
 
-/// Build a SampleResponse from a completed RunOutcome.
+/// Build a [`SampleResponse`] from a completed [`RunOutcome`].
+///
+/// Uses the [`DetectionVerdict`](automutate_common::DetectionVerdict) from the
+/// outcome when available, falling back to legacy exit-code logic.
 pub fn sample_response_ok(
     job_id: &str,
     run_id: &str,
@@ -149,7 +189,9 @@ pub fn sample_response_ok(
     }
 }
 
-/// Resolve run_id from optional controller-provided value
+/// Resolve `run_id` from an optional controller-provided value.
+///
+/// Returns the provided string when non-empty, otherwise generates a new UUID v4.
 pub fn resolve_run_id(requested: Option<&str>) -> String {
     requested
         .filter(|s| !s.is_empty())
@@ -161,7 +203,7 @@ pub fn resolve_run_id(requested: Option<&str>) -> String {
 // Output formatting helpers (used by both api/run.rs and session/stream_handler.rs)
 // ============================================================================
 
-/// Format human-readable output string from RunOutcome.
+/// Format a human-readable output string from a [`RunOutcome`].
 pub fn format_output(outcome: &RunOutcome, timeout_seconds: u32) -> String {
     if outcome.timed_out {
         format!("Execution timed out after {}s", timeout_seconds)

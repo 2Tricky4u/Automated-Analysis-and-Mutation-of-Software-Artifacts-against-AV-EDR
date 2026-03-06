@@ -33,6 +33,12 @@ use std::sync::Arc;
 use sysinfo::System;
 use tokio::sync::Mutex;
 
+/// Core gRPC service implementation for the worker agent.
+///
+/// Holds shared state needed by all RPC handlers: worker identity, configuration,
+/// the single-execution lock, a cached capability snapshot, and the optional
+/// bidirectional [`StreamHandler`](crate::session::stream_handler::StreamHandler)
+/// for real-time controller communication.
 #[derive(Clone)]
 pub struct WorkerAgentService {
     pub(crate) worker_id: String,
@@ -68,6 +74,7 @@ impl WorkerAgentService {
         self.execution_lock.lock().await.clone()
     }
 
+    /// Truncate a long output string by keeping the first and last 400 characters.
     pub fn truncate_middle_output(stdout_output: &str) -> String {
         if stdout_output.len() > 1000 {
             // Show first 400 chars and last 400 chars, truncate middle

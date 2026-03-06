@@ -32,10 +32,13 @@ const CRASH_NTSTATUS_CODES: &[i32] = &[
     0xC0000094_u32 as i32, // STATUS_INTEGER_DIVIDE_BY_ZERO
 ];
 
-/// Simplified classification evidence.
+/// Simplified classification evidence used by [`classify_outcome`].
 struct ClassificationEvidence {
+    /// Process exit code (may be a synthetic constant like [`EXIT_INFRA`]).
     exit_code: i32,
+    /// `true` if the execution engine killed the process due to timeout.
     timed_out: bool,
+    /// `true` if the artifact reached the `Launching` checkpoint or beyond.
     has_launched: bool,
 }
 
@@ -43,6 +46,12 @@ struct ClassificationEvidence {
 ///
 /// Scans checkpoint events to determine if the artifact reached the Launching
 /// checkpoint or beyond, and what the last checkpoint was.
+///
+/// # Returns
+///
+/// `(has_launched, last_checkpoint)` — `has_launched` is `true` when any
+/// checkpoint name satisfies [`has_launched`](automutate_common::has_launched);
+/// `last_checkpoint` is the name of the most recently seen checkpoint event.
 fn extract_evidence(telemetry_events: &[TelemetryData]) -> (bool, Option<String>) {
     let mut launched = false;
     let mut last_checkpoint: Option<String> = None;
@@ -70,6 +79,8 @@ fn extract_evidence(telemetry_events: &[TelemetryData]) -> (bool, Option<String>
 }
 
 /// Classify the detection outcome using the v3 decision tree.
+///
+/// Takes a [`ClassificationEvidence`] and returns a [`DetectionVerdict`].
 ///
 /// Decision order:
 ///  1. EXIT_INFRA (-4)                             → InfraError
@@ -148,7 +159,9 @@ fn classify_outcome(ev: &ClassificationEvidence) -> DetectionVerdict {
 
 /// Public entry point: classify a run using exit code, timeout, and telemetry.
 ///
-/// Returns `(verdict, last_checkpoint)`.
+/// Delegates to `extract_evidence` and `classify_outcome` internally.
+///
+/// Returns `(verdict, last_checkpoint)` where `verdict` is a [`DetectionVerdict`].
 pub fn classify_run(
     exit_code: i32,
     timed_out: bool,

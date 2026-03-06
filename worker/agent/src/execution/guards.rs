@@ -7,8 +7,12 @@ use crate::constants::CLEANUP_TIMEOUT_SECS;
 use crate::telemetry;
 use std::time::Duration;
 
-/// RAII guard that ensures RedEDR is reset on drop
-/// This guarantees cleanup on all exit paths (success, error, panic)
+/// RAII guard that ensures RedEDR is reset on drop.
+///
+/// Wraps a [`RedEdrCollector`](crate::telemetry::collectors::rededr::RedEdrCollector).
+/// On the normal exit path, call [`reset_now`](Self::reset_now) to reset
+/// synchronously; on error/panic paths the `Drop` impl fires a
+/// best-effort async reset via `tokio::spawn`.
 pub struct RedEdrGuard {
     collector: telemetry::collectors::rededr::RedEdrCollector,
     reset_on_drop: bool,
@@ -72,7 +76,8 @@ impl Drop for RedEdrGuard {
     }
 }
 
-/// RAII guard that ensures monitor is stopped on drop
+/// RAII guard that ensures the [`ExecutionMonitor`](crate::execution::monitor::ExecutionMonitor)
+/// is stopped on drop.
 pub struct MonitorGuard {
     stop_tx: Option<tokio::sync::watch::Sender<bool>>,
     handle: Option<tokio::task::JoinHandle<()>>,
@@ -122,7 +127,10 @@ impl Drop for MonitorGuard {
     }
 }
 
-/// RAII guard that ensures child process is killed on drop
+/// RAII guard that ensures the child process is killed on drop.
+///
+/// Call [`disarm`](Self::disarm) after the process exits normally to take
+/// ownership of the `Child` and prevent the kill-on-drop behavior.
 pub struct ProcessGuard {
     child: Option<tokio::process::Child>,
     should_kill: bool,

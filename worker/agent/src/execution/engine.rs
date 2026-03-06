@@ -17,18 +17,23 @@ use crate::execution::types::{
 };
 use crate::telemetry;
 
-/// Errors during execution setup (before process spawns)
+/// Errors during execution setup (before process spawns).
 #[derive(Debug)]
 pub enum RunError {
+    /// The artifact binary was not found on disk.
     ArtifactNotFound(String),
+    /// RedEDR HTTP API could not be configured or reached.
     RedEdrSetupFailed(String),
+    /// Telemetry directory or trace collector could not be created.
     EnvironmentSetupFailed(String),
+    /// `tokio::process::Command::spawn` failed.
     ProcessSpawnFailed(String),
-    /// RedEDR had leftover events from a previous run (strict mode)
+    /// RedEDR had leftover events from a previous run (strict mode).
     FailedPrecondition(String),
 }
 
 impl RunError {
+    /// Convert into a [`tonic::Status`] with an appropriate gRPC status code.
     pub fn into_status(self) -> tonic::Status {
         match self {
             RunError::ArtifactNotFound(msg) => tonic::Status::not_found(msg),
@@ -58,6 +63,11 @@ impl std::error::Error for RunError {}
 ///
 /// Skips RedEDR, telemetry, monitoring — used on a clean VM without AV
 /// to disambiguate carrier errors from AV kills.
+///
+/// # Errors
+///
+/// Returns [`RunError::ArtifactNotFound`] if the binary is missing, or
+/// [`RunError::ProcessSpawnFailed`] if `tokio::process::Command::spawn` fails.
 pub async fn execute_dryrun(
     request: &RunRequest,
     context: &RunContext,
@@ -163,6 +173,14 @@ pub async fn execute_dryrun(
 /// - Reset RedEDR and cleanup artifacts
 ///
 /// Assumes the execution lock is already held by the caller.
+///
+/// # Errors
+///
+/// Returns [`RunError::ArtifactNotFound`] if the binary is missing,
+/// [`RunError::RedEdrSetupFailed`] if RedEDR cannot be configured,
+/// [`RunError::EnvironmentSetupFailed`] if the telemetry directory cannot be created,
+/// [`RunError::ProcessSpawnFailed`] if the artifact process cannot be spawned, or
+/// [`RunError::FailedPrecondition`] if RedEDR has leftover events (strict mode).
 pub async fn execute_run(
     request: &RunRequest,
     context: &RunContext,

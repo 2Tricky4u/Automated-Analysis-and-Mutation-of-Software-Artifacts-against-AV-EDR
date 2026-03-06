@@ -279,7 +279,11 @@ pub fn collect_trace_log_binary(
     );
 }
 
-/// Collect basic-block coverage from metadata file
+/// Collect basic-block coverage from metadata file.
+///
+/// # Errors
+///
+/// Returns an error if `metadata_path` cannot be read.
 pub async fn collect_bb_coverage(
     _bitmap_path: &Path,
     metadata_path: &Path,
@@ -338,7 +342,11 @@ pub async fn collect_bb_coverage(
     })
 }
 
-/// Collect API checkpoint events from disk file (checkpoints.log)
+/// Collect API checkpoint events from disk file (`checkpoints.log`).
+///
+/// # Errors
+///
+/// Returns an error if `checkpoints_path` cannot be read.
 pub async fn collect_api_checkpoints(
     checkpoints_path: &Path,
     job_id: &str,

@@ -1,11 +1,12 @@
+//! Line-level trace collector via named pipe.
+//!
+//! Listens on `\\.\pipe\rededr_trace` for trace events from instrumented artifacts.
+//! Supports both Base64 text format and binary protocol (auto-detection).
+//!
+//! **Async implementation**: Uses `tokio::net::windows::named_pipe` for fully async I/O.
+
 #[cfg(any(windows, test))]
 use anyhow::Context;
-/// Line-level trace collector via named pipe (Lepori 2023-inspired)
-///
-/// Listens on \\.\pipe\rededr_trace for trace events from instrumented artifacts.
-/// Supports both Base64 text format and binary protocol (auto-detection).
-///
-/// **Async Implementation**: Uses tokio::net::windows::named_pipe for fully async I/O
 use anyhow::Result;
 #[cfg(any(windows, test))]
 use base64::{Engine as _, engine::general_purpose};
@@ -36,18 +37,27 @@ const MAGIC_BINARY: u32 = 0x49535452; // 'ISTR'
 #[cfg(windows)]
 const HEADER_SIZE: usize = std::mem::size_of::<InstRecordHeader>();
 
-/// Parsed line trace event from artifact
+/// Parsed line trace event from an instrumented artifact.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TraceEvent {
+    /// Monotonic sequence number (assigned by collector or binary header).
     pub seq: u32,
+    /// OS thread ID that emitted this trace (0 for Base64 text format).
     pub thread_id: u32,
+    /// Source file path (e.g. `"loader.c"`).
     pub file: String,
+    /// Source line number.
     pub line: u32,
+    /// Function name (may be empty for AST-format traces).
     pub func: String,
+    /// Timestamp in microseconds since UNIX epoch.
     pub ts_us: u64,
 }
 
-/// Named pipe trace collector (async)
+/// Named pipe trace collector (async).
+///
+/// Listens on `\\.\pipe\rededr_trace` and auto-detects the protocol
+/// (Base64 text vs binary) by peeking at the first 4 bytes.
 pub struct TraceCollector {
     #[cfg_attr(not(windows), allow(dead_code))]
     pipe_name: String,
@@ -58,6 +68,7 @@ pub struct TraceCollector {
 }
 
 impl TraceCollector {
+    /// Create a new collector that sends parsed events to `event_tx`.
     pub fn new(event_tx: mpsc::Sender<TraceEvent>) -> Self {
         Self {
             pipe_name: r"\\.\pipe\rededr_trace".to_string(),
@@ -66,8 +77,13 @@ impl TraceCollector {
         }
     }
 
-    /// Start async named pipe server (fully async, no spawn_blocking needed)
-    /// Auto-detects Base64 text vs binary protocol by peeking at first 4 bytes
+    /// Start async named pipe server (fully async, no `spawn_blocking` needed).
+    ///
+    /// Auto-detects Base64 text vs binary protocol by peeking at the first 4 bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the named pipe cannot be created after retries.
     #[cfg(windows)]
     pub async fn start_server(&self) -> Result<()> {
         use tokio::io::AsyncReadExt;
