@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Setup LLVM/Clang for cross-compiling C/C++ to Windows MSVC from WSL
-# Part of AutoMutate++ build pipeline
+# -----------------------------------------------------------------------
+# setup-llvm-crossbuild.sh -- Install LLVM 17 + xwin for Linux->Windows PE cross-compilation
 #
-# Usage:
-#   ./setup-llvm-crossbuild.sh
+# Provisions the WSL2 toolchain that the build crate uses to compile
+# loader templates into Windows x64 PE executables. Installs LLVM 17
+# (clang, lld, llc, opt), the xwin tool for downloading the Microsoft
+# CRT and Windows SDK headers/libs, and verifies the chain with a
+# smoke-test cross-compile.
 #
-# This script:
-#   1. Installs LLVM 17 toolchain (clang, lld, llc, opt)
-#   2. Installs xwin for Microsoft CRT/SDK
-#   3. Downloads Windows SDK files (~300MB)
-#   4. Verifies cross-compilation works
+# Usage:  ./setup-llvm-crossbuild.sh
+# Prerequisites: WSL2 Ubuntu, internet access, sudo, ~1 GB disk for SDK
+# Called by: standalone (one-time setup, before 02-wsl-bootstrap.sh or after)
+# -----------------------------------------------------------------------
 
 set -euo pipefail
 

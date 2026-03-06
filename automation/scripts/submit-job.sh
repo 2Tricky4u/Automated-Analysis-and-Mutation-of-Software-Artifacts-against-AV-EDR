@@ -1,6 +1,21 @@
 #!/bin/bash
-# Submit a job to the scheduler via gRPC
-# Usage: ./submit-job.sh --payload <path> [--carrier <module>] [--decoder <module>] ...
+# -----------------------------------------------------------------------
+# submit-job.sh -- Submit job to scheduler via ScheduleJob gRPC endpoint
+#
+# Sends a multi-round mutation job to the controller's ScheduleJob RPC.
+# The controller queues the job, selects mutations per round, builds
+# artifacts, and dispatches them to worker VMs for execution and
+# telemetry collection.
+#
+# Usage:  ./submit-job.sh --payload <path> [--name <name>]
+#                         [--max-rounds <n>] [--stop-on-evasion]
+#                         [--carrier <mod>] [--decoder <mod>]
+#                         [--antiemulation <mod>] [--guardrail <mod>]
+#                         [--virtualprotect <mod>] [--decoy <mod>]
+#                         [--encoding <type>] [--controller <addr>]
+# Prerequisites: grpcurl, jq, proto/ directory with controller.proto
+# Called by: standalone
+# -----------------------------------------------------------------------
 
 set -e
 

@@ -1,6 +1,15 @@
-#!/bin/bash
-# Reset Kibana Dashboard - Clean up and recreate
-# Use this if dashboard setup failed or needs to be refreshed
+#!/usr/bin/env bash
+# -----------------------------------------------------------------------
+# reset-kibana-dashboard.sh -- Delete and recreate the Artifact Execution dashboard
+#
+# Removes the dashboard plus its saved searches, then re-runs
+# create-kibana-dashboard.sh to provision fresh objects.  Useful after
+# schema changes or a failed initial setup.
+#
+# Usage:  ./reset-kibana-dashboard.sh
+# Prerequisites: curl, jq, running Kibana + Elasticsearch
+# Called by: standalone
+# -----------------------------------------------------------------------
 
 set -e
 

@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+# -----------------------------------------------------------------------
+# test-full-pipeline.sh -- End-to-end integration test — build, deploy, execute, query
+#
+# Drives the full artifact lifecycle through all four gRPC hops:
+# controller BuildArtifact, controller DeployArtifact, worker RunSample,
+# then queries Elasticsearch for the resulting telemetry. Intended for
+# verifying that the controller-worker-elastic chain is wired correctly.
+#
+# Usage:  ./test-full-pipeline.sh [template] [source_file]
+# Prerequisites: grpcurl, jq, curl, running controller + worker + ES
+# Called by: standalone (integration smoke test)
+# -----------------------------------------------------------------------
 set -euo pipefail
 
 GREEN="\033[0;32m"
@@ -25,7 +37,7 @@ echo "  Template: ${TEMPLATE}/${SOURCE}"
 echo ""
 
 # ============================================================================
-# Step 1: Build artifact on controller
+# Compile the C template into a Windows PE via the controller's build service
 # ============================================================================
 echo -e "${BLUE}[1/4] Building artifact: ${TEMPLATE}/${SOURCE}${NC}"
 
@@ -55,7 +67,7 @@ echo -e "${GREEN}✓ Built artifact: ${ARTIFACT_ID}${NC}"
 echo ""
 
 # ============================================================================
-# Step 2: Deploy artifact to worker (FULLY AUTOMATED!)
+# Stream the built PE to the worker VM so it is ready for execution
 # ============================================================================
 echo -e "${BLUE}[2/4] Deploying artifact to worker: ${WORKER_ADDR}${NC}"
 
@@ -89,7 +101,7 @@ echo -e "${GREEN}  Worker path: ${WORKER_PATH}${NC}"
 echo ""
 
 # ============================================================================
-# Step 3: Execute on worker
+# Run the artifact on the worker under ETW monitoring to collect telemetry
 # ============================================================================
 JOB_ID="test-$(date +%s)"
 echo -e "${BLUE}[3/4] Executing on worker (job_id=${JOB_ID})...${NC}"
@@ -120,7 +132,7 @@ fi
 echo ""
 
 # ============================================================================
-# Step 4: Query telemetry
+# Fetch run results and RedEDR events from Elasticsearch to verify indexing
 # ============================================================================
 echo -e "${BLUE}[4/4] Querying telemetry (waiting 3s for indexing)...${NC}"
 sleep 3

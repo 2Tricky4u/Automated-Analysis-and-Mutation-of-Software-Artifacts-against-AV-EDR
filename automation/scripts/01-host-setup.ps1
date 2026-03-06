@@ -61,7 +61,7 @@ if ($config.network.subnet -like '172.*') {
     throw "config.network.subnet '$($config.network.subnet)' must not be in 172.16.0.0/12. Use e.g. 10.200.200.0/24"
 }
 
-# 1. Enable features
+# --- Enable Hyper-V, WSL2, and VirtualMachinePlatform ---
 Write-Info "Enabling Hyper-V, WSL2, VirtualMachinePlatform..."
 $rebootNeeded = $false
 
@@ -88,7 +88,7 @@ if ($rebootNeeded) {
     exit 3010
 }
 
-# 2. Install WSL2 + Ubuntu
+# --- Install WSL2 with Ubuntu distribution ---
 Write-Info "Installing WSL2 Ubuntu..."
 if (-not (wsl -l -q 2>$null | Select-String "Ubuntu")) {
     wsl --install -d Ubuntu --no-launch
@@ -100,7 +100,7 @@ if (-not (wsl -l -q 2>$null | Select-String "Ubuntu")) {
 # Set default to WSL 2
 wsl --set-default-version 2 2>$null
 
-# 3. Configure WSL2 networking
+# --- Configure WSL2 networking for internet access ---
 Write-Info "Configuring WSL2 networking for internet access..."
 
 # Create .wslconfig to ensure proper networking mode
@@ -161,7 +161,7 @@ wsl --shutdown 2>$null
 Start-Sleep -Seconds 3
 Write-Success "WSL2 networking configured"
 
-# 4. Create Internal switch
+# --- Create internal NAT switch ---
 if (-not (Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue)) {
     New-VMSwitch -Name $SwitchName -SwitchType Internal | Out-Null
     Write-Success "Created internal switch: $SwitchName"
@@ -169,7 +169,7 @@ if (-not (Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue)) {
     Write-Success "Switch $SwitchName exists"
 }
 
-# 5. Assign host IP
+# --- Assign host IP to internal switch adapter ---
 $adapter = Get-NetAdapter | Where-Object { $_.Name -like "*$SwitchName*" } | Select-Object -First 1
 if (-not $adapter) {
     Write-Err "vEthernet adapter for $SwitchName not found"
@@ -184,7 +184,7 @@ if (-not $existingIp) {
     Write-Success "Host IP $HostIP already assigned"
 }
 
-# 5.5. Enable IP forwarding between WSL2 and IsolationSwitch
+# --- Enable IP forwarding between WSL2 and IsolationSwitch ---
 Write-Info "Enabling IP forwarding for WSL2 <-> VM communication..."
 
 # Enable global IP forwarding on Windows (requires reboot to fully activate)
@@ -225,7 +225,7 @@ if ($wslAdapter) {
 
 Write-Success "IP forwarding configured - WSL2 can now communicate with VMs"
 
-# 5.6. Configure WSL2 routing to VM network
+# --- Configure WSL2 routing to VM network ---
 Write-Info "Configuring WSL2 route to VM network..."
 
 # Check if WSL is running
@@ -303,7 +303,7 @@ if (-not $wslWasRunning) {
     Write-Success "WSL configured and shut down"
 }
 
-# 6. Firewall rules
+# --- Firewall rules for lab traffic ---
 $ports = @($GrpcPort, $EsPort, $KibanaPort)
 foreach ($port in $ports) {
     $ruleName = "AutoMutate-Allow-$port"
@@ -316,11 +316,13 @@ foreach ($port in $ports) {
     }
 }
 
-# 7. Port proxy
+# --- Port proxy: expose WSL services to VM network ---
 # Note: Controller (gRPC) binds to 0.0.0.0, so it doesn't need portproxy
 # Only Elasticsearch and Kibana (running in WSL on 127.0.0.1) need portproxy
 foreach ($port in $ports) {
-    # Skip gRPC port - controller binds to 0.0.0.0 directly (portproxy breaks HTTP/2 framing from WSL)
+    # Disabled: gRPC skip logic removed because all ports now use portproxy uniformly.
+    # The original approach selectively skipped the gRPC port since the controller
+    # binds to 0.0.0.0, but portproxy for all ports proved more consistent.
     #if ($port -eq $GrpcPort) {
     #    Write-Info "Skipping port proxy for gRPC port $port (controller binds to 0.0.0.0 directly)"
     #    continue
@@ -332,7 +334,7 @@ foreach ($port in $ports) {
     Write-Success "Port proxy: ${HostIP}:$port -> 127.0.0.1:$port"
 }
 
-# 8. Configure NAT for VM internet access
+# --- Configure NAT gateway for VM internet access ---
 Write-Info "Configuring NAT for VM internet access (optional)..."
 $natName = "AutoMutateVMNAT"
 
@@ -385,7 +387,7 @@ Write-Info "  - IP forwarding enabled: WSL2 <-> Windows Host <-> VMs"
 Write-Info "  - WSL2 can directly connect to VMs (e.g., controller -> worker agent)"
 Write-Info "  - VMs get internet only when NAT is enabled and subnet is non-overlapping"
 
-# 9. VM-to-VM Isolation
+# --- VM-to-VM isolation firewall rules ---
 $EnableVmIsolation = $false
 if ($config.security.ContainsKey('enable_vm_isolation')) {
     try {
@@ -442,7 +444,7 @@ if ($EnableVmIsolation) {
     Write-Info "Or use: .\scripts\toggle-vm-isolation.ps1 -Action Enable"
 }
 
-# 10. Egress Filtering
+# --- Egress filtering for outbound VM traffic ---
 $EnableEgressFilter = $false
 if ($config.security.ContainsKey('enable_egress_filter')) {
     try {
@@ -498,7 +500,7 @@ if ($EnableEgressFilter) {
     Write-Info "Or use: .\scripts\manage-egress-filter.ps1 -Action Enable"
 }
 
-# 12) Security notes
+# --- Security configuration summary ---
 Write-Info "`n+================================================================+"
 Write-Info "Security Configuration Summary:"
 Write-Info "+================================================================+"
