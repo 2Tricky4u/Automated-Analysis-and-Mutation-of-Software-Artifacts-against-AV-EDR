@@ -19,17 +19,22 @@ pub struct IrMutator {
 }
 
 impl IrMutator {
+    /// Create a new IR mutator with the default PRNG seed.
+    ///
+    /// This is infallible — the `Result` wrapper exists for trait consistency.
     pub fn new() -> Result<Self> {
         Ok(Self { rng_state: 1234 })
     }
 
+    /// Create an IR mutator with a specific PRNG seed for deterministic output.
     pub fn with_seed(seed: u32) -> Self {
         Self { rng_state: seed }
     }
 
     /// Apply a batch of `llvm.*` mutations to IR text.
     ///
-    /// Returns `(mutated_ir, applied_ids)`.
+    /// Returns `(mutated_ir, applied_ids)`. Unknown mutation names are logged
+    /// at `warn` level and silently skipped.
     pub fn apply(
         &mut self,
         ir_text: &str,

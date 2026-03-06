@@ -1,7 +1,22 @@
-/// Artifact Builder - Clang cross-compilation wrapper
-///
-/// Compiles C templates to Windows PE executables using Clang with xwin SDK.
-/// Uses the same flags and dependencies as corpus/templates/build_all.sh.
+//! Artifact builder — cross-compiles C templates to Windows PE executables.
+//!
+//! This module is the primary public API of the `build` crate. It orchestrates
+//! the full build pipeline:
+//!
+//! ```text
+//! ModuleSelection → Assembler → AST mutations → Compile (C → IR → .o) →
+//! IR mutations → Link (.o → .exe) → Binary mutations → SHA256 rename
+//! ```
+//!
+//! Two compilation backends are supported:
+//! - **Standard** (default): `clang` + `lld-link` via xwin SDK (Linux → Windows)
+//! - **MSVC-compat**: `clang-cl` + MSVC `link.exe` for genuine PE metadata
+//!
+//! When instrumentation is enabled (`trace_mode != "off"`), an instrumented
+//! variant is also produced by re-compiling through LLVM IR with line tracing
+//! and/or BB coverage injected by [`crate::Instrumenter`].
+//!
+//! See [`ArtifactBuilder::build`] for the main entry point.
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -14,7 +29,12 @@ use crate::template::assembler::{Assembler, ModuleSelection};
 use crate::template::payload::{EncodingType, PayloadEncoder};
 use crate::transform::BinaryMutator;
 
-/// Configuration for the artifact builder
+/// Configuration for the artifact builder.
+///
+/// Holds all filesystem paths and feature flags needed by [`ArtifactBuilder::new`].
+/// The xwin SDK directory provides Windows headers and libraries for
+/// Linux-to-Windows cross-compilation. When [`msvc_compat`](Self::msvc_compat)
+/// is set, the builder switches to `clang-cl` + `link.exe`.
 #[derive(Debug, Clone)]
 pub struct BuilderConfig {
     /// Path to output directory for artifacts (e.g., "artifacts")
@@ -48,7 +68,13 @@ impl Default for BuilderConfig {
     }
 }
 
-/// Metadata about a built artifact
+/// Metadata about a successfully built artifact.
+///
+/// Captures everything needed to identify, reproduce, and index a build:
+/// filesystem paths, content hash, compiler flags, and applied mutations.
+/// The `artifact_id` is a SHA-256 content hash of the final PE binary,
+/// making it a stable, content-addressable identifier suitable for
+/// storage in ElasticSearch.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuiltArtifact {
     /// SHA256 hash of the artifact (artifact_id)
@@ -92,6 +118,11 @@ pub struct PreparedPayload {
 /// encoding → C header generation. Deterministic: same inputs → same output.
 /// Call once per (payload, encoding, trace_mode, sc_checkpoint_count) tuple and
 /// reuse via `BuildInput::ModularTemplate::precomputed_payload`.
+///
+/// # Errors
+///
+/// Returns an error if INT3 checkpoint patching fails (invalid offsets) or
+/// encoding produces an invalid C header.
 pub fn prepare_payload(
     payload: &[u8],
     encoding: EncodingType,
@@ -161,10 +192,15 @@ pub fn prepare_payload(
     })
 }
 
-/// Input format for artifact building
+/// Input specification for artifact building.
+///
+/// Currently the only variant is [`ModularTemplate`](Self::ModularTemplate),
+/// which drives the full assembly pipeline: [`Assembler`] replaces `@MODULE`
+/// markers with selected module code, then [`crate::mutator::Mutator`] applies
+/// AST and IR mutations, and finally the compiler + linker produce a PE binary.
 #[derive(Debug, Clone)]
 pub enum BuildInput {
-    /// Build from modular template assembly using @MODULE markers
+    /// Build from modular template assembly using `@MODULE` markers.
     ModularTemplate {
         /// Module selection (carrier, decoder, antiemulation, etc.)
         modules: ModuleSelection,
@@ -188,13 +224,27 @@ pub enum BuildInput {
     },
 }
 
-/// Artifact builder
+/// Artifact builder — compiles [`BuildInput`] into Windows PE executables.
+///
+/// Created via [`ArtifactBuilder::new`] with a validated [`BuilderConfig`].
+/// Holds resolved xwin SDK paths for the lifetime of the builder.
 pub struct ArtifactBuilder {
     config: BuilderConfig,
     xwin: XwinPaths,
 }
 
 impl ArtifactBuilder {
+    /// Create a new artifact builder with the given configuration.
+    ///
+    /// Validates that the xwin SDK directory exists and creates the output
+    /// directory if needed. The xwin SDK provides Windows headers and libraries
+    /// for Linux-to-Windows cross-compilation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - [`BuilderConfig::xwin_dir`] does not exist on the filesystem
+    /// - [`BuilderConfig::output_dir`] cannot be created
     pub fn new(config: BuilderConfig) -> Result<Self> {
         // Validate xwin SDK exists
         if !config.xwin_dir.exists() {
@@ -211,13 +261,44 @@ impl ArtifactBuilder {
         Ok(Self { config, xwin })
     }
 
-    /// Build artifact from modular template input
+    /// Build an artifact from the given [`BuildInput`].
+    ///
+    /// Runs the full pipeline: template assembly → AST mutations → compile →
+    /// IR mutations → link → binary mutations → SHA-256 rename. When
+    /// `trace_mode` is not `"off"`, a second instrumented variant is produced.
     ///
     /// # Arguments
-    /// * `input` - Modular template specification (modules, payload, encoding, mutations, trace)
+    ///
+    /// * `input` — Modular template specification (modules, payload, encoding,
+    ///   mutations, trace mode).
     ///
     /// # Returns
-    /// Metadata about the built artifact
+    ///
+    /// [`BuiltArtifact`] metadata including the content-addressed `artifact_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if template assembly, payload encoding, compilation,
+    /// linking, or any mutation step fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let config = BuilderConfig::default();
+    /// let builder = ArtifactBuilder::new(config)?;
+    /// let input = BuildInput::ModularTemplate {
+    ///     modules: ModuleSelection::new(),
+    ///     payload: vec![0x90; 32],
+    ///     encoding: EncodingType::Xor,
+    ///     mutations: vec![],
+    ///     trace_mode: "off".into(),
+    ///     mutation_targets: vec![],
+    ///     sc_checkpoint_count: None,
+    ///     precomputed_payload: None,
+    /// };
+    /// let artifact = builder.build(input).await?;
+    /// println!("Built: {}", artifact.artifact_id);
+    /// ```
     pub async fn build(&self, input: BuildInput) -> Result<BuiltArtifact> {
         let BuildInput::ModularTemplate {
             modules,
@@ -1696,7 +1777,11 @@ impl ArtifactBuilder {
     }
 }
 
-/// Resolved xwin SDK paths for cross-compilation
+/// Resolved xwin SDK paths for cross-compilation.
+///
+/// Computed once from the root xwin directory and reused for every compilation
+/// invocation. Provides include paths (`-isystem`) and library paths (`-L`)
+/// for the MSVC CRT, Windows SDK (ucrt, um, shared, winrt).
 #[derive(Debug, Clone)]
 pub struct XwinPaths {
     pub crt_include: String,

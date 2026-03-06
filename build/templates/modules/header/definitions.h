@@ -1,3 +1,20 @@
+/**
+ * Module interface definitions for the modular loader template.
+ *
+ * Every module file (carrier, decoder, antiemulation, etc.) includes this
+ * header to access shared types, macros, and the function prototypes that
+ * form the module contract. The Assembler inlines this header once via the
+ * `@MODULE:definitions` marker in `loader_template.c`.
+ *
+ * Module function prototypes:
+ *   carrier()          — memory setup and payload execution
+ *   decode_payload()   — in-place decryption of encoded payload
+ *   antiemulation()    — environment checks / resource burn
+ *   decoy()            — benign activity for behavioral misdirection
+ *   deconditioner()    — EDR baseline normalization (alloc/write/free loop)
+ *   guardrail()        — execution environment gate (0 = safe, nonzero = bail)
+ *   MyVirtualProtect() — hookable VirtualProtect wrapper
+ */
 #ifndef DEFINITIONS_H
 #define DEFINITIONS_H
 

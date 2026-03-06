@@ -1,6 +1,19 @@
-//! Instrumentation module - Code instrumentation for tracing and coverage
+//! Code instrumentation for tracing and coverage.
 //!
-//! Provides line-level tracing and basic-block coverage instrumentation.
+//! Provides two injection strategies used by the two-run differential protocol:
+//!
+//! | Run   | Trace Mode     | Purpose                              |
+//! |-------|---------------|--------------------------------------|
+//! | Run A | `lines` / `bb` | Execution path, truncation localization |
+//! | Run B | `off`          | Ground-truth EDR behavior            |
+//!
+//! By comparing detection outcomes between Run A and Run B, the triage engine
+//! can distinguish real detections from instrumentation artifacts.
+//!
+//! # Submodules
+//!
+//! - [`instrumenter`] — LLVM IR-level BB coverage (SanitizerCoverage) and API tracing
+//! - [`line_tracer`] — AST-level line tracing via tree-sitter (C/C++ source injection)
 
 pub mod instrumenter;
 pub mod line_tracer;

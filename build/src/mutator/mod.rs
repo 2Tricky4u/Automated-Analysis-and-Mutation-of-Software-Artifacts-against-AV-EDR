@@ -1,16 +1,16 @@
-/// Mutation engine for AST and LLVM IR transformations
-///
-/// Supported mutations:
-/// - ast.decon_rounds:          Iteration count (tree-sitter)
-/// - ast.fill_pattern:          Benign data content (tree-sitter)
-/// - ast.exec_decoy:            Execute from allocated memory (tree-sitter)
-/// - ast.timing_pattern:        Inter-operation delays (tree-sitter)
-/// - ast.protection_transition: Memory protection pattern (tree-sitter)
-/// - ast.const_obfuscation:     Volatile decomposition of integer constants (tree-sitter)
-/// - ast.string_xor:            XOR-encode string literals (tree-sitter)
-/// - llvm.nop_insert:           Insert NOP instructions in LLVM IR
-/// - llvm.opaque_predicate:     Opaque predicates in LLVM IR
-/// - llvm.junk_block:           Dead unreachable blocks in LLVM IR
+//! Mutation engine for AST and LLVM IR transformations.
+//!
+//! Supported mutations:
+//! - `ast.decon_rounds`          — Iteration count (tree-sitter)
+//! - `ast.fill_pattern`          — Benign data content (tree-sitter)
+//! - `ast.exec_decoy`            — Execute from allocated memory (tree-sitter)
+//! - `ast.timing_pattern`        — Inter-operation delays (tree-sitter)
+//! - `ast.protection_transition` — Memory protection pattern (tree-sitter)
+//! - `ast.const_obfuscation`     — Volatile decomposition of integer constants (tree-sitter)
+//! - `ast.string_xor`            — XOR-encode string literals (tree-sitter)
+//! - `llvm.nop_insert`           — Insert NOP instructions in LLVM IR
+//! - `llvm.opaque_predicate`     — Opaque predicates in LLVM IR
+//! - `llvm.junk_block`           — Dead unreachable blocks in LLVM IR
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use tracing::warn;
@@ -68,18 +68,28 @@ impl MutationSpec {
 pub struct Mutator;
 
 impl Mutator {
-    /// Apply mutations to source code or IR
+    /// Apply mutations to source code or IR.
+    ///
+    /// Routes each [`MutationSpec`] by its `id` prefix:
+    /// - `ast.*`    → tree-sitter [`AstMutator`] (marker-based + global transforms)
+    /// - `llvm.*`   → [`IrMutator`] (text-based `.ll` transforms)
+    /// - `binary.*` → skipped here (handled post-link in `builder.rs`)
     ///
     /// # Arguments
-    /// * `input` - Original source code (C source or LLVM IR)
-    /// * `mutations` - List of mutations to apply
+    ///
+    /// * `input` — Original source code (C source or LLVM IR, must be valid UTF-8)
+    /// * `mutations` — List of mutations to apply
     ///
     /// # Returns
-    /// Transformed code and list of successfully applied mutation IDs
     ///
-    /// Mutation routing (2-way):
-    /// - `ast.*`  → tree-sitter `AstMutator` (marker-based + global string_xor)
-    /// - `llvm.*` → `IrMutator`
+    /// Transformed code and list of successfully applied mutation IDs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `input` is not valid UTF-8 (required for tree-sitter parsing)
+    /// - Tree-sitter language initialization fails
+    /// - An individual AST or IR mutation handler fails
     pub fn apply(input: &[u8], mutations: &[MutationSpec]) -> Result<(Vec<u8>, Vec<String>)> {
         if mutations.is_empty() {
             return Ok((input.to_vec(), vec![]));

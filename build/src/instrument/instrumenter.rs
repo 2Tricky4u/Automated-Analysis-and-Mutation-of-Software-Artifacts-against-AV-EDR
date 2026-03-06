@@ -17,14 +17,25 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::debug;
 
+/// LLVM IR-level instrumenter for BB coverage and API tracing.
+///
+/// Stateless — all configuration comes from the [`crate::TraceMode`] passed
+/// to [`Instrumenter::instrument`].
 pub struct Instrumenter;
 
 impl Instrumenter {
+    /// Create a new instrumenter.
     pub fn new() -> Self {
         Self
     }
 
-    /// Inject instrumentation into LLVM IR
+    /// Inject instrumentation into LLVM IR.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The IR file at `ir_path` cannot be read
+    /// - The instrumented IR cannot be written to `output_path`
     pub async fn instrument(
         &mut self,
         ir_path: &Path,

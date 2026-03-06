@@ -116,7 +116,15 @@ impl PayloadEncoder {
         dictionary
     }
 
-    /// Encode payload using specified encoding type
+    /// Encode payload using the specified encoding type.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let encoder = PayloadEncoder::with_xor_key([0xAA, 0x55]);
+    /// let encoded = encoder.encode(&[0x90, 0xCC], EncodingType::Xor);
+    /// assert_eq!(encoded.data.len(), 2);
+    /// ```
     pub fn encode(&self, payload: &[u8], encoding: EncodingType) -> EncodedPayload {
         match encoding {
             EncodingType::Xor => self.encode_xor(payload),
@@ -201,7 +209,11 @@ impl PayloadEncoder {
         }
     }
 
-    /// Generate C header code for the encoded payload
+    /// Generate C header code for the encoded payload.
+    ///
+    /// Produces a complete `payload.h` header with `#ifndef` guards,
+    /// `PAYLOAD_LEN` define, encoding-specific constants (XOR keys, dictionary,
+    /// sub-byte mapping), and the `supermega_payload` byte array.
     pub fn generate_c_header(&self, encoded: &EncodedPayload) -> String {
         match encoded.encoding {
             EncodingType::Xor => self.generate_xor_header(encoded),
@@ -362,7 +374,11 @@ fn format_c_byte_array(data: &[u8]) -> String {
     lines.join("\n")
 }
 
-/// Generate a dummy/test payload (NOPs + INT3)
+/// Generate a dummy/test payload (NOPs + INT3).
+///
+/// Fills the buffer with `0x90` (NOP) and places two `0xCC` (INT3)
+/// bytes at the end. Useful for integration tests that need a valid
+/// payload without real shellcode.
 pub fn generate_test_payload(size: usize) -> Vec<u8> {
     let mut payload = vec![0x90; size]; // NOPs
     if size >= 2 {
