@@ -1,7 +1,5 @@
 /// Mutation engine for AST and LLVM IR transformations
 ///
-/// Implements CLAUDE.md Section 3: Fuzzer & Mutation Engine
-///
 /// Supported mutations:
 /// - ast.decon_rounds:          Iteration count (tree-sitter)
 /// - ast.fill_pattern:          Benign data content (tree-sitter)
@@ -105,7 +103,7 @@ impl Mutator {
             }
         }
 
-        // Phase 1: tree-sitter AST mutations (all ast.*, including string_xor)
+        // Apply tree-sitter AST mutations (marker-based and global transforms)
         if !ast_mutations.is_empty() {
             let source = String::from_utf8(code.clone()).context("C source must be valid UTF-8")?;
             let mut ast = AstMutator::new().context("Failed to init tree-sitter")?;
@@ -115,7 +113,7 @@ impl Mutator {
             applied.extend(ast_applied);
         }
 
-        // Phase 2: LLVM IR mutations (nop_insert, opaque_predicate, junk_block)
+        // Apply LLVM IR mutations (nop_insert, opaque_predicate, junk_block)
         if !ir_mutations.is_empty() {
             let ir_text = String::from_utf8(code.clone()).context("IR text must be valid UTF-8")?;
             let mut ir = IrMutator::new().context("Failed to init IrMutator")?;

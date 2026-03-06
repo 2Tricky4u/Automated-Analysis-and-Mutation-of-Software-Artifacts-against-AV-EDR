@@ -13,10 +13,6 @@
 //! - `ast.const_obfuscation`     — volatile decomposition of integer constants (global, tree-sitter)
 //! - `ast.string_xor`            — XOR-encode string literals (global, tree-sitter)
 //!
-//! Adding a new marker-based mutation:
-//!   1. Add a `// @MUTATE:<name>` marker in the C template
-//!   2. Add a match arm in `apply_at_marker()`
-//!   3. Implement the handler method
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -74,7 +70,7 @@ impl AstMutator {
             }
         }
 
-        // Phase 1: marker-based mutations
+        // Apply marker-based mutations
         for mutation in &marker_mutations {
             let (_category, name) = mutation.parse();
 
@@ -110,21 +106,21 @@ impl AstMutator {
             }
         }
 
-        // Phase 1.5: global benign_syscall_insert (before const/string obfuscation)
+        // Apply global benign_syscall_insert (before const/string obfuscation)
         if let Some(spec) = benign_insert_spec {
             result = self.apply_benign_syscall_insert(&result, &spec.params)?;
             applied.push(spec.id.clone());
             info!("Applied ast.benign_syscall_insert globally");
         }
 
-        // Phase 2a: global const_obfuscation (number_literal nodes)
+        // Apply global const_obfuscation (number_literal nodes)
         if let Some(spec) = const_obfuscation_spec {
             result = self.apply_const_obfuscation(&result, &spec.params)?;
             applied.push(spec.id.clone());
             info!("Applied ast.const_obfuscation globally");
         }
 
-        // Phase 2b: global string_xor (string_literal nodes, runs last)
+        // Apply global string_xor (string_literal nodes, runs last)
         if let Some(spec) = string_xor_spec {
             result = self.apply_string_xor(&result, &spec.params)?;
             applied.push(spec.id.clone());

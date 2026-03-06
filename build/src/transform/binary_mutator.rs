@@ -30,9 +30,7 @@ use super::binary_data::{
 };
 use crate::mutator::MutationSpec;
 
-// ============================================================================
-// PE Constants
-// ============================================================================
+// --- PE Constants ---
 
 const SECTION_HEADER_SIZE: usize = 40;
 
@@ -54,9 +52,7 @@ const IMAGE_DEBUG_TYPE_CODEVIEW: u32 = 2;
 // IMAGE_IMPORT_DESCRIPTOR size
 const IMPORT_DESC_SIZE: usize = 20;
 
-// ============================================================================
-// BinaryMutator
-// ============================================================================
+// --- BinaryMutator ---
 
 /// Post-link binary PE mutator
 ///
@@ -99,7 +95,7 @@ impl BinaryMutator {
             }
         }
 
-        // Phase 1: Apply non-consolidated transforms in order
+        // Apply non-consolidated transforms in order
         for spec in &other_specs {
             let (_, name) = spec.parse();
             let result = match name {
@@ -125,7 +121,7 @@ impl BinaryMutator {
             }
         }
 
-        // Phase 2: Apply consolidated section (padding + debug_dir → single .rdata)
+        // Apply consolidated section (padding + debug_dir → single .rdata)
         if !consolidated_specs.is_empty() {
             self.apply_consolidated_padding(&consolidated_specs)?;
             for spec in &consolidated_specs {
@@ -144,9 +140,7 @@ impl BinaryMutator {
         Ok((self.pe_bytes, applied))
     }
 
-    // ========================================================================
-    // PE byte helpers
-    // ========================================================================
+    // --- PE byte helpers ---
 
     fn read_u16(&self, offset: usize) -> u16 {
         u16::from_le_bytes(self.pe_bytes[offset..offset + 2].try_into().unwrap())
@@ -384,9 +378,7 @@ impl BinaryMutator {
         Ok(new_va)
     }
 
-    // ========================================================================
-    // Transform: binary.rich_header
-    // ========================================================================
+    // --- Transform: binary.rich_header ---
 
     /// Inject an MSVC-style Rich header between DOS stub and PE signature
     ///
@@ -454,9 +446,7 @@ impl BinaryMutator {
         Ok(())
     }
 
-    // ========================================================================
-    // Transform: binary.import_pad
-    // ========================================================================
+    // --- Transform: binary.import_pad ---
 
     /// Add benign imports to dilute the suspicious-import ratio
     ///
@@ -588,9 +578,7 @@ impl BinaryMutator {
         Ok(())
     }
 
-    // ========================================================================
-    // Transform: binary.resource_inject
-    // ========================================================================
+    // --- Transform: binary.resource_inject ---
 
     /// Add version info + manifest resources
     ///
@@ -658,9 +646,7 @@ impl BinaryMutator {
         Ok(())
     }
 
-    // ========================================================================
-    // Transform: binary.section_rename
-    // ========================================================================
+    // --- Transform: binary.section_rename ---
 
     /// Rename non-standard sections to MSVC defaults based on characteristics.
     ///
@@ -716,9 +702,7 @@ impl BinaryMutator {
         Ok(())
     }
 
-    // ========================================================================
-    // Transform: binary.timestamp
-    // ========================================================================
+    // --- Transform: binary.timestamp ---
 
     /// Backdate the PE timestamp to make it look like an older build.
     ///
@@ -765,9 +749,7 @@ impl BinaryMutator {
         Ok(())
     }
 
-    // ========================================================================
-    // Consolidated section: debug_dir + string_inject + entropy_normalize + size_pad
-    // ========================================================================
+    // --- Consolidated section: debug_dir + string_inject + entropy_normalize + size_pad ---
 
     /// Apply consolidated transforms as a single `.rdata` section.
     ///
@@ -967,9 +949,7 @@ impl BinaryMutator {
     }
 }
 
-// ============================================================================
-// Import Section Builder
-// ============================================================================
+// --- Import Section Builder ---
 
 /// Build complete import section data with combined IDT + new ILTs/IATs/names
 fn build_import_section(
@@ -1088,9 +1068,7 @@ fn build_import_section(
     data
 }
 
-// ============================================================================
-// Resource Section Builder
-// ============================================================================
+// --- Resource Section Builder ---
 
 // Resource types
 const RT_VERSION: u32 = 16;
@@ -1169,9 +1147,7 @@ fn build_resource_section(version_data: &[u8], manifest_data: &[u8], section_rva
     data
 }
 
-// ============================================================================
-// Utility functions
-// ============================================================================
+// --- Utility functions ---
 
 /// Compute Shannon entropy of a byte slice in bits per byte.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1251,9 +1227,7 @@ fn write_u64_at(buf: &mut [u8], offset: usize, val: u64) {
     buf[offset..offset + 8].copy_from_slice(&val.to_le_bytes());
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
+// --- Tests ---
 
 #[cfg(test)]
 mod tests {
@@ -2160,9 +2134,7 @@ mod tests {
         }
     }
 
-    // ====================================================================
-    // New hardening tests
-    // ====================================================================
+    // --- Hardening tests ---
 
     #[test]
     fn test_pe_checksum_nonzero() {

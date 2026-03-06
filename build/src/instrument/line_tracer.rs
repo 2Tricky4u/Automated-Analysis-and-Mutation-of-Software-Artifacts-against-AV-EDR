@@ -204,7 +204,7 @@ fn visit_node(
     // Handle preprocessor conditional blocks (#ifdef, #if, #else, #elif)
     // Tree-sitter parses these as separate nodes; statements inside them are NOT
     // children of the enclosing compound_statement, so we must inject here too.
-    // IMPORTANT: Only inject when the preproc block is inside a function body
+    // Only inject when the preproc block is inside a function body
     // (has a compound_statement ancestor). Top-level #ifdef blocks contain
     // declarations/includes — injecting a function call there is invalid C.
     if matches!(
