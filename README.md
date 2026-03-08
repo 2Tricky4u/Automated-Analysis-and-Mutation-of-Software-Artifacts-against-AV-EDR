@@ -13,7 +13,7 @@
 <br />
 <div align="center">
   <a href="https://github.com/2Tricky4u/Automated-Analysis-and-Mutation-of-Software-Artifacts-against-AV-EDR">
-    <img src="docs/images/hierarchy.png" alt="Logo" width="200">
+    <img src="docs/images/illustration.png" alt="Logo" width="2752">
   </a>
 
 <h3 align="center">AutoMutate++</h3>
@@ -48,7 +48,7 @@
       <ul>
         <li><a href="#system-overview">System Overview</a></li>
         <li><a href="#closed-experimental-loop">Closed Experimental Loop</a></li>
-        <li><a href="#two-run-differential-protocol">Two-Run Differential Protocol</a></li>
+        <li><a href="#two-run-differential-protocol">Three-Run Differential Protocol</a></li>
         <li><a href="#mutation-engine">Mutation Engine</a></li>
         <li><a href="#triage-token-system">Triage Token System</a></li>
         <li><a href="#project-structure">Project Structure</a></li>
@@ -78,18 +78,18 @@
 
 EDR systems employ layered detection mechanisms -- static file analysis, behavioral monitoring via ETW, memory scanning, and ML classifiers -- making manual evaluation of *why* an artifact is detected a slow, opaque process. AutoMutate++ addresses this by implementing a **closed experimental loop**: mutate an artifact, execute it under monitoring, collect telemetry, extract normalized tokens, score tokens by correlation with detection, and use those scores to guide the next round of mutations. The system automates the entire cycle, producing **explainable, evidence-driven hypotheses** about which observable behaviors trigger EDR detections.
 
-- **Research problem:** Understanding *why* EDR detections fire, not just *whether* they fire -- enabling defenders to reason about detection blind spots and adversarial adaptation
+**Goal:** Understand *why* EDR detections fire, not just *whether* they fire -- enabling defenders to reason about detection blind spots and adversarial adaptation patterns.
+
+**Key capabilities:**
+
 - **Closed-loop automation:** Token-driven mutation selection replaces manual trial-and-error with evidence-guided iteration across build, execution, collection, and triage stages
+- **Three-run differential protocol:** Each mutation round runs the same artifact under baseline, instrumented, and dryrun conditions to isolate real detections from instrumentation artifacts and carrier bugs
+- **Multi-layer mutation engine:** Source-level (AST via tree-sitter), LLVM IR, binary (PE), and behavioral mutations applied in a deterministic pipeline
 - **Explainability:** Ranked hypotheses with confidence scores (e.g., "RWX memory protection triggers detection with 0.95 lift") rather than black-box evasion results
+- **Multi-EDR support:** Parallel evaluation across Windows Defender, MDE, and Cortex XDR on isolated Hyper-V VMs
 - **Safety:** Lab-only experiments using non-operational, behaviorally faithful artifacts -- no real payloads, no persistence, no lateral movement
 
-| Metric | Value |
-|--------|-------|
-| Controller | 15,674 LOC across 38 files, 5 modules |
-| Build crate | 22 mutations, 7 trace modes, 3-layer pipeline |
-| Worker agent | 5,926 LOC across 24 files, 10-phase execution pipeline |
-| Proto definitions | 1,160 lines, 121 messages, 37 RPCs, 5 services |
-| Automation | 20+ PowerShell/Bash scripts, 2 deployment modes |
+The loader template is based on the modular architecture from [SuperMega](https://github.com/dobin/SuperMega) by Dobin Rutishauser, adapted with pluggable gene modules (carrier, decoder, anti-emulation, guardrails, decoys) and extended with instrumentation support for line tracing, BB coverage, and API checkpoints.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -102,6 +102,7 @@ EDR systems employ layered detection mechanisms -- static file analysis, behavio
 * [![LLVM][LLVM-badge]][LLVM-url]
 * [![xwin][Xwin-badge]][Xwin-url]
 * [![tree-sitter][TreeSitter-badge]][TreeSitter-url]
+* [![iced][Iced-badge]][Iced-url]
 * [![RedEDR][RedEDR-badge]][RedEDR-url]
 * [![Elasticsearch][Elastic-badge]][Elastic-url]
 * [![Kibana][Kibana-badge]][Kibana-url]
@@ -122,7 +123,7 @@ flowchart TB
         CLI["gRPC Client"]
     end
 
-    subgraph CTRL["Controller &ensp; (Linux / WSL2) &ensp; 15,674 LOC"]
+    subgraph CTRL["Controller &ensp; (Linux / WSL2)"]
         direction TB
         API["API\n25 RPCs"]
         ORCH["Orchestrator\nJob routing"]
@@ -139,7 +140,7 @@ flowchart TB
         ASSEMBLE["Template Assembler\n7 module slots"]
     end
 
-    subgraph VM["Worker VM &ensp; (Windows 10/11) &ensp; 5,926 LOC"]
+    subgraph VM["Worker VM &ensp; (Windows 10/11)"]
         direction TB
         AGENT["Agent\n10-phase pipeline"]
         REDEDR["RedEDR\nETW kernel tracing"]
@@ -189,7 +190,7 @@ flowchart LR
     BUILD["BUILD\nTemplate + encode\n+ AST/IR/Binary\n(Build crate)"]
     SCAN["SCAN\nStatic Defender\ncheck\n(Controller)"]
     DEPLOY["DEPLOY\nChunked gRPC\ntransfer\n(VMExecutor)"]
-    EXECUTE["EXECUTE\nDual-run protocol\nbaseline + traced\n(Worker Agent)"]
+    EXECUTE["EXECUTE\nThree-run protocol\nbaseline+traced+dryrun\n(Worker Agent)"]
     COLLECT["COLLECT\nRedEDR + traces\n+ coverage\n(Telemetry)"]
     AGGREGATE["AGGREGATE\nDifferential\ncategory\n(RoundAgg)"]
     EXTRACT["EXTRACT\n9 token categories\n(Extractor)"]
@@ -216,9 +217,9 @@ After each round, triage results feed back to the selector. The system converges
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-### Two-Run Differential Protocol
+### Three-Run Differential Protocol
 
-Each mutation round executes the **same artifact** (identical bytes, same SHA-256) under different trace modes on the same VM, then adds a dryrun on a clean VM. Only baseline-consistent detections feed into the learning loop.
+Each mutation round executes the **same artifact** (identical bytes, same SHA-256) three times: a baseline run (no instrumentation), an instrumented run (line tracing enabled), and a dryrun on a clean VM without AV. Comparing the three outcomes isolates real detections from instrumentation artifacts and carrier bugs. Only baseline-consistent detections feed into the learning loop.
 
 ```mermaid
 flowchart LR
@@ -324,9 +325,9 @@ importance(T) = lift(T) x confidence(T)
 
 ```
 .
-├── controller/                  # Central orchestration (15,674 LOC)
+├── controller/                  # Central orchestration
 │   └── src/
-│       ├── api/                 # gRPC boundary — 25 RPCs, zero business logic
+│       ├── api/                 # gRPC boundary — RPCs, zero business logic
 │       ├── dispatch/            # Orchestrator, JobWorker, RunPool, VMExecutor
 │       ├── triage/              # Token extraction, scoring, 4 selector strategies
 │       ├── storage/             # ElasticSearch — 6 index families
@@ -336,13 +337,13 @@ importance(T) = lift(T) x confidence(T)
 │   ├── runtime/                 # C runtime libraries (minimal + instrumentation)
 │   └── templates/               # Modular loader template + 7 module slots
 ├── worker/
-│   └── agent/                   # Windows VM agent (5,926 LOC)
+│   └── agent/                   # Windows VM agent
 │       └── src/
 │           ├── execution/       # 10-phase pipeline, 7 verdicts
 │           ├── telemetry/       # 6 sources (RedEDR, traces, coverage, checkpoints)
 │           ├── api/             # gRPC thin adapters
 │           └── session/         # Bidirectional stream lifecycle
-├── proto/                       # gRPC definitions (121 messages, 37 RPCs, 5 services)
+├── proto/                       # gRPC definitions (5 services)
 │   ├── common.proto             # Shared domain types
 │   ├── controller.proto         # Controller inbound API
 │   └── worker.proto             # Worker inbound API
@@ -353,7 +354,7 @@ importance(T) = lift(T) x confidence(T)
 │   ├── backend/                 # Dashboard REST API
 │   ├── frontend/                # Web frontend
 │   └── kibana-dashboards/       # Kibana visualizations
-├── automation/                  # Lab infrastructure (20+ scripts)
+├── automation/                  # Lab infrastructure scripts
 │   ├── scripts/                 # PowerShell/Bash — setup, deploy, operate
 │   ├── templates/               # TOML config templates
 │   └── generated/               # Per-worker generated configs
@@ -361,13 +362,13 @@ importance(T) = lift(T) x confidence(T)
 └── docs/                        # Documentation and images
 ```
 
-| Component | Crate | LOC | Files | Role |
-|-----------|-------|----:|------:|------|
-| **Controller** | `scheduler` | 15,674 | 38 | gRPC server, orchestrator, job workers, triage, storage |
-| **Build System** | `build` | -- | -- | Template assembly, encoding, AST/IR/binary mutations, instrumentation |
-| **Worker Agent** | `worker-agent` | 5,926 | 24 | Execution engine, telemetry collection, detection classification |
-| **Proto** | -- | 1,160 | 3 | gRPC contract — 121 messages, 37 RPCs, 5 services |
-| **Automation** | -- | -- | 20+ | Hyper-V provisioning, WSL2 bootstrap, deployment, operations |
+| Component | Crate | Role |
+|-----------|-------|------|
+| **Controller** | `scheduler` | gRPC server, orchestrator, job workers, triage engine, ES storage |
+| **Build System** | `build` | Template assembly, encoding, AST/IR/binary mutations, instrumentation |
+| **Worker Agent** | `worker-agent` | Execution engine, telemetry collection, detection classification |
+| **Proto** | -- | gRPC contract — 5 services, shared domain types |
+| **Automation** | -- | Hyper-V provisioning, WSL2 bootstrap, deployment, operations |
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -556,7 +557,7 @@ cargo test -p worker-agent
 - [x] Instrumentation pipeline (BB coverage, API checkpoints, line tracing, 7 trace modes)
 - [x] Bidirectional gRPC streaming (real-time status + telemetry)
 - [x] Dynamic worker registration with capability detection
-- [x] Two-run differential protocol (7 differential categories)
+- [x] Three-run differential protocol (baseline + instrumented + dryrun, 7 categories)
 - [x] Token extraction (9 categories from telemetry + build metadata)
 - [x] Token scoring (lift x confidence, incremental per-round updates)
 - [x] 4 selector strategies (Coverage, Fuzzer, Token, Random)
@@ -609,8 +610,10 @@ Project Link: [https://github.com/2Tricky4u/Automated-Analysis-and-Mutation-of-S
 <!-- ACKNOWLEDGMENTS -->
 ## Acknowledgments
 
+* [SuperMega](https://github.com/dobin/SuperMega) by Dobin Rutishauser -- Modular loader architecture that inspired the template gene system
+* [RedEDR](https://github.com/dobin/RedEdr) by Dobin Rutishauser -- Open-source EDR telemetry collector (ETW kernel tracing)
+* [iced](https://github.com/icedland/iced) -- x86/x64 disassembler and assembler used for ASM-level instrumentation
 * [Tonic](https://github.com/hyperium/tonic) -- Rust gRPC implementation
-* [RedEDR](https://github.com/dobin/RedEdr) -- Open-source EDR telemetry collector
 * [tree-sitter](https://tree-sitter.github.io/) -- Incremental parsing for AST-level transforms
 * [xwin](https://github.com/Jake-Shadle/xwin) -- Cross-compilation to Windows from Linux
 * [LLVM](https://llvm.org/) -- Compiler infrastructure for IR mutations and SanitizerCoverage
@@ -652,6 +655,8 @@ Project Link: [https://github.com/2Tricky4u/Automated-Analysis-and-Mutation-of-S
 [Xwin-url]: https://github.com/Jake-Shadle/xwin
 [TreeSitter-badge]: https://img.shields.io/badge/tree--sitter-4B8BBE?style=for-the-badge&logo=treesitter&logoColor=white
 [TreeSitter-url]: https://tree-sitter.github.io/tree-sitter/
+[Iced-badge]: https://img.shields.io/badge/iced%20(x86%20asm)-4682B4?style=for-the-badge&logo=rust&logoColor=white
+[Iced-url]: https://github.com/icedland/iced
 [RedEDR-badge]: https://img.shields.io/badge/RedEDR%20(ETW)-B7312C?style=for-the-badge&logo=windows-terminal&logoColor=white
 [RedEDR-url]: https://github.com/dobin/RedEdr
 [Elastic-badge]: https://img.shields.io/badge/Elasticsearch-005571?style=for-the-badge&logo=elasticsearch&logoColor=white
