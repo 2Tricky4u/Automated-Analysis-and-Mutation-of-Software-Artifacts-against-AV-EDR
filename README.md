@@ -76,9 +76,9 @@
 <!-- TODO: Add a product screenshot or architecture diagram -->
 <!-- [![AutoMutate++ Screenshot][product-screenshot]](https://github.com/2Tricky4u/Automated-Analysis-and-Mutation-of-Software-Artifacts-against-AV-EDR) -->
 
-EDR systems employ layered detection mechanisms -- static file analysis, behavioral monitoring via ETW, memory scanning, and ML classifiers -- making manual evaluation of *why* an artifact is detected a slow, opaque process. AutoMutate++ addresses this by implementing a **closed experimental loop**: mutate an artifact, execute it under monitoring, collect telemetry, extract normalized tokens, score tokens by correlation with detection, and use those scores to guide the next round of mutations. The system automates the entire cycle, producing **explainable, evidence-driven hypotheses** about which observable behaviors trigger EDR detections.
+EDR systems employ layered detection mechanisms: static file analysis, behavioral monitoring, memory scanning, and ML classifiers. Making manual evaluation of *why* an artifact is detected a slow, opaque process. AutoMutate++ addresses this by implementing a **closed experimental loop**: mutate an artifact, execute it under monitoring, collect telemetry, extract normalized tokens, score tokens by correlation with detection, and use those scores to guide the next round of mutations. The system automates the entire cycle, trying to produce **explainable, evidence-driven hypotheses** about which observable behaviors trigger EDR detections.
 
-**Goal:** Understand *why* EDR detections fire, not just *whether* they fire -- enabling defenders to reason about detection blind spots and adversarial adaptation patterns.
+**Goal:** Understand *why* EDR detections fire, not just *whether* they fire, enabling defenders to reason about detection blind spots and adversarial adaptation patterns.
 
 **Key capabilities:**
 
@@ -86,8 +86,8 @@ EDR systems employ layered detection mechanisms -- static file analysis, behavio
 - **Three-run differential protocol:** Each mutation round runs the same artifact under baseline, instrumented, and dryrun conditions to isolate real detections from instrumentation artifacts and carrier bugs
 - **Multi-layer mutation engine:** Source-level (AST via tree-sitter), LLVM IR, binary (PE), and behavioral mutations applied in a deterministic pipeline
 - **Explainability:** Ranked hypotheses with confidence scores (e.g., "RWX memory protection triggers detection with 0.95 lift") rather than black-box evasion results
-- **Multi-EDR support:** Parallel evaluation across Windows Defender, MDE, and Cortex XDR on isolated Hyper-V VMs
-- **Safety:** Lab-only experiments using non-operational, behaviorally faithful artifacts -- no real payloads, no persistence, no lateral movement
+- **Multi-EDR support:** Parallel evaluation across Windows Defender, MDE, and Cortex XDR on isolated Hyper-V VMs or Remote VMs.
+- **Safety:** Lab-only experiments using non-operational, behaviorally faithful artifacts.
 
 The loader template is based on the modular architecture from [SuperMega](https://github.com/dobin/SuperMega) by Dobin Rutishauser, adapted with pluggable gene modules (carrier, decoder, anti-emulation, guardrails, decoys) and extended with instrumentation support for line tracing, BB coverage, and API checkpoints.
 
@@ -219,7 +219,7 @@ After each round, triage results feed back to the selector. The system converges
 
 ### Three-Run Differential Protocol
 
-Each mutation round executes the **same artifact** (identical bytes, same SHA-256) three times: a baseline run (no instrumentation), an instrumented run (line tracing enabled), and a dryrun on a clean VM without AV. Comparing the three outcomes isolates real detections from instrumentation artifacts and carrier bugs. Only baseline-consistent detections feed into the learning loop.
+Each mutation round executes the **same artifact** (identical mutations set, same args) three times: a baseline run (no instrumentation), an instrumented run (tracing enabled), and a dryrun on a clean VM without AV. Comparing the three outcomes isolates real detections from instrumentation artifacts and carrier bugs. Only baseline-consistent detections feed into the learning loop.
 
 ```mermaid
 flowchart LR
