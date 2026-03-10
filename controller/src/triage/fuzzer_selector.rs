@@ -9,10 +9,14 @@
 use super::coverage_selector::select_modules;
 use super::{SearchSpace, Selection, Selector, TriageGuidance, VariationStrategy};
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
+use crate::triage::accumulation::{
+    AccumulationPhase, compute_marginal_contributions, determine_phase, effective_max_recipe_size,
+    prune_recipe, reconstruct_best_recipe,
+};
 use crate::triage::param_space::{SeededRng, default_registry, find_param_space};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 /// Configuration for the FuzzerSelector's genetic algorithm.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,6 +176,11 @@ impl FuzzerSelector {
     }
 
     /// Evolve a new recipe from history using genetic operators.
+    ///
+    /// Retained for backward compatibility when accumulation is disabled;
+    /// the main path now uses `evolve_accumulated` which adds elite injection
+    /// and growth bias.
+    #[allow(dead_code)]
     fn evolve_recipe(
         &self,
         search_space: &SearchSpace,
@@ -275,6 +284,219 @@ impl FuzzerSelector {
         offspring.rationale = format!(
             "evolved gen={} (parents: {}, {})",
             generation, pa_fitness, pb_fitness
+        );
+        offspring
+    }
+
+    /// Individual exploration: test one pool mutation per round (rounds 2..=pool_size+1).
+    ///
+    /// Round N maps to pool index (N-2) % pool.len(). Includes fixed mutations.
+    fn individual_exploration(
+        &self,
+        round_number: u32,
+        search_space: &SearchSpace,
+        rng: &mut SeededRng,
+    ) -> Recipe {
+        let registry = default_registry();
+        let mut mutations = Vec::new();
+
+        // Fixed mutations
+        let config = search_space.fuzzer_config.clone().unwrap_or_default();
+        for id in &search_space.fixed_mutations {
+            let params = if config.vary_fixed_params {
+                find_param_space(&registry, id).and_then(|ps| ps.sample_params(rng))
+            } else {
+                None
+            };
+            mutations.push(MutationSpec {
+                id: id.clone(),
+                params,
+            });
+        }
+
+        // Pick one pool mutation based on round index
+        let pool = &search_space.mutation_pool;
+        if !pool.is_empty() {
+            let idx = ((round_number as usize).saturating_sub(2)) % pool.len();
+            let id = &pool[idx];
+            let params = find_param_space(&registry, id).and_then(|ps| ps.sample_params(rng));
+            mutations.push(MutationSpec {
+                id: id.clone(),
+                params,
+            });
+        }
+
+        Recipe {
+            mutations,
+            fitness: None,
+            generation: 0,
+            rationale: format!(
+                "individual exploration round {}",
+                round_number,
+            ),
+        }
+    }
+
+    /// Accumulation phase: evolve with elite injection and growth bias.
+    ///
+    /// 1. Inject best recipe as elite member of the population
+    /// 2. Bias structural mutation toward growth (70% add / 30% remove)
+    /// 3. Prune marginals below threshold before crossover
+    fn evolve_accumulated(
+        &self,
+        search_space: &SearchSpace,
+        history: &BTreeMap<u32, RoundSummary>,
+        config: &FuzzerConfig,
+        rng: &mut SeededRng,
+    ) -> Recipe {
+        let registry = default_registry();
+        let fixed_set: HashSet<&str> = search_space
+            .fixed_mutations
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let acc_config = &search_space.accumulation;
+        let max_size = effective_max_recipe_size(acc_config, search_space.mutation_pool.len());
+
+        // Reconstruct best recipe and marginals
+        let (best_recipe, best_score) = reconstruct_best_recipe(history, &fixed_set);
+        let marginals = compute_marginal_contributions(history, &fixed_set);
+        let pruned_best = prune_recipe(&best_recipe, &marginals, acc_config.prune_threshold);
+
+        // Reconstruct population from history
+        let mut population: Vec<Recipe> = history
+            .values()
+            .filter(|s| s.differential_category.is_trustworthy())
+            .map(|s| Recipe {
+                mutations: s.mutation_specs.clone(),
+                fitness: Some(s.evasion_score),
+                generation: 0,
+                rationale: String::new(),
+            })
+            .collect();
+
+        // Inject best recipe as elite (always survives)
+        let mut elite_mutations: Vec<MutationSpec> = search_space
+            .fixed_mutations
+            .iter()
+            .map(|id| {
+                let params = if config.vary_fixed_params {
+                    // Inherit from best recipe if available
+                    pruned_best
+                        .iter()
+                        .find(|m| m.id == *id)
+                        .and_then(|m| m.params.clone())
+                } else {
+                    None
+                };
+                MutationSpec {
+                    id: id.clone(),
+                    params,
+                }
+            })
+            .collect();
+        elite_mutations.extend(pruned_best.clone());
+        population.push(Recipe {
+            mutations: elite_mutations,
+            fitness: Some(best_score),
+            generation: 0,
+            rationale: "elite (best recipe)".to_string(),
+        });
+
+        // Sort by fitness descending
+        population.sort_by(|a, b| {
+            b.fitness
+                .unwrap_or(0.0)
+                .partial_cmp(&a.fitness.unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        if population.len() < 2 {
+            return self.random_recipe(search_space, config, rng);
+        }
+
+        let generation =
+            (history.len() as u32).saturating_sub(search_space.mutation_pool.len() as u32) + 1;
+
+        // Tournament selection + crossover
+        let parent_a = self.tournament_select(&population, rng);
+        let parent_b = self.tournament_select(&population, rng);
+        let mut offspring = self.crossover(&parent_a, &parent_b, search_space, rng);
+
+        // Param mutation
+        if rng.coin(config.param_mutation_rate) && !offspring.mutations.is_empty() {
+            let idx = rng.next_usize(offspring.mutations.len());
+            let spec = &offspring.mutations[idx];
+            if let Some(ps) = find_param_space(&registry, &spec.id) {
+                let new_params = ps.perturb_params(
+                    spec.params.as_ref(),
+                    rng,
+                    acc_config.perturb_intensity,
+                );
+                offspring.mutations[idx].params = new_params;
+            }
+        }
+
+        // Structural mutation with growth bias (70% add / 30% remove when under max_size)
+        if rng.coin(config.structural_mutation_rate) {
+            let pool_mutations: Vec<&MutationSpec> = offspring
+                .mutations
+                .iter()
+                .filter(|m| search_space.mutation_pool.contains(&m.id))
+                .collect();
+            let pool_count = pool_mutations.len();
+
+            // Bias toward growth: 70% add, 30% remove
+            let grow = rng.coin(0.7);
+            if !grow && pool_count > config.min_pool_mutations {
+                // Remove
+                let pool_ids: Vec<String> = pool_mutations.iter().map(|m| m.id.clone()).collect();
+                // Prefer removing worst-marginal mutation
+                let remove_id = pool_ids
+                    .iter()
+                    .min_by(|a, b| {
+                        let ma = marginals.get(a.as_str()).copied().unwrap_or(0.0);
+                        let mb = marginals.get(b.as_str()).copied().unwrap_or(0.0);
+                        ma.partial_cmp(&mb).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .cloned();
+                if let Some(rid) = remove_id {
+                    offspring.mutations.retain(|m| m.id != rid);
+                }
+            } else if grow && pool_count < max_size {
+                // Add
+                let present: Vec<&str> =
+                    offspring.mutations.iter().map(|m| m.id.as_str()).collect();
+                let candidates: Vec<&String> = search_space
+                    .mutation_pool
+                    .iter()
+                    .filter(|id| !present.contains(&id.as_str()))
+                    .collect();
+                if !candidates.is_empty() {
+                    let idx = rng.next_usize(candidates.len());
+                    let id = candidates[idx];
+                    let params =
+                        find_param_space(&registry, id).and_then(|ps| ps.sample_params(rng));
+                    offspring.mutations.push(MutationSpec {
+                        id: id.clone(),
+                        params,
+                    });
+                }
+            }
+        }
+
+        let pa_fitness = parent_a
+            .fitness
+            .map(|f| format!("{:.2}", f))
+            .unwrap_or("?".into());
+        let pb_fitness = parent_b
+            .fitness
+            .map(|f| format!("{:.2}", f))
+            .unwrap_or("?".into());
+        offspring.generation = generation;
+        offspring.rationale = format!(
+            "accumulated gen={} (parents: {}, {}, elite={:.2})",
+            generation, pa_fitness, pb_fitness, best_score
         );
         offspring
     }
@@ -395,19 +617,27 @@ impl Selector for FuzzerSelector {
         history: &BTreeMap<u32, RoundSummary>,
         _guidance: Option<&TriageGuidance>,
     ) -> Selection {
-        if round_number <= 1 {
+        let phase = determine_phase(
+            round_number,
+            search_space.mutation_pool.len(),
+            &search_space.accumulation,
+        );
+
+        if phase == AccumulationPhase::Baseline {
             return baseline_selection(default_modules);
         }
 
         let config = search_space.fuzzer_config.clone().unwrap_or_default();
         let mut rng = SeededRng::new(job_id, round_number);
 
-        let recipe = if (round_number as usize) <= config.population_size + 1 {
-            // Seeding phase: generate random recipes
-            self.random_recipe(search_space, &config, &mut rng)
-        } else {
-            // Evolution phase: evolve from history
-            self.evolve_recipe(search_space, history, &config, &mut rng)
+        let recipe = match phase {
+            AccumulationPhase::Baseline => unreachable!(),
+            AccumulationPhase::IndividualExploration => {
+                self.individual_exploration(round_number, search_space, &mut rng)
+            }
+            AccumulationPhase::Accumulation => {
+                self.evolve_accumulated(search_space, history, &config, &mut rng)
+            }
         };
 
         // Module selection (reuse shared epsilon-greedy logic)
@@ -836,6 +1066,113 @@ mod tests {
             assert_eq!(a.id, b.id);
             assert_eq!(a.params, b.params);
         }
+    }
+
+    // ==========================================================================
+    // Accumulation phase tests
+    // ==========================================================================
+
+    #[tokio::test]
+    async fn test_individual_exploration_one_per_round() {
+        let selector = FuzzerSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+        let history = BTreeMap::new();
+        let ss = default_fuzzer_search_space();
+
+        // Rounds 2..=pool_size+1 should each produce exactly 1 pool mutation
+        for round in 2..=(ss.mutation_pool.len() as u32 + 1) {
+            let selection = selector
+                .select("job-1", round, &ss, &defaults, &history, None)
+                .await;
+            let pool_count = selection
+                .mutations
+                .iter()
+                .filter(|m| ss.mutation_pool.contains(&m.id))
+                .count();
+            assert_eq!(
+                pool_count, 1,
+                "Individual exploration round {} should have exactly 1 pool mutation, got {}",
+                round, pool_count
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_accumulation_phase_uses_elite() {
+        let selector = FuzzerSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+        let ss = SearchSpace {
+            strategy: VariationStrategy::Full,
+            fuzzer_config: Some(FuzzerConfig {
+                population_size: 5,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        // Build individual exploration history
+        let mut history = BTreeMap::new();
+        history.insert(
+            1,
+            make_fuzzer_summary(1, 0.2, DifferentialCategory::RealDetection, vec![]),
+        );
+        for (i, pool_id) in ss.mutation_pool.iter().enumerate() {
+            let specs = vec![MutationSpec {
+                id: pool_id.clone(),
+                params: None,
+            }];
+            let score = if pool_id == "ast.fill_pattern" {
+                0.9
+            } else {
+                0.2
+            };
+            let cat = if score > 0.5 {
+                DifferentialCategory::Evasion
+            } else {
+                DifferentialCategory::RealDetection
+            };
+            history.insert((i + 2) as u32, make_fuzzer_summary((i + 2) as u32, score, cat, specs));
+        }
+
+        // Round in accumulation phase
+        let round = ss.mutation_pool.len() as u32 + 2;
+        let selection = selector
+            .select("job-1", round, &ss, &defaults, &history, None)
+            .await;
+
+        assert!(
+            selection.rationale.contains("accumulated"),
+            "Should be in accumulation phase. Got: {}",
+            selection.rationale
+        );
+    }
+
+    #[tokio::test]
+    async fn test_accumulation_disabled_stays_exploration_fuzzer() {
+        let selector = FuzzerSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+        let history = BTreeMap::new();
+
+        let mut ss = default_fuzzer_search_space();
+        ss.accumulation.enabled = false;
+
+        // Round well past pool_size+1
+        let round = ss.mutation_pool.len() as u32 + 5;
+        let selection = selector
+            .select("job-1", round, &ss, &defaults, &history, None)
+            .await;
+
+        // Individual exploration: exactly 1 pool mutation
+        let pool_count = selection
+            .mutations
+            .iter()
+            .filter(|m| ss.mutation_pool.contains(&m.id))
+            .count();
+        assert_eq!(
+            pool_count, 1,
+            "Disabled accumulation should stay in individual exploration, got {} pool mutations",
+            pool_count
+        );
     }
 
     #[tokio::test]
