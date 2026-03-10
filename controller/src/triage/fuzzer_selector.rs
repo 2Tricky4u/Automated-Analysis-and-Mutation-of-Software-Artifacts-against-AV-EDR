@@ -10,8 +10,8 @@ use super::coverage_selector::select_modules;
 use super::{SearchSpace, Selection, Selector, TriageGuidance, VariationStrategy};
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
 use crate::triage::accumulation::{
-    AccumulationPhase, compute_marginal_contributions, determine_phase, effective_max_recipe_size,
-    prune_recipe, reconstruct_best_recipe,
+    AccumulationPhase, compute_marginal_contributions, compute_recipe_diversity, determine_phase,
+    effective_max_recipe_size, prune_recipe, reconstruct_best_recipe,
 };
 use crate::triage::param_space::{SeededRng, default_registry, find_param_space};
 use async_trait::async_trait;
@@ -339,9 +339,10 @@ impl FuzzerSelector {
 
     /// Accumulation phase: evolve with elite injection and growth bias.
     ///
-    /// 1. Inject best recipe as elite member of the population
-    /// 2. Bias structural mutation toward growth (70% add / 30% remove)
-    /// 3. Prune marginals below threshold before crossover
+    /// 1. Check diversity — restart if converged
+    /// 2. Inject best recipe as elite member of the population
+    /// 3. Bias structural mutation toward growth (70% add / 30% remove)
+    /// 4. Prune marginals below threshold before crossover
     fn evolve_accumulated(
         &self,
         search_space: &SearchSpace,
@@ -358,15 +359,30 @@ impl FuzzerSelector {
         let acc_config = &search_space.accumulation;
         let max_size = effective_max_recipe_size(acc_config, search_space.mutation_pool.len());
 
+        // Diversity check: restart if converged
+        let diversity =
+            compute_recipe_diversity(history, &fixed_set, acc_config.stagnation_window);
+        if diversity < acc_config.diversity_threshold {
+            let mut recipe = self.random_recipe(search_space, config, rng);
+            recipe.rationale = format!(
+                "diversity restart (div={:.2}) | {}",
+                diversity, recipe.rationale
+            );
+            return recipe;
+        }
+
         // Reconstruct best recipe and marginals
         let (best_recipe, best_score) = reconstruct_best_recipe(history, &fixed_set);
         let marginals = compute_marginal_contributions(history, &fixed_set);
         let pruned_best = prune_recipe(&best_recipe, &marginals, acc_config.prune_threshold);
 
-        // Reconstruct population from history
+        // Reconstruct population from history (sliding window: most recent first)
+        let window_size = config.population_size.max(2) * 2;
         let mut population: Vec<Recipe> = history
             .values()
+            .rev() // Most recent first
             .filter(|s| s.differential_category.is_trustworthy())
+            .take(window_size) // Cap population to sliding window
             .map(|s| Recipe {
                 mutations: s.mutation_specs.clone(),
                 fitness: Some(s.evasion_score),

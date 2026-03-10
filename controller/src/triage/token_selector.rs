@@ -16,16 +16,13 @@ use super::coverage_selector::CoverageSelector;
 use super::{SearchSpace, Selection, Selector, TriageGuidance, VariationStrategy};
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
 use crate::triage::accumulation::{
-    AccumulationPhase, compute_marginal_contributions, determine_phase, effective_max_recipe_size,
-    perturb_recipe_params, reconstruct_best_recipe,
+    AccumulationPhase, compute_marginal_contributions, compute_recipe_diversity, decaying_epsilon,
+    determine_phase, effective_max_recipe_size, perturb_recipe_params, reconstruct_best_recipe,
 };
 use crate::triage::param_space::{default_registry, find_param_space};
 use async_trait::async_trait;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-/// Exploration rate for epsilon-greedy selection.
-const EPSILON: f64 = 0.3;
 
 /// All available deconditioner variants (mirrors coverage_selector).
 const DECONDITIONER_VARIANTS: &[&str] = &[
@@ -99,8 +96,33 @@ impl TokenSelector {
             );
         }
 
-        let avoid_set: HashSet<&str> = guidance.avoid_tokens.iter().map(|s| s.as_str()).collect();
-        let seek_set: HashSet<&str> = guidance.seek_tokens.iter().map(|s| s.as_str()).collect();
+        // Build evidence-based score lookups; fall back to hardcoded weights if empty
+        let avoid_scores: HashMap<&str, f64> = if !guidance.scored_avoid.is_empty() {
+            guidance
+                .scored_avoid
+                .iter()
+                .map(|s| (s.token.as_str(), s.importance))
+                .collect()
+        } else {
+            guidance
+                .avoid_tokens
+                .iter()
+                .map(|s| (s.as_str(), 0.5))
+                .collect()
+        };
+        let seek_scores: HashMap<&str, f64> = if !guidance.scored_seek.is_empty() {
+            guidance
+                .scored_seek
+                .iter()
+                .map(|s| (s.token.as_str(), s.importance))
+                .collect()
+        } else {
+            guidance
+                .seek_tokens
+                .iter()
+                .map(|s| (s.as_str(), 0.3))
+                .collect()
+        };
 
         // Collect per-variant stats from trustworthy history
         let mut stats: HashMap<String, (u32, f64)> = HashMap::new(); // (count, total_score)
@@ -129,12 +151,12 @@ impl TokenSelector {
                     score += 0.4;
                 }
 
-                // Token guidance
-                if avoid_set.contains(token.as_str()) {
-                    score -= 0.5;
+                // Evidence-based token guidance (capped at 1.0)
+                if let Some(&imp) = avoid_scores.get(token.as_str()) {
+                    score -= imp.min(1.0);
                 }
-                if seek_set.contains(token.as_str()) {
-                    score += 0.3;
+                if let Some(&imp) = seek_scores.get(token.as_str()) {
+                    score += imp.min(1.0);
                 }
 
                 (v.to_string(), score)
@@ -144,15 +166,16 @@ impl TokenSelector {
         // Sort descending by score
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Epsilon-greedy
-        let (chosen, rationale) = if rng.coin(EPSILON) {
+        // Epsilon-greedy (uses constant EPSILON here — individual exploration phase)
+        let epsilon = 0.3_f64;
+        let (chosen, rationale) = if rng.coin(epsilon) {
             let idx = rng.next_usize(scored.len());
             let variant = &scored[idx].0;
             (
                 variant.clone(),
                 format!(
-                    "Token-guided random: {} (score={:.2}, ε={:.1})",
-                    variant, scored[idx].1, EPSILON
+                    "Token-guided random: {} (score={:.2}, ε={:.2})",
+                    variant, scored[idx].1, epsilon
                 ),
             )
         } else {
@@ -179,8 +202,33 @@ impl TokenSelector {
         guidance: &TriageGuidance,
         rng: &mut crate::triage::param_space::SeededRng,
     ) -> (Vec<MutationSpec>, String) {
-        let avoid_set: HashSet<&str> = guidance.avoid_tokens.iter().map(|s| s.as_str()).collect();
-        let seek_set: HashSet<&str> = guidance.seek_tokens.iter().map(|s| s.as_str()).collect();
+        // Build evidence-based score lookups; fall back to hardcoded weights if empty
+        let avoid_scores: HashMap<&str, f64> = if !guidance.scored_avoid.is_empty() {
+            guidance
+                .scored_avoid
+                .iter()
+                .map(|s| (s.token.as_str(), s.importance))
+                .collect()
+        } else {
+            guidance
+                .avoid_tokens
+                .iter()
+                .map(|s| (s.as_str(), 0.5))
+                .collect()
+        };
+        let seek_scores: HashMap<&str, f64> = if !guidance.scored_seek.is_empty() {
+            guidance
+                .scored_seek
+                .iter()
+                .map(|s| (s.token.as_str(), s.importance))
+                .collect()
+        } else {
+            guidance
+                .seek_tokens
+                .iter()
+                .map(|s| (s.as_str(), 0.3))
+                .collect()
+        };
 
         // Fixed mutations always applied
         let mut mutations: Vec<MutationSpec> = search_space
@@ -249,12 +297,12 @@ impl TokenSelector {
                     score += 0.4;
                 }
 
-                // Token guidance
-                if avoid_set.contains(token.as_str()) {
-                    score -= 0.5;
+                // Evidence-based token guidance (capped at 1.0)
+                if let Some(&imp) = avoid_scores.get(token.as_str()) {
+                    score -= imp.min(1.0);
                 }
-                if seek_set.contains(token.as_str()) {
-                    score += 0.3;
+                if let Some(&imp) = seek_scores.get(token.as_str()) {
+                    score += imp.min(1.0);
                 }
 
                 (m.to_string(), score)
@@ -263,8 +311,9 @@ impl TokenSelector {
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Epsilon-greedy
-        let (chosen, rationale) = if rng.coin(EPSILON) {
+        // Epsilon-greedy (individual exploration — constant epsilon)
+        let epsilon = 0.3_f64;
+        let (chosen, rationale) = if rng.coin(epsilon) {
             let idx = rng.next_usize(scored.len());
             (
                 scored[idx].0.clone(),
@@ -306,11 +355,9 @@ impl TokenSelector {
         search_space: &SearchSpace,
         history: &BTreeMap<u32, RoundSummary>,
         guidance: &TriageGuidance,
+        round_number: u32,
         rng: &mut crate::triage::param_space::SeededRng,
     ) -> (Vec<MutationSpec>, String) {
-        let avoid_set: HashSet<&str> = guidance.avoid_tokens.iter().map(|s| s.as_str()).collect();
-        let seek_set: HashSet<&str> = guidance.seek_tokens.iter().map(|s| s.as_str()).collect();
-
         let fixed_set: HashSet<&str> = search_space
             .fixed_mutations
             .iter()
@@ -322,6 +369,46 @@ impl TokenSelector {
             .map(|s| s.as_str())
             .collect();
         let config = &search_space.accumulation;
+
+        // Diversity check: restart if converged
+        let diversity = compute_recipe_diversity(history, &fixed_set, config.stagnation_window);
+        if diversity < config.diversity_threshold {
+            // Fall through to individual exploration (token-guided)
+            let (mutations, rationale) =
+                self.token_guided_mutations(search_space, history, guidance, rng);
+            return (
+                mutations,
+                format!("Token: diversity restart (div={:.2}) | {}", diversity, rationale),
+            );
+        }
+
+        // Build evidence-based score lookups; fall back to hardcoded weights if empty
+        let avoid_scores: HashMap<&str, f64> = if !guidance.scored_avoid.is_empty() {
+            guidance
+                .scored_avoid
+                .iter()
+                .map(|s| (s.token.as_str(), s.importance))
+                .collect()
+        } else {
+            guidance
+                .avoid_tokens
+                .iter()
+                .map(|s| (s.as_str(), 0.5))
+                .collect()
+        };
+        let seek_scores: HashMap<&str, f64> = if !guidance.scored_seek.is_empty() {
+            guidance
+                .scored_seek
+                .iter()
+                .map(|s| (s.token.as_str(), s.importance))
+                .collect()
+        } else {
+            guidance
+                .seek_tokens
+                .iter()
+                .map(|s| (s.as_str(), 0.3))
+                .collect()
+        };
 
         // Fixed mutations always applied
         let mut mutations: Vec<MutationSpec> = search_space
@@ -337,18 +424,16 @@ impl TokenSelector {
         let (best_recipe, best_score) = reconstruct_best_recipe(history, &fixed_set);
         let marginals = compute_marginal_contributions(history, &fixed_set);
 
-        // 2. Token-biased pruning: prune if in avoid_tokens AND below marginal threshold
+        // 2. Token-biased pruning: prune if avoided AND below marginal threshold
         let mut recipe: Vec<MutationSpec> = best_recipe
             .iter()
             .filter(|m| {
                 let token = format!("mutation:{}", m.id);
-                let is_avoided = avoid_set.contains(token.as_str());
+                let is_avoided = avoid_scores.contains_key(token.as_str());
                 let marginal = marginals.get(&m.id).copied().unwrap_or(0.0);
-                // If avoided AND marginal is below threshold, prune
                 if is_avoided && marginal < config.prune_threshold {
                     return false;
                 }
-                // Otherwise apply standard pruning
                 marginal >= config.prune_threshold || !marginals.contains_key(&m.id)
             })
             .cloned()
@@ -365,12 +450,12 @@ impl TokenSelector {
                 let token = format!("mutation:{}", m);
                 let mut score = marginals.get(*m).copied().unwrap_or(0.0);
 
-                // Token bias
-                if seek_set.contains(token.as_str()) {
-                    score += 0.3;
+                // Evidence-based token bias (capped at 1.0)
+                if let Some(&imp) = seek_scores.get(token.as_str()) {
+                    score += imp.min(1.0);
                 }
-                if avoid_set.contains(token.as_str()) {
-                    score -= 0.5;
+                if let Some(&imp) = avoid_scores.get(token.as_str()) {
+                    score -= imp.min(1.0);
                 }
                 // Novelty bonus for untried
                 if !marginals.contains_key(*m) {
@@ -382,9 +467,12 @@ impl TokenSelector {
             .collect();
         candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
+        // Decaying epsilon for accumulation phase
+        let epsilon = decaying_epsilon(round_number, pool.len());
+
         // 4. Epsilon-greedy addition
         if !candidates.is_empty() && recipe.len() < max_size {
-            let (chosen, _chosen_score) = if rng.coin(EPSILON) {
+            let (chosen, _chosen_score) = if rng.coin(epsilon) {
                 let idx = rng.next_usize(candidates.len());
                 candidates[idx].clone()
             } else {
@@ -407,7 +495,7 @@ impl TokenSelector {
                 })
                 .map(|(i, _)| i);
             if let Some(idx) = worst_idx {
-                let (chosen, _) = if rng.coin(EPSILON) {
+                let (chosen, _) = if rng.coin(epsilon) {
                     let ci = rng.next_usize(candidates.len());
                     candidates[ci].clone()
                 } else {
@@ -530,6 +618,7 @@ impl Selector for TokenSelector {
                             search_space,
                             history,
                             guidance,
+                            round_number,
                             &mut rng,
                         );
                         Selection {
@@ -550,6 +639,7 @@ impl Selector for TokenSelector {
                             search_space,
                             history,
                             guidance,
+                            round_number,
                             &mut rng,
                         );
                         Selection {
@@ -650,6 +740,8 @@ mod tests {
         let guidance = TriageGuidance {
             avoid_tokens: vec!["module:deconditioner=alloc_loop".to_string()],
             seek_tokens: vec!["module:deconditioner=entropy_flood".to_string()],
+            scored_avoid: vec![],
+            scored_seek: vec![],
         };
 
         let search_space = SearchSpace {
@@ -693,6 +785,8 @@ mod tests {
         let guidance = TriageGuidance {
             avoid_tokens: vec!["mutation:ast.decon_rounds".to_string()],
             seek_tokens: vec!["mutation:ast.fill_pattern".to_string()],
+            scored_avoid: vec![],
+            scored_seek: vec![],
         };
 
         let search_space = SearchSpace::default();
@@ -746,6 +840,8 @@ mod tests {
         let guidance = TriageGuidance {
             avoid_tokens: vec!["module:deconditioner=none".to_string()],
             seek_tokens: vec![],
+            scored_avoid: vec![],
+            scored_seek: vec![],
         };
 
         let selection = selector
@@ -804,6 +900,8 @@ mod tests {
         let guidance = TriageGuidance {
             avoid_tokens: vec!["mutation:ast.decon_rounds".to_string()],
             seek_tokens: vec!["mutation:ast.fill_pattern".to_string()],
+            scored_avoid: vec![],
+            scored_seek: vec![],
         };
 
         let round = ss.mutation_pool.len() as u32 + 2;
@@ -830,6 +928,8 @@ mod tests {
         let guidance = TriageGuidance {
             avoid_tokens: vec![],
             seek_tokens: vec![],
+            scored_avoid: vec![],
+            scored_seek: vec![],
         };
 
         // Round well past pool_size+1

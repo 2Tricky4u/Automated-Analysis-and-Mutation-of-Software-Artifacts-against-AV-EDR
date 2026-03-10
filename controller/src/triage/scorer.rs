@@ -7,7 +7,7 @@
 //! Confidence(T) = min(1.0, n_total / 5.0)
 //! Importance(T) = lift * confidence
 
-use crate::triage::TriageGuidance;
+use crate::triage::{ScoredToken, TriageGuidance};
 use std::collections::HashMap;
 
 /// Per-token statistics from the round matrix.
@@ -111,26 +111,43 @@ pub fn build_guidance(
 ) -> TriageGuidance {
     let inverse_threshold = 1.0 / lift_threshold;
 
-    let mut avoid_tokens: Vec<String> = scores
+    let mut avoid_tokens = Vec::new();
+    let mut scored_avoid = Vec::new();
+    for s in scores
         .iter()
         .filter(|s| s.lift > lift_threshold && s.confidence > min_confidence)
-        .map(|s| s.token.clone())
-        .collect();
+    {
+        avoid_tokens.push(s.token.clone());
+        scored_avoid.push(ScoredToken {
+            token: s.token.clone(),
+            importance: s.importance,
+        });
+    }
 
-    let mut seek_tokens: Vec<String> = scores
+    let mut seek_tokens = Vec::new();
+    let mut scored_seek = Vec::new();
+    for s in scores
         .iter()
         .filter(|s| s.lift < inverse_threshold && s.confidence > min_confidence)
-        .map(|s| s.token.clone())
-        .collect();
+    {
+        seek_tokens.push(s.token.clone());
+        scored_seek.push(ScoredToken {
+            token: s.token.clone(),
+            importance: s.importance,
+        });
+    }
 
-    // Already sorted by importance via scores ordering, but let's be explicit
-    // (avoid is sorted descending by importance, seek ascending by lift = most evasion-correlated first)
-    avoid_tokens.truncate(50); // Cap to keep guidance manageable
+    // Already sorted by importance via scores ordering
+    avoid_tokens.truncate(50);
     seek_tokens.truncate(50);
+    scored_avoid.truncate(50);
+    scored_seek.truncate(50);
 
     TriageGuidance {
         avoid_tokens,
         seek_tokens,
+        scored_avoid,
+        scored_seek,
     }
 }
 

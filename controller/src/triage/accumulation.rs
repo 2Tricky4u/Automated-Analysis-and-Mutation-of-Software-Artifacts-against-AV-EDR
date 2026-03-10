@@ -29,6 +29,12 @@ pub struct AccumulationConfig {
     /// Intensity of parameter perturbation during accumulation. Default: `0.15`.
     #[serde(default = "default_perturb_intensity")]
     pub perturb_intensity: f64,
+    /// Window size for stagnation detection. Default: `5`.
+    #[serde(default = "default_stagnation_window")]
+    pub stagnation_window: usize,
+    /// Diversity threshold below which a restart is triggered. Default: `0.15`.
+    #[serde(default = "default_diversity_threshold")]
+    pub diversity_threshold: f64,
 }
 
 fn default_enabled() -> bool {
@@ -40,6 +46,12 @@ fn default_prune_threshold() -> f64 {
 fn default_perturb_intensity() -> f64 {
     0.15
 }
+fn default_stagnation_window() -> usize {
+    5
+}
+fn default_diversity_threshold() -> f64 {
+    0.15
+}
 
 impl Default for AccumulationConfig {
     fn default() -> Self {
@@ -48,6 +60,8 @@ impl Default for AccumulationConfig {
             max_recipe_size: None,
             prune_threshold: default_prune_threshold(),
             perturb_intensity: default_perturb_intensity(),
+            stagnation_window: default_stagnation_window(),
+            diversity_threshold: default_diversity_threshold(),
         }
     }
 }
@@ -159,15 +173,7 @@ pub fn compute_marginal_contributions(
                     .or_default()
                     .push(summary.evasion_score);
             }
-            _ => {
-                // Multi-mutation rounds: attribute score equally to each
-                for m in &pool_mutations {
-                    individual_scores
-                        .entry((*m).clone())
-                        .or_default()
-                        .push(summary.evasion_score);
-                }
-            }
+            _ => {} // Skip confounded multi-mutation rounds (ablation requires isolation)
         }
     }
 
@@ -229,6 +235,77 @@ pub fn perturb_recipe_params(
 /// Effective max recipe size, falling back to pool_size if not configured.
 pub fn effective_max_recipe_size(config: &AccumulationConfig, pool_size: usize) -> usize {
     config.max_recipe_size.unwrap_or(pool_size).max(1)
+}
+
+/// Decaying epsilon: ε(r) = ε_min + (ε₀ - ε_min) / (1 + α * r_acc)
+///
+/// During IndividualExploration (round_number <= pool_size+1), returns ~ε₀.
+/// After exploration, decays toward ε_min as rounds accumulate.
+///
+/// - ε₀ = 0.3 (initial exploration rate)
+/// - ε_min = 0.05 (minimum exploration rate)
+/// - α = 0.1 (decay rate)
+pub fn decaying_epsilon(round_number: u32, pool_size: usize) -> f64 {
+    let epsilon_initial = 0.3;
+    let epsilon_min = 0.05;
+    let decay_rate = 0.1;
+    let exploration_end = pool_size as u32 + 1;
+    let rounds_past = round_number.saturating_sub(exploration_end) as f64;
+    epsilon_min + (epsilon_initial - epsilon_min) / (1.0 + decay_rate * rounds_past)
+}
+
+/// Compute diversity of recent recipes via mean pairwise Jaccard distance.
+///
+/// Returns a value in `[0.0, 1.0]`:
+/// - `0.0` = all recent recipes are identical
+/// - `1.0` = all recent recipes are completely disjoint
+///
+/// Only considers trustworthy rounds and excludes fixed mutations.
+pub fn compute_recipe_diversity(
+    history: &BTreeMap<u32, RoundSummary>,
+    fixed_set: &HashSet<&str>,
+    window: usize,
+) -> f64 {
+    let recent_sets: Vec<HashSet<&str>> = history
+        .values()
+        .rev()
+        .filter(|s| s.differential_category.is_trustworthy())
+        .take(window)
+        .map(|s| {
+            s.mutations
+                .iter()
+                .filter(|m| !fixed_set.contains(m.as_str()))
+                .map(|m| m.as_str())
+                .collect::<HashSet<_>>()
+        })
+        .collect();
+
+    if recent_sets.len() < 2 {
+        return 1.0; // Not enough data — assume diverse
+    }
+
+    let mut total_distance = 0.0;
+    let mut pair_count = 0u32;
+
+    for i in 0..recent_sets.len() {
+        for j in (i + 1)..recent_sets.len() {
+            let intersection = recent_sets[i].intersection(&recent_sets[j]).count();
+            let union = recent_sets[i].union(&recent_sets[j]).count();
+            let jaccard_distance = if union == 0 {
+                0.0 // Both empty — identical
+            } else {
+                1.0 - (intersection as f64 / union as f64)
+            };
+            total_distance += jaccard_distance;
+            pair_count += 1;
+        }
+    }
+
+    if pair_count == 0 {
+        1.0
+    } else {
+        total_distance / pair_count as f64
+    }
 }
 
 #[cfg(test)]
@@ -577,5 +654,205 @@ mod tests {
         perturb_recipe_params(&mut recipe, &mut rng, 0.3, 1.0);
         // Params should be present (may or may not have changed values, but structure preserved)
         assert!(recipe[0].params.is_some());
+    }
+
+    // ========== marginal contributions: multi-mutation exclusion ==========
+
+    #[test]
+    fn test_marginal_contributions_skips_multi_mutation_rounds() {
+        let mut history = BTreeMap::new();
+        let fixed_set: HashSet<&str> = ["binary.rich_header"].into_iter().collect();
+
+        // Baseline: score 0.2
+        history.insert(
+            1,
+            make_summary(
+                1,
+                0.2,
+                DifferentialCategory::RealDetection,
+                vec!["binary.rich_header".to_string()],
+            ),
+        );
+        // Individual with ast.decon_rounds: score 0.6 → marginal +0.4
+        history.insert(
+            2,
+            make_summary(
+                2,
+                0.6,
+                DifferentialCategory::Evasion,
+                vec![
+                    "binary.rich_header".to_string(),
+                    "ast.decon_rounds".to_string(),
+                ],
+            ),
+        );
+        // Multi-mutation round with high score — should NOT inflate marginals
+        history.insert(
+            3,
+            make_summary(
+                3,
+                0.95,
+                DifferentialCategory::Evasion,
+                vec![
+                    "binary.rich_header".to_string(),
+                    "ast.decon_rounds".to_string(),
+                    "ast.fill_pattern".to_string(),
+                ],
+            ),
+        );
+
+        let marginals = compute_marginal_contributions(&history, &fixed_set);
+        // ast.decon_rounds should only get 0.6 - 0.2 = 0.4, NOT inflated by the 0.95 round
+        assert!(
+            (marginals["ast.decon_rounds"] - 0.4).abs() < 1e-9,
+            "decon_rounds marginal should be 0.4, got {}",
+            marginals["ast.decon_rounds"]
+        );
+        // ast.fill_pattern should have NO marginal entry (only appeared in multi-mutation round)
+        assert!(
+            !marginals.contains_key("ast.fill_pattern"),
+            "fill_pattern should have no marginal (only in multi-mutation round)"
+        );
+    }
+
+    // ========== decaying_epsilon ==========
+
+    #[test]
+    fn test_decaying_epsilon_during_exploration() {
+        // During exploration phase, rounds_past = 0, epsilon ≈ 0.3
+        let eps = decaying_epsilon(5, 10);
+        assert!(
+            (eps - 0.3).abs() < 0.01,
+            "During exploration, ε should be ~0.3, got {}",
+            eps
+        );
+    }
+
+    #[test]
+    fn test_decaying_epsilon_boundary_values() {
+        let pool_size = 10;
+        // Round 12 (1 past exploration): ε ≈ 0.05 + 0.25/(1+0.1*1) ≈ 0.277
+        let eps12 = decaying_epsilon(12, pool_size);
+        assert!(
+            (eps12 - 0.277).abs() < 0.01,
+            "ε(12,10) should be ~0.277, got {}",
+            eps12
+        );
+
+        // Round 22 (11 past): ε ≈ 0.05 + 0.25/(1+1.1) ≈ 0.169
+        let eps22 = decaying_epsilon(22, pool_size);
+        assert!(
+            eps22 < 0.2 && eps22 > 0.1,
+            "ε(22,10) should be ~0.17, got {}",
+            eps22
+        );
+
+        // Round 100 (89 past): ε ≈ 0.05 + 0.25/(1+8.9) ≈ 0.075
+        let eps100 = decaying_epsilon(100, pool_size);
+        assert!(
+            eps100 < 0.1 && eps100 > 0.05,
+            "ε(100,10) should approach 0.05, got {}",
+            eps100
+        );
+    }
+
+    #[test]
+    fn test_decaying_epsilon_monotonically_decreasing() {
+        let pool_size = 10;
+        let mut prev = decaying_epsilon(12, pool_size);
+        for r in 13..=100 {
+            let eps = decaying_epsilon(r, pool_size);
+            assert!(
+                eps <= prev + 1e-12,
+                "ε should be monotonically decreasing: ε({})={} > ε({})={}",
+                r,
+                eps,
+                r - 1,
+                prev
+            );
+            prev = eps;
+        }
+    }
+
+    // ========== compute_recipe_diversity ==========
+
+    #[test]
+    fn test_diversity_identical_recipes() {
+        let mut history = BTreeMap::new();
+        let fixed_set: HashSet<&str> = ["binary.rich_header"].into_iter().collect();
+
+        // All rounds have the same pool mutation
+        for i in 1..=5 {
+            history.insert(
+                i,
+                make_summary(
+                    i,
+                    0.5,
+                    DifferentialCategory::Evasion,
+                    vec![
+                        "binary.rich_header".to_string(),
+                        "ast.decon_rounds".to_string(),
+                    ],
+                ),
+            );
+        }
+
+        let diversity = compute_recipe_diversity(&history, &fixed_set, 5);
+        assert!(
+            diversity.abs() < 1e-9,
+            "Identical recipes should have diversity 0.0, got {}",
+            diversity
+        );
+    }
+
+    #[test]
+    fn test_diversity_disjoint_recipes() {
+        let mut history = BTreeMap::new();
+        let fixed_set: HashSet<&str> = ["binary.rich_header"].into_iter().collect();
+
+        let pool_mutations = [
+            "ast.decon_rounds",
+            "ast.fill_pattern",
+            "ast.string_xor",
+            "ast.exec_decoy",
+            "ast.timing_pattern",
+        ];
+        for (i, m) in pool_mutations.iter().enumerate() {
+            history.insert(
+                (i + 1) as u32,
+                make_summary(
+                    (i + 1) as u32,
+                    0.5,
+                    DifferentialCategory::Evasion,
+                    vec!["binary.rich_header".to_string(), m.to_string()],
+                ),
+            );
+        }
+
+        let diversity = compute_recipe_diversity(&history, &fixed_set, 5);
+        assert!(
+            (diversity - 1.0).abs() < 1e-9,
+            "Disjoint recipes should have diversity 1.0, got {}",
+            diversity
+        );
+    }
+
+    #[test]
+    fn test_diversity_insufficient_data() {
+        let mut history = BTreeMap::new();
+        let fixed_set = HashSet::new();
+
+        history.insert(
+            1,
+            make_summary(1, 0.5, DifferentialCategory::Evasion, vec!["ast.decon_rounds".to_string()]),
+        );
+
+        // Only 1 recipe — should return 1.0 (assume diverse)
+        let diversity = compute_recipe_diversity(&history, &fixed_set, 5);
+        assert!(
+            (diversity - 1.0).abs() < 1e-9,
+            "Single recipe should return 1.0, got {}",
+            diversity
+        );
     }
 }
