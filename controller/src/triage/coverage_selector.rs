@@ -14,8 +14,9 @@
 use super::{SearchSpace, Selection, Selector, TriageGuidance, VariationStrategy};
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
 use crate::triage::accumulation::{
-    AccumulationPhase, compute_marginal_contributions, determine_phase, effective_max_recipe_size,
-    perturb_recipe_params, prune_recipe, reconstruct_best_recipe,
+    AccumulationPhase, compute_marginal_contributions, compute_recipe_diversity, decaying_epsilon,
+    determine_phase, effective_max_recipe_size, perturb_recipe_params, prune_recipe,
+    reconstruct_best_recipe,
 };
 use crate::triage::param_space::{default_registry, find_param_space};
 use async_trait::async_trait;
@@ -408,18 +409,20 @@ impl CoverageSelector {
         }
     }
 
-    /// Accumulation phase: build on best recipe using epsilon-greedy.
+    /// Accumulation phase: build on best recipe using decaying epsilon-greedy.
     ///
-    /// 1. Reconstruct best recipe from history
-    /// 2. Prune mutations with negative marginal contribution
-    /// 3. Epsilon-greedy: Explore (30%) = add untried mutation or perturb params
-    ///    Exploit (70%) = keep pruned recipe, perturb params at low intensity
-    /// 4. If at max_recipe_size, explore replaces worst mutation instead of adding
+    /// 1. Check diversity — restart if converged
+    /// 2. Reconstruct best recipe from history
+    /// 3. Prune mutations with negative marginal contribution
+    /// 4. Decaying epsilon-greedy: Explore = add untried mutation or perturb params
+    ///    Exploit = keep pruned recipe, perturb params at low intensity
+    /// 5. If at max_recipe_size, explore replaces worst mutation instead of adding
     fn select_accumulated(
         &self,
         search_space: &SearchSpace,
         default_modules: &ModuleSelectionSpec,
         history: &BTreeMap<u32, RoundSummary>,
+        round_number: u32,
     ) -> Selection {
         let fixed_set: HashSet<&str> = search_space
             .fixed_mutations
@@ -433,6 +436,19 @@ impl CoverageSelector {
             .collect();
         let config = &search_space.accumulation;
 
+        // Diversity check: restart if converged
+        let diversity = compute_recipe_diversity(history, &fixed_set, config.stagnation_window);
+        if diversity < config.diversity_threshold {
+            // Fall back to individual exploration behavior
+            let mut restart_selection =
+                self.select_mutations(search_space, default_modules, history);
+            restart_selection.rationale = format!(
+                "Diversity restart (div={:.2}) | {}",
+                diversity, restart_selection.rationale
+            );
+            return restart_selection;
+        }
+
         // 1. Reconstruct best recipe
         let (best_recipe, best_score) = reconstruct_best_recipe(history, &fixed_set);
 
@@ -442,11 +458,12 @@ impl CoverageSelector {
 
         let max_size = effective_max_recipe_size(config, pool.len());
 
-        // 3. Epsilon-greedy
+        // 3. Decaying epsilon-greedy
+        let epsilon = decaying_epsilon(round_number, pool.len());
         let coin = Self::pseudo_random(100) as f64 / 100.0;
         let rationale;
 
-        if coin < EPSILON {
+        if coin < epsilon {
             // Explore: add an untried mutation or one not in the recipe
             let recipe_ids: HashSet<&str> = recipe.iter().map(|m| m.id.as_str()).collect();
             let candidates: Vec<&str> = pool
@@ -599,7 +616,7 @@ impl Selector for CoverageSelector {
             },
             AccumulationPhase::Accumulation => match search_space.strategy {
                 VariationStrategy::MutationOnly => {
-                    self.select_accumulated(search_space, default_modules, history)
+                    self.select_accumulated(search_space, default_modules, history, round_number)
                 }
                 VariationStrategy::Full => {
                     // Modules vary + accumulated mutations
@@ -608,7 +625,7 @@ impl Selector for CoverageSelector {
                             Self::pseudo_random(n)
                         });
                     let mut accumulated =
-                        self.select_accumulated(search_space, default_modules, history);
+                        self.select_accumulated(search_space, default_modules, history, round_number);
                     accumulated.modules = modules;
                     accumulated.rationale =
                         format!("Module: {} | {}", module_rationale, accumulated.rationale);

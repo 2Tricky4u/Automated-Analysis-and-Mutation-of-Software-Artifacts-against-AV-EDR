@@ -204,6 +204,13 @@ impl Default for SearchSpace {
     }
 }
 
+/// A token with its computed importance score from triage.
+#[derive(Debug, Clone)]
+pub struct ScoredToken {
+    pub token: String,
+    pub importance: f64,
+}
+
 /// Token-level guidance from async triage.
 ///
 /// Produced by `extractor::extract_and_score()` in a background task,
@@ -212,6 +219,10 @@ impl Default for SearchSpace {
 pub struct TriageGuidance {
     pub avoid_tokens: Vec<String>,
     pub seek_tokens: Vec<String>,
+    /// Avoid tokens with their importance scores (lift * confidence).
+    pub scored_avoid: Vec<ScoredToken>,
+    /// Seek tokens with their importance scores (lift * confidence).
+    pub scored_seek: Vec<ScoredToken>,
 }
 
 /// Trait for mutation selection strategies.
