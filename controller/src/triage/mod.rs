@@ -13,6 +13,7 @@
 //! - [`RandomSelector`](random_selector::RandomSelector): uniform random
 //!   baseline for controlled evaluation.
 
+pub mod accumulation;
 pub mod coverage_selector;
 pub mod extractor;
 pub mod fuzzer_selector;
@@ -24,6 +25,7 @@ pub mod token_diff;
 pub mod token_selector;
 
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
+use crate::triage::accumulation::AccumulationConfig;
 use crate::triage::fuzzer_selector::FuzzerConfig;
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -143,6 +145,10 @@ pub struct SearchSpace {
     /// Config for FuzzerSelector (only used when strategy=Fuzzer).
     #[serde(default)]
     pub fuzzer_config: Option<FuzzerConfig>,
+    /// Accumulation phase config. Controls progressive recipe building.
+    /// When `enabled: false`, selectors stay in individual exploration forever.
+    #[serde(default)]
+    pub accumulation: AccumulationConfig,
 }
 
 fn default_fixed_mutations() -> Vec<String> {
@@ -193,6 +199,7 @@ impl Default for SearchSpace {
             mutation_targets: vec![],
             fixed_mutations: default_fixed_mutations(),
             fuzzer_config: None,
+            accumulation: AccumulationConfig::default(),
         }
     }
 }

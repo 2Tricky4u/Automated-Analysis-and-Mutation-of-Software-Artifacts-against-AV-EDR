@@ -5,8 +5,8 @@
 //!
 //! Usage:
 //!   cargo run -p build --example emit_c
-//!   cargo run -p build --example emit_c -- --antiemulation sirallocalot -o out.c
-//!   cargo run -p build --example emit_c -- --payload sc.bin -m ast.string_xor --trace off
+//!   cargo run -p build --example emit_c -- --carrier peb_walk --encoding english -o out.c
+//!   cargo run -p build --example emit_c -- --payload sc.bin -m ast.string_xor --trace on
 //!   cargo run -p build --example emit_c -- --deconditioner basic -m ast.decon_rounds:count=50 --trace off -o mutated.c
 
 use build::mutator::MutationSpec;
@@ -15,6 +15,7 @@ use build::{
     inject_line_traces_with_opts, strip_mutation_markers,
 };
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::{env, fs, process};
 
 fn main() {
@@ -37,14 +38,21 @@ fn main() {
         }
     };
 
+    // Parse encoding
+    let encoding = EncodingType::from_str(&args.encoding).unwrap_or_else(|e| {
+        eprintln!("Error: {}", e);
+        process::exit(1);
+    });
+
     let encoder = PayloadEncoder::new();
-    let encoded = encoder.encode(&payload, EncodingType::Xor);
+    let encoded = encoder.encode(&payload, encoding);
     let payload_header = encoder.generate_c_header(&encoded);
 
     eprintln!(
-        "[emit_c] Payload: {} bytes → {} byte XOR-encoded header",
+        "[emit_c] Payload: {} bytes → {} byte {}-encoded header",
         payload.len(),
-        payload_header.len()
+        payload_header.len(),
+        args.encoding
     );
 
     // ── Step 2: Assemble (matches builder.rs:1322-1327) ─────────────────────
@@ -55,13 +63,13 @@ fn main() {
     });
 
     let modules = ModuleSelection {
-        carrier: "change_rw_rx".into(),
-        decoder: "xor".into(),
+        carrier: args.carrier.clone(),
+        decoder: args.decoder.clone(),
         antiemulation: args.antiemulation.clone(),
         deconditioner: args.deconditioner.clone(),
-        guardrail: "env".into(),
-        virtualprotect: "standard".into(),
-        decoy: "winexec".into(),
+        guardrail: args.guardrail.clone(),
+        virtualprotect: args.virtualprotect.clone(),
+        decoy: args.decoy.clone(),
     };
 
     let assembled = assembler
@@ -72,9 +80,14 @@ fn main() {
         });
 
     eprintln!(
-        "[emit_c] Assembled: {} bytes (carrier=change_rw_rx, decoder=xor, antiemulation={}, guardrail=env, decoy=winexec)",
+        "[emit_c] Assembled: {} bytes (carrier={}, decoder={}, antiemulation={}, guardrail={}, virtualprotect={}, decoy={})",
         assembled.len(),
-        modules.antiemulation
+        modules.carrier,
+        modules.decoder,
+        modules.antiemulation,
+        modules.guardrail,
+        modules.virtualprotect,
+        modules.decoy
     );
 
     // ── Step 3: Mutate + strip markers (matches builder.rs:1339-1351) ───────
@@ -102,10 +115,11 @@ fn main() {
         // Exactly mirrors apply_instrumentation():
         //   language = SourceLanguage::from_path(...)  → C
         //   format   = TraceFormat::default()          → Binary
+        let trace_filename = format!("modular_{}_{}.c", args.carrier, args.decoder);
         let instrumented = inject_line_traces_with_opts(
             &final_source,
             SourceLanguage::C,
-            "modular_change_rw_rx_xor.c",
+            &trace_filename,
             TraceFormat::default(), // Binary — matches builder.rs:920
         )
         .unwrap_or_else(|e| {
@@ -147,10 +161,19 @@ struct Args {
     help: bool,
     payload: Option<PathBuf>,
     output: Option<PathBuf>,
+    carrier: String,
+    decoder: String,
     antiemulation: String,
     deconditioner: String,
+    guardrail: String,
+    virtualprotect: String,
+    decoy: String,
+    encoding: String,
     trace: bool,
     mutations: Vec<MutationSpec>,
+    // Track which flags the user explicitly set (for auto-sync)
+    decoder_set: bool,
+    encoding_set: bool,
 }
 
 impl Args {
@@ -159,10 +182,18 @@ impl Args {
             help: false,
             payload: None,
             output: None,
+            carrier: "change_rw_rx".into(),
+            decoder: "xor".into(),
             antiemulation: "none".into(),
             deconditioner: "none".into(),
-            trace: true,
+            guardrail: "env".into(),
+            virtualprotect: "standard".into(),
+            decoy: "winexec".into(),
+            encoding: "xor".into(),
+            trace: false,
             mutations: vec![],
+            decoder_set: false,
+            encoding_set: false,
         };
         let argv: Vec<String> = env::args().skip(1).collect();
         let mut i = 0;
@@ -177,6 +208,15 @@ impl Args {
                     i += 1;
                     a.output = Some(PathBuf::from(&argv[i]));
                 }
+                "--carrier" => {
+                    i += 1;
+                    a.carrier = argv[i].clone();
+                }
+                "--decoder" => {
+                    i += 1;
+                    a.decoder = argv[i].clone();
+                    a.decoder_set = true;
+                }
                 "--antiemulation" => {
                     i += 1;
                     a.antiemulation = argv[i].clone();
@@ -184,6 +224,23 @@ impl Args {
                 "--deconditioner" => {
                     i += 1;
                     a.deconditioner = argv[i].clone();
+                }
+                "--guardrail" => {
+                    i += 1;
+                    a.guardrail = argv[i].clone();
+                }
+                "--virtualprotect" => {
+                    i += 1;
+                    a.virtualprotect = argv[i].clone();
+                }
+                "--decoy" => {
+                    i += 1;
+                    a.decoy = argv[i].clone();
+                }
+                "--encoding" => {
+                    i += 1;
+                    a.encoding = argv[i].clone();
+                    a.encoding_set = true;
                 }
                 "--trace" => {
                     i += 1;
@@ -200,6 +257,22 @@ impl Args {
             }
             i += 1;
         }
+
+        // Auto-sync encoding ↔ decoder (same logic as build_artifact)
+        if a.decoder_set && !a.encoding_set {
+            a.encoding = a.decoder.clone();
+            eprintln!(
+                "[emit_c] Auto-synced encoding to '{}' (from --decoder)",
+                a.encoding
+            );
+        } else if a.encoding_set && !a.decoder_set {
+            a.decoder = a.encoding.clone();
+            eprintln!(
+                "[emit_c] Auto-synced decoder to '{}' (from --encoding)",
+                a.decoder
+            );
+        }
+
         a
     }
 }
@@ -210,10 +283,6 @@ fn print_help() {
 
 Reproduces builder.rs Steps 1-4 + AST line tracing, stops before clang/LLVM.
 
-Fixed modules: carrier=change_rw_rx, decoder=xor, guardrail=env,
-               virtualprotect=standard, decoy=winexec, encoding=xor,
-               deconditioner=none (configurable via --deconditioner)
-
 USAGE:
     cargo run -p build --example emit_c -- [OPTIONS]
 
@@ -221,9 +290,15 @@ OPTIONS:
     -h, --help                      Show this help
     -p, --payload <FILE>            Raw .bin payload (default: 256-byte test payload)
     -o, --output <FILE>             Write to file (default: stdout)
+    --carrier <NAME>                change_rw_rx | alloc_rw_rx | peb_walk  (default: change_rw_rx)
+    --decoder <NAME>                xor | english  (default: xor)
     --antiemulation <NAME>          none | sirallocalot | timeraw | cpuburn | heapstress | fsenum | sleepaccel  (default: none)
     --deconditioner <NAME>          none | alloc_loop | alloc_exec | basic | thread_alloc | mixed_apis | entropy_flood  (default: none)
-    --trace <on|off>                AST line tracing (default: on)
+    --guardrail <NAME>              env | none  (default: env)
+    --virtualprotect <NAME>         standard | undersized  (default: standard)
+    --decoy <NAME>                  winexec | none  (default: winexec)
+    --encoding <TYPE>               xor | english  (default: xor)
+    --trace <on|off>                AST line tracing (default: off)
     -m, --mutation <ID[:params]>    Mutation to apply (repeatable). Params: key=val,key=val
 
 MUTATION SYNTAX:
@@ -249,6 +324,7 @@ AVAILABLE MUTATIONS:
 EXAMPLES:
     cargo run -p build --example emit_c
     cargo run -p build --example emit_c -- -o instrumented.c
+    cargo run -p build --example emit_c -- --carrier peb_walk --encoding english -o out.c
     cargo run -p build --example emit_c -- --antiemulation sirallocalot -o out.c
     cargo run -p build --example emit_c -- --trace off -o uninstrumented.c
     cargo run -p build --example emit_c -- -m ast.string_xor -o mutated.c

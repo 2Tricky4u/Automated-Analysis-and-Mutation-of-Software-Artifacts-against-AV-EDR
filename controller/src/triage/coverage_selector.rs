@@ -13,9 +13,13 @@
 
 use super::{SearchSpace, Selection, Selector, TriageGuidance, VariationStrategy};
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
+use crate::triage::accumulation::{
+    AccumulationPhase, compute_marginal_contributions, determine_phase, effective_max_recipe_size,
+    perturb_recipe_params, prune_recipe, reconstruct_best_recipe,
+};
 use crate::triage::param_space::{default_registry, find_param_space};
 use async_trait::async_trait;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Exploration rate for epsilon-greedy selection.
@@ -404,6 +408,140 @@ impl CoverageSelector {
         }
     }
 
+    /// Accumulation phase: build on best recipe using epsilon-greedy.
+    ///
+    /// 1. Reconstruct best recipe from history
+    /// 2. Prune mutations with negative marginal contribution
+    /// 3. Epsilon-greedy: Explore (30%) = add untried mutation or perturb params
+    ///    Exploit (70%) = keep pruned recipe, perturb params at low intensity
+    /// 4. If at max_recipe_size, explore replaces worst mutation instead of adding
+    fn select_accumulated(
+        &self,
+        search_space: &SearchSpace,
+        default_modules: &ModuleSelectionSpec,
+        history: &BTreeMap<u32, RoundSummary>,
+    ) -> Selection {
+        let fixed_set: HashSet<&str> = search_space
+            .fixed_mutations
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let pool: Vec<&str> = search_space
+            .mutation_pool
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let config = &search_space.accumulation;
+
+        // 1. Reconstruct best recipe
+        let (best_recipe, best_score) = reconstruct_best_recipe(history, &fixed_set);
+
+        // 2. Compute marginals and prune
+        let marginals = compute_marginal_contributions(history, &fixed_set);
+        let mut recipe = prune_recipe(&best_recipe, &marginals, config.prune_threshold);
+
+        let max_size = effective_max_recipe_size(config, pool.len());
+
+        // 3. Epsilon-greedy
+        let coin = Self::pseudo_random(100) as f64 / 100.0;
+        let rationale;
+
+        if coin < EPSILON {
+            // Explore: add an untried mutation or one not in the recipe
+            let recipe_ids: HashSet<&str> = recipe.iter().map(|m| m.id.as_str()).collect();
+            let candidates: Vec<&str> = pool
+                .iter()
+                .filter(|m| !recipe_ids.contains(*m))
+                .copied()
+                .collect();
+
+            if !candidates.is_empty() {
+                let idx = Self::pseudo_random(candidates.len());
+                let new_id = candidates[idx];
+                let new_spec = MutationSpec {
+                    id: new_id.to_string(),
+                    params: Self::sample_mutation_params(new_id),
+                };
+
+                if recipe.len() >= max_size {
+                    // Replace worst mutation
+                    let worst_idx = recipe
+                        .iter()
+                        .enumerate()
+                        .min_by(|(_, a), (_, b)| {
+                            let ma = marginals.get(&a.id).copied().unwrap_or(0.0);
+                            let mb = marginals.get(&b.id).copied().unwrap_or(0.0);
+                            ma.partial_cmp(&mb).unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    let replaced = recipe[worst_idx].id.clone();
+                    recipe[worst_idx] = new_spec;
+                    rationale = format!(
+                        "Accumulation: explore add {} replacing {} (best={:.2}, pruned={})",
+                        new_id,
+                        replaced,
+                        best_score,
+                        best_recipe.len() - recipe.len() + 1,
+                    );
+                } else {
+                    recipe.push(new_spec);
+                    rationale = format!(
+                        "Accumulation: explore add {} (recipe={}, best={:.2})",
+                        new_id,
+                        recipe.len(),
+                        best_score,
+                    );
+                }
+            } else {
+                // All pool mutations already in recipe — perturb params
+                let nanos = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as u64;
+                let mut rng = crate::triage::param_space::SeededRng::from_raw(nanos.max(1));
+                perturb_recipe_params(&mut recipe, &mut rng, config.perturb_intensity, 0.5);
+                rationale = format!(
+                    "Accumulation: explore perturb (recipe={}, best={:.2})",
+                    recipe.len(),
+                    best_score,
+                );
+            }
+        } else {
+            // Exploit: keep pruned recipe, perturb params at low intensity
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos() as u64;
+            let mut rng = crate::triage::param_space::SeededRng::from_raw(nanos.max(1));
+            perturb_recipe_params(
+                &mut recipe,
+                &mut rng,
+                config.perturb_intensity * 0.5,
+                0.3,
+            );
+            rationale = format!(
+                "Accumulation: exploit (recipe={}, best={:.2})",
+                recipe.len(),
+                best_score,
+            );
+        }
+
+        // Prepend fixed mutations
+        let mut mutations = Self::fixed_mutation_specs(search_space);
+        mutations.extend(recipe);
+
+        Selection {
+            modules: default_modules.clone(),
+            mutations,
+            rationale: format!(
+                "Fixed: {} | {}",
+                search_space.fixed_mutations.len(),
+                rationale
+            ),
+        }
+    }
+
     /// Full mode: both modules AND mutations vary.
     fn select_full(
         &self,
@@ -439,20 +577,44 @@ impl Selector for CoverageSelector {
         history: &BTreeMap<u32, RoundSummary>,
         _guidance: Option<&TriageGuidance>,
     ) -> Selection {
-        // Round 1: always use defaults (baseline control measurement)
-        if round_number <= 1 {
-            return Selection {
+        let phase = determine_phase(
+            round_number,
+            search_space.mutation_pool.len(),
+            &search_space.accumulation,
+        );
+
+        match phase {
+            AccumulationPhase::Baseline => Selection {
                 modules: default_modules.clone(),
                 mutations: vec![],
                 rationale: "Round 1: baseline control (defaults)".to_string(),
-            };
-        }
-
-        match search_space.strategy {
-            VariationStrategy::MutationOnly => {
-                self.select_mutations(search_space, default_modules, history)
-            }
-            VariationStrategy::Full => self.select_full(search_space, default_modules, history),
+            },
+            AccumulationPhase::IndividualExploration => match search_space.strategy {
+                VariationStrategy::MutationOnly => {
+                    self.select_mutations(search_space, default_modules, history)
+                }
+                VariationStrategy::Full => {
+                    self.select_full(search_space, default_modules, history)
+                }
+            },
+            AccumulationPhase::Accumulation => match search_space.strategy {
+                VariationStrategy::MutationOnly => {
+                    self.select_accumulated(search_space, default_modules, history)
+                }
+                VariationStrategy::Full => {
+                    // Modules vary + accumulated mutations
+                    let (modules, module_rationale) =
+                        select_modules(search_space, default_modules, history, &mut |n| {
+                            Self::pseudo_random(n)
+                        });
+                    let mut accumulated =
+                        self.select_accumulated(search_space, default_modules, history);
+                    accumulated.modules = modules;
+                    accumulated.rationale =
+                        format!("Module: {} | {}", module_rationale, accumulated.rationale);
+                    accumulated
+                }
+            },
         }
     }
 }
@@ -1021,6 +1183,149 @@ mod tests {
             "Expected exploitation to favor alloc_exec (score=0.9), got {} out of {}",
             best_count,
             trials
+        );
+    }
+
+    // ==========================================================================
+    // Accumulation phase tests
+    // ==========================================================================
+
+    #[tokio::test]
+    async fn test_accumulation_disabled_stays_in_exploration() {
+        let selector = CoverageSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+        let history = BTreeMap::new();
+
+        let mut ss = SearchSpace::default();
+        ss.accumulation.enabled = false;
+
+        // Round 20 (well past pool_size+1): should still be individual exploration
+        let selection = selector
+            .select("job-1", 20, &ss, &defaults, &history, None)
+            .await;
+
+        // Individual exploration produces exactly 1 explored mutation
+        let pool_mutations: Vec<&MutationSpec> = selection
+            .mutations
+            .iter()
+            .filter(|m| !ss.fixed_mutations.contains(&m.id))
+            .collect();
+        assert_eq!(
+            pool_mutations.len(),
+            1,
+            "Disabled accumulation should produce exactly 1 pool mutation (exploration mode)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_accumulation_produces_multi_mutation_recipe() {
+        let selector = CoverageSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+        let ss = SearchSpace::default();
+        let fixed_count = ss.fixed_mutations.len();
+
+        // Build history: baseline + individual exploration for all 10 pool mutations
+        let mut history = BTreeMap::new();
+        history.insert(
+            1,
+            make_summary(1, "none", 0.2, DifferentialCategory::RealDetection),
+        );
+        for (i, pool_id) in ss.mutation_pool.iter().enumerate() {
+            let mut mutations: Vec<String> = ss.fixed_mutations.clone();
+            mutations.push(pool_id.clone());
+            let score = if pool_id == "ast.fill_pattern" {
+                0.8
+            } else {
+                0.3
+            };
+            let category = if score > 0.5 {
+                DifferentialCategory::Evasion
+            } else {
+                DifferentialCategory::RealDetection
+            };
+            history.insert(
+                (i + 2) as u32,
+                make_summary_with_mutations(
+                    (i + 2) as u32,
+                    "none",
+                    score,
+                    category,
+                    mutations,
+                ),
+            );
+        }
+
+        // Round pool_size+2 should be in accumulation phase
+        let round = ss.mutation_pool.len() as u32 + 2;
+        let selection = selector
+            .select("job-1", round, &ss, &defaults, &history, None)
+            .await;
+
+        assert!(
+            selection.rationale.contains("Accumulation"),
+            "Should be in accumulation phase. Got: {}",
+            selection.rationale
+        );
+        // Accumulation recipe should contain at least the best mutation from exploration
+        let pool_mutations: Vec<&MutationSpec> = selection
+            .mutations
+            .iter()
+            .filter(|m| !ss.fixed_mutations.contains(&m.id))
+            .collect();
+        assert!(
+            !pool_mutations.is_empty(),
+            "Accumulation should have pool mutations"
+        );
+        // Total should be fixed + recipe
+        assert!(
+            selection.mutations.len() >= fixed_count,
+            "Should include all fixed mutations"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_accumulation_respects_max_recipe_size() {
+        let selector = CoverageSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+
+        let mut ss = SearchSpace::default();
+        ss.accumulation.max_recipe_size = Some(2);
+
+        let mut history = BTreeMap::new();
+        history.insert(
+            1,
+            make_summary(1, "none", 0.2, DifferentialCategory::RealDetection),
+        );
+        // Give multiple mutations good scores
+        for (i, pool_id) in ss.mutation_pool.iter().enumerate() {
+            let mut mutations: Vec<String> = ss.fixed_mutations.clone();
+            mutations.push(pool_id.clone());
+            history.insert(
+                (i + 2) as u32,
+                make_summary_with_mutations(
+                    (i + 2) as u32,
+                    "none",
+                    0.7,
+                    DifferentialCategory::Evasion,
+                    mutations,
+                ),
+            );
+        }
+
+        let round = ss.mutation_pool.len() as u32 + 2;
+        let selection = selector
+            .select("job-1", round, &ss, &defaults, &history, None)
+            .await;
+
+        let pool_count = selection
+            .mutations
+            .iter()
+            .filter(|m| !ss.fixed_mutations.contains(&m.id))
+            .count();
+        assert!(
+            pool_count <= 2,
+            "Pool mutations ({}) should respect max_recipe_size=2",
+            pool_count
         );
     }
 

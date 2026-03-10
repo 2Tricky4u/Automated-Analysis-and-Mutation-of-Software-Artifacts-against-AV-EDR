@@ -14,6 +14,7 @@
 use super::coverage_selector::DECONDITIONER_VARIANTS;
 use super::{SearchSpace, Selection, Selector, TriageGuidance, VariationStrategy};
 use crate::dispatch::types::{ModuleSelectionSpec, MutationSpec, RoundSummary};
+use crate::triage::accumulation::{AccumulationPhase, determine_phase, effective_max_recipe_size};
 use crate::triage::param_space::{SeededRng, default_registry, find_param_space};
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -85,6 +86,52 @@ impl RandomSelector {
         (chosen, rationale)
     }
 
+    /// Random accumulation: random recipe of growing size k.
+    ///
+    /// k = min(round_number - pool_size - 1, max_recipe_size), clamped to [1, pool_size].
+    /// No history used — tests whether growing recipes provide value.
+    fn random_accumulated(
+        search_space: &SearchSpace,
+        round_number: u32,
+        rng: &mut SeededRng,
+    ) -> (Vec<MutationSpec>, String) {
+        let pool = &search_space.mutation_pool;
+        if pool.is_empty() {
+            return (vec![], "No exploration pool".to_string());
+        }
+
+        let pool_size = pool.len();
+        let max_size = effective_max_recipe_size(&search_space.accumulation, pool_size);
+        let k_raw = (round_number as usize).saturating_sub(pool_size + 1);
+        let k = k_raw.clamp(1, max_size).min(pool_size);
+
+        // Fisher-Yates partial shuffle to pick k unique items
+        let mut indices: Vec<usize> = (0..pool.len()).collect();
+        for i in 0..k {
+            let j = i + rng.next_usize(indices.len() - i);
+            indices.swap(i, j);
+        }
+
+        let chosen: Vec<MutationSpec> = indices[..k]
+            .iter()
+            .map(|&idx| {
+                let id = &pool[idx];
+                MutationSpec {
+                    id: id.clone(),
+                    params: Self::sample_mutation_params(id, rng),
+                }
+            })
+            .collect();
+
+        let names: Vec<&str> = chosen.iter().map(|m| m.id.as_str()).collect();
+        let rationale = format!(
+            "Random accumulated: k={} from pool [{}]",
+            k,
+            names.join(", ")
+        );
+        (chosen, rationale)
+    }
+
     /// Random module selection: pick a uniform random deconditioner.
     fn random_modules(
         search_space: &SearchSpace,
@@ -122,8 +169,14 @@ impl Selector for RandomSelector {
         _history: &BTreeMap<u32, RoundSummary>,
         _guidance: Option<&TriageGuidance>,
     ) -> Selection {
-        // Round 1: always use defaults (baseline control measurement)
-        if round_number <= 1 {
+        let phase = determine_phase(
+            round_number,
+            search_space.mutation_pool.len(),
+            &search_space.accumulation,
+        );
+
+        // Baseline: no mutations
+        if phase == AccumulationPhase::Baseline {
             return Selection {
                 modules: default_modules.clone(),
                 mutations: vec![],
@@ -134,10 +187,17 @@ impl Selector for RandomSelector {
         // Deterministic RNG from job_id + round_number
         let mut rng = SeededRng::new(job_id, round_number);
 
-        // Build mutations: fixed + random subset from pool
+        // Build mutations: fixed + pool selection based on phase
         let mut mutations = Self::fixed_mutation_specs(search_space, &mut rng);
-        let (pool_mutations, pool_rationale) =
-            Self::random_pool_mutations(&search_space.mutation_pool, &mut rng);
+        let (pool_mutations, pool_rationale) = match phase {
+            AccumulationPhase::Baseline => unreachable!(),
+            AccumulationPhase::IndividualExploration => {
+                Self::random_pool_mutations(&search_space.mutation_pool, &mut rng)
+            }
+            AccumulationPhase::Accumulation => {
+                Self::random_accumulated(search_space, round_number, &mut rng)
+            }
+        };
         mutations.extend(pool_mutations);
 
         match search_space.strategy {
@@ -386,6 +446,115 @@ mod tests {
                 "MutationOnly should preserve default modules (round {})",
                 round
             );
+        }
+    }
+
+    // ==========================================================================
+    // Accumulation phase tests
+    // ==========================================================================
+
+    #[tokio::test]
+    async fn test_random_accumulation_growing_k() {
+        let selector = RandomSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+        let history = BTreeMap::new();
+        let ss = SearchSpace::default();
+        let pool_size = ss.mutation_pool.len();
+
+        // Accumulation starts at pool_size+2
+        let mut sizes = Vec::new();
+        for round in (pool_size as u32 + 2)..=(pool_size as u32 + 6) {
+            let selection = selector
+                .select("job-growth", round, &ss, &defaults, &history, None)
+                .await;
+            let pool_count = selection
+                .mutations
+                .iter()
+                .filter(|m| ss.mutation_pool.contains(&m.id))
+                .count();
+            sizes.push(pool_count);
+        }
+
+        // k should grow: round pool_size+2 → k=1, pool_size+3 → k=2, etc.
+        assert_eq!(sizes[0], 1, "First accumulation round should have k=1");
+        assert!(
+            sizes[1] >= 2,
+            "Second accumulation round should have k>=2, got {}",
+            sizes[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_random_accumulation_respects_max_recipe_size() {
+        let selector = RandomSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+        let history = BTreeMap::new();
+
+        let mut ss = SearchSpace::default();
+        ss.accumulation.max_recipe_size = Some(3);
+        let pool_size = ss.mutation_pool.len();
+
+        // Round far into accumulation (would be k=50 without clamping)
+        let round = pool_size as u32 + 50;
+        let selection = selector
+            .select("job-max", round, &ss, &defaults, &history, None)
+            .await;
+        let pool_count = selection
+            .mutations
+            .iter()
+            .filter(|m| ss.mutation_pool.contains(&m.id))
+            .count();
+        assert!(
+            pool_count <= 3,
+            "Pool mutations ({}) should respect max_recipe_size=3",
+            pool_count
+        );
+    }
+
+    #[tokio::test]
+    async fn test_random_accumulation_disabled() {
+        let selector = RandomSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+        let history = BTreeMap::new();
+
+        let mut ss = SearchSpace::default();
+        ss.accumulation.enabled = false;
+        let pool_size = ss.mutation_pool.len();
+
+        // Round well past pool_size+1
+        let round = pool_size as u32 + 10;
+        let selection = selector
+            .select("job-disabled", round, &ss, &defaults, &history, None)
+            .await;
+
+        // Should NOT contain "accumulated" — stays in individual exploration
+        assert!(
+            !selection.rationale.contains("accumulated"),
+            "Disabled accumulation should not use accumulated logic. Got: {}",
+            selection.rationale
+        );
+    }
+
+    #[tokio::test]
+    async fn test_random_accumulation_deterministic() {
+        let selector = RandomSelector::new();
+        let defaults = ModuleSelectionSpec::default();
+        let history = BTreeMap::new();
+        let ss = SearchSpace::default();
+        let pool_size = ss.mutation_pool.len();
+
+        let round = pool_size as u32 + 3;
+        let sel1 = selector
+            .select("job-det", round, &ss, &defaults, &history, None)
+            .await;
+        let sel2 = selector
+            .select("job-det", round, &ss, &defaults, &history, None)
+            .await;
+
+        assert_eq!(sel1.mutations.len(), sel2.mutations.len());
+        for (a, b) in sel1.mutations.iter().zip(sel2.mutations.iter()) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.params, b.params);
         }
     }
 
