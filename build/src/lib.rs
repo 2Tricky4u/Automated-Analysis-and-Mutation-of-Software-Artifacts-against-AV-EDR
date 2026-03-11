@@ -45,7 +45,7 @@ pub mod builder;
 pub mod instrument;
 pub mod msvc_compat;
 pub mod mutator;
-pub mod pe_inject;
+//pub mod pe_inject;
 pub mod template;
 pub mod transform;
 
