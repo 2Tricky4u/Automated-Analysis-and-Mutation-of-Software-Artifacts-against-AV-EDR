@@ -1003,6 +1003,56 @@
             arrow.classList.toggle('open');
         }
 
+        async function loadFunctionCoverage(jobId, roundId) {
+            const body = document.getElementById('sec-funccov-body');
+            if (!body) return;
+            body.innerHTML = '<div style="color:#8b949e;font-size:0.85rem;padding:8px 0;">Loading...</div>';
+            try {
+                const resp = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/rounds/${encodeURIComponent(roundId)}/coverage`);
+                const data = await resp.json();
+                const cov = data.data;
+                if (!cov || !cov.function_coverage || cov.function_coverage.length === 0) {
+                    body.innerHTML = '<div style="color:#8b949e;padding:8px 0;">No coverage data available.</div>';
+                    return;
+                }
+                let html = '';
+                if (cov.coverage_executable_lines > 0 || cov.coverage_total_lines > 0) {
+                    html += `<div style="margin-bottom: 6px; font-size: 0.8rem; color: #8b949e;">`;
+                    html += `Executed <strong style="color:#ccc;">${cov.coverage_executed_lines || 0}</strong>`;
+                    html += ` of <strong style="color:#ccc;">${cov.coverage_executable_lines || 0}</strong> executable lines`;
+                    html += ` (${cov.coverage_total_lines || 0} total)`;
+                    html += `</div>`;
+                }
+                html += `<table class="func-cov-table">`;
+                html += `<thead><tr><th>Function</th><th>Coverage</th><th>Lines</th></tr></thead><tbody>`;
+                cov.function_coverage.forEach(fc => {
+                    const pct = fc.percent || 0;
+                    const color = coverageColor(pct);
+                    html += `<tr>`;
+                    html += `<td style="font-family:'Consolas',monospace;color:#c9d1d9;">${escapeHtml(fc.name)}</td>`;
+                    html += `<td><span class="func-cov-bar"><span class="func-cov-bar-fill" style="width:${pct.toFixed(0)}%;background:${color};"></span></span>` +
+                        `<span style="color:${color};font-size:0.75rem;font-weight:600;">${pct.toFixed(0)}%</span></td>`;
+                    html += `<td style="color:#8b949e;font-size:0.75rem;">${fc.executed_lines}/${fc.total_lines}</td>`;
+                    html += `</tr>`;
+                });
+                html += `</tbody></table>`;
+                body.innerHTML = html;
+                // Update header title with count
+                const arrow = document.getElementById('sec-funccov-arrow');
+                if (arrow && arrow.parentElement) {
+                    const headerText = arrow.parentElement.childNodes;
+                    for (let i = 0; i < headerText.length; i++) {
+                        if (headerText[i].nodeType === 3 && headerText[i].textContent.includes('Function Coverage')) {
+                            headerText[i].textContent = ` Function Coverage (${cov.function_coverage.length})`;
+                            break;
+                        }
+                    }
+                }
+            } catch (err) {
+                body.innerHTML = `<div style="color:#f85149;padding:8px 0;">Error: ${err.message}</div>`;
+            }
+        }
+
         function formatRunInfo(label, run) {
             if (!run) return `<div class="run-info"><div class="run-label">${escapeHtml(label)}</div><span class="muted">No data</span></div>`;
             const cp = run.last_checkpoint;
@@ -1473,36 +1523,15 @@
                     html += collapsibleSection('sec-mutations', `Mutations (${d.mutations.length})`, mutHtml, true);
                 }
 
-                // Function Coverage section
-                if (d.function_coverage && d.function_coverage.length > 0) {
-                    let fcHtml = '';
-                    // Summary header
-                    if (d.coverage_executable_lines > 0 || d.coverage_total_lines > 0) {
-                        fcHtml += `<div style="margin-bottom: 6px; font-size: 0.8rem; color: #8b949e;">`;
-                        fcHtml += `Executed <strong style="color:#ccc;">${d.coverage_executed_lines || 0}</strong>`;
-                        fcHtml += ` of <strong style="color:#ccc;">${d.coverage_executable_lines || 0}</strong> executable lines`;
-                        fcHtml += ` (${d.coverage_total_lines || 0} total)`;
-                        fcHtml += `</div>`;
-                    }
-                    fcHtml += `<table class="func-cov-table">`;
-                    fcHtml += `<thead><tr><th>Function</th><th>Coverage</th><th>Lines</th></tr></thead><tbody>`;
-                    d.function_coverage.forEach(fc => {
-                        const pct = fc.percent || 0;
-                        const color = coverageColor(pct);
-                        fcHtml += `<tr>`;
-                        fcHtml += `<td style="font-family:'Consolas',monospace;color:#c9d1d9;">${escapeHtml(fc.name)}</td>`;
-                        fcHtml += `<td><span class="func-cov-bar"><span class="func-cov-bar-fill" style="width:${pct.toFixed(0)}%;background:${color};"></span></span>` +
-                            `<span style="color:${color};font-size:0.75rem;font-weight:600;">${pct.toFixed(0)}%</span></td>`;
-                        fcHtml += `<td style="color:#8b949e;font-size:0.75rem;">${fc.executed_lines}/${fc.total_lines}</td>`;
-                        fcHtml += `</tr>`;
-                    });
-                    fcHtml += `</tbody></table>`;
-                    html += collapsibleSection('sec-funccov', `Function Coverage (${d.function_coverage.length})`, fcHtml, false);
+                // Function Coverage section (lazy-loaded on expand)
+                if (d.has_function_coverage) {
+                    html += collapsibleSection('sec-funccov', 'Function Coverage',
+                        '<div style="color:#8b949e;font-size:0.85rem;padding:8px 0;">Click to load function coverage...</div>', false);
                 }
 
                 // Action buttons row
                 const hasInstrumented = d.instrumented_run && d.instrumented_run.run_id;
-                const hasSource = !!d.assembled_source;
+                const hasSource = !!d.has_assembled_source;
 
                 if (hasInstrumented || hasSource) {
                     html += '<div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">';
@@ -1523,6 +1552,19 @@
                 }
 
                 responseBox.innerHTML = html;
+
+                // Lazy-load function coverage on first expand
+                if (d.has_function_coverage) {
+                    const origToggle = window.toggleSection;
+                    let fcLoaded = false;
+                    window.toggleSection = function(id) {
+                        origToggle(id);
+                        if (id === 'sec-funccov' && !fcLoaded) {
+                            fcLoaded = true;
+                            loadFunctionCoverage(parsed.jobId, parsed.roundId);
+                        }
+                    };
+                }
             } catch (e) {
                 responseBox.textContent = `Error: ${e.message}`;
             }

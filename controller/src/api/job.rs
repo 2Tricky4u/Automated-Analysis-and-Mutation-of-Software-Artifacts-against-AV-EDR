@@ -13,11 +13,13 @@ use crate::api::SchedulerService;
 use crate::automutate::common::JobId;
 use crate::automutate::controller::{
     BehaviorComparisonProto, CompareRunsRequest, CompareRunsResponse, CompareTokensRequest,
-    CompareTokensResponse, FunctionCoverageProto, GetRoundRequest, GetRoundResponse,
-    GetTraceLinesRequest, GetTraceLinesResponse, JobProgressRequest, JobProgressResponse,
-    JobRequest, JobResponse, JobStatusRequest, JobStatusResponse, ModuleSelection,
-    MutationComparisonProto, ParamComparisonProto, RoundSummaryProto, RunResultProto, StatusAck,
-    StatusReport, StopJobRequest, StopJobResponse, TokenSetComparisonProto, TraceLine,
+    CompareTokensResponse, FunctionCoverageProto, GetRoundCoverageRequest,
+    GetRoundCoverageResponse, GetRoundRequest, GetRoundResponse, GetRoundSourceRequest,
+    GetRoundSourceResponse, GetTraceLinesRequest, GetTraceLinesResponse, JobProgressRequest,
+    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
+    ModuleSelection, MutationComparisonProto, ParamComparisonProto, RoundSummaryProto,
+    RunResultProto, StatusAck, StatusReport, StopJobRequest, StopJobResponse,
+    TokenSetComparisonProto, TraceLine,
 };
 use crate::dispatch::{
     JobControlCommand, JobId as DispatchJobId, JobSession, ModularBuildSpec, ModuleSelectionSpec,
@@ -316,7 +318,7 @@ pub async fn get_round(
 
     let source = match service
         .storage
-        .query_round(&req.job_id, &req.round_id)
+        .query_round_light(&req.job_id, &req.round_id)
         .await
     {
         Some(s) => s,
@@ -361,21 +363,13 @@ pub async fn get_round(
         None
     };
 
-    // Parse function_coverage array from ES
-    // ES stores fields as "total" and "executed" (see storage/rounds.rs)
-    let function_coverage: Vec<FunctionCoverageProto> = source["function_coverage"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .map(|fc| FunctionCoverageProto {
-                    name: str_field(fc, "name"),
-                    total_lines: u32_field(fc, "total"),
-                    executed_lines: u32_field(fc, "executed"),
-                    percent: f64_field(fc, "percent"),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // Lazy-loaded fields: function_coverage is excluded from light query.
+    // We infer has_function_coverage from coverage_executed_lines > 0.
+    let has_assembled_source = source
+        .get("has_assembled_source")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true); // backward compat: old rounds without this field have source
+    let has_function_coverage = u32_field(&source, "coverage_executed_lines") > 0;
 
     // Parse modules object from ES
     let modules = if source["modules"].is_object() {
@@ -401,11 +395,11 @@ pub async fn get_round(
         instrumented_run,
         status: str_field(&source, "status"),
         behavior_match,
-        assembled_source: str_field(&source, "assembled_source"),
+        assembled_source: String::new(), // lazy-loaded via GetRoundSource
         coverage_percent: f64_field(&source, "coverage_percent"),
         cutoff_line: u32_field(&source, "cutoff_line"),
         cutoff_func: str_field(&source, "cutoff_func"),
-        function_coverage,
+        function_coverage: Vec::new(), // lazy-loaded via GetRoundCoverage
         modules,
         coverage_total_lines: u32_field(&source, "coverage_total_lines"),
         coverage_executable_lines: u32_field(&source, "coverage_executable_lines"),
@@ -413,9 +407,107 @@ pub async fn get_round(
         dryrun_run: None, // Populated if dryrun data exists in ES
         dry_run_exit_code: source["dry_run_exit_code"].as_i64().unwrap_or(0) as i32,
         detection_verdict: str_field(&source, "detection_verdict"),
+        has_assembled_source,
+        has_function_coverage,
     };
 
     Ok(Response::new(GetRoundResponse { round: Some(round) }))
+}
+
+/// Get assembled source for a round (lazy-loaded by source viewer).
+pub async fn get_round_source(
+    service: &SchedulerService,
+    request: Request<GetRoundSourceRequest>,
+) -> Result<Response<GetRoundSourceResponse>, Status> {
+    let req = request.get_ref();
+    debug!(
+        "[RPC] GetRoundSource: job_id={}, round_id={}",
+        req.job_id, req.round_id
+    );
+
+    let source = match service
+        .storage
+        .query_round_source_only(&req.job_id, &req.round_id)
+        .await
+    {
+        Some(s) => s,
+        None => {
+            return Ok(Response::new(GetRoundSourceResponse {
+                assembled_source: String::new(),
+                last_checkpoint: String::new(),
+            }));
+        }
+    };
+
+    let assembled_source = str_field(&source, "assembled_source");
+    let instrumented_run_id = str_field(&source, "instrumented_run_id");
+
+    // Look up last_checkpoint from the instrumented run doc
+    let last_checkpoint = if !instrumented_run_id.is_empty() {
+        let runs = service
+            .storage
+            .query_runs_by_ids(&[&instrumented_run_id])
+            .await;
+        runs.first()
+            .map(|r| str_field(r, "last_checkpoint"))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    Ok(Response::new(GetRoundSourceResponse {
+        assembled_source,
+        last_checkpoint,
+    }))
+}
+
+/// Get function coverage for a round (lazy-loaded on section expand).
+pub async fn get_round_coverage(
+    service: &SchedulerService,
+    request: Request<GetRoundCoverageRequest>,
+) -> Result<Response<GetRoundCoverageResponse>, Status> {
+    let req = request.get_ref();
+    debug!(
+        "[RPC] GetRoundCoverage: job_id={}, round_id={}",
+        req.job_id, req.round_id
+    );
+
+    let source = match service
+        .storage
+        .query_round_coverage_only(&req.job_id, &req.round_id)
+        .await
+    {
+        Some(s) => s,
+        None => {
+            return Ok(Response::new(GetRoundCoverageResponse {
+                function_coverage: Vec::new(),
+                coverage_total_lines: 0,
+                coverage_executable_lines: 0,
+                coverage_executed_lines: 0,
+            }));
+        }
+    };
+
+    let function_coverage: Vec<FunctionCoverageProto> = source["function_coverage"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|fc| FunctionCoverageProto {
+                    name: str_field(fc, "name"),
+                    total_lines: u32_field(fc, "total"),
+                    executed_lines: u32_field(fc, "executed"),
+                    percent: f64_field(fc, "percent"),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(Response::new(GetRoundCoverageResponse {
+        function_coverage,
+        coverage_total_lines: u32_field(&source, "coverage_total_lines"),
+        coverage_executable_lines: u32_field(&source, "coverage_executable_lines"),
+        coverage_executed_lines: u32_field(&source, "coverage_executed_lines"),
+    }))
 }
 
 /// Compare baseline vs instrumented runs for differential analysis.
@@ -465,7 +557,7 @@ pub async fn compare_runs(
 
         if !job_id.is_empty()
             && !round_id.is_empty()
-            && let Some(doc) = service.storage.query_round(&job_id, &round_id).await
+            && let Some(doc) = service.storage.query_round_light(&job_id, &round_id).await
         {
             break 'round Some(doc);
         }

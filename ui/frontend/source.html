@@ -969,12 +969,12 @@
             }
 
             try {
-                // Fetch round data (contains assembled_source)
-                const roundResp = await fetch(`${API_BASE}/api/jobs/${jobId}/rounds/${roundId}`);
-                const roundData = await roundResp.json();
-                const round = roundData.data;
+                // Fetch source via dedicated lightweight endpoint
+                const sourceResp = await fetch(`${API_BASE}/api/jobs/${jobId}/rounds/${roundId}/source`);
+                const sourceData = await sourceResp.json();
+                const src = sourceData.data;
 
-                if (!round || !round.assembled_source) {
+                if (!src || !src.assembled_source) {
                     document.getElementById('loadingMsg').className = 'status-msg error';
                     document.getElementById('loadingMsg').textContent =
                         'No assembled source found for this round';
@@ -995,13 +995,10 @@
                     }
                 }
 
-                // Extract last_checkpoint from the instrumented run (primary trace source)
-                const lastCheckpoint = (round.instrumented_run && round.instrumented_run.last_checkpoint)
-                    || (round.baseline_run && round.baseline_run.last_checkpoint)
-                    || '';
+                const lastCheckpoint = src.last_checkpoint || '';
 
                 document.title = `Source: ${roundId} - AutoMutate++`;
-                renderSource(round.assembled_source, traceLines, lastCheckpoint);
+                renderSource(src.assembled_source, traceLines, lastCheckpoint);
 
             } catch (e) {
                 document.getElementById('loadingMsg').className = 'status-msg error';

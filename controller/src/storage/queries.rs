@@ -73,6 +73,98 @@ pub async fn query_round(es: &Elasticsearch, job_id: &str, round_id: &str) -> Op
         .map(|hit| hit["_source"].clone())
 }
 
+/// Query a single round by job_id + round_id, excluding heavy fields.
+///
+/// Excludes `assembled_source` and `function_coverage` for fast round detail loads.
+pub async fn query_round_light(es: &Elasticsearch, job_id: &str, round_id: &str) -> Option<Value> {
+    let response = es
+        .search(SearchParts::Index(&["rounds-*"]))
+        .body(json!({
+            "query": {
+                "bool": {
+                    "must": [
+                        { "term": { "job_id": job_id } },
+                        { "term": { "round_id": round_id } }
+                    ]
+                }
+            },
+            "_source": { "excludes": ["assembled_source", "function_coverage"] },
+            "size": 1
+        }))
+        .send()
+        .await
+        .map_err(|e| { warn!("ES query_round_light failed: {}", e); e })
+        .ok()?;
+
+    let body = response.json::<Value>().await
+        .map_err(|e| { warn!("ES query_round_light: failed to parse response: {}", e); e })
+        .ok()?;
+    body["hits"]["hits"]
+        .as_array()
+        .and_then(|h| h.first())
+        .map(|hit| hit["_source"].clone())
+}
+
+/// Query a single round by job_id + round_id, returning only assembled_source + instrumented_run_id.
+pub async fn query_round_source_only(es: &Elasticsearch, job_id: &str, round_id: &str) -> Option<Value> {
+    let response = es
+        .search(SearchParts::Index(&["rounds-*"]))
+        .body(json!({
+            "query": {
+                "bool": {
+                    "must": [
+                        { "term": { "job_id": job_id } },
+                        { "term": { "round_id": round_id } }
+                    ]
+                }
+            },
+            "_source": ["assembled_source", "instrumented_run_id"],
+            "size": 1
+        }))
+        .send()
+        .await
+        .map_err(|e| { warn!("ES query_round_source_only failed: {}", e); e })
+        .ok()?;
+
+    let body = response.json::<Value>().await
+        .map_err(|e| { warn!("ES query_round_source_only: failed to parse response: {}", e); e })
+        .ok()?;
+    body["hits"]["hits"]
+        .as_array()
+        .and_then(|h| h.first())
+        .map(|hit| hit["_source"].clone())
+}
+
+/// Query a single round by job_id + round_id, returning only function coverage fields.
+pub async fn query_round_coverage_only(es: &Elasticsearch, job_id: &str, round_id: &str) -> Option<Value> {
+    let response = es
+        .search(SearchParts::Index(&["rounds-*"]))
+        .body(json!({
+            "query": {
+                "bool": {
+                    "must": [
+                        { "term": { "job_id": job_id } },
+                        { "term": { "round_id": round_id } }
+                    ]
+                }
+            },
+            "_source": ["function_coverage", "coverage_total_lines", "coverage_executable_lines", "coverage_executed_lines"],
+            "size": 1
+        }))
+        .send()
+        .await
+        .map_err(|e| { warn!("ES query_round_coverage_only failed: {}", e); e })
+        .ok()?;
+
+    let body = response.json::<Value>().await
+        .map_err(|e| { warn!("ES query_round_coverage_only: failed to parse response: {}", e); e })
+        .ok()?;
+    body["hits"]["hits"]
+        .as_array()
+        .and_then(|h| h.first())
+        .map(|hit| hit["_source"].clone())
+}
+
 /// Query runs by a list of run IDs.
 pub async fn query_runs_by_ids(es: &Elasticsearch, run_ids: &[&str]) -> Vec<Value> {
     if run_ids.is_empty() {

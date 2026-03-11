@@ -36,12 +36,14 @@ use crate::generated::controller::{
     CompareTokensResponse, DeployRequest, DeployResponse, DisconnectAllWorkersRequest,
     DisconnectAllWorkersResponse, DisconnectWorkerRequest, DisconnectWorkerResponse,
     GetAvailableWorkersRequest, GetAvailableWorkersResponse, GetOrchestratorStatusRequest,
-    GetOrchestratorStatusResponse, GetRoundRequest, GetRoundResponse, GetTraceLinesRequest,
-    GetTraceLinesResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, JobProgressRequest,
-    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
-    ListWorkersRequest, ListWorkersResponse, ModuleSelection, PingRequest, PingResponse,
-    PingWorkerRequest, PingWorkerResponse, QueryRequest, QueryResponse, StopJobRequest,
-    StopJobResponse, TriageRequest, TriageResponse, controller_client::ControllerClient,
+    GetOrchestratorStatusResponse, GetRoundCoverageRequest, GetRoundCoverageResponse,
+    GetRoundRequest, GetRoundResponse, GetRoundSourceRequest, GetRoundSourceResponse,
+    GetTraceLinesRequest, GetTraceLinesResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, JobProgressRequest, JobProgressResponse, JobRequest, JobResponse,
+    JobStatusRequest, JobStatusResponse, ListWorkersRequest, ListWorkersResponse, ModuleSelection,
+    PingRequest, PingResponse, PingWorkerRequest, PingWorkerResponse, QueryRequest, QueryResponse,
+    StopJobRequest, StopJobResponse, TriageRequest, TriageResponse,
+    controller_client::ControllerClient,
 };
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
@@ -347,6 +349,48 @@ impl ControllerGrpcClient {
             .get_round(request)
             .await
             .map_err(|e| anyhow!("GetRound failed: {}", e))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Fetch assembled source for a round (lazy-loaded by source viewer).
+    pub async fn get_round_source(
+        &self,
+        job_id: &str,
+        round_id: &str,
+    ) -> Result<GetRoundSourceResponse> {
+        let mut client = self.get_client().await?;
+
+        let request = GetRoundSourceRequest {
+            job_id: job_id.to_string(),
+            round_id: round_id.to_string(),
+        };
+
+        let response = client
+            .get_round_source(request)
+            .await
+            .map_err(|e| anyhow!("GetRoundSource failed: {}", e))?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Fetch function coverage for a round (lazy-loaded on section expand).
+    pub async fn get_round_coverage(
+        &self,
+        job_id: &str,
+        round_id: &str,
+    ) -> Result<GetRoundCoverageResponse> {
+        let mut client = self.get_client().await?;
+
+        let request = GetRoundCoverageRequest {
+            job_id: job_id.to_string(),
+            round_id: round_id.to_string(),
+        };
+
+        let response = client
+            .get_round_coverage(request)
+            .await
+            .map_err(|e| anyhow!("GetRoundCoverage failed: {}", e))?;
 
         Ok(response.into_inner())
     }
