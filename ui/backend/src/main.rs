@@ -97,8 +97,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "http://10.200.200.1:50051".to_string());
     let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
     let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "../frontend".to_string());
-    let shellcode_dir =
-        std::env::var("SHELLCODE_DIR").unwrap_or_else(|_| "../../data/shellcodes".to_string());
+    let shellcode_dir = std::env::var("SHELLCODE_DIR").unwrap_or_else(|_| {
+        // Discover repo root via git, fall back to relative path
+        std::process::Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|root| format!("{}/data/shellcodes", root.trim()))
+            .unwrap_or_else(|| "../../data/shellcodes".to_string())
+    });
 
     info!("UI Backend starting...");
     info!("  Controller: {}", controller_addr);
@@ -126,12 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Shellcode directory (canonicalize for absolute path resolution in submit_job)
-    let shellcode_path = std::fs::canonicalize(&shellcode_dir).unwrap_or_else(|_| {
-        warn!("Shellcode dir '{}' not found, using as-is", shellcode_dir);
-        PathBuf::from(&shellcode_dir)
-    });
-    let shellcode_dir_arc: Arc<PathBuf> = Arc::new(shellcode_path);
+    let shellcode_dir_arc: Arc<PathBuf> = Arc::new(PathBuf::from(&shellcode_dir));
 
     // CORS configuration - allow all origins for development
     let cors = CorsLayer::new()

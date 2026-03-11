@@ -13,11 +13,10 @@ use super::{ApiError, ApiResponse};
 use crate::generated::controller::ModuleSelection;
 use crate::grpc_client::{ControllerGrpcClient, ScheduleJobParams};
 use axum::{
-    Extension, Json,
+    Json,
     extract::{Path, State},
 };
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
@@ -359,7 +358,6 @@ pub struct CompareRunsResponse {
 /// - `SERVICE_UNAVAILABLE` if the Controller is unreachable.
 pub async fn submit_job(
     State(client): State<Arc<ControllerGrpcClient>>,
-    Extension(shellcode_dir): Extension<Arc<PathBuf>>,
     Json(payload): Json<SubmitJobRequest>,
 ) -> Result<Json<ApiResponse<JobResponse>>, ApiError> {
     // Validate required fields
@@ -373,17 +371,9 @@ pub async fn submit_job(
         return Err(ApiError::bad_request("max_rounds must be greater than 0"));
     }
 
-    // If source is a bare filename (no path separators), resolve against shellcode dir
-    let resolved_source = if !payload.source.contains('/') && !payload.source.contains('\\') {
-        let full_path = shellcode_dir.join(&payload.source);
-        full_path.to_string_lossy().to_string()
-    } else {
-        payload.source.clone()
-    };
-
     info!(
-        "REST: Submit job (source={}, resolved={}, max_rounds={})",
-        payload.source, resolved_source, payload.max_rounds
+        "REST: Submit job (source={}, max_rounds={})",
+        payload.source, payload.max_rounds
     );
 
     // Convert module selection
@@ -399,7 +389,7 @@ pub async fn submit_job(
 
     match client
         .schedule_job(ScheduleJobParams {
-            source: resolved_source,
+            source: payload.source,
             max_rounds: payload.max_rounds,
             target_os: payload.target_os,
             required_capabilities: payload.required_capabilities,
