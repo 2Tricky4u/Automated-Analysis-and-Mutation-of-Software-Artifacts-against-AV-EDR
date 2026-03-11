@@ -103,7 +103,7 @@ impl EvalMetric for TokenCoverage {
         // Categories with actual tokens
         let active_categories = TOKEN_CATEGORIES
             .iter()
-            .filter(|(_, name)| category_tokens.get(name).map_or(false, |s| !s.is_empty()))
+            .filter(|(_, name)| category_tokens.get(name).is_some_and(|s| !s.is_empty()))
             .count();
         let category_coverage = active_categories as f64 / TOKEN_CATEGORIES.len() as f64;
 

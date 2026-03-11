@@ -61,11 +61,7 @@ fn fisher_exact_two_sided(a: u64, b: u64, c: u64, d: u64) -> f64 {
     let p_obs = log_p_obs.exp();
 
     // Range of possible k values (# detected among token-present rounds)
-    let min_k = if row1 + col1 > n_total {
-        row1 + col1 - n_total
-    } else {
-        0
-    };
+    let min_k = (row1 + col1).saturating_sub(n_total);
     let max_k = row1.min(col1);
 
     // Sum probabilities of all tables with P ≤ P_observed
