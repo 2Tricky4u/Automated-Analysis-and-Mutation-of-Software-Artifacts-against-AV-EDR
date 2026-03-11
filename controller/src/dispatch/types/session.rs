@@ -61,6 +61,11 @@ pub struct JobSession {
     /// When empty, uses default VS 2022 Build Tools path.
     pub msvc_vcvarsall: String,
 
+    /// If true, don't remove the dryrun from the pool when the grace period expires.
+    /// The dryrun will remain available for a VM to pick up, and the late-dryrun
+    /// handler will process the result when it arrives.
+    pub keep_late_dryrun: bool,
+
     // Completed round summaries
     pub rounds: BTreeMap<u32, RoundSummary>,
     pub last_round: Option<RoundSummary>,
@@ -84,6 +89,7 @@ impl JobSession {
             cache_payload: true,
             msvc_compat: false,
             msvc_vcvarsall: String::new(),
+            keep_late_dryrun: false,
             current_round: 0,
             completed_rounds: 0,
             max_rounds,

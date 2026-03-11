@@ -827,6 +827,14 @@
                                 Produces genuine MSVC PE metadata (Rich header, linker version). Requires VS Build Tools on host.
                             </div>
                         </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="jobKeepLateDryrun"> Keep late dryrun in pool
+                            </label>
+                            <div class="muted" style="font-size: 0.75rem; margin-top: 2px;">
+                                Don't discard dryrun when grace period expires — a VM will eventually execute it.
+                            </div>
+                        </div>
                     </div>
                     <button type="submit" class="btn-primary">Submit Job</button>
                 </form>
@@ -1198,6 +1206,7 @@
                 sc_checkpoint_count: parseInt(document.getElementById('jobScCheckpoints').value) || 0,
                 cache_payload: document.getElementById('jobCachePayload').checked,
                 msvc_compat: document.getElementById('jobMsvcCompat').checked,
+                keep_late_dryrun: document.getElementById('jobKeepLateDryrun').checked,
             };
 
             try {

@@ -337,47 +337,60 @@ impl RoundAgg {
         })
     }
 
-    /// Composite evasion score with per-category ranges.
-    /// Returns `(evasion_score, time_factor)` where `time_factor` is the
-    /// normalized time component stored for async blended recomputation.
-    ///
-    /// | Category               | Range     |
-    /// |------------------------|-----------|
-    /// | RealDetection          | 0.0–0.4   |
-    /// | Flaky                  | 0.0–0.3   |
-    /// | InstrumentationArtifact| 0.5–0.7   |
-    /// | Evasion                | 0.6–1.0   |
+    /// Composite evasion score — delegates to the free function [`compute_evasion_score`].
     fn compute_evasion_score(
         &self,
         baseline: &RunOutcome,
         instrumented: &RunOutcome,
         category: DifferentialCategory,
     ) -> (f64, f64) {
-        let timeout = self.timeout_ms.max(100 * 1000) as f64;
-        let survival_ratio = (baseline.elapsed_ms / timeout).clamp(0.0, 1.0);
-        let payload_reached = if baseline.exit_code == 0 { 1.0 } else { 0.0 };
-        let exits_match = baseline.exit_code == instrumented.exit_code;
-        let detected_match = baseline.detected == instrumented.detected;
-        let behavior_match_val = if exits_match && detected_match {
-            1.0
-        } else {
-            0.0
-        };
+        compute_evasion_score(self.timeout_ms, baseline, instrumented, category)
+    }
+}
 
-        match category {
-            DifferentialCategory::RealDetection => (0.4 * survival_ratio, survival_ratio),
-            DifferentialCategory::InstrumentationArtifact => {
-                (0.5 + 0.2 * survival_ratio, survival_ratio)
-            }
-            DifferentialCategory::Flaky => (0.3 * survival_ratio, survival_ratio),
-            DifferentialCategory::Evasion => {
-                let tf = 0.5 * payload_reached + 0.5 * behavior_match_val;
-                (0.6 + 0.2 * payload_reached + 0.2 * behavior_match_val, tf)
-            }
-            DifferentialCategory::MutationFailed
-            | DifferentialCategory::PayloadFailed
-            | DifferentialCategory::StaticDetection => (0.0, 0.0),
+/// Composite evasion score with per-category ranges.
+/// Returns `(evasion_score, time_factor)` where `time_factor` is the
+/// normalized time component stored for async blended recomputation.
+///
+/// This is the **single source of truth** for evasion score computation.
+/// `RoundAgg::compute_evasion_score` delegates here.
+///
+/// | Category               | Range     |
+/// |------------------------|-----------|
+/// | RealDetection          | 0.0–0.4   |
+/// | Flaky                  | 0.0–0.3   |
+/// | InstrumentationArtifact| 0.5–0.7   |
+/// | Evasion                | 0.6–1.0   |
+pub(crate) fn compute_evasion_score(
+    timeout_ms: u64,
+    baseline: &RunOutcome,
+    instrumented: &RunOutcome,
+    category: DifferentialCategory,
+) -> (f64, f64) {
+    let timeout = timeout_ms.max(100 * 1000) as f64;
+    let survival_ratio = (baseline.elapsed_ms / timeout).clamp(0.0, 1.0);
+    let payload_reached = if baseline.exit_code == 0 { 1.0 } else { 0.0 };
+    let exits_match = baseline.exit_code == instrumented.exit_code;
+    let detected_match = baseline.detected == instrumented.detected;
+    let behavior_match_val = if exits_match && detected_match {
+        1.0
+    } else {
+        0.0
+    };
+
+    match category {
+        DifferentialCategory::RealDetection => (0.4 * survival_ratio, survival_ratio),
+        DifferentialCategory::InstrumentationArtifact => {
+            (0.5 + 0.2 * survival_ratio, survival_ratio)
         }
+        DifferentialCategory::Flaky => (0.3 * survival_ratio, survival_ratio),
+        DifferentialCategory::Evasion => {
+            let tf = 0.5 * payload_reached + 0.5 * behavior_match_val;
+            (0.6 + 0.2 * payload_reached + 0.2 * behavior_match_val, tf)
+        }
+        DifferentialCategory::MutationFailed
+        | DifferentialCategory::PayloadFailed
+        | DifferentialCategory::StaticDetection => (0.0, 0.0),
     }
 }
 
@@ -426,7 +439,7 @@ pub fn compute_blended_evasion_score(
 ///     baseline != 0                              → Detected
 ///  8. Same nonzero exit code                    → InfraError
 ///  9. Different nonzero exit codes              → Detected
-fn override_with_dryrun(
+pub(crate) fn override_with_dryrun(
     dryrun: &RunOutcome,
     baseline: &RunOutcome,
     instrumented_checkpoint: &str,

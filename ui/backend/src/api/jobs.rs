@@ -93,6 +93,10 @@ pub struct SubmitJobRequest {
     /// Use MSVC link.exe instead of lld-link (default: false)
     #[serde(default)]
     pub msvc_compat: bool,
+
+    /// Keep dryrun in pool after grace period (default: false)
+    #[serde(default)]
+    pub keep_late_dryrun: bool,
 }
 
 /// Serde default that returns `true`. Used for [`SubmitJobRequest::cache_payload`].
@@ -396,6 +400,7 @@ pub async fn submit_job(
             sc_checkpoint_count: payload.sc_checkpoint_count,
             cache_payload: payload.cache_payload,
             msvc_compat: payload.msvc_compat,
+            keep_late_dryrun: payload.keep_late_dryrun,
         })
         .await
     {

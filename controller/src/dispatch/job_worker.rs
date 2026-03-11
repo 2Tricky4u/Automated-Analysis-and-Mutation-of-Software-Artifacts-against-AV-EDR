@@ -22,14 +22,37 @@ use build::{
     MsvcCompat, PreparedPayload, prepare_payload,
 };
 
+use automutate_common::DetectionVerdict;
+
 use super::channels::{CoverageCorrection, JobRunResult, JobWorkerEvent, RoundCompletedData};
 use super::run_pool::RunPool;
 use super::types::{
-    ArtifactRef, JobId, JobOutcome, JobSession, ModularBuildSpec, RoundAgg, RoundId, RoundSpec,
-    RunEnvelope, RunId, RunOutcome, RunType,
+    ArtifactRef, DifferentialCategory, JobId, JobOutcome, JobSession, ModularBuildSpec, RoundAgg,
+    RoundId, RoundSpec, RunEnvelope, RunId, RunOutcome, RunType, compute_evasion_score,
+    override_with_dryrun,
 };
 use crate::storage::EsStorage;
+use crate::storage::RunIndexParams;
 use crate::triage::{Selector, TriageGuidance};
+
+// ============================================================================
+// Finalized Round Context (for late dryrun handling)
+// ============================================================================
+
+/// Minimal context kept after a round finalizes without its dryrun,
+/// so a late-arriving dryrun result can still be indexed and the round updated.
+struct FinalizedRoundContext {
+    job_id: JobId,
+    round_id: RoundId,
+    round_number: u32,
+    #[allow(dead_code)]
+    dryrun_run_id: RunId,
+    mutations: Vec<String>,
+    baseline_outcome: RunOutcome,
+    instrumented_outcome: RunOutcome,
+    timeout_ms: u64,
+    finalized_at: Instant,
+}
 
 // ============================================================================
 // Configuration
@@ -192,6 +215,11 @@ pub struct JobWorker {
 
     /// Sender cloned into spawned triage tasks.
     guidance_tx: mpsc::Sender<TriageGuidance>,
+
+    /// Rounds that finalized without a dryrun — keyed by dryrun RunId for O(1) lookup.
+    /// When a late dryrun result arrives in `on_result()`, it is caught here and
+    /// triggers an async ES update + in-memory selector history patch.
+    finalized_rounds: HashMap<RunId, FinalizedRoundContext>,
 }
 
 impl JobWorker {
@@ -224,6 +252,7 @@ impl JobWorker {
             latest_guidance: None,
             guidance_rx,
             guidance_tx,
+            finalized_rounds: HashMap::new(),
         }
     }
 
@@ -322,16 +351,22 @@ impl JobWorker {
                         .map(|(id, _)| id.clone())
                         .collect();
                     for round_id in expired {
-                        // Remove the unclaimed dryrun run from the pool before finalizing
-                        if let Some(agg) = self.round_aggs.get(&round_id) {
-                            self.run_pool.remove_run(&agg.dryrun_run_id);
+                        // Only remove from pool if keep_late_dryrun is disabled
+                        if !self.job.keep_late_dryrun {
+                            if let Some(agg) = self.round_aggs.get(&round_id) {
+                                self.run_pool.remove_run(&agg.dryrun_run_id);
+                            }
                         }
                         info!(
-                            "[JobWorker:{}] Dryrun grace expired for round {}, finalizing without",
-                            self.job.id, round_id
+                            "[JobWorker:{}] Dryrun grace expired for round {}, finalizing without{}",
+                            self.job.id, round_id,
+                            if self.job.keep_late_dryrun { " (dryrun kept in pool)" } else { "" }
                         );
                         self.finalize_round(&round_id).await;
                     }
+
+                    // Clean up stale finalized-round contexts (no dryrun arrived within 120s)
+                    self.finalized_rounds.retain(|_, ctx| ctx.finalized_at.elapsed() < Duration::from_secs(120));
 
                     // Produce more rounds if possible
                     if self.can_produce_round()
@@ -804,10 +839,15 @@ impl JobWorker {
                 None
             }
         } else {
-            warn!(
-                "[JobWorker:{}] Result for unknown round: {}",
-                self.job.id, result.round_id
-            );
+            // Round already finalized — check if this is a late dryrun
+            if let Some(ctx) = self.finalized_rounds.remove(&result.run_id) {
+                self.handle_late_dryrun(ctx, result);
+            } else {
+                warn!(
+                    "[JobWorker:{}] Result for unknown round: {}",
+                    self.job.id, result.round_id
+                );
+            }
             return;
         };
 
@@ -843,6 +883,24 @@ impl JobWorker {
                 "[JobWorker:{}] Round {} finalizing without dryrun result",
                 self.job.id, round_id
             );
+
+            // Stash context so a late-arriving dryrun can still update ES + selector history
+            if let (Some(bl), Some(inst)) = (&agg.baseline, &agg.instrumented) {
+                self.finalized_rounds.insert(
+                    agg.dryrun_run_id.clone(),
+                    FinalizedRoundContext {
+                        job_id: self.job.id.clone(),
+                        round_id: round_id.clone(),
+                        round_number: agg.spec.round_number,
+                        dryrun_run_id: agg.dryrun_run_id.clone(),
+                        mutations: agg.spec.mutations.iter().map(|m| m.id.clone()).collect(),
+                        baseline_outcome: bl.clone(),
+                        instrumented_outcome: inst.clone(),
+                        timeout_ms: agg.timeout_ms,
+                        finalized_at: Instant::now(),
+                    },
+                );
+            }
         }
 
         let summary = match agg.to_summary() {
@@ -911,6 +969,115 @@ impl JobWorker {
             .event_tx
             .send(JobWorkerEvent::RoundCompleted(Box::new(data)))
             .await;
+    }
+
+    /// Handle a dryrun result that arrived after the round's grace period expired.
+    ///
+    /// Recomputes the differential category and evasion score with the dryrun data,
+    /// updates the round document in ES, indexes the dryrun run, and patches the
+    /// in-memory selector history. All ES work is spawned async (non-blocking).
+    fn handle_late_dryrun(&mut self, ctx: FinalizedRoundContext, result: JobRunResult) {
+        info!(
+            "[JobWorker:{}] Late dryrun arrived for round {} (exit={})",
+            self.job.id, ctx.round_id, result.outcome.exit_code
+        );
+
+        // Recompute summary fields with dryrun
+        let effective_verdict = override_with_dryrun(
+            &result.outcome,
+            &ctx.baseline_outcome,
+            &ctx.instrumented_outcome.last_checkpoint,
+        );
+
+        let (category, detected, evasion_score) = if effective_verdict.is_broken() {
+            let cat = match effective_verdict {
+                DetectionVerdict::PayloadFailed => DifferentialCategory::PayloadFailed,
+                _ => DifferentialCategory::MutationFailed,
+            };
+            (cat, false, 0.0)
+        } else {
+            let effective_baseline_detected = effective_verdict.is_detected();
+            let cat = DifferentialCategory::from_runs(
+                effective_baseline_detected,
+                ctx.instrumented_outcome.detected,
+            );
+            let det = cat.is_detected();
+            let (es, _tf) = compute_evasion_score(
+                ctx.timeout_ms,
+                &ctx.baseline_outcome,
+                &ctx.instrumented_outcome,
+                cat,
+            );
+            (cat, det, es)
+        };
+
+        // Patch in-memory selector history
+        if let Some(summary) = self.job.rounds.get_mut(&ctx.round_number) {
+            let old_cat = summary.differential_category;
+            summary.differential_category = category;
+            summary.detected = detected;
+            summary.evasion_score = evasion_score;
+            summary.has_dryrun = true;
+            summary.dry_run_exit_code = Some(result.outcome.exit_code);
+            summary.detection_verdict = effective_verdict.as_str().to_string();
+            if old_cat != category {
+                info!(
+                    "[JobWorker:{}] Late dryrun changed round {} category: {} → {}",
+                    self.job.id,
+                    ctx.round_id,
+                    old_cat.as_str(),
+                    category.as_str()
+                );
+            }
+        }
+
+        // Spawn async ES work (non-blocking)
+        if let Some(ref storage) = self.storage {
+            let storage = storage.clone();
+            let job_id = ctx.job_id.0.clone();
+            let round_id = ctx.round_id.0.clone();
+            let dryrun_run_id = result.run_id.0.clone();
+            let mutations = ctx.mutations;
+            let vm_id = result.vm_id.clone();
+            let outcome = result.outcome;
+            let cat_str = category.as_str().to_string();
+            let verdict_str = effective_verdict.as_str().to_string();
+
+            tokio::spawn(async move {
+                // 1) Index the dryrun run document
+                if let Err(e) = storage
+                    .index_run_result(&RunIndexParams {
+                        job_id: &job_id,
+                        round_id: &round_id,
+                        run_id: &dryrun_run_id,
+                        run_type: "dryrun",
+                        outcome: &outcome,
+                        mutations: &mutations,
+                        vm_id: &vm_id,
+                    })
+                    .await
+                {
+                    error!("Failed to index late dryrun run: {}", e);
+                }
+
+                // 2) Update the round document with dryrun fields
+                if let Err(e) = storage
+                    .update_round_dryrun(
+                        &job_id,
+                        &round_id,
+                        &dryrun_run_id,
+                        outcome.exit_code,
+                        &cat_str,
+                        &verdict_str,
+                        detected,
+                        evasion_score,
+                    )
+                    .await
+                {
+                    error!("Failed to update round with late dryrun: {}", e);
+                }
+            });
+        }
     }
 
     /// Apply an async coverage correction to a completed round's evasion score.

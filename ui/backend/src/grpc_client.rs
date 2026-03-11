@@ -111,6 +111,8 @@ pub struct ScheduleJobParams {
     pub cache_payload: bool,
     /// Use MSVC `link.exe` instead of `lld-link` for the final link step.
     pub msvc_compat: bool,
+    /// Keep dryrun in pool after grace period expires (default: false).
+    pub keep_late_dryrun: bool,
 }
 
 /// Thread-safe gRPC client wrapper with lazy connection management.
@@ -253,6 +255,7 @@ impl ControllerGrpcClient {
             sc_checkpoint_count: params.sc_checkpoint_count,
             cache_payload: params.cache_payload,
             msvc_compat: params.msvc_compat,
+            keep_late_dryrun: params.keep_late_dryrun,
             ..Default::default()
         };
 

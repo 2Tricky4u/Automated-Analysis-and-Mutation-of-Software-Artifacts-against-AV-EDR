@@ -161,6 +161,36 @@ impl EsStorage {
         rounds::update_round_evasion_score(&self.client, job_id, round_id, blended_score).await
     }
 
+    /// Patch an existing round document with late-arriving dryrun data and recomputed fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the round document cannot be located or the update fails.
+    pub async fn update_round_dryrun(
+        &self,
+        job_id: &str,
+        round_id: &str,
+        dryrun_run_id: &str,
+        dry_run_exit_code: i32,
+        differential_category: &str,
+        detection_verdict: &str,
+        detected: bool,
+        evasion_score: f64,
+    ) -> anyhow::Result<()> {
+        rounds::update_round_dryrun(
+            &self.client,
+            job_id,
+            round_id,
+            dryrun_run_id,
+            dry_run_exit_code,
+            differential_category,
+            detection_verdict,
+            detected,
+            evasion_score,
+        )
+        .await
+    }
+
     // -- Runs --------------------------------------------------------------
 
     /// Index a run result from a `RoundCompleted` event (primary path).
