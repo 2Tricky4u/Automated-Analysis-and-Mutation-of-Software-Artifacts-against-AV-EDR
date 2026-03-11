@@ -265,12 +265,10 @@ impl RoundAgg {
         let has_dryrun = self.dryrun.is_some();
 
         // Compute authoritative verdict using dry-run if available
-        let has_mutations = !self.spec.mutations.is_empty();
         let effective_verdict = if let Some(dryrun) = &self.dryrun {
             override_with_dryrun(
                 dryrun,
                 baseline,
-                has_mutations,
                 &instrumented.last_checkpoint,
             )
         } else if !baseline.detection_verdict.is_empty() {
@@ -422,7 +420,6 @@ pub fn compute_blended_evasion_score(
 fn override_with_dryrun(
     dryrun: &RunOutcome,
     baseline: &RunOutcome,
-    has_mutations: bool,
     instrumented_checkpoint: &str,
 ) -> DetectionVerdict {
     let dr_timeout = dryrun.exit_code == -3; // EXIT_TIMEOUT
@@ -436,8 +433,10 @@ fn override_with_dryrun(
 
     // 1. Dryrun nonzero AND not timeout → artifact broken on clean VM
     if !dr_clean && !dr_timeout {
-        // No mutations + reached payload execution → the .bin payload itself is bad
-        if !has_mutations && launched {
+        // If instrumented run reached payload execution phase, the loader/mutations
+        // worked fine — the crash is in the .bin payload itself, regardless of
+        // whether mutations were applied.
+        if launched {
             return DetectionVerdict::PayloadFailed;
         }
         return DetectionVerdict::MutationFailed;
