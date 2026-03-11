@@ -193,11 +193,16 @@ pub async fn index_telemetry_batch(
             let status = resp.status_code();
             let body = resp.text().await.unwrap_or_default();
             return Err(anyhow::anyhow!(
-                "Bulk telemetry index failed: status {} - {}", status, body
+                "Bulk telemetry index failed: status {} - {}",
+                status,
+                body
             ));
         }
         Err(e) => {
-            return Err(anyhow::anyhow!("Bulk telemetry index transport error: {}", e));
+            return Err(anyhow::anyhow!(
+                "Bulk telemetry index transport error: {}",
+                e
+            ));
         }
     }
 

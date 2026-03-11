@@ -352,11 +352,10 @@ impl JobWorker {
                         .collect();
                     for round_id in expired {
                         // Only remove from pool if keep_late_dryrun is disabled
-                        if !self.job.keep_late_dryrun {
-                            if let Some(agg) = self.round_aggs.get(&round_id) {
+                        if !self.job.keep_late_dryrun
+                            && let Some(agg) = self.round_aggs.get(&round_id) {
                                 self.run_pool.remove_run(&agg.dryrun_run_id);
                             }
-                        }
                         info!(
                             "[JobWorker:{}] Dryrun grace expired for round {}, finalizing without{}",
                             self.job.id, round_id,

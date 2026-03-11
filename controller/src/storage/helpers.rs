@@ -88,7 +88,9 @@ pub async fn update_doc_by_id(
 
             return Err(anyhow::anyhow!(
                 "Failed to update {} {}: {}",
-                entity_label, doc_id, err_body
+                entity_label,
+                doc_id,
+                err_body
             ));
         } else {
             warn!("{} {} not found in ES for update", entity_label, doc_id);
@@ -98,7 +100,9 @@ pub async fn update_doc_by_id(
 
     Err(anyhow::anyhow!(
         "Failed to update {} {} after {} retries (version conflict)",
-        entity_label, doc_id, MAX_RETRIES
+        entity_label,
+        doc_id,
+        MAX_RETRIES
     ))
 }
 
@@ -161,7 +165,9 @@ pub async fn update_doc_by_es_id(
 
             return Err(anyhow::anyhow!(
                 "Failed to update {} {}: {}",
-                entity_label, es_id, err_body
+                entity_label,
+                es_id,
+                err_body
             ));
         } else {
             warn!("{} {} not found in ES for update", entity_label, es_id);
@@ -171,7 +177,9 @@ pub async fn update_doc_by_es_id(
 
     Err(anyhow::anyhow!(
         "Failed to update {} {} after {} retries (version conflict)",
-        entity_label, es_id, MAX_RETRIES
+        entity_label,
+        es_id,
+        MAX_RETRIES
     ))
 }
 

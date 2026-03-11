@@ -17,11 +17,19 @@ pub async fn query_job(es: &Elasticsearch, job_id: &str) -> Option<Value> {
         }))
         .send()
         .await
-        .map_err(|e| { warn!("ES query_job failed: {}", e); e })
+        .map_err(|e| {
+            warn!("ES query_job failed: {}", e);
+            e
+        })
         .ok()?;
 
-    let body = response.json::<Value>().await
-        .map_err(|e| { warn!("ES query_job: failed to parse response: {}", e); e })
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|e| {
+            warn!("ES query_job: failed to parse response: {}", e);
+            e
+        })
         .ok()?;
     body["hits"]["hits"]
         .as_array()
@@ -61,11 +69,19 @@ pub async fn query_round(es: &Elasticsearch, job_id: &str, round_id: &str) -> Op
         }))
         .send()
         .await
-        .map_err(|e| { warn!("ES query_round failed: {}", e); e })
+        .map_err(|e| {
+            warn!("ES query_round failed: {}", e);
+            e
+        })
         .ok()?;
 
-    let body = response.json::<Value>().await
-        .map_err(|e| { warn!("ES query_round: failed to parse response: {}", e); e })
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|e| {
+            warn!("ES query_round: failed to parse response: {}", e);
+            e
+        })
         .ok()?;
     body["hits"]["hits"]
         .as_array()
@@ -93,11 +109,19 @@ pub async fn query_round_light(es: &Elasticsearch, job_id: &str, round_id: &str)
         }))
         .send()
         .await
-        .map_err(|e| { warn!("ES query_round_light failed: {}", e); e })
+        .map_err(|e| {
+            warn!("ES query_round_light failed: {}", e);
+            e
+        })
         .ok()?;
 
-    let body = response.json::<Value>().await
-        .map_err(|e| { warn!("ES query_round_light: failed to parse response: {}", e); e })
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|e| {
+            warn!("ES query_round_light: failed to parse response: {}", e);
+            e
+        })
         .ok()?;
     body["hits"]["hits"]
         .as_array()
@@ -106,7 +130,11 @@ pub async fn query_round_light(es: &Elasticsearch, job_id: &str, round_id: &str)
 }
 
 /// Query a single round by job_id + round_id, returning only assembled_source + instrumented_run_id.
-pub async fn query_round_source_only(es: &Elasticsearch, job_id: &str, round_id: &str) -> Option<Value> {
+pub async fn query_round_source_only(
+    es: &Elasticsearch,
+    job_id: &str,
+    round_id: &str,
+) -> Option<Value> {
     let response = es
         .search(SearchParts::Index(&["rounds-*"]))
         .body(json!({
@@ -123,11 +151,22 @@ pub async fn query_round_source_only(es: &Elasticsearch, job_id: &str, round_id:
         }))
         .send()
         .await
-        .map_err(|e| { warn!("ES query_round_source_only failed: {}", e); e })
+        .map_err(|e| {
+            warn!("ES query_round_source_only failed: {}", e);
+            e
+        })
         .ok()?;
 
-    let body = response.json::<Value>().await
-        .map_err(|e| { warn!("ES query_round_source_only: failed to parse response: {}", e); e })
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|e| {
+            warn!(
+                "ES query_round_source_only: failed to parse response: {}",
+                e
+            );
+            e
+        })
         .ok()?;
     body["hits"]["hits"]
         .as_array()
@@ -136,7 +175,11 @@ pub async fn query_round_source_only(es: &Elasticsearch, job_id: &str, round_id:
 }
 
 /// Query a single round by job_id + round_id, returning only function coverage fields.
-pub async fn query_round_coverage_only(es: &Elasticsearch, job_id: &str, round_id: &str) -> Option<Value> {
+pub async fn query_round_coverage_only(
+    es: &Elasticsearch,
+    job_id: &str,
+    round_id: &str,
+) -> Option<Value> {
     let response = es
         .search(SearchParts::Index(&["rounds-*"]))
         .body(json!({
@@ -156,8 +199,16 @@ pub async fn query_round_coverage_only(es: &Elasticsearch, job_id: &str, round_i
         .map_err(|e| { warn!("ES query_round_coverage_only failed: {}", e); e })
         .ok()?;
 
-    let body = response.json::<Value>().await
-        .map_err(|e| { warn!("ES query_round_coverage_only: failed to parse response: {}", e); e })
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|e| {
+            warn!(
+                "ES query_round_coverage_only: failed to parse response: {}",
+                e
+            );
+            e
+        })
         .ok()?;
     body["hits"]["hits"]
         .as_array()
@@ -474,11 +525,22 @@ pub async fn query_token_set_by_round_id(
         }))
         .send()
         .await
-        .map_err(|e| { warn!("ES query_token_set_by_round_id failed: {}", e); e })
+        .map_err(|e| {
+            warn!("ES query_token_set_by_round_id failed: {}", e);
+            e
+        })
         .ok()?;
 
-    let body = response.json::<Value>().await
-        .map_err(|e| { warn!("ES query_token_set_by_round_id: failed to parse response: {}", e); e })
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|e| {
+            warn!(
+                "ES query_token_set_by_round_id: failed to parse response: {}",
+                e
+            );
+            e
+        })
         .ok()?;
     body["hits"]["hits"]
         .as_array()
@@ -528,20 +590,16 @@ async fn extract_sources(
     response: Result<elasticsearch::http::response::Response, elasticsearch::Error>,
 ) -> Vec<Value> {
     match response {
-        Ok(resp) => {
-            match resp.json::<Value>().await {
-                Ok(body) => {
-                    body["hits"]["hits"]
-                        .as_array()
-                        .map(|hits| hits.iter().map(|h| h["_source"].clone()).collect())
-                        .unwrap_or_default()
-                }
-                Err(e) => {
-                    warn!("ES extract_sources: failed to parse response: {}", e);
-                    Vec::new()
-                }
+        Ok(resp) => match resp.json::<Value>().await {
+            Ok(body) => body["hits"]["hits"]
+                .as_array()
+                .map(|hits| hits.iter().map(|h| h["_source"].clone()).collect())
+                .unwrap_or_default(),
+            Err(e) => {
+                warn!("ES extract_sources: failed to parse response: {}", e);
+                Vec::new()
             }
-        }
+        },
         Err(e) => {
             warn!("ES search request failed: {}", e);
             Vec::new()
@@ -573,10 +631,14 @@ pub(crate) async fn find_index_by_es_id(
         })
         .ok()?;
 
-    let body = resp.json::<Value>().await.map_err(|e| {
-        warn!("ES search by _id: failed to parse response: {}", e);
-        e
-    }).ok()?;
+    let body = resp
+        .json::<Value>()
+        .await
+        .map_err(|e| {
+            warn!("ES search by _id: failed to parse response: {}", e);
+            e
+        })
+        .ok()?;
     let hit = body["hits"]["hits"].as_array()?.first()?;
     let index = hit["_index"].as_str()?.to_string();
     let doc_id = hit["_id"].as_str()?.to_string();
@@ -602,11 +664,19 @@ pub(crate) async fn find_index(
         }))
         .send()
         .await
-        .map_err(|e| { warn!("ES find_index failed: {}", e); e })
+        .map_err(|e| {
+            warn!("ES find_index failed: {}", e);
+            e
+        })
         .ok()?;
 
-    let body = resp.json::<Value>().await
-        .map_err(|e| { warn!("ES find_index: failed to parse response: {}", e); e })
+    let body = resp
+        .json::<Value>()
+        .await
+        .map_err(|e| {
+            warn!("ES find_index: failed to parse response: {}", e);
+            e
+        })
         .ok()?;
     let hit = body["hits"]["hits"].as_array()?.first()?;
     let index = hit["_index"].as_str()?.to_string();

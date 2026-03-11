@@ -224,11 +224,10 @@ pub fn perturb_recipe_params(
 ) {
     let registry = default_registry();
     for spec in recipe.iter_mut() {
-        if rng.coin(probability) {
-            if let Some(ps) = find_param_space(&registry, &spec.id) {
+        if rng.coin(probability)
+            && let Some(ps) = find_param_space(&registry, &spec.id) {
                 spec.params = ps.perturb_params(spec.params.as_ref(), rng, intensity);
             }
-        }
     }
 }
 
@@ -844,7 +843,12 @@ mod tests {
 
         history.insert(
             1,
-            make_summary(1, 0.5, DifferentialCategory::Evasion, vec!["ast.decon_rounds".to_string()]),
+            make_summary(
+                1,
+                0.5,
+                DifferentialCategory::Evasion,
+                vec!["ast.decon_rounds".to_string()],
+            ),
         );
 
         // Only 1 recipe — should return 1.0 (assume diverse)
