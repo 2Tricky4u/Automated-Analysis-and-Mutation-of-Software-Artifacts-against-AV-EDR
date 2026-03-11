@@ -5,10 +5,18 @@
 //!   - `mutation:*` tokens include sorted `key=value` params when present
 //! - **ES telemetry** (`extract_telemetry_tokens`): tokens from all non-trace events:
 //!   - `api:*` — syscall/lifecycle function names (dll + kernel events)
-//!   - `api_arg:*` — memory protection arguments (e.g. `api_arg:NtAllocateVirtualMemory:protect=RW-`)
+//!   - `api_arg:*:protect=*` — memory protection arguments
+//!   - `api_arg:*:alloc_type=*` — allocation type flags (COMMIT, RESERVE, COMMIT_RESERVE)
+//!   - `api_arg:*:size_bucket=*` — allocation size buckets (tiny/4K/64K/1M/large)
+//!   - `api_arg:*:handle=*` — target process handle (self vs remote)
+//!   - `api_ret:*:success/fail` — API return code outcome
 //!   - `etw:*` — ETW provider/event pairs (e.g. `etw:Microsoft-Windows-Kernel-Process/6`)
 //!   - `image:*` — loaded DLL basenames (e.g. `image:ntdll.dll`)
 //!   - `seq2:*` — bigrams from consecutive `payload_func` calls
+//!   - `exit_code:*` — process exit code from ETW ProcessStop events
+//!   - `audit:desired_access=*` — access flags from Kernel-Audit-API-Calls
+//!   - `net:*` — network protocol from Kernel-Network events (tcp/udp)
+//!   - `file_op:*` — file operations from Kernel-File events (create/name_op)
 //! - **ES checkpoint events** (`extract_checkpoint_tokens`): tokens from instrumented run:
 //!   - `checkpoint:*` — reached checkpoint names (e.g. `checkpoint:antiemulation_passed`)
 //!
@@ -161,6 +169,55 @@ pub fn extract_tokens_from_docs(docs: &[Value]) -> Vec<String> {
                 }
             }
 
+            // api_arg:<func>:alloc_type=<name> (allocation type flags)
+            if let Some(alloc_type) = doc["payload_alloc_type"].as_u64() {
+                let name = match alloc_type {
+                    0x1000 => "COMMIT",
+                    0x2000 => "RESERVE",
+                    0x3000 => "COMMIT_RESERVE",
+                    _ => "",
+                };
+                if !name.is_empty() {
+                    let token = format!("api_arg:{func}:alloc_type={name}");
+                    if seen.insert(token.clone()) {
+                        tokens.push(token);
+                    }
+                }
+            }
+
+            // api_arg:<func>:size_bucket=<bucket> (allocation size)
+            if let Some(size) = doc["payload_size"].as_u64() {
+                let bucket = match size {
+                    0..=4095 => "tiny",
+                    4096 => "4K",
+                    4097..=65536 => "64K",
+                    65537..=1048576 => "1M",
+                    _ => "large",
+                };
+                let token = format!("api_arg:{func}:size_bucket={bucket}");
+                if seen.insert(token.clone()) {
+                    tokens.push(token);
+                }
+            }
+
+            // api_ret:<func>:success/fail (return code outcome)
+            if let Some(ret) = doc["payload_return"].as_i64() {
+                let outcome = if ret == 0 { "success" } else { "fail" };
+                let token = format!("api_ret:{func}:{outcome}");
+                if seen.insert(token.clone()) {
+                    tokens.push(token);
+                }
+            }
+
+            // api_arg:<func>:handle=self/remote (target process)
+            if let Some(handle) = doc["payload_handle"].as_i64() {
+                let target = if handle == -1 { "self" } else { "remote" };
+                let token = format!("api_arg:{func}:handle={target}");
+                if seen.insert(token.clone()) {
+                    tokens.push(token);
+                }
+            }
+
             // image:<dll_basename> from kernel image_load events
             if func == "image_load"
                 && let Some(path) = doc["payload_image"].as_str()
@@ -186,6 +243,62 @@ pub fn extract_tokens_from_docs(docs: &[Value]) -> Vec<String> {
                 let etw_token = format!("etw:{provider}/{event_id}");
                 if seen.insert(etw_token.clone()) {
                     tokens.push(etw_token);
+                }
+
+                // --- Tier 2: provider-specific enrichment ---
+
+                // exit_code:<N> from ProcessStop events
+                if event.starts_with("ProcessStop")
+                    && let Some(code) = doc["payload_ExitCode"].as_i64()
+                {
+                    let token = format!("exit_code:{code}");
+                    if seen.insert(token.clone()) {
+                        tokens.push(token);
+                    }
+                }
+
+                // audit:desired_access=0x<hex> from Kernel-Audit-API-Calls
+                if provider == "Microsoft-Windows-Kernel-Audit-API-Calls"
+                    && let Some(access) = doc["payload_DesiredAccess"].as_u64()
+                {
+                    let token = format!("audit:desired_access=0x{access:X}");
+                    if seen.insert(token.clone()) {
+                        tokens.push(token);
+                    }
+                }
+
+                // net:tcp/udp from Kernel-Network events
+                if provider == "Microsoft-Windows-Kernel-Network" {
+                    let proto = if event.contains("UDPIP") {
+                        "udp"
+                    } else if event.contains("TCPIP") {
+                        "tcp"
+                    } else {
+                        ""
+                    };
+                    if !proto.is_empty() {
+                        let token = format!("net:{proto}");
+                        if seen.insert(token.clone()) {
+                            tokens.push(token);
+                        }
+                    }
+                }
+
+                // file_op:create/name_op from Kernel-File events
+                if provider == "Microsoft-Windows-Kernel-File" {
+                    let op = if event.contains("Create") {
+                        "create"
+                    } else if event.contains("Name") {
+                        "name_op"
+                    } else {
+                        ""
+                    };
+                    if !op.is_empty() {
+                        let token = format!("file_op:{op}");
+                        if seen.insert(token.clone()) {
+                            tokens.push(token);
+                        }
+                    }
                 }
             }
             // Also emit a descriptive etw event token
@@ -653,5 +766,223 @@ mod tests {
         assert_eq!(tokens.len(), 2); // etw: + etw_event:
         assert!(tokens.contains(&"etw:Microsoft-Windows-Kernel-Process/3".to_string()));
         assert!(tokens.contains(&"etw_event:ThreadStart".to_string()));
+    }
+
+    #[test]
+    fn test_tier1_alloc_type_tokens() {
+        let docs = vec![
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtAllocateVirtualMemory",
+                "payload_id": 1,
+                "payload_alloc_type": 0x1000,
+            }),
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtMapViewOfSection",
+                "payload_id": 2,
+                "payload_alloc_type": 0x3000,
+            }),
+        ];
+        let tokens = extract_tokens_from_docs(&docs);
+        assert!(tokens.contains(&"api_arg:NtAllocateVirtualMemory:alloc_type=COMMIT".to_string()));
+        assert!(
+            tokens.contains(&"api_arg:NtMapViewOfSection:alloc_type=COMMIT_RESERVE".to_string())
+        );
+    }
+
+    #[test]
+    fn test_tier1_alloc_type_unknown_skipped() {
+        let docs = vec![json!({
+            "event_type": "dll",
+            "payload_func": "NtAllocateVirtualMemory",
+            "payload_id": 1,
+            "payload_alloc_type": 0x9999,
+        })];
+        let tokens = extract_tokens_from_docs(&docs);
+        assert!(
+            !tokens.iter().any(|t| t.contains("alloc_type")),
+            "Unknown alloc_type should not produce a token"
+        );
+    }
+
+    #[test]
+    fn test_tier1_size_bucket_tokens() {
+        let docs = vec![
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtAllocateVirtualMemory",
+                "payload_id": 1,
+                "payload_size": 512,
+            }),
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtProtectVirtualMemory",
+                "payload_id": 2,
+                "payload_size": 4096,
+            }),
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtWriteVirtualMemory",
+                "payload_id": 3,
+                "payload_size": 50000,
+            }),
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtMapViewOfSection",
+                "payload_id": 4,
+                "payload_size": 500000,
+            }),
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtFreeVirtualMemory",
+                "payload_id": 5,
+                "payload_size": 5000000,
+            }),
+        ];
+        let tokens = extract_tokens_from_docs(&docs);
+        assert!(tokens.contains(&"api_arg:NtAllocateVirtualMemory:size_bucket=tiny".to_string()));
+        assert!(tokens.contains(&"api_arg:NtProtectVirtualMemory:size_bucket=4K".to_string()));
+        assert!(tokens.contains(&"api_arg:NtWriteVirtualMemory:size_bucket=64K".to_string()));
+        assert!(tokens.contains(&"api_arg:NtMapViewOfSection:size_bucket=1M".to_string()));
+        assert!(tokens.contains(&"api_arg:NtFreeVirtualMemory:size_bucket=large".to_string()));
+    }
+
+    #[test]
+    fn test_tier1_return_code_tokens() {
+        let docs = vec![
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtAllocateVirtualMemory",
+                "payload_id": 1,
+                "payload_return": 0,
+            }),
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtProtectVirtualMemory",
+                "payload_id": 2,
+                "payload_return": -1073741819_i64,
+            }),
+        ];
+        let tokens = extract_tokens_from_docs(&docs);
+        assert!(tokens.contains(&"api_ret:NtAllocateVirtualMemory:success".to_string()));
+        assert!(tokens.contains(&"api_ret:NtProtectVirtualMemory:fail".to_string()));
+    }
+
+    #[test]
+    fn test_tier1_handle_tokens() {
+        let docs = vec![
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtAllocateVirtualMemory",
+                "payload_id": 1,
+                "payload_handle": -1,
+            }),
+            json!({
+                "event_type": "dll",
+                "payload_func": "NtWriteVirtualMemory",
+                "payload_id": 2,
+                "payload_handle": 1234,
+            }),
+        ];
+        let tokens = extract_tokens_from_docs(&docs);
+        assert!(tokens.contains(&"api_arg:NtAllocateVirtualMemory:handle=self".to_string()));
+        assert!(tokens.contains(&"api_arg:NtWriteVirtualMemory:handle=remote".to_string()));
+    }
+
+    #[test]
+    fn test_tier2_exit_code_token() {
+        let docs = vec![json!({
+            "event_type": "etw",
+            "payload_func": null,
+            "payload_id": 1,
+            "payload_event": "ProcessStopStop",
+            "payload_etw_provider_name": "Microsoft-Windows-Kernel-Process",
+            "payload_event_id": 2,
+            "payload_ExitCode": 0,
+        })];
+        let tokens = extract_tokens_from_docs(&docs);
+        assert!(tokens.contains(&"exit_code:0".to_string()));
+    }
+
+    #[test]
+    fn test_tier2_audit_desired_access_token() {
+        let docs = vec![json!({
+            "event_type": "etw",
+            "payload_func": null,
+            "payload_id": 1,
+            "payload_event": "OpenProcess",
+            "payload_etw_provider_name": "Microsoft-Windows-Kernel-Audit-API-Calls",
+            "payload_event_id": 5,
+            "payload_DesiredAccess": 0x1FFFFF,
+        })];
+        let tokens = extract_tokens_from_docs(&docs);
+        assert!(tokens.contains(&"audit:desired_access=0x1FFFFF".to_string()));
+    }
+
+    #[test]
+    fn test_tier2_network_protocol_tokens() {
+        let docs = vec![
+            json!({
+                "event_type": "etw",
+                "payload_func": null,
+                "payload_id": 1,
+                "payload_event": "TCPIP/Send",
+                "payload_etw_provider_name": "Microsoft-Windows-Kernel-Network",
+                "payload_event_id": 10,
+            }),
+            json!({
+                "event_type": "etw",
+                "payload_func": null,
+                "payload_id": 2,
+                "payload_event": "UDPIP/Recv",
+                "payload_etw_provider_name": "Microsoft-Windows-Kernel-Network",
+                "payload_event_id": 11,
+            }),
+        ];
+        let tokens = extract_tokens_from_docs(&docs);
+        assert!(tokens.contains(&"net:tcp".to_string()));
+        assert!(tokens.contains(&"net:udp".to_string()));
+    }
+
+    #[test]
+    fn test_tier2_file_op_tokens() {
+        let docs = vec![
+            json!({
+                "event_type": "etw",
+                "payload_func": null,
+                "payload_id": 1,
+                "payload_event": "CreateNewFile",
+                "payload_etw_provider_name": "Microsoft-Windows-Kernel-File",
+                "payload_event_id": 12,
+            }),
+            json!({
+                "event_type": "etw",
+                "payload_func": null,
+                "payload_id": 2,
+                "payload_event": "NameDelete",
+                "payload_etw_provider_name": "Microsoft-Windows-Kernel-File",
+                "payload_event_id": 13,
+            }),
+        ];
+        let tokens = extract_tokens_from_docs(&docs);
+        assert!(tokens.contains(&"file_op:create".to_string()));
+        assert!(tokens.contains(&"file_op:name_op".to_string()));
+    }
+
+    #[test]
+    fn test_missing_fields_no_crash() {
+        // Docs with payload_func but no optional fields — should only produce api: tokens
+        let docs = vec![json!({
+            "event_type": "dll",
+            "payload_func": "NtAllocateVirtualMemory",
+            "payload_id": 1,
+        })];
+        let tokens = extract_tokens_from_docs(&docs);
+        assert!(tokens.contains(&"api:NtAllocateVirtualMemory".to_string()));
+        assert!(!tokens.iter().any(|t| t.contains("alloc_type")));
+        assert!(!tokens.iter().any(|t| t.contains("size_bucket")));
+        assert!(!tokens.iter().any(|t| t.contains("api_ret")));
+        assert!(!tokens.iter().any(|t| t.contains("handle=")));
     }
 }
