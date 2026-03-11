@@ -651,8 +651,10 @@
                 <h2>Submit Job</h2>
                 <form id="submitJobForm">
                     <div class="form-group">
-                        <label>Payload Source (path to .bin)</label>
-                        <input type="text" id="jobSource" placeholder="/path/to/payload.bin" required>
+                        <label>Payload Source (.bin)</label>
+                        <select id="jobSource" required>
+                            <option value="">Loading shellcodes...</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label>Max Rounds</label>
@@ -1982,9 +1984,35 @@
         }
 
         // ================================================================
+        // ================================================================
+        // Shellcode Loader
+        // ================================================================
+
+        async function loadShellcodes() {
+            const select = document.getElementById('jobSource');
+            try {
+                const resp = await fetch('/api/shellcodes');
+                const json = await resp.json();
+                select.innerHTML = '';
+                if (json.data && json.data.length > 0) {
+                    json.data.forEach(name => {
+                        const opt = document.createElement('option');
+                        opt.value = name;
+                        opt.textContent = name;
+                        select.appendChild(opt);
+                    });
+                } else {
+                    select.innerHTML = '<option value="">No .bin files found</option>';
+                }
+            } catch (e) {
+                select.innerHTML = '<option value="">Failed to load shellcodes</option>';
+            }
+        }
+
         // Init
         // ================================================================
 
+        loadShellcodes();
         checkHealth();
         refreshWorkers();
         refreshOrchestratorStatus();
