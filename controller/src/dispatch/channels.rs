@@ -75,6 +75,11 @@ pub struct RoundCompletedData {
     pub round_started_at: SystemTime,
     /// Pre-instrumentation assembled C source for line trace resolution.
     pub assembled_source: Option<String>,
+    // --- Artifact metadata ---
+    pub baseline_artifact_id: String,
+    pub baseline_artifact_size: u64,
+    pub instrumented_artifact_id: String,
+    pub instrumented_artifact_size: u64,
     // --- Dryrun fields ---
     pub dryrun_run_id: Option<RunId>,
     pub dryrun_outcome: Option<RunOutcome>,

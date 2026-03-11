@@ -5,6 +5,7 @@
 
 use elasticsearch::{Elasticsearch, SearchParts};
 use serde_json::{Value, json};
+use tracing::warn;
 
 /// Look up a single job document by job_id.
 pub async fn query_job(es: &Elasticsearch, job_id: &str) -> Option<Value> {
@@ -16,9 +17,12 @@ pub async fn query_job(es: &Elasticsearch, job_id: &str) -> Option<Value> {
         }))
         .send()
         .await
+        .map_err(|e| { warn!("ES query_job failed: {}", e); e })
         .ok()?;
 
-    let body = response.json::<Value>().await.ok()?;
+    let body = response.json::<Value>().await
+        .map_err(|e| { warn!("ES query_job: failed to parse response: {}", e); e })
+        .ok()?;
     body["hits"]["hits"]
         .as_array()
         .and_then(|h| h.first())
@@ -57,9 +61,12 @@ pub async fn query_round(es: &Elasticsearch, job_id: &str, round_id: &str) -> Op
         }))
         .send()
         .await
+        .map_err(|e| { warn!("ES query_round failed: {}", e); e })
         .ok()?;
 
-    let body = response.json::<Value>().await.ok()?;
+    let body = response.json::<Value>().await
+        .map_err(|e| { warn!("ES query_round: failed to parse response: {}", e); e })
+        .ok()?;
     body["hits"]["hits"]
         .as_array()
         .and_then(|h| h.first())
@@ -375,9 +382,12 @@ pub async fn query_token_set_by_round_id(
         }))
         .send()
         .await
+        .map_err(|e| { warn!("ES query_token_set_by_round_id failed: {}", e); e })
         .ok()?;
 
-    let body = response.json::<Value>().await.ok()?;
+    let body = response.json::<Value>().await
+        .map_err(|e| { warn!("ES query_token_set_by_round_id: failed to parse response: {}", e); e })
+        .ok()?;
     body["hits"]["hits"]
         .as_array()
         .and_then(|h| h.first())
@@ -427,17 +437,58 @@ async fn extract_sources(
 ) -> Vec<Value> {
     match response {
         Ok(resp) => {
-            if let Ok(body) = resp.json::<Value>().await {
-                body["hits"]["hits"]
-                    .as_array()
-                    .map(|hits| hits.iter().map(|h| h["_source"].clone()).collect())
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
+            match resp.json::<Value>().await {
+                Ok(body) => {
+                    body["hits"]["hits"]
+                        .as_array()
+                        .map(|hits| hits.iter().map(|h| h["_source"].clone()).collect())
+                        .unwrap_or_default()
+                }
+                Err(e) => {
+                    warn!("ES extract_sources: failed to parse response: {}", e);
+                    Vec::new()
+                }
             }
         }
-        Err(_) => Vec::new(),
+        Err(e) => {
+            warn!("ES search request failed: {}", e);
+            Vec::new()
+        }
     }
+}
+
+/// Find a document by its ES `_id` (not a field value) using an `ids` query.
+///
+/// Returns `(index_name, es_id)`. Use when the `_id` is known (e.g. composite
+/// round IDs like `{job_id}/{round_id}`), avoiding collision risk from field-only lookups.
+pub(crate) async fn find_index_by_es_id(
+    es: &Elasticsearch,
+    pattern: &str,
+    es_id: &str,
+) -> Option<(String, String)> {
+    let resp = es
+        .search(SearchParts::Index(&[pattern]))
+        .body(json!({
+            "query": { "ids": { "values": [es_id] } },
+            "size": 1,
+            "_source": false
+        }))
+        .send()
+        .await
+        .map_err(|e| {
+            warn!("ES search by _id failed: {}", e);
+            e
+        })
+        .ok()?;
+
+    let body = resp.json::<Value>().await.map_err(|e| {
+        warn!("ES search by _id: failed to parse response: {}", e);
+        e
+    }).ok()?;
+    let hit = body["hits"]["hits"].as_array()?.first()?;
+    let index = hit["_index"].as_str()?.to_string();
+    let doc_id = hit["_id"].as_str()?.to_string();
+    Some((index, doc_id))
 }
 
 /// Find the concrete index name and document `_id` for a document (ES update requires both).
@@ -459,9 +510,12 @@ pub(crate) async fn find_index(
         }))
         .send()
         .await
+        .map_err(|e| { warn!("ES find_index failed: {}", e); e })
         .ok()?;
 
-    let body = resp.json::<Value>().await.ok()?;
+    let body = resp.json::<Value>().await
+        .map_err(|e| { warn!("ES find_index: failed to parse response: {}", e); e })
+        .ok()?;
     let hit = body["hits"]["hits"].as_array()?.first()?;
     let index = hit["_index"].as_str()?.to_string();
     let doc_id = hit["_id"].as_str()?.to_string();

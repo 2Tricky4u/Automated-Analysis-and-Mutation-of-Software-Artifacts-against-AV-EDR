@@ -1,6 +1,6 @@
 //! Index template bootstrap — create/update ES index templates on startup.
 //!
-//! Templates define mappings for: jobs, rounds, runs, telemetry.
+//! Templates define mappings for: jobs, rounds, runs, telemetry, tokens, artifacts.
 //! Uses `_meta.version` for idempotent updates.
 
 use elasticsearch::Elasticsearch;
@@ -11,7 +11,7 @@ use tracing::{info, warn};
 /// Create or update all Elasticsearch index templates on startup.
 ///
 /// Concurrently ensures templates for `jobs`, `rounds`, `runs`, `telemetry`,
-/// and `tokens` indices. Individual template failures are logged as warnings
+/// `tokens`, and `artifacts` indices. Individual template failures are logged as warnings
 /// but do not abort the overall operation.
 ///
 /// # Errors
@@ -26,6 +26,7 @@ pub async fn ensure_templates(es: &Elasticsearch) -> anyhow::Result<()> {
         create_runs_template(es),
         create_telemetry_template(es),
         create_tokens_template(es),
+        create_artifacts_template(es),
     );
 
     // Log failures but don't crash on template errors
@@ -43,6 +44,9 @@ pub async fn ensure_templates(es: &Elasticsearch) -> anyhow::Result<()> {
     }
     if let Err(e) = results.4 {
         warn!("Failed to create tokens template: {}", e);
+    }
+    if let Err(e) = results.5 {
+        warn!("Failed to create artifacts template: {}", e);
     }
 
     info!("Index templates ensured");
@@ -112,6 +116,68 @@ async fn create_jobs_template(es: &Elasticsearch) -> anyhow::Result<()> {
 }
 
 async fn create_rounds_template(es: &Elasticsearch) -> anyhow::Result<()> {
+    // Split into two json! calls to stay under macro recursion limit
+    let core_props = json!({
+        "round_id": { "type": "keyword" },
+        "job_id": { "type": "keyword" },
+        "round_number": { "type": "integer" },
+        "mutations": { "type": "keyword" },
+        "mutation_recipe": {
+            "properties": {
+                "id": { "type": "keyword" },
+                "params": { "type": "object", "enabled": false }
+            }
+        },
+        "baseline_run_id": { "type": "keyword" },
+        "instrumented_run_id": { "type": "keyword" },
+        "detected": { "type": "boolean" },
+        "behavior_match": { "type": "boolean" },
+        "evasion_score": { "type": "float" },
+        "differential_category": { "type": "keyword" },
+        "modules": {
+            "properties": {
+                "carrier": { "type": "keyword" },
+                "decoder": { "type": "keyword" },
+                "antiemulation": { "type": "keyword" },
+                "deconditioner": { "type": "keyword" },
+                "guardrail": { "type": "keyword" },
+                "virtualprotect": { "type": "keyword" },
+                "decoy": { "type": "keyword" }
+            }
+        },
+        "status": { "type": "keyword" },
+        "started_at": { "type": "date" },
+        "completed_at": { "type": "date" },
+        "assembled_source": { "type": "text", "index": false },
+        "detection_verdict": { "type": "keyword" }
+    });
+
+    let extra_props = json!({
+        "dry_run_exit_code": { "type": "integer" },
+        "has_dryrun": { "type": "boolean" },
+        "dryrun_run_id": { "type": "keyword" },
+        "coverage_total_lines": { "type": "integer" },
+        "coverage_executable_lines": { "type": "integer" },
+        "coverage_executed_lines": { "type": "integer" },
+        "coverage_percent": { "type": "float" },
+        "cutoff_line": { "type": "integer" },
+        "cutoff_func": { "type": "keyword" },
+        "function_coverage": {
+            "type": "nested",
+            "properties": {
+                "name": { "type": "keyword" },
+                "total": { "type": "integer" },
+                "executed": { "type": "integer" },
+                "percent": { "type": "float" }
+            }
+        },
+        "evasion_score_blended": { "type": "boolean" }
+    });
+
+    // Merge core + extra properties
+    let mut properties = core_props.as_object().unwrap().clone();
+    properties.extend(extra_props.as_object().unwrap().clone());
+
     let template = json!({
         "index_patterns": ["rounds-*"],
         "template": {
@@ -120,41 +186,8 @@ async fn create_rounds_template(es: &Elasticsearch) -> anyhow::Result<()> {
                 "number_of_replicas": 0
             },
             "mappings": {
-                "_meta": { "version": 6 },
-                "properties": {
-                    "round_id": { "type": "keyword" },
-                    "job_id": { "type": "keyword" },
-                    "round_number": { "type": "integer" },
-                    "mutations": { "type": "keyword" },
-                    "mutation_recipe": {
-                        "properties": {
-                            "id": { "type": "keyword" },
-                            "params": { "type": "object", "enabled": false }
-                        }
-                    },
-                    "baseline_run_id": { "type": "keyword" },
-                    "instrumented_run_id": { "type": "keyword" },
-                    "detected": { "type": "boolean" },
-                    "behavior_match": { "type": "boolean" },
-                    "evasion_score": { "type": "float" },
-                    "differential_category": { "type": "keyword" },
-                    "modules": {
-                        "properties": {
-                            "carrier": { "type": "keyword" },
-                            "decoder": { "type": "keyword" },
-                            "antiemulation": { "type": "keyword" },
-                            "deconditioner": { "type": "keyword" },
-                            "guardrail": { "type": "keyword" },
-                            "virtualprotect": { "type": "keyword" },
-                            "decoy": { "type": "keyword" }
-                        }
-                    },
-                    "status": { "type": "keyword" },
-                    "started_at": { "type": "date" },
-                    "completed_at": { "type": "date" },
-                    "assembled_source": { "type": "text", "index": false },
-                    "detection_verdict": { "type": "keyword" }
-                }
+                "_meta": { "version": 7 },
+                "properties": properties
             }
         }
     });
@@ -178,7 +211,7 @@ async fn create_runs_template(es: &Elasticsearch) -> anyhow::Result<()> {
                 "number_of_replicas": 0
             },
             "mappings": {
-                "_meta": { "version": 4 },
+                "_meta": { "version": 5 },
                 "properties": {
                     "run_id": { "type": "keyword" },
                     "job_id": { "type": "keyword" },
@@ -208,7 +241,9 @@ async fn create_runs_template(es: &Elasticsearch) -> anyhow::Result<()> {
                         }
                     },
                     "finished_at": { "type": "date" },
-                    "timestamp": { "type": "date" }
+                    "timestamp": { "type": "date" },
+                    "success": { "type": "boolean" },
+                    "elapsed_ms": { "type": "float" }
                 }
             }
         }
@@ -327,5 +362,56 @@ async fn create_tokens_template(es: &Elasticsearch) -> anyhow::Result<()> {
         .await?;
 
     info!("Created index template: tokens-template");
+    Ok(())
+}
+
+async fn create_artifacts_template(es: &Elasticsearch) -> anyhow::Result<()> {
+    let template = json!({
+        "index_patterns": ["artifacts-*"],
+        "template": {
+            "settings": {
+                "number_of_shards": 1,
+                "number_of_replicas": 0
+            },
+            "mappings": {
+                "_meta": { "version": 1 },
+                "properties": {
+                    "artifact_id": { "type": "keyword" },
+                    "job_id": { "type": "keyword" },
+                    "round_id": { "type": "keyword" },
+                    "round_number": { "type": "integer" },
+                    "size_bytes": { "type": "long" },
+                    "mutations_applied": { "type": "keyword" },
+                    "trace_mode": { "type": "keyword" },
+                    "encoding": { "type": "keyword" },
+                    "build_timestamp": { "type": "date" },
+                    "storage_path": { "type": "keyword", "index": false },
+                    "sha256": { "type": "keyword" },
+                    "compiler_version": { "type": "keyword" },
+                    "compiler_flags": { "type": "keyword" },
+                    "modules": {
+                        "properties": {
+                            "carrier": { "type": "keyword" },
+                            "decoder": { "type": "keyword" },
+                            "antiemulation": { "type": "keyword" },
+                            "deconditioner": { "type": "keyword" },
+                            "guardrail": { "type": "keyword" },
+                            "virtualprotect": { "type": "keyword" },
+                            "decoy": { "type": "keyword" }
+                        }
+                    },
+                    "indexed_at": { "type": "date" }
+                }
+            }
+        }
+    });
+
+    es.indices()
+        .put_index_template(IndicesPutIndexTemplateParts::Name("artifacts-template"))
+        .body(template)
+        .send()
+        .await?;
+
+    info!("Created index template: artifacts-template");
     Ok(())
 }

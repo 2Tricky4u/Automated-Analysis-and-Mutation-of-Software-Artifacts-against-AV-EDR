@@ -340,7 +340,7 @@ VIS_STATE=$(jq -n '{
     type: "pie",
     aggs: [
         { id: "1", enabled: true, type: "count", params: {}, schema: "metric" },
-        { id: "2", enabled: true, type: "terms", params: { field: "differential_category.keyword", orderBy: "1", order: "desc", size: 10 }, schema: "segment" }
+        { id: "2", enabled: true, type: "terms", params: { field: "differential_category", orderBy: "1", order: "desc", size: 10 }, schema: "segment" }
     ],
     params: {
         type: "pie",

@@ -588,6 +588,10 @@ impl JobWorker {
         agg.assembled_source = assembled_source;
         agg.baseline_artifact_path = baseline_artifact_path;
         agg.instrumented_artifact_path = instrumented_artifact_path;
+        agg.baseline_artifact_id = baseline_built.artifact_id.clone();
+        agg.baseline_artifact_size = baseline_built.size_bytes;
+        agg.instrumented_artifact_id = instrumented_built.artifact_id.clone();
+        agg.instrumented_artifact_size = instrumented_built.size_bytes;
         self.round_aggs.insert(round_id.clone(), agg);
 
         info!(
@@ -1026,6 +1030,10 @@ fn build_round_completed_data(
         instrumented_vm_id: agg.instrumented_vm_id,
         round_started_at: agg.started_at,
         assembled_source: agg.assembled_source,
+        baseline_artifact_id: agg.baseline_artifact_id,
+        baseline_artifact_size: agg.baseline_artifact_size,
+        instrumented_artifact_id: agg.instrumented_artifact_id,
+        instrumented_artifact_size: agg.instrumented_artifact_size,
         dryrun_run_id: Some(agg.dryrun_run_id),
         dryrun_outcome: agg.dryrun,
         dryrun_vm_id: agg.dryrun_vm_id,

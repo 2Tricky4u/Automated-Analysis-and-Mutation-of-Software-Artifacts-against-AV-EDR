@@ -38,6 +38,9 @@ pub fn now_rfc3339() -> String {
 ///
 /// Uses the actual ES `_id` (which may differ from the field value) for the update.
 /// Retries up to 3 times on version conflict (HTTP 409) to handle concurrent updates.
+///
+/// Returns `Err` if the update request fails with a non-409 status or all retries
+/// are exhausted.
 pub async fn update_doc_by_id(
     es: &Elasticsearch,
     index_pattern: &str,
@@ -83,15 +86,93 @@ pub async fn update_doc_by_id(
                 continue;
             }
 
-            warn!("Failed to update {} {}: {}", entity_label, doc_id, err_body);
-            return Ok(true); // document exists, but update failed
+            return Err(anyhow::anyhow!(
+                "Failed to update {} {}: {}",
+                entity_label, doc_id, err_body
+            ));
         } else {
             warn!("{} {} not found in ES for update", entity_label, doc_id);
             return Ok(false);
         }
     }
 
-    Ok(true)
+    Err(anyhow::anyhow!(
+        "Failed to update {} {} after {} retries (version conflict)",
+        entity_label, doc_id, MAX_RETRIES
+    ))
+}
+
+/// Find a document by ES `_id`, then update it. Returns `Ok(true)` on success,
+/// `Ok(false)` if the document was not found (logged as a warning).
+///
+/// `body` must already be wrapped as `{"doc": { ... }}`.
+///
+/// Unlike `update_doc_by_id` which searches by a field value, this uses the
+/// document's `_id` directly via an `ids` query, avoiding collision risk when
+/// the field value alone is not unique across indices.
+///
+/// Retries up to 3 times on version conflict (HTTP 409).
+///
+/// Returns `Err` if the update request fails with a non-409 status or all retries
+/// are exhausted.
+pub async fn update_doc_by_es_id(
+    es: &Elasticsearch,
+    index_pattern: &str,
+    es_id: &str,
+    body: Value,
+    entity_label: &str,
+) -> anyhow::Result<bool> {
+    const MAX_RETRIES: u32 = 3;
+
+    for attempt in 0..=MAX_RETRIES {
+        let found = queries::find_index_by_es_id(es, index_pattern, es_id).await;
+
+        if let Some((ref idx, ref doc_id)) = found {
+            let response = es
+                .update(UpdateParts::IndexId(idx, doc_id))
+                .body(body.clone())
+                .refresh(elasticsearch::params::Refresh::WaitFor)
+                .send()
+                .await?;
+
+            let status = response.status_code();
+            if status.is_success() {
+                info!("Updated {} {} successfully", entity_label, es_id);
+                return Ok(true);
+            }
+
+            let err_body = response.text().await.unwrap_or_default();
+
+            // Retry on version conflict (409)
+            if status.as_u16() == 409 && attempt < MAX_RETRIES {
+                debug!(
+                    "Version conflict updating {} {}, retrying ({}/{})",
+                    entity_label,
+                    es_id,
+                    attempt + 1,
+                    MAX_RETRIES
+                );
+                tokio::time::sleep(tokio::time::Duration::from_millis(
+                    50 * (attempt as u64 + 1),
+                ))
+                .await;
+                continue;
+            }
+
+            return Err(anyhow::anyhow!(
+                "Failed to update {} {}: {}",
+                entity_label, es_id, err_body
+            ));
+        } else {
+            warn!("{} {} not found in ES for update", entity_label, es_id);
+            return Ok(false);
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "Failed to update {} {} after {} retries (version conflict)",
+        entity_label, es_id, MAX_RETRIES
+    ))
 }
 
 /// Check an ES index response status. Returns `Err` with context on failure.
