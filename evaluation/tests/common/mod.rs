@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared test fixtures for evaluation integration tests.
 
 use evaluation::fixtures::round_factory::RoundSequenceBuilder;
