@@ -23,6 +23,7 @@
 
 pub mod jobs;
 pub mod query;
+pub mod shellcodes;
 pub mod tokens;
 pub mod workers;
 

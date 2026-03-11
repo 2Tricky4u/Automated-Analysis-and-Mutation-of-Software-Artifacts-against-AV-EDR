@@ -77,6 +77,7 @@ use axum::{
 use elasticsearch::Elasticsearch;
 use elasticsearch::http::transport::Transport;
 use grpc_client::{ControllerConfig, ControllerGrpcClient};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
@@ -96,11 +97,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "http://10.200.200.1:50051".to_string());
     let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
     let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "../frontend".to_string());
+    let shellcode_dir = std::env::var("SHELLCODE_DIR")
+        .unwrap_or_else(|_| "../../data/shellcodes".to_string());
 
     info!("UI Backend starting...");
     info!("  Controller: {}", controller_addr);
     info!("  Listen: {}", listen_addr);
     info!("  Frontend: {}", frontend_dir);
+    info!("  Shellcode dir: {}", shellcode_dir);
 
     // Create gRPC client
     let grpc_client = Arc::new(ControllerGrpcClient::new(ControllerConfig {
@@ -121,6 +125,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
+
+    // Shellcode directory (canonicalize for absolute path resolution in submit_job)
+    let shellcode_path = std::fs::canonicalize(&shellcode_dir).unwrap_or_else(|_| {
+        warn!("Shellcode dir '{}' not found, using as-is", shellcode_dir);
+        PathBuf::from(&shellcode_dir)
+    });
+    let shellcode_dir_arc: Arc<PathBuf> = Arc::new(shellcode_path);
 
     // CORS configuration - allow all origins for development
     let cors = CorsLayer::new()
@@ -186,7 +197,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api::tokens::get_round_tokens),
         )
         .route("/api/tokens/compare", get(api::tokens::compare_tokens))
+        // Shellcode listing
+        .route(
+            "/api/shellcodes",
+            get(api::shellcodes::list_shellcodes),
+        )
         // Middleware
+        .layer(Extension(shellcode_dir_arc.clone()))
         .layer(Extension(es_client))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
