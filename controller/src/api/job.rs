@@ -333,14 +333,17 @@ pub async fn get_round(
     // Query both runs
     let baseline_run_id = str_field(&source, "baseline_run_id");
     let instrumented_run_id = str_field(&source, "instrumented_run_id");
+    let dryrun_run_id = str_field(&source, "dryrun_run_id");
 
-    let runs = service
-        .storage
-        .query_runs_by_ids(&[&baseline_run_id, &instrumented_run_id])
-        .await;
+    let mut run_ids: Vec<&str> = vec![&baseline_run_id, &instrumented_run_id];
+    if !dryrun_run_id.is_empty() {
+        run_ids.push(&dryrun_run_id);
+    }
+    let runs = service.storage.query_runs_by_ids(&run_ids).await;
 
     let mut baseline_run = None;
     let mut instrumented_run = None;
+    let mut dryrun_run = None;
     for run in &runs {
         let rid = str_field(run, "run_id");
         let proto = run_doc_to_proto(run);
@@ -348,6 +351,8 @@ pub async fn get_round(
             baseline_run = Some(proto);
         } else if rid == instrumented_run_id {
             instrumented_run = Some(proto);
+        } else if rid == dryrun_run_id {
+            dryrun_run = Some(proto);
         }
     }
 
@@ -406,7 +411,7 @@ pub async fn get_round(
         coverage_total_lines: u32_field(&source, "coverage_total_lines"),
         coverage_executable_lines: u32_field(&source, "coverage_executable_lines"),
         coverage_executed_lines: u32_field(&source, "coverage_executed_lines"),
-        dryrun_run: None, // Populated if dryrun data exists in ES
+        dryrun_run,
         dry_run_exit_code: source["dry_run_exit_code"].as_i64().unwrap_or(0) as i32,
         detection_verdict: str_field(&source, "detection_verdict"),
         has_assembled_source,
