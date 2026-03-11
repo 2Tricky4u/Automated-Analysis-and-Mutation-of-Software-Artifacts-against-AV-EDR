@@ -330,10 +330,7 @@ impl FuzzerSelector {
             mutations,
             fitness: None,
             generation: 0,
-            rationale: format!(
-                "individual exploration round {}",
-                round_number,
-            ),
+            rationale: format!("individual exploration round {}", round_number,),
         }
     }
 
@@ -360,8 +357,7 @@ impl FuzzerSelector {
         let max_size = effective_max_recipe_size(acc_config, search_space.mutation_pool.len());
 
         // Diversity check: restart if converged
-        let diversity =
-            compute_recipe_diversity(history, &fixed_set, acc_config.stagnation_window);
+        let diversity = compute_recipe_diversity(history, &fixed_set, acc_config.stagnation_window);
         if diversity < acc_config.diversity_threshold {
             let mut recipe = self.random_recipe(search_space, config, rng);
             recipe.rationale = format!(
@@ -444,11 +440,8 @@ impl FuzzerSelector {
             let idx = rng.next_usize(offspring.mutations.len());
             let spec = &offspring.mutations[idx];
             if let Some(ps) = find_param_space(&registry, &spec.id) {
-                let new_params = ps.perturb_params(
-                    spec.params.as_ref(),
-                    rng,
-                    acc_config.perturb_intensity,
-                );
+                let new_params =
+                    ps.perturb_params(spec.params.as_ref(), rng, acc_config.perturb_intensity);
                 offspring.mutations[idx].params = new_params;
             }
         }
@@ -1147,7 +1140,10 @@ mod tests {
             } else {
                 DifferentialCategory::RealDetection
             };
-            history.insert((i + 2) as u32, make_fuzzer_summary((i + 2) as u32, score, cat, specs));
+            history.insert(
+                (i + 2) as u32,
+                make_fuzzer_summary((i + 2) as u32, score, cat, specs),
+            );
         }
 
         // Round in accumulation phase

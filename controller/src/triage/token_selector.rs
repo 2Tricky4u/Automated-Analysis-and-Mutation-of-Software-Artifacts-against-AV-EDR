@@ -378,7 +378,10 @@ impl TokenSelector {
                 self.token_guided_mutations(search_space, history, guidance, rng);
             return (
                 mutations,
-                format!("Token: diversity restart (div={:.2}) | {}", diversity, rationale),
+                format!(
+                    "Token: diversity restart (div={:.2}) | {}",
+                    diversity, rationale
+                ),
             );
         }
 

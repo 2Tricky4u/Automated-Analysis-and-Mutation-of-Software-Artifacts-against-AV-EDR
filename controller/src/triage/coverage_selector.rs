@@ -531,12 +531,7 @@ impl CoverageSelector {
                 .unwrap_or_default()
                 .subsec_nanos() as u64;
             let mut rng = crate::triage::param_space::SeededRng::from_raw(nanos.max(1));
-            perturb_recipe_params(
-                &mut recipe,
-                &mut rng,
-                config.perturb_intensity * 0.5,
-                0.3,
-            );
+            perturb_recipe_params(&mut recipe, &mut rng, config.perturb_intensity * 0.5, 0.3);
             rationale = format!(
                 "Accumulation: exploit (recipe={}, best={:.2})",
                 recipe.len(),
@@ -610,9 +605,7 @@ impl Selector for CoverageSelector {
                 VariationStrategy::MutationOnly => {
                     self.select_mutations(search_space, default_modules, history)
                 }
-                VariationStrategy::Full => {
-                    self.select_full(search_space, default_modules, history)
-                }
+                VariationStrategy::Full => self.select_full(search_space, default_modules, history),
             },
             AccumulationPhase::Accumulation => match search_space.strategy {
                 VariationStrategy::MutationOnly => {
@@ -624,8 +617,12 @@ impl Selector for CoverageSelector {
                         select_modules(search_space, default_modules, history, &mut |n| {
                             Self::pseudo_random(n)
                         });
-                    let mut accumulated =
-                        self.select_accumulated(search_space, default_modules, history, round_number);
+                    let mut accumulated = self.select_accumulated(
+                        search_space,
+                        default_modules,
+                        history,
+                        round_number,
+                    );
                     accumulated.modules = modules;
                     accumulated.rationale =
                         format!("Module: {} | {}", module_rationale, accumulated.rationale);
@@ -1262,13 +1259,7 @@ mod tests {
             };
             history.insert(
                 (i + 2) as u32,
-                make_summary_with_mutations(
-                    (i + 2) as u32,
-                    "none",
-                    score,
-                    category,
-                    mutations,
-                ),
+                make_summary_with_mutations((i + 2) as u32, "none", score, category, mutations),
             );
         }
 

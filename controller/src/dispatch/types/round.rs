@@ -275,11 +275,7 @@ impl RoundAgg {
 
         // Compute authoritative verdict using dry-run if available
         let effective_verdict = if let Some(dryrun) = &self.dryrun {
-            override_with_dryrun(
-                dryrun,
-                baseline,
-                &instrumented.last_checkpoint,
-            )
+            override_with_dryrun(dryrun, baseline, &instrumented.last_checkpoint)
         } else if !baseline.detection_verdict.is_empty() {
             // No dry-run: use worker's provisional verdict string
             DetectionVerdict::from_verdict_str(&baseline.detection_verdict)

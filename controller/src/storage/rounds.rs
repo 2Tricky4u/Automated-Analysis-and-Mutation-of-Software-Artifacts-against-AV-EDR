@@ -165,14 +165,7 @@ pub async fn update_round_evasion_score(
     });
 
     let doc_id = format!("{}/{}", job_id, round_id);
-    helpers::update_doc_by_es_id(
-        es,
-        "rounds-*",
-        &doc_id,
-        body,
-        "round-evasion-blend",
-    )
-    .await?;
+    helpers::update_doc_by_es_id(es, "rounds-*", &doc_id, body, "round-evasion-blend").await?;
 
     info!(
         "Updated round {}/{} blended evasion score: {:.3}",
@@ -181,6 +174,7 @@ pub async fn update_round_evasion_score(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 /// Patch an existing round document with late-arriving dryrun data.
 ///
 /// Updates: has_dryrun, dry_run_exit_code, dryrun_run_id, differential_category,

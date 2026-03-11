@@ -15,14 +15,14 @@ use crate::automutate::controller::{
     CompareTokensResponse, DeployRequest, DeployResponse, DisconnectAllWorkersRequest,
     DisconnectAllWorkersResponse, DisconnectWorkerRequest, DisconnectWorkerResponse,
     GetAvailableWorkersRequest, GetAvailableWorkersResponse, GetOrchestratorStatusRequest,
-    GetOrchestratorStatusResponse, GetPoolMetricsRequest, GetPoolMetricsResponse, GetRoundRequest,
-    GetRoundCoverageRequest, GetRoundCoverageResponse, GetRoundResponse, GetRoundSourceRequest,
-    GetRoundSourceResponse, GetTraceLinesRequest, GetTraceLinesResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, GetWorkerRequest, GetWorkerResponse, JobProgressRequest,
-    JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
-    ListWorkersRequest, ListWorkersResponse, PingRequest, PingResponse, PingWorkerRequest,
-    PingWorkerResponse, QueryRequest, QueryResponse, StatusAck, StatusReport, StopJobRequest,
-    StopJobResponse, TriageRequest, TriageResponse, controller_server::Controller,
+    GetOrchestratorStatusResponse, GetPoolMetricsRequest, GetPoolMetricsResponse,
+    GetRoundCoverageRequest, GetRoundCoverageResponse, GetRoundRequest, GetRoundResponse,
+    GetRoundSourceRequest, GetRoundSourceResponse, GetTraceLinesRequest, GetTraceLinesResponse,
+    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkerRequest, GetWorkerResponse,
+    JobProgressRequest, JobProgressResponse, JobRequest, JobResponse, JobStatusRequest,
+    JobStatusResponse, ListWorkersRequest, ListWorkersResponse, PingRequest, PingResponse,
+    PingWorkerRequest, PingWorkerResponse, QueryRequest, QueryResponse, StatusAck, StatusReport,
+    StopJobRequest, StopJobResponse, TriageRequest, TriageResponse, controller_server::Controller,
 };
 use crate::dispatch::{JobControlCommand, JobSession, RunPool};
 use crate::storage::EsStorage;
