@@ -402,6 +402,7 @@ message JobProgressResponse {
   uint32 max_rounds = 4;
   uint32 progress_percent = 5;
   repeated RoundSummaryProto rounds = 6;
+  string source_file = 7;  // Path to the payload .bin used for this job
 }
 
 message RoundSummaryProto {
