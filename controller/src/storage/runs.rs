@@ -75,6 +75,7 @@ pub async fn index_run_result(
         "success": params.outcome.success,
         "elapsed_ms": params.outcome.elapsed_ms,
         "detection_verdict": params.outcome.detection_verdict,
+        "detection_outcome": params.outcome.detection_verdict,
         "last_checkpoint": params.outcome.last_checkpoint,
         "trace_mode": trace_mode_from_run_type(params.run_type),
         "finished_at": now,
