@@ -135,7 +135,7 @@ pub async fn update_round_coverage(
         }
     });
 
-    helpers::update_doc_by_id(es, "rounds-*", "round_id", round_id, body, "round-coverage").await?;
+    helpers::update_doc_by_es_id(es, "rounds-*", &doc_id, body, "round-coverage").await?;
 
     info!(
         "Updated round {} coverage: {:.1}% ({}/{})",
@@ -163,11 +163,11 @@ pub async fn update_round_evasion_score(
         }
     });
 
-    helpers::update_doc_by_id(
+    let doc_id = format!("{}/{}", job_id, round_id);
+    helpers::update_doc_by_es_id(
         es,
         "rounds-*",
-        "round_id",
-        round_id,
+        &doc_id,
         body,
         "round-evasion-blend",
     )

@@ -56,9 +56,10 @@ impl EsStorage {
     ///
     /// # Errors
     ///
-    /// Returns an error if the Elasticsearch bulk request fails at the transport level.
-    /// Individual item failures within the bulk response are logged but do not
-    /// cause a top-level error.
+    /// Returns an error if the Elasticsearch bulk request fails at the transport
+    /// level or the bulk response has a non-success HTTP status. Individual item
+    /// failures within a successful bulk response are logged but do not cause a
+    /// top-level error.
     pub async fn index_telemetry_batch(
         &self,
         events: &[TelemetryData],
@@ -333,8 +334,8 @@ impl EsStorage {
 
     /// Create or update all Elasticsearch index templates on startup.
     ///
-    /// Ensures mappings exist for `jobs`, `rounds`, `runs`, `telemetry`, and
-    /// `tokens` indices. Individual template failures are logged as warnings
+    /// Ensures mappings exist for `jobs`, `rounds`, `runs`, `telemetry`,
+    /// `tokens`, and `artifacts` indices. Individual template failures are logged as warnings
     /// but do not abort the overall operation.
     ///
     /// # Errors

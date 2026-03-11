@@ -612,6 +612,49 @@ async fn index_round_and_runs(storage: &EsStorage, data: &RoundCompletedData) {
     {
         error!("Failed to index dryrun run: {}", e);
     }
+
+    // Index artifact metadata (baseline + instrumented)
+    let modules_json = serde_json::json!({
+        "carrier": data.modules.carrier,
+        "decoder": data.modules.decoder,
+        "antiemulation": data.modules.antiemulation,
+        "deconditioner": data.modules.deconditioner,
+        "guardrail": data.modules.guardrail,
+        "virtualprotect": data.modules.virtualprotect,
+        "decoy": data.modules.decoy,
+    });
+    if !data.baseline_artifact_id.is_empty() {
+        let baseline_doc = serde_json::json!({
+            "artifact_id": data.baseline_artifact_id,
+            "job_id": jid,
+            "round_id": rid,
+            "round_number": round_number,
+            "size_bytes": data.baseline_artifact_size,
+            "trace_mode": "off",
+            "mutations_applied": &data.mutations,
+            "modules": modules_json,
+            "indexed_at": crate::storage::helpers::now_rfc3339(),
+        });
+        if let Err(e) = storage.index_artifact(baseline_doc).await {
+            error!("Failed to index baseline artifact: {}", e);
+        }
+    }
+    if !data.instrumented_artifact_id.is_empty() {
+        let instrumented_doc = serde_json::json!({
+            "artifact_id": data.instrumented_artifact_id,
+            "job_id": jid,
+            "round_id": rid,
+            "round_number": round_number,
+            "size_bytes": data.instrumented_artifact_size,
+            "trace_mode": "lines",
+            "mutations_applied": &data.mutations,
+            "modules": modules_json,
+            "indexed_at": crate::storage::helpers::now_rfc3339(),
+        });
+        if let Err(e) = storage.index_artifact(instrumented_doc).await {
+            error!("Failed to index instrumented artifact: {}", e);
+        }
+    }
 }
 
 /// Compute line coverage from trace data, update round in ES, and send

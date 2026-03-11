@@ -188,6 +188,11 @@ pub struct RoundAgg {
     /// Controller-side build artifact paths for post-round cleanup.
     pub baseline_artifact_path: PathBuf,
     pub instrumented_artifact_path: PathBuf,
+    /// Artifact IDs and sizes for ES indexing.
+    pub baseline_artifact_id: String,
+    pub baseline_artifact_size: u64,
+    pub instrumented_artifact_id: String,
+    pub instrumented_artifact_size: u64,
     // --- Dryrun fields ---
     /// Run ID for the dryrun (always produced; may sit unclaimed in pool)
     pub dryrun_run_id: RunId,
@@ -221,6 +226,10 @@ impl RoundAgg {
             assembled_source: None,
             baseline_artifact_path: PathBuf::new(),
             instrumented_artifact_path: PathBuf::new(),
+            baseline_artifact_id: String::new(),
+            baseline_artifact_size: 0,
+            instrumented_artifact_id: String::new(),
+            instrumented_artifact_size: 0,
             dryrun: None,
             dryrun_vm_id: String::new(),
             dryrun_deadline: None,

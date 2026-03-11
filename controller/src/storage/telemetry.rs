@@ -25,8 +25,9 @@ use tracing::{info, warn};
 /// # Errors
 ///
 /// Returns an error if the Elasticsearch bulk request fails at the transport
-/// level. Individual item failures within the bulk response are logged as
-/// warnings but do not cause a top-level error.
+/// level or the bulk response has a non-success HTTP status. Individual item
+/// failures within a successful bulk response are logged as warnings but do
+/// not cause a top-level error.
 pub async fn index_telemetry_batch(
     es: &Elasticsearch,
     batch: &[TelemetryData],
@@ -191,10 +192,12 @@ pub async fn index_telemetry_batch(
         Ok(resp) => {
             let status = resp.status_code();
             let body = resp.text().await.unwrap_or_default();
-            warn!("Bulk telemetry index failed: status {} - {}", status, body);
+            return Err(anyhow::anyhow!(
+                "Bulk telemetry index failed: status {} - {}", status, body
+            ));
         }
         Err(e) => {
-            warn!("Bulk telemetry index failed: {}", e);
+            return Err(anyhow::anyhow!("Bulk telemetry index transport error: {}", e));
         }
     }
 

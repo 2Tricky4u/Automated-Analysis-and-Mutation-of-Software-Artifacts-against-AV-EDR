@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! Controller library for the AutoMutate++ EDR evaluation framework.
 //!
 //! Provides the dispatch engine (job orchestration, run pooling, VM execution),
