@@ -448,13 +448,15 @@ impl Orchestrator {
                 if !batch.events.is_empty() {
                     let storage = self.storage.clone();
                     let events = batch.events;
+                    let run_id_opt = if batch.run_id.is_empty() {
+                        None
+                    } else {
+                        Some(batch.run_id.clone())
+                    };
+                    let round_id_opt = run_id_opt.as_deref().and_then(derive_round_id_from_run_id);
                     let context = TelemetryContext {
-                        run_id: if batch.run_id.is_empty() {
-                            None
-                        } else {
-                            Some(batch.run_id.clone())
-                        },
-                        round_id: None, // Not available on TelemetryBatch
+                        run_id: run_id_opt,
+                        round_id: round_id_opt,
                         vm_id: target_id.to_string(),
                     };
                     tokio::spawn(async move {
@@ -751,6 +753,19 @@ async fn compute_round_coverage(
     }
 }
 
+/// Derive `round_id` from `run_id` by stripping the known suffix.
+///
+/// Run IDs follow the format `{round_id}-{baseline|instrumented|dryrun}`.
+/// Returns `None` if the suffix is not recognized.
+fn derive_round_id_from_run_id(run_id: &str) -> Option<String> {
+    for suffix in &["-baseline", "-instrumented", "-dryrun"] {
+        if let Some(prefix) = run_id.strip_suffix(suffix) {
+            return Some(prefix.to_string());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,5 +803,23 @@ mod tests {
 
         assert_eq!(orchestrator.active_job_count(), 0);
         assert_eq!(orchestrator.vm_count(), 0);
+    }
+
+    #[test]
+    fn test_derive_round_id_from_run_id() {
+        assert_eq!(
+            derive_round_id_from_run_id("job-abc-r001-baseline"),
+            Some("job-abc-r001".to_string())
+        );
+        assert_eq!(
+            derive_round_id_from_run_id("job-abc-r001-instrumented"),
+            Some("job-abc-r001".to_string())
+        );
+        assert_eq!(
+            derive_round_id_from_run_id("job-abc-r001-dryrun"),
+            Some("job-abc-r001".to_string())
+        );
+        assert_eq!(derive_round_id_from_run_id("unknown-format"), None);
+        assert_eq!(derive_round_id_from_run_id(""), None);
     }
 }
