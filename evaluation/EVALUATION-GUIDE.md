@@ -19,6 +19,9 @@ The evaluation crate measures AutoMutate++'s fuzzer quality along three canonica
    - [Guidance Axis](#83-guidance-axis)
 9. [Interpreting Results](#9-interpreting-results)
 10. [Programmatic Usage (Rust)](#10-programmatic-usage-rust)
+11. [Component-Level Experiments](#11-component-level-experiments)
+12. [Running Tests](#12-running-tests)
+13. [End-to-End Analysis Pipeline](#13-end-to-end-analysis-pipeline)
 
 ---
 
@@ -771,4 +774,250 @@ use evaluation::report::csv_report::write_csv_report;
 
 write_json_report(&results, Path::new("report.json"))?;
 write_csv_report(&results, Path::new("metrics.csv"))?;
+```
+
+---
+
+## 11. Component-Level Experiments
+
+Beyond the 11 evaluation metrics (Section 8), the crate includes 6 **component-level academic experiments** designed for thesis figures and tables. These probe specific subsystem behaviors that the high-level metrics aggregate over.
+
+### 11.1 Experiment Reference
+
+| ID | Module | Thesis Section | What It Measures | Key Outputs |
+|----|--------|---------------|------------------|-------------|
+| **C1** | `token_sensitivity` | Triage | Actionable token count across a 5x5 grid of (lift_threshold, min_confidence) | Heatmap data for parameter sensitivity figure |
+| **C3** | `token_coverage` | Triage | Token extraction completeness per category (module, mutation, api, seq2, etw, image) | Coverage table + presence heatmap (top-20 tokens x rounds) |
+| **C4** | `scoring_convergence` | Triage | How quickly token rankings stabilize as rounds accumulate | Top-5 overlap curve + actionable count over rounds |
+| **C5** | `counterfactual` | Triage | Per-token detection rate delta with Fisher exact test + Bonferroni correction | Forest plot data + volcano plot data |
+| **B2** | `classifier_analysis` | Execution | Verdict-to-category confusion matrix from the 3-run differential protocol | Confusion matrix (verdict x category) |
+| **B3** | `telemetry_completeness` | Execution | Coverage distribution across differential categories | Box plot data + histogram |
+
+### 11.2 Running Component Experiments
+
+```bash
+# Run all 6 experiments on your dataset
+cargo run -p evaluation --features full --bin component-eval -- \
+  --input eval_dataset.json \
+  --output component_eval_report.json \
+  --csv component_eval_metrics.csv
+
+# Run a single experiment by ID
+cargo run -p evaluation --features full --bin component-eval -- \
+  --input eval_dataset.json --experiment c1
+
+# Run quietly (CSV to stdout)
+cargo run -p evaluation --features full --bin component-eval -- \
+  --input eval_dataset.json --quiet > component_metrics.csv
+```
+
+**Options:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--input <PATH>` | Input EvalDataset JSON | `eval_dataset.json` |
+| `--output <PATH>` | Output JSON report (with full details for plotting) | `component_eval_report.json` |
+| `--csv <PATH>` | Output CSV summary | `component_eval_metrics.csv` |
+| `--experiment <ID>` | Only run one experiment: `c1`, `c3`, `c4`, `c5`, `b2`, `b3` | all |
+| `--quiet` | Suppress stderr; print CSV to stdout | off |
+
+### 11.3 Generating Thesis Figures
+
+The JSON report from `component-eval` contains structured `details` fields designed for direct plotting. A Python script generates publication-quality PDF/PNG figures:
+
+```bash
+# Install dependencies
+pip install matplotlib seaborn numpy
+
+# Generate all figures
+python evaluation/scripts/plots.py \
+  --input component_eval_report.json \
+  --outdir figures/
+```
+
+**Generated figures:**
+
+| File | Experiment | Description |
+|------|-----------|-------------|
+| `c1_sensitivity_heatmap.pdf` | C1 | Actionable token count by (lift, confidence) |
+| `c3_token_coverage.pdf` | C3 | Unique tokens per category + occurrence proportions |
+| `c3_presence_heatmap.pdf` | C3 | Token presence matrix (top-20 tokens x rounds) |
+| `c4_scoring_convergence.pdf` | C4 | Top-5 overlap and actionable count vs rounds included |
+| `c5_forest_plot.pdf` | C5 | Detection rate delta per token with 95% CI |
+| `c5_volcano_plot.pdf` | C5 | Effect size vs significance (-log10(p)) |
+| `b2_confusion_matrix.pdf` | B2 | Verdict-to-category confusion matrix |
+| `b3_coverage_boxplot.pdf` | B3 | Coverage distribution by differential category |
+| `b3_coverage_histogram.pdf` | B3 | Overall coverage histogram |
+| `component_metrics_table.tex` | All | LaTeX summary table for thesis appendix |
+
+---
+
+## 12. Running Tests
+
+The evaluation crate has 42 integration tests across 13 test files. All tests use synthetic datasets from the shared fixture module — no external dependencies required.
+
+### 12.1 Run All Tests
+
+```bash
+cargo test -p evaluation --features full
+```
+
+### 12.2 Test Organization
+
+| Test File | Experiments Covered | Tests |
+|-----------|-------------------|-------|
+| `input_expressiveness.rs` | Input expressiveness metric | Module/mutation coverage, unique configs, edge cases |
+| `input_validity.rs` | Input validity metric | Rejection/execution rates, mutation failure correlation |
+| `input_diversity.rs` | Input diversity metric | Jaccard distance, entropy, config discovery, seq2 |
+| `oracle_precision.rs` | Oracle precision metric | FP/FN proxy rates, trustworthy ratio, dryrun resolution |
+| `oracle_soundness.rs` | Oracle soundness metric | Static ratio, evasion rate, blind spots |
+| `oracle_attribution.rs` | Oracle attribution metric | Token ranking, top-5 stability, counterfactual |
+| `oracle_stability.rs` | Oracle stability metric | Flaky rate, behavior match, config consistency |
+| `guidance_feedback_quality.rs` | Guidance feedback quality | Coverage correlation, guidance strength, avoidance |
+| `guidance_search_efficiency.rs` | Guidance search efficiency | Evasions/round, time-to-first, score trajectory |
+| `guidance_baseline_comparison.rs` | Guidance baseline comparison | Evasion delta, score delta, mutation ablation |
+| `guidance_convergence.rs` | Guidance convergence | Decay ratio, plateau onset, exploitation ratio |
+| `classifier_coverage.rs` | B2 (standalone) | Exhaustive 11-branch classifier decision tree coverage |
+| `mutation_impact.rs` | A2 (standalone) | 22-mutation catalog completeness, ablation table structure |
+
+### 12.3 Run Specific Test Files
+
+```bash
+# Run tests for a single metric
+cargo test -p evaluation --features full --test oracle_attribution
+
+# Run tests for classifier coverage (B2)
+cargo test -p evaluation --test classifier_coverage
+
+# Run a single test by name
+cargo test -p evaluation --features full --test guidance_convergence -- test_improvement_scenario
+
+# Run with output (for debug info and tables printed by tests)
+cargo test -p evaluation --features full -- --nocapture
+```
+
+### 12.4 Shared Test Fixtures
+
+All integration tests use fixtures from `evaluation/tests/common/mod.rs` which provides 5 pre-built datasets:
+
+| Fixture | Scenario | Rounds | Token Matrix | Selections |
+|---------|----------|:------:|:------------:|:----------:|
+| `mixed_dataset()` | Random outcomes (seed=42) | 30 | Enriched | No |
+| `improvement_dataset()` | Detected -> evasion trajectory | 30 | Enriched | Yes |
+| `plateau_dataset()` | Quick gain then flat | 30 | Basic | No |
+| `all_detected_dataset()` | Every round detected | 20 | Basic | No |
+| `all_evasion_dataset()` | Every round evades | 20 | Basic | No |
+
+---
+
+## 13. End-to-End Analysis Pipeline
+
+This section walks through the complete workflow: generate data, run all evaluations, produce figures, and verify correctness.
+
+### 13.1 Full Pipeline
+
+```bash
+# ── Step 1: Generate a synthetic dataset ──────────────────────────────
+cargo run -p evaluation --bin eval-export -- \
+  --scenario improvement --rounds 50 --enriched \
+  --output eval_dataset.json
+
+# ── Step 2: Run the 11 evaluation metrics ─────────────────────────────
+cargo run -p evaluation --features full --bin evaluate -- \
+  --input eval_dataset.json \
+  --json eval_report.json \
+  --csv eval_metrics.csv \
+  --summary eval_summary.json
+
+# ── Step 3: Run the 6 component-level experiments ─────────────────────
+cargo run -p evaluation --features full --bin component-eval -- \
+  --input eval_dataset.json \
+  --output component_eval_report.json \
+  --csv component_eval_metrics.csv
+
+# ── Step 4: Generate thesis figures ───────────────────────────────────
+python evaluation/scripts/plots.py \
+  --input component_eval_report.json \
+  --outdir figures/
+
+# ── Step 5: Run all 42 tests to verify correctness ───────────────────
+cargo test -p evaluation --features full
+```
+
+### 13.2 What Each Step Produces
+
+| Step | Command | Outputs |
+|------|---------|---------|
+| 1 | `eval-export` | `eval_dataset.json` — synthetic dataset (50 rounds, enriched tokens) |
+| 2 | `evaluate` | `eval_report.json` (detailed), `eval_metrics.csv` (flat), `eval_summary.json` (grouped by axis) |
+| 3 | `component-eval` | `component_eval_report.json` (with plotting details), `component_eval_metrics.csv` |
+| 4 | `plots.py` | 9 PDF/PNG figures + 1 LaTeX table in `figures/` |
+| 5 | `cargo test` | 42 passing tests, 0 warnings |
+
+### 13.3 Multi-Scenario Comparison
+
+To compare how metrics behave across different outcome distributions:
+
+```bash
+for scenario in random improvement plateau detected evasion; do
+  # Generate dataset
+  cargo run -p evaluation --bin eval-export -- \
+    --scenario $scenario --rounds 50 --enriched \
+    --output ${scenario}_dataset.json
+
+  # Run evaluation metrics
+  cargo run -p evaluation --features full --bin evaluate -- \
+    --input ${scenario}_dataset.json \
+    --csv ${scenario}_eval.csv --quiet
+
+  # Run component experiments
+  cargo run -p evaluation --features full --bin component-eval -- \
+    --input ${scenario}_dataset.json \
+    --output ${scenario}_components.json \
+    --csv ${scenario}_components.csv --quiet
+done
+
+# Compare in Python
+python3 -c "
+import pandas as pd
+
+scenarios = ['random', 'improvement', 'plateau', 'detected', 'evasion']
+frames = []
+for s in scenarios:
+    df = pd.read_csv(f'{s}_eval.csv')
+    df['scenario'] = s
+    frames.append(df)
+
+combined = pd.concat(frames)
+pivot = combined.pivot_table(index='metric_id', columns='scenario', values='value')
+print(pivot.to_string(float_format='%.4f'))
+"
+```
+
+### 13.4 From Real Job Data
+
+After a live campaign completes, the same pipeline applies to real data:
+
+```bash
+# 1. Export job data from controller (see Section 4.1 for Rust code)
+#    This produces: job_abc123_eval.json
+
+# 2. Run the full analysis
+cargo run -p evaluation --features full --bin evaluate -- \
+  --input job_abc123_eval.json \
+  --json job_abc123_report.json \
+  --csv job_abc123_metrics.csv \
+  --summary job_abc123_summary.json
+
+cargo run -p evaluation --features full --bin component-eval -- \
+  --input job_abc123_eval.json \
+  --output job_abc123_components.json
+
+# 3. Generate figures for thesis
+python evaluation/scripts/plots.py \
+  --input job_abc123_components.json \
+  --outdir figures/job_abc123/
+
+# 4. Verify test infrastructure still passes
+cargo test -p evaluation --features full
 ```

@@ -9,6 +9,10 @@
 //! All metrics operate on [`EvalDataset`], which can be constructed from live
 //! `JobSession` data or loaded offline from JSON exports.
 
+pub mod analysis;
+pub mod build_bench;
+pub mod campaign_runner;
+pub mod es_query;
 pub mod fixtures;
 pub mod helpers;
 pub mod report;

@@ -13,16 +13,23 @@ required-features = ["full"]
 name = "eval-export"
 path = "src/bin/export.rs"
 
+[[bin]]
+name = "component-eval"
+path = "src/bin/component_eval.rs"
+required-features = ["full"]
+
 [features]
 default = []
 input = []
 oracle = []
 guidance = []
 full = ["input", "oracle", "guidance"]
+build-bench = ["build"]
 
 [dependencies]
 controller = { path = "../controller" }
 automutate-common = { path = "../common" }
+build = { path = "../build", optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true
