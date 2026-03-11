@@ -45,6 +45,12 @@ service Controller {
   // NEW: Get round details
   rpc GetRound(GetRoundRequest) returns (GetRoundResponse);
 
+  // Get round assembled source (lazy-loaded by source viewer)
+  rpc GetRoundSource(GetRoundSourceRequest) returns (GetRoundSourceResponse);
+
+  // Get round function coverage (lazy-loaded on section expand)
+  rpc GetRoundCoverage(GetRoundCoverageRequest) returns (GetRoundCoverageResponse);
+
   // NEW: Compare two runs (differential analysis)
   rpc CompareRuns(CompareRunsRequest) returns (CompareRunsResponse);
 
@@ -434,6 +440,30 @@ message GetRoundResponse {
   RoundProto round = 1;
 }
 
+// Lazy-load round source (for source viewer)
+message GetRoundSourceRequest {
+  string job_id = 1;
+  string round_id = 2;
+}
+
+message GetRoundSourceResponse {
+  string assembled_source = 1;
+  string last_checkpoint = 2;
+}
+
+// Lazy-load round function coverage (on section expand)
+message GetRoundCoverageRequest {
+  string job_id = 1;
+  string round_id = 2;
+}
+
+message GetRoundCoverageResponse {
+  repeated FunctionCoverageProto function_coverage = 1;
+  uint32 coverage_total_lines = 2;
+  uint32 coverage_executable_lines = 3;
+  uint32 coverage_executed_lines = 4;
+}
+
 message FunctionCoverageProto {
   string name = 1;
   uint32 total_lines = 2;
@@ -465,6 +495,8 @@ message RoundProto {
   RunResultProto dryrun_run = 30;    // Dryrun run result (if available)
   int32 dry_run_exit_code = 31;      // Exit code from dryrun execution
   string detection_verdict = 32;    // verdict string: "detected", "evasion", "ambiguous", etc.
+  bool has_assembled_source = 33;   // Whether assembled source is available (lazy-loaded)
+  bool has_function_coverage = 34;  // Whether function coverage data exists (lazy-loaded)
 }
 
 message RunResultProto {

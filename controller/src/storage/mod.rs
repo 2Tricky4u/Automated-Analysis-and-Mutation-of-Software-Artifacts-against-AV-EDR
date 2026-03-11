@@ -253,6 +253,27 @@ impl EsStorage {
         queries::query_round(&self.client, job_id, round_id).await
     }
 
+    /// Query a single round excluding heavy fields (`assembled_source`, `function_coverage`).
+    ///
+    /// Used for fast round detail loads where source and coverage are lazy-loaded separately.
+    pub async fn query_round_light(&self, job_id: &str, round_id: &str) -> Option<serde_json::Value> {
+        queries::query_round_light(&self.client, job_id, round_id).await
+    }
+
+    /// Query a single round returning only `assembled_source` and `instrumented_run_id`.
+    ///
+    /// Used by the source viewer lazy-load endpoint.
+    pub async fn query_round_source_only(&self, job_id: &str, round_id: &str) -> Option<serde_json::Value> {
+        queries::query_round_source_only(&self.client, job_id, round_id).await
+    }
+
+    /// Query a single round returning only function coverage fields.
+    ///
+    /// Used by the function coverage lazy-load endpoint.
+    pub async fn query_round_coverage_only(&self, job_id: &str, round_id: &str) -> Option<serde_json::Value> {
+        queries::query_round_coverage_only(&self.client, job_id, round_id).await
+    }
+
     /// Query run documents by a list of run IDs.
     ///
     /// Returns an empty `Vec` if `run_ids` is empty or the query fails.

@@ -279,16 +279,16 @@ pub struct RoundDetailResponse {
     pub instrumented_run: Option<RunResultInfo>,
     /// Round status: `"completed"`, `"running"`, `"failed"`.
     pub status: String,
-    /// Full assembled C source snapshot, if available.
-    pub assembled_source: Option<String>,
+    /// Whether assembled source is available (fetch via dedicated endpoint).
+    pub has_assembled_source: bool,
     /// Overall line coverage percentage.
     pub coverage_percent: f64,
     /// Source line where execution was cut off (0 if no cutoff).
     pub cutoff_line: u32,
     /// Function in which execution was cut off.
     pub cutoff_func: String,
-    /// Per-function coverage breakdown.
-    pub function_coverage: Vec<FunctionCoverageInfo>,
+    /// Whether function coverage data exists (fetch via dedicated endpoint).
+    pub has_function_coverage: bool,
     /// Module selections used for this round.
     pub modules: Option<ModulesInfo>,
     /// Mutations applied in this round.
@@ -564,17 +564,6 @@ pub async fn get_round(
                     detection_verdict: r.detection_verdict,
                 });
 
-                let function_coverage: Vec<FunctionCoverageInfo> = round
-                    .function_coverage
-                    .into_iter()
-                    .map(|fc| FunctionCoverageInfo {
-                        name: fc.name,
-                        total_lines: fc.total_lines,
-                        executed_lines: fc.executed_lines,
-                        percent: fc.percent,
-                    })
-                    .collect();
-
                 let modules = round.modules.map(|m| ModulesInfo {
                     carrier: m.carrier,
                     decoder: m.decoder,
@@ -601,15 +590,11 @@ pub async fn get_round(
                     baseline_run,
                     instrumented_run,
                     status: round.status,
-                    assembled_source: if round.assembled_source.is_empty() {
-                        None
-                    } else {
-                        Some(round.assembled_source)
-                    },
+                    has_assembled_source: round.has_assembled_source,
                     coverage_percent: round.coverage_percent,
                     cutoff_line: round.cutoff_line,
                     cutoff_func: round.cutoff_func,
-                    function_coverage,
+                    has_function_coverage: round.has_function_coverage,
                     modules,
                     mutations,
                     coverage_total_lines: round.coverage_total_lines,
@@ -623,6 +608,91 @@ pub async fn get_round(
         }
         Err(e) => {
             error!("Failed to get round: {}", e);
+            Err(ApiError::unavailable(format!(
+                "Controller unavailable: {}",
+                e
+            )))
+        }
+    }
+}
+
+// ============================================================================
+// Lazy-Load Round Source & Coverage
+// ============================================================================
+
+/// Response for `GET /api/jobs/:job_id/rounds/:round_id/source`.
+#[derive(Debug, Serialize)]
+pub struct RoundSourceResponse {
+    pub assembled_source: String,
+    pub last_checkpoint: String,
+}
+
+/// Response for `GET /api/jobs/:job_id/rounds/:round_id/coverage`.
+#[derive(Debug, Serialize)]
+pub struct RoundCoverageResponse {
+    pub function_coverage: Vec<FunctionCoverageInfo>,
+    pub coverage_total_lines: u32,
+    pub coverage_executable_lines: u32,
+    pub coverage_executed_lines: u32,
+}
+
+/// `GET /api/jobs/:job_id/rounds/:round_id/source` — Get assembled source for a round.
+pub async fn get_round_source(
+    State(client): State<Arc<ControllerGrpcClient>>,
+    Path((job_id, round_id)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<RoundSourceResponse>>, ApiError> {
+    debug!(
+        "REST: Get round source (job_id={}, round_id={})",
+        job_id, round_id
+    );
+
+    match client.get_round_source(&job_id, &round_id).await {
+        Ok(resp) => Ok(Json(ApiResponse::new(RoundSourceResponse {
+            assembled_source: resp.assembled_source,
+            last_checkpoint: resp.last_checkpoint,
+        }))),
+        Err(e) => {
+            error!("Failed to get round source: {}", e);
+            Err(ApiError::unavailable(format!(
+                "Controller unavailable: {}",
+                e
+            )))
+        }
+    }
+}
+
+/// `GET /api/jobs/:job_id/rounds/:round_id/coverage` — Get function coverage for a round.
+pub async fn get_round_coverage(
+    State(client): State<Arc<ControllerGrpcClient>>,
+    Path((job_id, round_id)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<RoundCoverageResponse>>, ApiError> {
+    debug!(
+        "REST: Get round coverage (job_id={}, round_id={})",
+        job_id, round_id
+    );
+
+    match client.get_round_coverage(&job_id, &round_id).await {
+        Ok(resp) => {
+            let function_coverage: Vec<FunctionCoverageInfo> = resp
+                .function_coverage
+                .into_iter()
+                .map(|fc| FunctionCoverageInfo {
+                    name: fc.name,
+                    total_lines: fc.total_lines,
+                    executed_lines: fc.executed_lines,
+                    percent: fc.percent,
+                })
+                .collect();
+
+            Ok(Json(ApiResponse::new(RoundCoverageResponse {
+                function_coverage,
+                coverage_total_lines: resp.coverage_total_lines,
+                coverage_executable_lines: resp.coverage_executable_lines,
+                coverage_executed_lines: resp.coverage_executed_lines,
+            })))
+        }
+        Err(e) => {
+            error!("Failed to get round coverage: {}", e);
             Err(ApiError::unavailable(format!(
                 "Controller unavailable: {}",
                 e

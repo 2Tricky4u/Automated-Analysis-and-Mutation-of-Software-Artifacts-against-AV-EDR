@@ -16,7 +16,8 @@ use crate::automutate::controller::{
     DisconnectAllWorkersResponse, DisconnectWorkerRequest, DisconnectWorkerResponse,
     GetAvailableWorkersRequest, GetAvailableWorkersResponse, GetOrchestratorStatusRequest,
     GetOrchestratorStatusResponse, GetPoolMetricsRequest, GetPoolMetricsResponse, GetRoundRequest,
-    GetRoundResponse, GetTraceLinesRequest, GetTraceLinesResponse, GetWorkerMetadataRequest,
+    GetRoundCoverageRequest, GetRoundCoverageResponse, GetRoundResponse, GetRoundSourceRequest,
+    GetRoundSourceResponse, GetTraceLinesRequest, GetTraceLinesResponse, GetWorkerMetadataRequest,
     GetWorkerMetadataResponse, GetWorkerRequest, GetWorkerResponse, JobProgressRequest,
     JobProgressResponse, JobRequest, JobResponse, JobStatusRequest, JobStatusResponse,
     ListWorkersRequest, ListWorkersResponse, PingRequest, PingResponse, PingWorkerRequest,
@@ -168,6 +169,20 @@ impl Controller for SchedulerService {
         request: Request<GetRoundRequest>,
     ) -> Result<Response<GetRoundResponse>, Status> {
         job::get_round(self, request).await
+    }
+
+    async fn get_round_source(
+        &self,
+        request: Request<GetRoundSourceRequest>,
+    ) -> Result<Response<GetRoundSourceResponse>, Status> {
+        job::get_round_source(self, request).await
+    }
+
+    async fn get_round_coverage(
+        &self,
+        request: Request<GetRoundCoverageRequest>,
+    ) -> Result<Response<GetRoundCoverageResponse>, Status> {
+        job::get_round_coverage(self, request).await
     }
 
     async fn compare_runs(

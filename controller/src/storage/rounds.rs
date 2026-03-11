@@ -76,6 +76,7 @@ pub async fn index_round(es: &Elasticsearch, params: &RoundIndexParams<'_>) -> a
         "completed_at": helpers::system_time_to_rfc3339(summary.completed_at),
         "started_at": params.started_at,
         "assembled_source": params.assembled_source,
+        "has_assembled_source": params.assembled_source.is_some(),
         "dry_run_exit_code": params.dry_run_exit_code,
         "has_dryrun": params.has_dryrun,
         "dryrun_run_id": params.dryrun_run_id,
