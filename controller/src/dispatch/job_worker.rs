@@ -66,7 +66,7 @@ const MAX_IN_FLIGHT_ROUNDS: usize = 5;
 const MAX_PENDING_RUNS: usize = 9;
 
 /// Default timeout for run execution
-const DEFAULT_TIMEOUT_SECONDS: u32 = 100;
+const DEFAULT_TIMEOUT_SECONDS: u32 = 25;
 
 /// Grace period (seconds) to wait for dryrun result after baseline+instrumented complete.
 /// If no dryrun worker picks up the run within this window, the round finalizes without it.
