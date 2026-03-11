@@ -474,7 +474,15 @@ pub async fn query_api_telemetry(es: &Elasticsearch, run_id: &str) -> Vec<Value>
                 "payload_event_id",
                 "payload_image",
                 "event_type",
-                "payload_type"
+                "payload_type",
+                "payload_return",
+                "payload_handle",
+                "payload_ExitCode",
+                "payload_HandleCount",
+                "payload_DesiredAccess",
+                "payload_TargetProcessId",
+                "payload_FileName",
+                "payload_ImageName"
             ]
         }))
         .send()
