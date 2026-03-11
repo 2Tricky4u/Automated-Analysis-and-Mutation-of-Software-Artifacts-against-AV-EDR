@@ -97,8 +97,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "http://10.200.200.1:50051".to_string());
     let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
     let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "../frontend".to_string());
-    let shellcode_dir = std::env::var("SHELLCODE_DIR")
-        .unwrap_or_else(|_| "../../data/shellcodes".to_string());
+    let shellcode_dir =
+        std::env::var("SHELLCODE_DIR").unwrap_or_else(|_| "../../data/shellcodes".to_string());
 
     info!("UI Backend starting...");
     info!("  Controller: {}", controller_addr);
@@ -198,10 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/tokens/compare", get(api::tokens::compare_tokens))
         // Shellcode listing
-        .route(
-            "/api/shellcodes",
-            get(api::shellcodes::list_shellcodes),
-        )
+        .route("/api/shellcodes", get(api::shellcodes::list_shellcodes))
         // Middleware
         .layer(Extension(shellcode_dir_arc.clone()))
         .layer(Extension(es_client))
