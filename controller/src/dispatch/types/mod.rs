@@ -17,6 +17,7 @@ pub use ids::{JobId, RoundId, RunId, TargetId, WorkerId};
 pub use round::{
     DifferentialCategory, MutationSpec, RoundAgg, RoundSpec, RoundSummary, RunOutcome,
 };
+pub(crate) use round::{compute_evasion_score, override_with_dryrun};
 pub use run::{
     ArtifactRef, RunEnvelope, RunType, VMInfo, WorkerInfo, capabilities_match, chunk_artifact,
 };

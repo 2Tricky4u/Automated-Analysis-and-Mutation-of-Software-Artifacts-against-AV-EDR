@@ -42,6 +42,7 @@ pub async fn index_job(es: &Elasticsearch, job: &JobSession) -> anyhow::Result<(
             "decoy": job.build_spec.modules.decoy,
         },
         "sc_checkpoint_count": job.sc_checkpoint_count,
+        "keep_late_dryrun": job.keep_late_dryrun,
         "created_at": helpers::system_time_to_rfc3339(job.created_at),
         "updated_at": helpers::now_rfc3339(),
     });

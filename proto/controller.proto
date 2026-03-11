@@ -141,6 +141,7 @@ message JobRequest {
   bool cache_payload = 20;                       // Cache encoded payload across rounds (default: true via handler)
   bool msvc_compat = 21;                         // Use clang-cl + link.exe for MSVC-native PE metadata (default: false = clang + lld-link)
   string msvc_vcvarsall = 22;                    // Optional: WSL path to vcvarsall.bat (default: VS 2022 Build Tools)
+  bool keep_late_dryrun = 23;                     // Keep dryrun in pool after grace period (default: false)
 }
 
 message JobResponse {

@@ -137,6 +137,7 @@ pub async fn schedule_job(
     job.cache_payload = req.cache_payload;
     job.msvc_compat = req.msvc_compat;
     job.msvc_vcvarsall = req.msvc_vcvarsall.clone();
+    job.keep_late_dryrun = req.keep_late_dryrun;
 
     // Index to ES before submission
     if let Err(e) = service.storage.index_job(&job).await {

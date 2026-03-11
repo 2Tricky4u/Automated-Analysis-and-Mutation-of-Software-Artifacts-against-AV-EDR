@@ -179,3 +179,46 @@ pub async fn update_round_evasion_score(
     );
     Ok(())
 }
+
+/// Patch an existing round document with late-arriving dryrun data.
+///
+/// Updates: has_dryrun, dry_run_exit_code, dryrun_run_id, differential_category,
+/// detection_verdict, detected, evasion_score.
+///
+/// # Errors
+///
+/// Returns an error if the round document cannot be located or the update fails.
+pub async fn update_round_dryrun(
+    es: &Elasticsearch,
+    job_id: &str,
+    round_id: &str,
+    dryrun_run_id: &str,
+    dry_run_exit_code: i32,
+    differential_category: &str,
+    detection_verdict: &str,
+    detected: bool,
+    evasion_score: f64,
+) -> anyhow::Result<()> {
+    let body = json!({
+        "doc": {
+            "has_dryrun": true,
+            "dry_run_exit_code": dry_run_exit_code,
+            "dryrun_run_id": dryrun_run_id,
+            "differential_category": differential_category,
+            "detection_verdict": detection_verdict,
+            "detected": detected,
+            "evasion_score": (evasion_score * 1000.0).round() / 1000.0,
+            "late_dryrun": true,
+            "dryrun_arrived_at": helpers::now_rfc3339(),
+        }
+    });
+
+    let doc_id = format!("{}/{}", job_id, round_id);
+    helpers::update_doc_by_es_id(es, "rounds-*", &doc_id, body, "round-late-dryrun").await?;
+
+    info!(
+        "Updated round {} with late dryrun (cat={}, verdict={})",
+        doc_id, differential_category, detection_verdict
+    );
+    Ok(())
+}
