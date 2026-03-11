@@ -230,13 +230,14 @@ pub async fn get_job_progress(
         service.storage.query_rounds(job_id),
     );
 
-    let (status, current_round, max_rounds) = match job_doc {
+    let (status, current_round, max_rounds, source_file) = match job_doc {
         Some(source) => (
             str_field(&source, "status"),
             u32_field(&source, "current_round"),
             u32_field(&source, "max_rounds"),
+            str_field(&source, "source_file"),
         ),
-        None => ("not_found".to_string(), 0, 0),
+        None => ("not_found".to_string(), 0, 0, String::new()),
     };
 
     let rounds: Vec<RoundSummaryProto> = round_docs.iter().map(round_doc_to_proto).collect();
@@ -254,6 +255,7 @@ pub async fn get_job_progress(
         max_rounds,
         progress_percent: progress,
         rounds,
+        source_file,
     }))
 }
 

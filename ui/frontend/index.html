@@ -1362,6 +1362,9 @@
                 let html = `
                     <div class="stat-line">${statusBadge(d.status)} &nbsp; Progress: <strong>${d.progress_percent}%</strong> &nbsp; Round ${d.current_round}/${d.max_rounds}</div>
                 `;
+                if (d.source_file) {
+                    html += `<div class="stat-line muted" style="font-size:0.8rem;">Payload: <strong>${escapeHtml(d.source_file)}</strong></div>`;
+                }
 
                 if (d.rounds && d.rounds.length > 0) {
                     html += `<table style="margin-top: 8px;">
@@ -1372,6 +1375,7 @@
                             <th>Coverage</th>
                             <th>Mutations</th>
                             <th>Evasion Score</th>
+                            <th>Dryrun</th>
                             <th>Status</th>
                         </tr></thead><tbody>`;
 
@@ -1387,6 +1391,7 @@
                             <td>${coverageMiniBar(r.coverage_percent)}</td>
                             <td>${mutDisplay}</td>
                             <td>${r.evasion_score !== undefined ? r.evasion_score.toFixed(2) : '-'}</td>
+                            <td>${r.has_dryrun ? '<span style="color:#4caf50;">&#10003;</span>' : '<span class="muted">&#10007;</span>'}</td>
                             <td>${statusBadge(r.status)}</td>
                         </tr>`;
                     });
@@ -1471,6 +1476,7 @@
                     <div class="stat-line"><strong>Round ${d.round_number}</strong> &nbsp; ${statusBadge(d.status)}</div>
                     ${formatRunInfo('Baseline (trace=off)', d.baseline_run)}
                     ${formatRunInfo('Instrumented (trace=lines)', d.instrumented_run)}
+                    ${formatRunInfo('DryRun (no EDR)', d.dryrun_run)}
                 `;
 
                 // Coverage info bar (server-computed)

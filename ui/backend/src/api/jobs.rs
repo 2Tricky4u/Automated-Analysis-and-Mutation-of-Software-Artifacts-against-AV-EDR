@@ -178,6 +178,8 @@ pub struct JobProgressResponse {
     pub progress_percent: u32,
     /// Per-round summary records, ordered by `round_number`.
     pub rounds: Vec<RoundSummaryInfo>,
+    /// Path to the payload .bin used for this job.
+    pub source_file: String,
 }
 
 /// One row in the rounds summary table within [`JobProgressResponse`].
@@ -202,6 +204,8 @@ pub struct RoundSummaryInfo {
     pub mutations: Vec<String>,
     /// Final detection verdict string for display badges.
     pub detection_verdict: String,
+    /// Whether dryrun result was available for this round.
+    pub has_dryrun: bool,
 }
 
 /// Response for `POST /api/jobs/:id/stop`.
@@ -277,6 +281,8 @@ pub struct RoundDetailResponse {
     pub baseline_run: Option<RunResultInfo>,
     /// Instrumented (trace-on) run result, if completed.
     pub instrumented_run: Option<RunResultInfo>,
+    /// Dryrun (no EDR) run result, if completed.
+    pub dryrun_run: Option<RunResultInfo>,
     /// Round status: `"completed"`, `"running"`, `"failed"`.
     pub status: String,
     /// Whether assembled source is available (fetch via dedicated endpoint).
@@ -479,6 +485,7 @@ pub async fn get_job_progress(
                     coverage_percent: r.coverage_percent,
                     mutations: r.mutations,
                     detection_verdict: r.detection_verdict,
+                    has_dryrun: r.has_dryrun,
                 })
                 .collect();
 
@@ -489,6 +496,7 @@ pub async fn get_job_progress(
                 max_rounds: resp.max_rounds,
                 progress_percent: resp.progress_percent,
                 rounds,
+                source_file: resp.source_file,
             })))
         }
         Err(e) => {
@@ -564,6 +572,16 @@ pub async fn get_round(
                     detection_verdict: r.detection_verdict,
                 });
 
+                let dryrun_run = round.dryrun_run.map(|r| RunResultInfo {
+                    run_id: r.run_id,
+                    detected: r.detected,
+                    raw_detected: r.raw_detected,
+                    exit_code: r.exit_code,
+                    outcome: r.outcome,
+                    last_checkpoint: r.last_checkpoint,
+                    detection_verdict: r.detection_verdict,
+                });
+
                 let modules = round.modules.map(|m| ModulesInfo {
                     carrier: m.carrier,
                     decoder: m.decoder,
@@ -589,6 +607,7 @@ pub async fn get_round(
                     round_number: round.round_number,
                     baseline_run,
                     instrumented_run,
+                    dryrun_run,
                     status: round.status,
                     has_assembled_source: round.has_assembled_source,
                     coverage_percent: round.coverage_percent,
