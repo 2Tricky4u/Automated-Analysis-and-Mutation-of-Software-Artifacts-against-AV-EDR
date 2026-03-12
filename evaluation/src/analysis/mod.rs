@@ -15,7 +15,7 @@
 //! | B3  | `telemetry_completeness`  | Execution | Telemetry collection completeness        |
 //! | B2  | `classifier_analysis`     | Execution | Classifier decision boundary analysis    |
 //!
-//! ## Infrastructure Experiments (I1–I13)
+//! ## Infrastructure Experiments (I1–I15)
 //!
 //! | ID  | Module                            | Section         | Description                          |
 //! |-----|-----------------------------------|-----------------|--------------------------------------|
@@ -32,6 +32,8 @@
 //! | I11 | `selector_comparison_analysis`    | Guidance        | Selector baseline comparison         |
 //! | I12 | `guidance_utilization_analysis`   | Guidance        | Guidance utilization measurement     |
 //! | I13 | `convergence_simulation_analysis` | Guidance        | Convergence simulation               |
+//! | I14 | `line_tracing_analysis`           | Instrumentation | Line tracing overhead                |
+//! | I15 | `sc_checkpoint_analysis`          | Instrumentation | Shellcode checkpoint patching        |
 
 // Component-level modules
 pub mod classifier_analysis;
@@ -49,8 +51,10 @@ pub mod guidance_utilization_analysis;
 pub mod input_diversity_analysis;
 pub mod instrumentation_analysis;
 pub mod ir_mutation_analysis;
+pub mod line_tracing_analysis;
 pub mod oracle_stability_analysis;
 pub mod payload_encoding;
+pub mod sc_checkpoint_analysis;
 pub mod selector_comparison_analysis;
 pub mod template_assembly_analysis;
 pub mod token_extraction_analysis;
@@ -70,7 +74,7 @@ pub fn all_analysis_metrics() -> Vec<Box<dyn EvalMetric>> {
     ]
 }
 
-/// Returns all infrastructure-level analysis metrics (I1–I13).
+/// Returns all infrastructure-level analysis metrics (I1–I15).
 pub fn all_infra_analysis_metrics() -> Vec<Box<dyn InfraMetric>> {
     vec![
         Box::new(payload_encoding::PayloadEncoding),
@@ -86,5 +90,7 @@ pub fn all_infra_analysis_metrics() -> Vec<Box<dyn InfraMetric>> {
         Box::new(selector_comparison_analysis::SelectorComparisonAnalysis),
         Box::new(guidance_utilization_analysis::GuidanceUtilizationAnalysis),
         Box::new(convergence_simulation_analysis::ConvergenceSimulationAnalysis),
+        Box::new(line_tracing_analysis::LineTracingAnalysis),
+        Box::new(sc_checkpoint_analysis::ScCheckpointAnalysis),
     ]
 }

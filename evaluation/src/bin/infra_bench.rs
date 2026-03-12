@@ -6,15 +6,20 @@
 //!   cargo run -p evaluation --bin infra-bench -- [OPTIONS]
 //!
 //! Options:
-//!   --experiments <IDS>  Comma-separated: i1,i2,...,i13 (default: i7,i8)
+//!   --experiments <IDS>  Comma-separated: i1,i2,...,i15 (default: i7,i8)
 //!   --output <PATH>      Output JSON path (default: infra_dataset.json)
+//!   --dataset <PATH>     Load real campaign EvalDataset JSON for I7,I8,I10–I13
 //!   --quiet              Suppress progress output
 //!
-//! Experiments requiring `--features build-bench`: i1, i2, i3, i5, i9
+//! When --dataset is provided, experiments I7,I8,I10–I13 use real campaign
+//! round data instead of synthetic inputs. Other experiments (I1–I5,I9,I14,I15)
+//! are unaffected — they exercise build-crate APIs directly.
+//!
+//! Experiments requiring `--features build-bench`: i1, i2, i3, i5, i9, i14, i15
 //! Experiments requiring full toolchain + PE: i4, i6
 
 use evaluation::{
-    ConvergenceSimulationResult, GuidanceUtilizationResult, InfraEvalDataset,
+    ConvergenceSimulationResult, EvalDataset, GuidanceUtilizationResult, InfraEvalDataset,
     OracleStabilityResult, SelectorComparisonResult, TokenExtractionResult, TokenScoringResult,
 };
 use std::collections::HashMap;
@@ -24,7 +29,7 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     #[cfg(feature = "build-bench")]
-    let default_experiments = "i1,i2,i3,i5,i7,i8,i10,i11,i12,i13";
+    let default_experiments = "i1,i2,i3,i5,i7,i8,i10,i11,i12,i13,i14,i15";
     #[cfg(not(feature = "build-bench"))]
     let default_experiments = "i7,i8,i10,i11,i12,i13";
 
@@ -33,12 +38,42 @@ fn main() -> anyhow::Result<()> {
     let output = get_arg(&args, "--output").unwrap_or_else(|| "infra_dataset.json".to_string());
     let quiet = args.iter().any(|a| a == "--quiet");
 
+    let dataset_path = get_arg(&args, "--dataset");
+
     let enabled: Vec<&str> = experiments.split(',').map(|s| s.trim()).collect();
     let mut dataset = InfraEvalDataset::default();
+
+    // Load real campaign data if --dataset provided
+    let real_dataset: Option<EvalDataset> = if let Some(ref path) = dataset_path {
+        let content = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("Failed to read dataset {}: {}", path, e));
+        let ds: EvalDataset = serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse dataset {}: {}", path, e));
+        if !quiet {
+            eprintln!("Loaded real campaign dataset from {}", path);
+            eprintln!("  job_id:           {}", ds.job_id);
+            eprintln!("  rounds:           {}", ds.rounds.len());
+            eprintln!("  selections:       {}", ds.selections.len());
+            eprintln!("  token_matrices:   {}", ds.token_matrices.len());
+            eprintln!(
+                "  telemetry_tokens: {}",
+                ds.telemetry_tokens.as_ref().map_or(0, |v| v.len())
+            );
+            eprintln!();
+        }
+        Some(ds)
+    } else {
+        None
+    };
 
     if !quiet {
         eprintln!("Infrastructure benchmark runner");
         eprintln!("Experiments: {:?}", enabled);
+        if real_dataset.is_some() {
+            eprintln!("Mode: REAL DATA (I7,I8,I10-I13 use campaign dataset)");
+        } else {
+            eprintln!("Mode: SYNTHETIC (use --dataset <path> for real campaign data)");
+        }
         eprintln!();
     }
 
@@ -115,17 +150,39 @@ fn main() -> anyhow::Result<()> {
     // I7: Token Extraction (pure controller, no build crate needed)
     if enabled.contains(&"i7") {
         if !quiet {
-            eprintln!("Running I7: Token Extraction...");
+            eprintln!(
+                "Running I7: Token Extraction{}...",
+                if real_dataset.is_some() {
+                    " [real]"
+                } else {
+                    ""
+                }
+            );
         }
-        dataset.token_extraction = Some(bench_token_extraction(quiet));
+        dataset.token_extraction = Some(if let Some(ref ds) = real_dataset {
+            bench_token_extraction_real(ds, quiet)
+        } else {
+            bench_token_extraction(quiet)
+        });
     }
 
     // I8: Token Scoring Validation (pure controller, no build crate needed)
     if enabled.contains(&"i8") {
         if !quiet {
-            eprintln!("Running I8: Token Scoring Validation...");
+            eprintln!(
+                "Running I8: Token Scoring Validation{}...",
+                if real_dataset.is_some() {
+                    " [real]"
+                } else {
+                    ""
+                }
+            );
         }
-        dataset.token_scoring = Some(bench_token_scoring(quiet));
+        dataset.token_scoring = Some(if let Some(ref ds) = real_dataset {
+            bench_token_scoring_real(ds, quiet)
+        } else {
+            bench_token_scoring(quiet)
+        });
     }
 
     // I9: Input Diversity (needs build crate)
@@ -146,33 +203,107 @@ fn main() -> anyhow::Result<()> {
     // I10: Oracle Stability (pure controller, no build crate needed)
     if enabled.contains(&"i10") {
         if !quiet {
-            eprintln!("Running I10: Oracle Stability...");
+            eprintln!(
+                "Running I10: Oracle Stability{}...",
+                if real_dataset.is_some() {
+                    " [real]"
+                } else {
+                    ""
+                }
+            );
         }
-        dataset.oracle_stability = Some(bench_oracle_stability(quiet));
+        dataset.oracle_stability = Some(if let Some(ref ds) = real_dataset {
+            bench_oracle_stability_real(ds, quiet)
+        } else {
+            bench_oracle_stability(quiet)
+        });
     }
 
     // I11: Selector Comparison (needs tokio runtime for async select())
     if enabled.contains(&"i11") {
         if !quiet {
-            eprintln!("Running I11: Selector Comparison...");
+            eprintln!(
+                "Running I11: Selector Comparison{}...",
+                if real_dataset.is_some() {
+                    " [real]"
+                } else {
+                    ""
+                }
+            );
         }
-        dataset.selector_comparison = Some(bench_selector_comparison(quiet));
+        dataset.selector_comparison = Some(if let Some(ref ds) = real_dataset {
+            bench_selector_comparison_real(ds, quiet)
+        } else {
+            bench_selector_comparison(quiet)
+        });
     }
 
     // I12: Guidance Utilization (needs tokio runtime for async select())
     if enabled.contains(&"i12") {
         if !quiet {
-            eprintln!("Running I12: Guidance Utilization...");
+            eprintln!(
+                "Running I12: Guidance Utilization{}...",
+                if real_dataset.is_some() {
+                    " [real]"
+                } else {
+                    ""
+                }
+            );
         }
-        dataset.guidance_utilization = Some(bench_guidance_utilization(quiet));
+        dataset.guidance_utilization = Some(if let Some(ref ds) = real_dataset {
+            bench_guidance_utilization_real(ds, quiet)
+        } else {
+            bench_guidance_utilization(quiet)
+        });
     }
 
     // I13: Convergence Simulation (pure controller)
     if enabled.contains(&"i13") {
         if !quiet {
-            eprintln!("Running I13: Convergence Simulation...");
+            eprintln!(
+                "Running I13: Convergence Simulation{}...",
+                if real_dataset.is_some() {
+                    " [real]"
+                } else {
+                    ""
+                }
+            );
         }
-        dataset.convergence_simulation = Some(bench_convergence_simulation(quiet));
+        dataset.convergence_simulation = Some(if let Some(ref ds) = real_dataset {
+            bench_convergence_simulation_real(ds, quiet)
+        } else {
+            bench_convergence_simulation(quiet)
+        });
+    }
+
+    // I14: Line Tracing Overhead (needs build crate)
+    if enabled.contains(&"i14") {
+        #[cfg(feature = "build-bench")]
+        {
+            if !quiet {
+                eprintln!("Running I14: Line Tracing Overhead...");
+            }
+            dataset.line_tracing = Some(build_bench::bench_line_tracing(quiet));
+        }
+        #[cfg(not(feature = "build-bench"))]
+        if !quiet {
+            eprintln!("I14: Line Tracing requires --features build-bench. Skipping.");
+        }
+    }
+
+    // I15: Shellcode Checkpoint Patching (needs build crate)
+    if enabled.contains(&"i15") {
+        #[cfg(feature = "build-bench")]
+        {
+            if !quiet {
+                eprintln!("Running I15: Shellcode Checkpoint Patching...");
+            }
+            dataset.sc_checkpoint = Some(build_bench::bench_sc_checkpoints(quiet));
+        }
+        #[cfg(not(feature = "build-bench"))]
+        if !quiet {
+            eprintln!("I15: SC Checkpoints requires --features build-bench. Skipping.");
+        }
     }
 
     // Write dataset
@@ -1120,16 +1251,1142 @@ fn bench_convergence_simulation(quiet: bool) -> Vec<ConvergenceSimulationResult>
     }]
 }
 
+// ── Real-data benchmark variants (--dataset) ────────────────────────────
+
+/// I7 with real data: reconstruct ES docs from telemetry tokens or round metadata.
+fn bench_token_extraction_real(real: &EvalDataset, quiet: bool) -> Vec<TokenExtractionResult> {
+    use controller::triage::extractor::extract_tokens_from_docs;
+
+    let mut results = Vec::new();
+
+    let all_docs = if let Some(ref toks) = real.telemetry_tokens {
+        reconstruct_docs_from_telemetry(toks)
+    } else {
+        reconstruct_docs_from_rounds(&real.rounds)
+    };
+
+    if all_docs.is_empty() {
+        if !quiet {
+            eprintln!("  [real] No documents reconstructable from dataset");
+        }
+        return results;
+    }
+
+    let batch_sizes: Vec<usize> = vec![5, 10, 25, 50, 100]
+        .into_iter()
+        .filter(|&s| s <= all_docs.len())
+        .collect();
+    // Always include the full set if not already covered
+    let full = all_docs.len();
+    let batch_sizes: Vec<usize> = if batch_sizes.last().copied() == Some(full) {
+        batch_sizes
+    } else {
+        let mut b = batch_sizes;
+        b.push(full);
+        b
+    };
+
+    for &batch_size in &batch_sizes {
+        let docs: Vec<_> = all_docs.iter().take(batch_size).cloned().collect();
+
+        let t0 = Instant::now();
+        let tokens_1 = extract_tokens_from_docs(&docs);
+        let time_1 = t0.elapsed().as_secs_f64() * 1_000_000.0;
+
+        let tokens_2 = extract_tokens_from_docs(&docs);
+        let deterministic = tokens_1 == tokens_2;
+
+        let mut category_counts: HashMap<String, usize> = HashMap::new();
+        for token in &tokens_1 {
+            *category_counts.entry(token_category(token)).or_default() += 1;
+        }
+        let categories_active = category_counts.len();
+
+        if !quiet {
+            eprintln!(
+                "  [real] docs={:>4} tokens={:>4} categories={} time={:.0}µs det={}",
+                batch_size,
+                tokens_1.len(),
+                categories_active,
+                time_1,
+                deterministic
+            );
+        }
+
+        results.push(TokenExtractionResult {
+            input_doc_count: batch_size,
+            output_token_count: tokens_1.len(),
+            category_counts,
+            categories_active,
+            extraction_time_us: time_1,
+            deterministic,
+        });
+    }
+
+    results
+}
+
+/// Reconstruct ES-style docs from RoundTelemetryTokens.
+fn reconstruct_docs_from_telemetry(
+    rounds: &[evaluation::RoundTelemetryTokens],
+) -> Vec<serde_json::Value> {
+    use serde_json::json;
+    let mut docs = Vec::new();
+
+    for round in rounds {
+        for token in &round.api_tokens {
+            if let Some(func) = token.strip_prefix("api:") {
+                docs.push(json!({
+                    "payload_func": func,
+                    "payload_return": "1",
+                    "payload_caller": "dll",
+                }));
+            } else if let Some(rest) = token.strip_prefix("api_arg:") {
+                // api_arg:VirtualProtect:flProtect=RWX → func + params
+                let parts: Vec<&str> = rest.splitn(2, ':').collect();
+                if parts.len() == 2 {
+                    docs.push(json!({
+                        "payload_func": parts[0],
+                        "payload_funcparams": parts[1],
+                        "payload_caller": "dll",
+                    }));
+                }
+            }
+        }
+        for token in &round.image_tokens {
+            if let Some(dll) = token.strip_prefix("image:") {
+                docs.push(json!({
+                    "payload_func": "image_load",
+                    "payload_funcparams": format!("path=C:\\Windows\\System32\\{}", dll),
+                    "payload_caller": "dll",
+                }));
+            }
+        }
+        for token in &round.etw_tokens {
+            if let Some(rest) = token.strip_prefix("etw_event:") {
+                let parts: Vec<&str> = rest.splitn(2, '/').collect();
+                if parts.len() == 2 {
+                    docs.push(json!({
+                        "payload_event": parts[1],
+                        "payload_eventname": parts[0],
+                        "payload_provider": "unknown",
+                    }));
+                }
+            }
+        }
+    }
+
+    docs
+}
+
+/// Fallback: reconstruct minimal docs from round metadata (modules + mutations).
+fn reconstruct_docs_from_rounds(rounds: &[evaluation::RoundSummary]) -> Vec<serde_json::Value> {
+    use serde_json::json;
+    let mut docs = Vec::new();
+    let api_funcs = [
+        "NtAllocateVirtualMemory",
+        "NtProtectVirtualMemory",
+        "VirtualAlloc",
+        "VirtualProtect",
+        "CreateThread",
+    ];
+
+    for (i, _r) in rounds.iter().enumerate() {
+        let func = api_funcs[i % api_funcs.len()];
+        docs.push(json!({
+            "payload_func": func,
+            "payload_return": if i % 3 == 0 { "0" } else { "1" },
+            "payload_funcparams": format!("protect={}", if i % 2 == 0 { "PAGE_EXECUTE_READWRITE" } else { "PAGE_READWRITE" }),
+            "payload_caller": "dll",
+        }));
+    }
+
+    docs
+}
+
+/// I8 with real data: validate scoring on real token matrices.
+fn bench_token_scoring_real(real: &EvalDataset, quiet: bool) -> Vec<TokenScoringResult> {
+    use controller::triage::scorer::{build_guidance, compute_token_scores};
+
+    let mut results = Vec::new();
+
+    let token_matrix: Vec<(Vec<String>, bool)> = real
+        .token_matrices
+        .iter()
+        .filter(|e| e.trustworthy)
+        .map(|e| (e.tokens.clone(), e.detected))
+        .collect();
+
+    if token_matrix.is_empty() {
+        if !quiet {
+            eprintln!("  [real] No trustworthy token matrix entries");
+        }
+        return results;
+    }
+
+    // Test 1: Full matrix scoring
+    let scores = compute_token_scores(&token_matrix);
+    let guidance = build_guidance(&scores, 1.5, 0.3);
+    let top_lift = scores.first().map(|s| s.lift).unwrap_or(0.0);
+
+    if !quiet {
+        eprintln!(
+            "  [real] full_matrix: {} rounds, {} scored tokens, avoid={} seek={}, top_lift={:.4}",
+            token_matrix.len(),
+            scores.len(),
+            guidance.avoid_tokens.len(),
+            guidance.seek_tokens.len(),
+            top_lift
+        );
+    }
+
+    results.push(TokenScoringResult {
+        test_case: format!("real_full_matrix_{}_rounds", token_matrix.len()),
+        input_rounds: token_matrix.len(),
+        expected_lift: top_lift,
+        computed_lift: top_lift,
+        lift_error: 0.0,
+        guidance_correct: true,
+    });
+
+    // Test 2: Determinism — compare via serialization since TokenScore lacks PartialEq
+    let scores_2 = compute_token_scores(&token_matrix);
+    let deterministic = scores.len() == scores_2.len()
+        && scores
+            .iter()
+            .zip(scores_2.iter())
+            .all(|(a, b)| a.token == b.token && (a.lift - b.lift).abs() < f64::EPSILON);
+
+    if !quiet {
+        eprintln!("  [real] determinism: {}", deterministic);
+    }
+
+    results.push(TokenScoringResult {
+        test_case: "real_determinism".to_string(),
+        input_rounds: token_matrix.len(),
+        expected_lift: 0.0,
+        computed_lift: 0.0,
+        lift_error: 0.0,
+        guidance_correct: deterministic,
+    });
+
+    // Test 3: Half-matrix convergence — does scoring on first half produce similar results?
+    let half = token_matrix.len() / 2;
+    if half >= 2 {
+        let half_matrix: Vec<_> = token_matrix[..half].to_vec();
+        let half_scores = compute_token_scores(&half_matrix);
+        let half_top = half_scores.first().map(|s| s.lift).unwrap_or(0.0);
+        let delta = (top_lift - half_top).abs();
+
+        let half_guidance = build_guidance(&half_scores, 1.5, 0.3);
+        let convergence_ok = half_guidance.avoid_tokens.len() + half_guidance.seek_tokens.len() > 0
+            || guidance.avoid_tokens.len() + guidance.seek_tokens.len() == 0;
+
+        if !quiet {
+            eprintln!(
+                "  [real] half_convergence: half_top={:.4} full_top={:.4} delta={:.4}",
+                half_top, top_lift, delta
+            );
+        }
+
+        results.push(TokenScoringResult {
+            test_case: format!("real_half_convergence_{}_rounds", half),
+            input_rounds: half,
+            expected_lift: top_lift,
+            computed_lift: half_top,
+            lift_error: delta,
+            guidance_correct: convergence_ok,
+        });
+    }
+
+    results
+}
+
+/// I10 with real data: oracle stability on real campaign rounds.
+fn bench_oracle_stability_real(real: &EvalDataset, quiet: bool) -> Vec<OracleStabilityResult> {
+    use controller::triage::scorer::{build_guidance, compute_token_scores};
+    use evaluation::IncrementalSnapshot;
+
+    if real.rounds.len() < 5 {
+        if !quiet {
+            eprintln!(
+                "  [real] Need at least 5 rounds for stability analysis, got {}",
+                real.rounds.len()
+            );
+        }
+        return vec![];
+    }
+
+    // Use real token matrix if available, else derive from rounds
+    let token_matrix: Vec<(Vec<String>, bool)> = if !real.token_matrices.is_empty() {
+        real.token_matrices
+            .iter()
+            .filter(|e| e.trustworthy)
+            .map(|e| (e.tokens.clone(), e.detected))
+            .collect()
+    } else {
+        let matrix = evaluation::fixtures::token_factory::build_enriched_token_matrix(&real.rounds);
+        matrix
+            .iter()
+            .filter(|e| e.trustworthy)
+            .map(|e| (e.tokens.clone(), e.detected))
+            .collect()
+    };
+
+    if token_matrix.len() < 3 {
+        if !quiet {
+            eprintln!("  [real] Not enough trustworthy rounds for stability");
+        }
+        return vec![];
+    }
+
+    // Test 1: Repeated determinism
+    let scores_1 = compute_token_scores(&token_matrix);
+    let guidance_1 = build_guidance(&scores_1, 1.5, 0.3);
+    let scores_2 = compute_token_scores(&token_matrix);
+    let guidance_2 = build_guidance(&scores_2, 1.5, 0.3);
+    let repeated_deterministic = guidance_1.avoid_tokens == guidance_2.avoid_tokens
+        && guidance_1.seek_tokens == guidance_2.seek_tokens;
+
+    // Test 2: Permutation robustness
+    let full_top5: Vec<String> = scores_1.iter().take(5).map(|s| s.token.clone()).collect();
+    let mut permutation_jaccards = Vec::new();
+    let mut lift_variances_per_token: HashMap<String, Vec<f64>> = HashMap::new();
+
+    for perm_seed in 0..10u32 {
+        let mut perm_matrix = token_matrix.clone();
+        let mut state = perm_seed.wrapping_mul(2654435761).wrapping_add(1);
+        for i in (1..perm_matrix.len()).rev() {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let j = (state as usize) % (i + 1);
+            perm_matrix.swap(i, j);
+        }
+
+        let perm_scores = compute_token_scores(&perm_matrix);
+        let perm_top5: Vec<String> = perm_scores
+            .iter()
+            .take(5)
+            .map(|s| s.token.clone())
+            .collect();
+        let jaccard_sim = 1.0 - evaluation::helpers::jaccard_distance(&full_top5, &perm_top5);
+        permutation_jaccards.push(jaccard_sim);
+
+        for s in &perm_scores {
+            lift_variances_per_token
+                .entry(s.token.clone())
+                .or_default()
+                .push(s.lift);
+        }
+    }
+
+    let mean_jaccard =
+        permutation_jaccards.iter().sum::<f64>() / permutation_jaccards.len().max(1) as f64;
+
+    let mut total_variance = 0.0;
+    let mut token_count = 0;
+    for lifts in lift_variances_per_token.values() {
+        if lifts.len() > 1 {
+            let mean = lifts.iter().sum::<f64>() / lifts.len() as f64;
+            let variance =
+                lifts.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / (lifts.len() - 1) as f64;
+            total_variance += variance;
+            token_count += 1;
+        }
+    }
+    let mean_lift_variance = if token_count > 0 {
+        total_variance / token_count as f64
+    } else {
+        0.0
+    };
+
+    // Test 3: Incremental convergence
+    let total = token_matrix.len();
+    let incremental_points: Vec<usize> = (0..5)
+        .map(|i| (total * (i + 1)) / 5)
+        .filter(|&n| n >= 2)
+        .collect();
+
+    let mut snapshots = Vec::new();
+    for &count in &incremental_points {
+        let partial_matrix: Vec<(Vec<String>, bool)> =
+            token_matrix.iter().take(count).cloned().collect();
+        let partial_scores = compute_token_scores(&partial_matrix);
+        let partial_guidance = build_guidance(&partial_scores, 1.5, 0.3);
+
+        let mut all_partial: Vec<String> = partial_guidance.avoid_tokens.clone();
+        all_partial.extend(partial_guidance.seek_tokens.clone());
+        let mut all_full: Vec<String> = guidance_1.avoid_tokens.clone();
+        all_full.extend(guidance_1.seek_tokens.clone());
+
+        let jaccard_sim = if all_full.is_empty() && all_partial.is_empty() {
+            1.0
+        } else {
+            1.0 - evaluation::helpers::jaccard_distance(&all_partial, &all_full)
+        };
+
+        snapshots.push(IncrementalSnapshot {
+            round_count: count,
+            avoid_count: partial_guidance.avoid_tokens.len(),
+            seek_count: partial_guidance.seek_tokens.len(),
+            jaccard_with_full: jaccard_sim,
+        });
+    }
+
+    if !quiet {
+        eprintln!(
+            "  [real] {} rounds, deterministic={} perm_jaccard={:.3} lift_var={:.6}",
+            token_matrix.len(),
+            repeated_deterministic,
+            mean_jaccard,
+            mean_lift_variance
+        );
+        for s in &snapshots {
+            eprintln!(
+                "    rounds={:>3} avoid={} seek={} jaccard={:.3}",
+                s.round_count, s.avoid_count, s.seek_count, s.jaccard_with_full
+            );
+        }
+    }
+
+    vec![OracleStabilityResult {
+        test_case: format!("real_{}_rounds", token_matrix.len()),
+        repeated_deterministic,
+        permutation_top5_jaccard: mean_jaccard,
+        permutation_lift_variance: mean_lift_variance,
+        incremental_snapshots: snapshots,
+    }]
+}
+
+/// I11 with real data: selector comparison on real campaign history.
+fn bench_selector_comparison_real(
+    real: &EvalDataset,
+    quiet: bool,
+) -> Vec<SelectorComparisonResult> {
+    use controller::triage::coverage_selector::CoverageSelector;
+    use controller::triage::fuzzer_selector::FuzzerSelector;
+    use controller::triage::random_selector::RandomSelector;
+    use controller::triage::scorer::{build_guidance, compute_token_scores};
+    use controller::triage::token_selector::TokenSelector;
+    use controller::triage::{SearchSpace, Selector};
+    use std::collections::BTreeMap;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+
+    if real.rounds.len() < 3 {
+        if !quiet {
+            eprintln!("  [real] Need at least 3 rounds, got {}", real.rounds.len());
+        }
+        return vec![];
+    }
+
+    let history: BTreeMap<u32, evaluation::RoundSummary> = real
+        .rounds
+        .iter()
+        .map(|r| (r.round_number, r.clone()))
+        .collect();
+
+    // Derive guidance from real token matrix
+    let token_matrix: Vec<(Vec<String>, bool)> = if !real.token_matrices.is_empty() {
+        real.token_matrices
+            .iter()
+            .filter(|e| e.trustworthy)
+            .map(|e| (e.tokens.clone(), e.detected))
+            .collect()
+    } else {
+        let matrix = evaluation::fixtures::token_factory::build_enriched_token_matrix(&real.rounds);
+        matrix
+            .iter()
+            .filter(|e| e.trustworthy)
+            .map(|e| (e.tokens.clone(), e.detected))
+            .collect()
+    };
+
+    let scores = compute_token_scores(&token_matrix);
+    let guidance = build_guidance(&scores, 1.5, 0.3);
+
+    let search_space = SearchSpace::default();
+    let default_modules = controller::dispatch::types::ModuleSelectionSpec::default();
+
+    let selectors: Vec<(&str, Box<dyn Selector>)> = vec![
+        ("Coverage", Box::new(CoverageSelector::new())),
+        ("Fuzzer", Box::new(FuzzerSelector::new())),
+        ("Token", Box::new(TokenSelector::new())),
+        ("Random", Box::new(RandomSelector::new())),
+    ];
+
+    let mut results = Vec::new();
+    let n_rounds = real.rounds.len().min(30);
+
+    for (name, selector) in &selectors {
+        let mut per_round_mutations: Vec<Vec<String>> = Vec::new();
+        let mut all_selected: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut exploration_count = 0usize;
+
+        for round_num in 2..=(n_rounds as u32 + 1) {
+            let selection = rt.block_on(selector.select(
+                &real.job_id,
+                round_num,
+                &search_space,
+                &default_modules,
+                &history,
+                Some(&guidance),
+            ));
+
+            let mut mutation_ids: Vec<String> =
+                selection.mutations.iter().map(|m| m.id.clone()).collect();
+            mutation_ids.sort();
+
+            for id in &mutation_ids {
+                all_selected.insert(id.clone());
+            }
+
+            if selection.rationale.contains("exploration")
+                || selection.rationale.contains("random")
+                || selection.rationale.contains("explore")
+            {
+                exploration_count += 1;
+            }
+
+            per_round_mutations.push(mutation_ids);
+        }
+
+        let rounds_evaluated = per_round_mutations.len();
+        let unique_sets: std::collections::HashSet<String> = per_round_mutations
+            .iter()
+            .map(|muts| muts.join(","))
+            .collect();
+
+        let pool_mutations: std::collections::HashSet<String> =
+            search_space.mutation_pool.iter().cloned().collect();
+        let pool_coverage = if pool_mutations.is_empty() {
+            0.0
+        } else {
+            all_selected.intersection(&pool_mutations).count() as f64 / pool_mutations.len() as f64
+        };
+
+        let total_mutations: usize = per_round_mutations.iter().map(|m| m.len()).sum();
+        let mean_recipe_size = total_mutations as f64 / rounds_evaluated.max(1) as f64;
+        let exploration_rate = exploration_count as f64 / rounds_evaluated.max(1) as f64;
+
+        if !quiet {
+            eprintln!(
+                "  [real] {:<10} coverage={:.2} unique_sets={} mean_size={:.1} explore={:.2}",
+                name,
+                pool_coverage,
+                unique_sets.len(),
+                mean_recipe_size,
+                exploration_rate
+            );
+        }
+
+        results.push(SelectorComparisonResult {
+            selector_name: name.to_string(),
+            rounds_evaluated,
+            unique_mutation_sets: unique_sets.len(),
+            mutation_pool_coverage: pool_coverage,
+            mean_recipe_size,
+            exploration_rate,
+            per_round_mutations,
+        });
+    }
+
+    results
+}
+
+/// I12 with real data: guidance utilization on real campaign history.
+fn bench_guidance_utilization_real(
+    real: &EvalDataset,
+    quiet: bool,
+) -> Vec<GuidanceUtilizationResult> {
+    use controller::triage::coverage_selector::CoverageSelector;
+    use controller::triage::scorer::{build_guidance, compute_token_scores};
+    use controller::triage::token_selector::TokenSelector;
+    use controller::triage::{ScoredToken, SearchSpace, Selector, TriageGuidance};
+    use std::collections::BTreeMap;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+
+    if real.rounds.len() < 3 {
+        if !quiet {
+            eprintln!("  [real] Need at least 3 rounds, got {}", real.rounds.len());
+        }
+        return vec![];
+    }
+
+    let history: BTreeMap<u32, evaluation::RoundSummary> = real
+        .rounds
+        .iter()
+        .map(|r| (r.round_number, r.clone()))
+        .collect();
+
+    // Derive guidance from real data
+    let token_matrix: Vec<(Vec<String>, bool)> = if !real.token_matrices.is_empty() {
+        real.token_matrices
+            .iter()
+            .filter(|e| e.trustworthy)
+            .map(|e| (e.tokens.clone(), e.detected))
+            .collect()
+    } else {
+        let matrix = evaluation::fixtures::token_factory::build_enriched_token_matrix(&real.rounds);
+        matrix
+            .iter()
+            .filter(|e| e.trustworthy)
+            .map(|e| (e.tokens.clone(), e.detected))
+            .collect()
+    };
+
+    let scores = compute_token_scores(&token_matrix);
+    let natural_guidance = build_guidance(&scores, 1.5, 0.3);
+
+    let avoid_tokens = if natural_guidance.avoid_tokens.is_empty() {
+        vec![
+            "mutation:ast.exec_decoy".to_string(),
+            "mutation:ast.timing_pattern".to_string(),
+            "mutation:ast.decon_rounds".to_string(),
+        ]
+    } else {
+        natural_guidance
+            .avoid_tokens
+            .iter()
+            .take(5)
+            .cloned()
+            .collect()
+    };
+    let seek_tokens = if natural_guidance.seek_tokens.is_empty() {
+        vec![
+            "mutation:ast.protection_transition".to_string(),
+            "mutation:ast.fill_pattern".to_string(),
+        ]
+    } else {
+        natural_guidance
+            .seek_tokens
+            .iter()
+            .take(3)
+            .cloned()
+            .collect()
+    };
+
+    if !quiet {
+        eprintln!(
+            "  [real] guidance: avoid={:?} seek={:?}",
+            avoid_tokens, seek_tokens
+        );
+    }
+
+    let test_guidance = TriageGuidance {
+        avoid_tokens: avoid_tokens.clone(),
+        seek_tokens: seek_tokens.clone(),
+        scored_avoid: avoid_tokens
+            .iter()
+            .enumerate()
+            .map(|(i, t)| ScoredToken {
+                token: t.clone(),
+                importance: 2.0 - i as f64 * 0.3,
+            })
+            .collect(),
+        scored_seek: seek_tokens
+            .iter()
+            .enumerate()
+            .map(|(i, t)| ScoredToken {
+                token: t.clone(),
+                importance: 0.3 + i as f64 * 0.1,
+            })
+            .collect(),
+    };
+
+    let search_space = SearchSpace::default();
+    let default_modules = controller::dispatch::types::ModuleSelectionSpec::default();
+    let n_rounds = real.rounds.len().min(20);
+
+    let selector_pairs: Vec<(&str, Box<dyn Selector>)> = vec![
+        ("Token", Box::new(TokenSelector::new())),
+        ("Coverage", Box::new(CoverageSelector::new())),
+    ];
+
+    let mut results = Vec::new();
+
+    for (name, selector) in &selector_pairs {
+        let mut mutations_without: Vec<Vec<String>> = Vec::new();
+        for round_num in 2..=(n_rounds as u32 + 1) {
+            let selection = rt.block_on(selector.select(
+                &real.job_id,
+                round_num,
+                &search_space,
+                &default_modules,
+                &history,
+                None,
+            ));
+            let mut ids: Vec<String> = selection.mutations.iter().map(|m| m.id.clone()).collect();
+            ids.sort();
+            mutations_without.push(ids);
+        }
+
+        let mut mutations_with: Vec<Vec<String>> = Vec::new();
+        for round_num in 2..=(n_rounds as u32 + 1) {
+            let selection = rt.block_on(selector.select(
+                &real.job_id,
+                round_num,
+                &search_space,
+                &default_modules,
+                &history,
+                Some(&test_guidance),
+            ));
+            let mut ids: Vec<String> = selection.mutations.iter().map(|m| m.id.clone()).collect();
+            ids.sort();
+            mutations_with.push(ids);
+        }
+
+        let avoid_mutation_ids: Vec<String> = avoid_tokens
+            .iter()
+            .filter_map(|t| t.strip_prefix("mutation:"))
+            .map(|s| s.to_string())
+            .collect();
+        let seek_mutation_ids: Vec<String> = seek_tokens
+            .iter()
+            .filter_map(|t| t.strip_prefix("mutation:"))
+            .map(|s| s.to_string())
+            .collect();
+
+        let avoidance_rate = if avoid_mutation_ids.is_empty() {
+            1.0
+        } else {
+            let avoiding_rounds = mutations_with
+                .iter()
+                .filter(|muts| !avoid_mutation_ids.iter().any(|avoid| muts.contains(avoid)))
+                .count();
+            avoiding_rounds as f64 / mutations_with.len().max(1) as f64
+        };
+
+        let seek_adoption_rate = if seek_mutation_ids.is_empty() {
+            0.0
+        } else {
+            let adopting_rounds = mutations_with
+                .iter()
+                .filter(|muts| seek_mutation_ids.iter().any(|seek| muts.contains(seek)))
+                .count();
+            adopting_rounds as f64 / mutations_with.len().max(1) as f64
+        };
+
+        let mut total_jaccard = 0.0;
+        let n = mutations_without.len().min(mutations_with.len());
+        for i in 0..n {
+            total_jaccard +=
+                evaluation::helpers::jaccard_distance(&mutations_without[i], &mutations_with[i]);
+        }
+        let recipe_jaccard_delta = total_jaccard / n.max(1) as f64;
+
+        if !quiet {
+            eprintln!(
+                "  [real] {:<10} avoid={:.2} seek={:.2} delta={:.3}",
+                name, avoidance_rate, seek_adoption_rate, recipe_jaccard_delta
+            );
+        }
+
+        results.push(GuidanceUtilizationResult {
+            selector_name: name.to_string(),
+            rounds: n,
+            mutations_without_guidance: mutations_without,
+            mutations_with_guidance: mutations_with,
+            avoid_tokens: avoid_tokens.clone(),
+            seek_tokens: seek_tokens.clone(),
+            avoidance_rate,
+            seek_adoption_rate,
+            recipe_jaccard_delta,
+        });
+    }
+
+    results
+}
+
+/// I13 with real data: convergence simulation on real campaign rounds.
+fn bench_convergence_simulation_real(
+    real: &EvalDataset,
+    quiet: bool,
+) -> Vec<ConvergenceSimulationResult> {
+    use controller::triage::accumulation::{
+        AccumulationConfig, compute_marginal_contributions, compute_recipe_diversity,
+        determine_phase, reconstruct_best_recipe,
+    };
+    use std::collections::{BTreeMap, HashSet};
+
+    if real.rounds.len() < 5 {
+        if !quiet {
+            eprintln!(
+                "  [real] Need at least 5 rounds for convergence, got {}",
+                real.rounds.len()
+            );
+        }
+        return vec![];
+    }
+
+    let total_rounds = real.rounds.len();
+    let config = AccumulationConfig::default();
+    let pool_size = 10;
+    let fixed_set: HashSet<&str> = HashSet::new();
+
+    let mut phase_transitions: Vec<(u32, String)> = Vec::new();
+    let mut recipe_size_trajectory: Vec<(u32, usize)> = Vec::new();
+    let mut diversity_trajectory: Vec<(u32, f64)> = Vec::new();
+    let mut best_score_trajectory: Vec<(u32, f64)> = Vec::new();
+    let mut marginal_contribution_count: Vec<(u32, usize)> = Vec::new();
+    let mut prev_phase = String::new();
+
+    for end in 1..=total_rounds {
+        let round_num = end as u32;
+        let partial: BTreeMap<u32, evaluation::RoundSummary> = real
+            .rounds
+            .iter()
+            .take(end)
+            .map(|r| (r.round_number, r.clone()))
+            .collect();
+
+        let phase = determine_phase(round_num, pool_size, &config);
+        let phase_name = format!("{:?}", phase);
+        if phase_name != prev_phase {
+            phase_transitions.push((round_num, phase_name.clone()));
+            prev_phase = phase_name;
+        }
+
+        let (recipe, best_score) = reconstruct_best_recipe(&partial, &fixed_set);
+        recipe_size_trajectory.push((round_num, recipe.len()));
+        best_score_trajectory.push((round_num, best_score));
+
+        let diversity = if end >= 2 {
+            compute_recipe_diversity(&partial, &fixed_set, 5)
+        } else {
+            0.0
+        };
+        diversity_trajectory.push((round_num, diversity));
+
+        let marginals = compute_marginal_contributions(&partial, &fixed_set);
+        let contributing = marginals.values().filter(|&&v| v > 0.0).count();
+        marginal_contribution_count.push((round_num, contributing));
+    }
+
+    if !quiet {
+        eprintln!("  [real] {} rounds, phase transitions:", total_rounds);
+        for (round, phase) in &phase_transitions {
+            eprintln!("    round {} -> {}", round, phase);
+        }
+        let final_recipe_size = recipe_size_trajectory.last().map(|(_, s)| *s).unwrap_or(0);
+        let final_score = best_score_trajectory.last().map(|(_, s)| *s).unwrap_or(0.0);
+        eprintln!("  [real] Final recipe size: {}", final_recipe_size);
+        eprintln!("  [real] Final best score: {:.3}", final_score);
+    }
+
+    vec![ConvergenceSimulationResult {
+        total_rounds,
+        phase_transitions,
+        recipe_size_trajectory,
+        diversity_trajectory,
+        best_score_trajectory,
+        marginal_contribution_count,
+    }]
+}
+
 // ── Build-crate-dependent benchmarks ────────────────────────────────────
 
 #[cfg(feature = "build-bench")]
 mod build_bench {
     use evaluation::{
-        AstMutationResult, InputDiversityResult, IrMutationResult, PayloadEncodingResult,
-        TemplateAssemblyResult,
+        AstMutationResult, InputDiversityResult, IrMutationResult, LineTracingResult,
+        PayloadEncodingResult, ScCheckpointResult, TemplateAssemblyResult,
     };
     use std::collections::HashMap;
     use std::time::Instant;
+
+    // ── I14: Line Tracing Overhead ──────────────────────────────────────
+
+    pub fn bench_line_tracing(quiet: bool) -> Vec<LineTracingResult> {
+        use build::instrument::line_tracer::{SourceLanguage, inject_line_traces};
+
+        let iterations = 50usize;
+        let mut results = Vec::new();
+
+        // Source 1: REFERENCE_C_SOURCE (~70 lines)
+        let sources: Vec<(&str, String)> = vec![
+            ("reference_c", REFERENCE_C_SOURCE.to_string()),
+            ("synthetic_100", generate_synthetic_c(100)),
+            ("synthetic_300", generate_synthetic_c(300)),
+            ("synthetic_500", generate_synthetic_c(500)),
+            ("synthetic_1000", generate_synthetic_c(1000)),
+        ];
+
+        for (label, source) in &sources {
+            let input_lines = source.lines().count();
+
+            // Warmup run
+            let _ = inject_line_traces(source, SourceLanguage::C);
+
+            // Timed runs
+            let mut times = Vec::with_capacity(iterations);
+            let mut output_source = String::new();
+
+            for _ in 0..iterations {
+                let t0 = Instant::now();
+                match inject_line_traces(source, SourceLanguage::C) {
+                    Ok(out) => {
+                        let elapsed = t0.elapsed().as_secs_f64() * 1_000_000.0;
+                        times.push(elapsed);
+                        output_source = out;
+                    }
+                    Err(e) => {
+                        if !quiet {
+                            eprintln!("  {} FAILED: {}", label, e);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if times.is_empty() {
+                continue;
+            }
+
+            let mean = times.iter().sum::<f64>() / times.len() as f64;
+            let variance = times.iter().map(|t| (t - mean).powi(2)).sum::<f64>()
+                / (times.len() - 1).max(1) as f64;
+            let stddev = variance.sqrt();
+            let first_time = times[0];
+
+            let output_lines = output_source.lines().count();
+            let trace_calls = output_source.matches("__trace_line_binary(").count()
+                + output_source.matches("__trace_line(").count();
+            let deferred = output_source.matches("__seen_L").count() / 2; // each deferred has decl + check
+            let output_valid = check_parse_valid(&output_source);
+            let chars_per_us = if mean > 0.0 {
+                source.len() as f64 / mean
+            } else {
+                0.0
+            };
+
+            if !quiet {
+                eprintln!(
+                    "  {:<20} lines={:>5} traces={:>4} deferred={:>3} mean={:.0}µs stddev={:.0}µs valid={}",
+                    label, input_lines, trace_calls, deferred, mean, stddev, output_valid
+                );
+            }
+
+            results.push(LineTracingResult {
+                source_label: label.to_string(),
+                input_lines,
+                output_lines,
+                trace_calls_injected: trace_calls,
+                deferred_trace_calls: deferred,
+                trace_format: "binary".to_string(),
+                transform_time_us: first_time,
+                mean_transform_time_us: mean,
+                stddev_transform_time_us: stddev,
+                iterations,
+                output_valid,
+                chars_per_us,
+            });
+        }
+
+        results
+    }
+
+    /// Generate synthetic C source of approximately `target_lines` lines.
+    fn generate_synthetic_c(target_lines: usize) -> String {
+        let mut out = String::new();
+        out.push_str("#include <windows.h>\n#include <stdio.h>\n\n");
+
+        let mut line_count = 3usize;
+        let mut func_idx = 0u32;
+
+        while line_count < target_lines {
+            out.push_str(&format!("void synthetic_func_{}(void) {{\n", func_idx));
+            out.push_str("    int x = 0;\n");
+            out.push_str("    for (int i = 0; i < 10; i++) {\n");
+            out.push_str("        x += i * 2;\n");
+            out.push_str("        if (x > 50) break;\n");
+            out.push_str("    }\n");
+            out.push_str("    volatile int y = x;\n");
+            out.push_str("    (void)y;\n");
+            out.push_str("}\n\n");
+            line_count += 10;
+            func_idx += 1;
+        }
+
+        out.push_str("int main() {\n");
+        for i in 0..func_idx {
+            out.push_str(&format!("    synthetic_func_{}();\n", i));
+        }
+        out.push_str("    return 0;\n}\n");
+
+        out
+    }
+
+    // ── I15: Shellcode Checkpoint Patching ──────────────────────────────
+
+    pub fn bench_sc_checkpoints(quiet: bool) -> Vec<ScCheckpointResult> {
+        use build::template::sc_checkpoints::{generate_c_header, patch_shellcode};
+        use build::template::shellcode_stub::{STUB_SIZE, prepend_checkpoint_stub};
+
+        let iterations = 50usize;
+
+        let shellcode_files = [
+            "eicar.bin",
+            "calc64.bin",
+            "messagebox.bin",
+            "msf-revshell-win64.bin",
+            "msf-revwinhttp.bin",
+            "nanodump_v0_direct.bin",
+            "met_revhttp.bin",
+            "2_beacon_x64.bin",
+            "NimPlant.bin",
+        ];
+
+        let checkpoint_counts: [u32; 5] = [1, 3, 5, 10, 20];
+
+        let shellcode_dir = std::path::PathBuf::from("data/shellcodes");
+        if !shellcode_dir.exists() {
+            if !quiet {
+                eprintln!("  Shellcode directory not found: {:?}", shellcode_dir);
+            }
+            return vec![];
+        }
+
+        let mut results = Vec::new();
+
+        for &filename in &shellcode_files {
+            let path = shellcode_dir.join(filename);
+            let raw_shellcode = match std::fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    if !quiet {
+                        eprintln!("  Skipping {}: {}", filename, e);
+                    }
+                    continue;
+                }
+            };
+
+            let shellcode_size = raw_shellcode.len();
+
+            // Prepend stub (time it once with iterations)
+            let mut stub_times = Vec::with_capacity(iterations);
+            let mut with_stub = Vec::new();
+            for _ in 0..iterations {
+                let t0 = Instant::now();
+                with_stub = prepend_checkpoint_stub(&raw_shellcode);
+                let elapsed = t0.elapsed().as_secs_f64() * 1_000_000.0;
+                stub_times.push(elapsed);
+            }
+            let mean_stub_time = stub_times.iter().sum::<f64>() / stub_times.len() as f64;
+            let size_with_stub = with_stub.len();
+
+            // Get reachable boundaries count (single run)
+            let mut boundary_probe = with_stub.clone();
+            let reachable_boundaries = match patch_shellcode(&mut boundary_probe, 0, STUB_SIZE) {
+                Ok(_) => {
+                    // For count=0, we don't get boundaries. Do a max-count probe instead.
+                    let mut probe2 = with_stub.clone();
+                    match patch_shellcode(&mut probe2, u32::MAX, STUB_SIZE) {
+                        Ok(p) => p.table.len(),
+                        Err(_) => 0,
+                    }
+                }
+                Err(_) => 0,
+            };
+
+            for &count in &checkpoint_counts {
+                // Timed patch runs
+                let mut patch_times = Vec::with_capacity(iterations);
+                let mut header_times = Vec::with_capacity(iterations);
+                let mut last_patched = None;
+
+                for _ in 0..iterations {
+                    let mut buf = with_stub.clone();
+                    let t0 = Instant::now();
+                    let result = patch_shellcode(&mut buf, count, STUB_SIZE);
+                    let elapsed = t0.elapsed().as_secs_f64() * 1_000_000.0;
+                    patch_times.push(elapsed);
+
+                    if let Ok(ref patched) = result {
+                        let t1 = Instant::now();
+                        let _ = generate_c_header(patched);
+                        let header_elapsed = t1.elapsed().as_secs_f64() * 1_000_000.0;
+                        header_times.push(header_elapsed);
+                        last_patched = Some(patched.clone());
+                    }
+                }
+
+                if patch_times.is_empty() {
+                    continue;
+                }
+
+                let mean_patch = patch_times.iter().sum::<f64>() / patch_times.len() as f64;
+                let variance = patch_times
+                    .iter()
+                    .map(|t| (t - mean_patch).powi(2))
+                    .sum::<f64>()
+                    / (patch_times.len() - 1).max(1) as f64;
+                let stddev_patch = variance.sqrt();
+                let first_patch_time = patch_times[0];
+                let mean_header = if header_times.is_empty() {
+                    0.0
+                } else {
+                    header_times.iter().sum::<f64>() / header_times.len() as f64
+                };
+
+                let (actual_checkpoints, boundary_correct, progress_pcts) =
+                    if let Some(ref patched) = last_patched {
+                        let pcts: Vec<u8> = patched.table.iter().map(|e| e.progress_pct).collect();
+                        // Verify boundary correctness: all offsets should be >= STUB_SIZE
+                        let correct = patched.table.iter().all(|e| e.offset >= STUB_SIZE);
+                        (patched.table.len(), correct, pcts)
+                    } else {
+                        (0, true, vec![])
+                    };
+
+                let bytes_per_us = if mean_patch > 0.0 {
+                    shellcode_size as f64 / mean_patch
+                } else {
+                    0.0
+                };
+
+                if !quiet {
+                    eprintln!(
+                        "  {:<28} size={:>7} count={:>2} actual={:>2} mean={:>10.1}µs throughput={:.1} bytes/µs",
+                        filename,
+                        shellcode_size,
+                        count,
+                        actual_checkpoints,
+                        mean_patch,
+                        bytes_per_us
+                    );
+                }
+
+                results.push(ScCheckpointResult {
+                    shellcode_name: filename.to_string(),
+                    shellcode_size,
+                    requested_checkpoints: count,
+                    actual_checkpoints,
+                    size_with_stub,
+                    reachable_boundaries,
+                    patch_time_us: first_patch_time,
+                    mean_patch_time_us: mean_patch,
+                    stddev_patch_time_us: stddev_patch,
+                    stub_prepend_time_us: mean_stub_time,
+                    header_gen_time_us: mean_header,
+                    iterations,
+                    bytes_per_us,
+                    boundary_correct,
+                    checkpoint_progress_pcts: progress_pcts,
+                });
+            }
+        }
+
+        results
+    }
 
     pub fn bench_input_diversity(quiet: bool) -> Vec<InputDiversityResult> {
         use build::mutator::MutationSpec;

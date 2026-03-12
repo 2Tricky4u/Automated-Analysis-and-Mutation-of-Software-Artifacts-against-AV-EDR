@@ -1,6 +1,6 @@
 //! Infrastructure-level evaluation runner.
 //!
-//! Reads InfraEvalDataset JSON, runs I1–I13 analysis modules, and writes
+//! Reads InfraEvalDataset JSON, runs I1–I15 analysis modules, and writes
 //! JSON + CSV reports suitable for thesis figures.
 //!
 //! Usage:
@@ -10,7 +10,7 @@
 //!   --input <PATH>       Input InfraEvalDataset JSON (default: infra_dataset.json)
 //!   --output <PATH>      Output JSON report path (default: infra_eval_report.json)
 //!   --csv <PATH>         Output CSV report path (default: infra_eval_metrics.csv)
-//!   --experiment <ID>    Only run specific experiment: i1–i13 (default: all)
+//!   --experiment <ID>    Only run specific experiment: i1–i15 (default: all)
 //!   --quiet              Suppress output to stderr
 
 use evaluation::report::csv_report::{format_csv, write_csv_report};
@@ -89,6 +89,14 @@ fn main() -> anyhow::Result<()> {
                 .as_ref()
                 .map_or(0, |v| v.len())
         );
+        eprintln!(
+            "  line_tracing:      {}",
+            dataset.line_tracing.as_ref().map_or(0, |v| v.len())
+        );
+        eprintln!(
+            "  sc_checkpoint:     {}",
+            dataset.sc_checkpoint.as_ref().map_or(0, |v| v.len())
+        );
     }
 
     // Get all infrastructure metrics
@@ -110,6 +118,8 @@ fn main() -> anyhow::Result<()> {
             "i11" => "infra.i11",
             "i12" => "infra.i12",
             "i13" => "infra.i13",
+            "i14" => "infra.i14",
+            "i15" => "infra.i15",
             other => other,
         };
         all_metrics
