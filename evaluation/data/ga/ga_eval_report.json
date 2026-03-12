@@ -65,7 +65,7 @@
         }
       }
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "input.expressiveness.mutation_coverage",
@@ -83,41 +83,41 @@
         "ast.protection_transition"
       ],
       "used": [
-        "ast.const_obfuscation",
-        "ast.api_sequence_obfuscation",
-        "binary.debug_dir",
         "binary.import_pad",
-        "ast.benign_syscall_insert",
-        "ast.fill_pattern",
-        "binary.timestamp",
-        "ast.timing_pattern",
-        "binary.section_rename",
-        "binary.string_inject",
-        "binary.entropy_normalize",
-        "ast.protection_transition",
-        "ast.string_xor",
         "llvm.opaque_predicate",
-        "binary.resource_inject",
-        "binary.rich_header",
-        "binary.size_pad",
-        "ast.decon_rounds",
+        "binary.timestamp",
+        "ast.protection_transition",
+        "binary.section_rename",
+        "ast.fill_pattern",
+        "ast.exec_decoy",
         "ast.benign_preamble",
-        "ast.exec_decoy"
+        "binary.resource_inject",
+        "binary.entropy_normalize",
+        "ast.timing_pattern",
+        "ast.benign_syscall_insert",
+        "binary.string_inject",
+        "binary.debug_dir",
+        "ast.string_xor",
+        "ast.const_obfuscation",
+        "ast.decon_rounds",
+        "binary.size_pad",
+        "ast.api_sequence_obfuscation",
+        "binary.rich_header"
       ]
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "input.expressiveness.unique_configs",
     "axis": "input",
     "category": "expressiveness",
     "label": "Unique configuration ratio (distinct configs / total rounds)",
-    "value": 0.42,
+    "value": 0.5686274509803921,
     "details": {
-      "total_rounds": 50,
-      "unique_count": 21
+      "total_rounds": 51,
+      "unique_count": 29
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "input.expressiveness.category_reachability",
@@ -129,174 +129,174 @@
       "total": 7,
       "varied": 0
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "input.validity.rejection_rate",
     "axis": "input",
     "category": "validity",
     "label": "Rejection rate (broken artifacts / total)",
-    "value": 0.68,
+    "value": 0.3333333333333333,
     "details": {
-      "broken": 34,
-      "mutation_failed": 34,
+      "broken": 17,
+      "mutation_failed": 17,
       "payload_failed": 0,
-      "total": 50
+      "total": 51
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "input.validity.execution_rate",
     "axis": "input",
     "category": "validity",
     "label": "Semantic execution rate (non-broken / total)",
-    "value": 0.32,
+    "value": 0.6666666666666666,
     "details": {
-      "executed": 16,
-      "total": 50
+      "executed": 34,
+      "total": 51
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "input.validity.mutation_failure_correlation",
     "axis": "input",
     "category": "validity",
     "label": "Per-mutation failure rate",
-    "value": 0.9090909090909091,
+    "value": 1.0,
     "details": {
       "per_mutation": [
         {
-          "broken": 30,
-          "failure_rate": 0.9090909090909091,
+          "broken": 1,
+          "failure_rate": 1.0,
           "mutation": "ast.exec_decoy",
-          "total": 33
+          "total": 1
         },
         {
-          "broken": 31,
-          "failure_rate": 0.8611111111111112,
-          "mutation": "ast.benign_preamble",
-          "total": 36
-        },
-        {
-          "broken": 30,
-          "failure_rate": 0.8571428571428571,
-          "mutation": "ast.decon_rounds",
-          "total": 35
-        },
-        {
-          "broken": 30,
-          "failure_rate": 0.8571428571428571,
-          "mutation": "ast.const_obfuscation",
-          "total": 35
-        },
-        {
-          "broken": 32,
-          "failure_rate": 0.8421052631578947,
+          "broken": 16,
+          "failure_rate": 0.5714285714285714,
           "mutation": "ast.timing_pattern",
-          "total": 38
+          "total": 28
         },
         {
-          "broken": 30,
-          "failure_rate": 0.8333333333333334,
+          "broken": 4,
+          "failure_rate": 0.5714285714285714,
           "mutation": "ast.string_xor",
-          "total": 36
+          "total": 7
         },
         {
-          "broken": 30,
-          "failure_rate": 0.8108108108108109,
-          "mutation": "ast.protection_transition",
-          "total": 37
-        },
-        {
-          "broken": 31,
-          "failure_rate": 0.7948717948717948,
+          "broken": 5,
+          "failure_rate": 0.5555555555555556,
           "mutation": "ast.fill_pattern",
-          "total": 39
+          "total": 9
         },
         {
-          "broken": 30,
-          "failure_rate": 0.7894736842105263,
-          "mutation": "ast.benign_syscall_insert",
-          "total": 38
-        },
-        {
-          "broken": 30,
-          "failure_rate": 0.7894736842105263,
+          "broken": 2,
+          "failure_rate": 0.5,
           "mutation": "ast.api_sequence_obfuscation",
-          "total": 38
+          "total": 4
         },
         {
-          "broken": 34,
-          "failure_rate": 0.6938775510204082,
-          "mutation": "binary.debug_dir",
-          "total": 49
+          "broken": 4,
+          "failure_rate": 0.4444444444444444,
+          "mutation": "ast.decon_rounds",
+          "total": 9
         },
         {
-          "broken": 34,
-          "failure_rate": 0.6938775510204082,
-          "mutation": "binary.rich_header",
-          "total": 49
+          "broken": 9,
+          "failure_rate": 0.391304347826087,
+          "mutation": "ast.benign_syscall_insert",
+          "total": 23
         },
         {
-          "broken": 34,
-          "failure_rate": 0.6938775510204082,
-          "mutation": "binary.timestamp",
-          "total": 49
-        },
-        {
-          "broken": 34,
-          "failure_rate": 0.6938775510204082,
-          "mutation": "binary.import_pad",
-          "total": 49
-        },
-        {
-          "broken": 34,
-          "failure_rate": 0.6938775510204082,
-          "mutation": "binary.resource_inject",
-          "total": 49
-        },
-        {
-          "broken": 34,
-          "failure_rate": 0.6938775510204082,
-          "mutation": "binary.entropy_normalize",
-          "total": 49
-        },
-        {
-          "broken": 34,
-          "failure_rate": 0.6938775510204082,
+          "broken": 17,
+          "failure_rate": 0.34,
           "mutation": "binary.string_inject",
-          "total": 49
+          "total": 50
         },
         {
-          "broken": 34,
-          "failure_rate": 0.6938775510204082,
-          "mutation": "binary.size_pad",
-          "total": 49
+          "broken": 17,
+          "failure_rate": 0.34,
+          "mutation": "binary.import_pad",
+          "total": 50
         },
         {
-          "broken": 34,
-          "failure_rate": 0.6938775510204082,
-          "mutation": "binary.section_rename",
-          "total": 49
+          "broken": 17,
+          "failure_rate": 0.34,
+          "mutation": "binary.entropy_normalize",
+          "total": 50
         },
         {
-          "broken": 34,
-          "failure_rate": 0.6938775510204082,
+          "broken": 17,
+          "failure_rate": 0.34,
+          "mutation": "binary.timestamp",
+          "total": 50
+        },
+        {
+          "broken": 17,
+          "failure_rate": 0.34,
           "mutation": "llvm.opaque_predicate",
-          "total": 49
+          "total": 50
+        },
+        {
+          "broken": 17,
+          "failure_rate": 0.34,
+          "mutation": "binary.section_rename",
+          "total": 50
+        },
+        {
+          "broken": 17,
+          "failure_rate": 0.34,
+          "mutation": "binary.resource_inject",
+          "total": 50
+        },
+        {
+          "broken": 17,
+          "failure_rate": 0.34,
+          "mutation": "binary.debug_dir",
+          "total": 50
+        },
+        {
+          "broken": 17,
+          "failure_rate": 0.34,
+          "mutation": "binary.size_pad",
+          "total": 50
+        },
+        {
+          "broken": 17,
+          "failure_rate": 0.34,
+          "mutation": "binary.rich_header",
+          "total": 50
+        },
+        {
+          "broken": 1,
+          "failure_rate": 0.2,
+          "mutation": "ast.protection_transition",
+          "total": 5
+        },
+        {
+          "broken": 1,
+          "failure_rate": 0.16666666666666666,
+          "mutation": "ast.const_obfuscation",
+          "total": 6
+        },
+        {
+          "broken": 1,
+          "failure_rate": 0.14285714285714285,
+          "mutation": "ast.benign_preamble",
+          "total": 7
         }
       ]
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "input.diversity.mutation_jaccard",
     "axis": "input",
     "category": "diversity",
     "label": "Mean pairwise Jaccard distance of mutation sets",
-    "value": 0.23254724542602737,
+    "value": 0.22845923588138098,
     "details": {},
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "input.diversity.module_entropy",
@@ -308,56 +308,56 @@
       "per_category": {
         "antiemulation": {
           "distribution": {
-            "none": 50
+            "none": 51
           },
           "entropy": 0.0
         },
         "carrier": {
           "distribution": {
-            "alloc_rw_rx": 50
+            "alloc_rw_rx": 51
           },
           "entropy": 0.0
         },
         "decoder": {
           "distribution": {
-            "subbyte": 50
+            "subbyte": 51
           },
           "entropy": 0.0
         },
         "deconditioner": {
           "distribution": {
-            "basic": 50
+            "basic": 51
           },
           "entropy": 0.0
         },
         "decoy": {
           "distribution": {
-            "none": 50
+            "none": 51
           },
           "entropy": 0.0
         },
         "guardrail": {
           "distribution": {
-            "env": 50
+            "env": 51
           },
           "entropy": 0.0
         },
         "virtualprotect": {
           "distribution": {
-            "standard": 50
+            "standard": 51
           },
           "entropy": 0.0
         }
       }
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "input.diversity.config_discovery_rate",
     "axis": "input",
     "category": "diversity",
     "label": "Config discovery rate (fraction of rounds introducing new configs)",
-    "value": 0.40816326530612246,
+    "value": 0.56,
     "details": {
       "cumulative_unique": [
         1,
@@ -371,73 +371,74 @@
         9,
         10,
         11,
+        11,
+        12,
+        12,
         12,
         13,
+        13,
+        14,
+        14,
+        14,
+        14,
         14,
         15,
+        15,
+        15,
+        15,
+        15,
+        16,
         16,
         17,
         18,
+        18,
         19,
         20,
+        20,
         21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21
+        22,
+        22,
+        23,
+        24,
+        25,
+        25,
+        25,
+        26,
+        26,
+        27,
+        28,
+        28,
+        29,
+        29,
+        29
       ],
-      "total_unique": 21
+      "total_unique": 29
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "input.diversity.seq2_uniqueness",
     "axis": "input",
     "category": "diversity",
     "label": "Seq2 token uniqueness (unique seq2 / total seq2 occurrences)",
-    "value": 0.05319148936170213,
+    "value": 0.03745583038869258,
     "details": {
-      "total_occurrences": 1034,
-      "unique_seq2": 55
+      "total_occurrences": 1415,
+      "unique_seq2": 53
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.precision.fp_proxy_rate",
     "axis": "oracle",
     "category": "precision",
     "label": "FP proxy rate (InstrumentationArtifact / total)",
-    "value": 0.0,
+    "value": 0.11764705882352941,
     "details": {
-      "instrumentation_artifact_count": 0,
-      "total": 50
+      "instrumentation_artifact_count": 6,
+      "total": 51
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.precision.fn_proxy_rate",
@@ -447,37 +448,39 @@
     "value": 0.0,
     "details": {
       "flaky_count": 0,
-      "total": 50
+      "total": 51
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.precision.trustworthy_ratio",
     "axis": "oracle",
     "category": "precision",
     "label": "Trustworthy ratio (RealDetection+Evasion+StaticDetection / total)",
-    "value": 0.32,
+    "value": 0.5490196078431373,
     "details": {
       "category_counts": {
-        "MutationFailed": 34,
-        "RealDetection": 16
+        "Evasion": 6,
+        "InstrumentationArtifact": 6,
+        "MutationFailed": 17,
+        "RealDetection": 22
       },
-      "total": 50,
-      "trustworthy": 16
+      "total": 51,
+      "trustworthy": 28
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.precision.dryrun_resolution_rate",
     "axis": "oracle",
     "category": "precision",
     "label": "Dryrun resolution rate (resolved MutationFailed/PayloadFailed via dryrun)",
-    "value": 0.68,
+    "value": 0.3333333333333333,
     "details": {
-      "has_dryrun": 50,
-      "resolved": 34
+      "has_dryrun": 51,
+      "resolved": 17
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.soundness.static_ratio",
@@ -486,79 +489,107 @@
     "label": "Static detection ratio (static / all detections)",
     "value": 0.0,
     "details": {
-      "dynamic": 16,
+      "dynamic": 22,
       "static": 0
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.soundness.evasion_rate",
     "axis": "oracle",
     "category": "soundness",
     "label": "Overall evasion rate",
-    "value": 0.0,
+    "value": 0.11764705882352941,
     "details": {
-      "evasion_count": 0,
-      "total": 50,
+      "evasion_count": 6,
+      "total": 51,
       "verdict_distribution": {
-        "detected": 16,
-        "mutation_failed": 34
+        "detected": 22,
+        "evasion": 12,
+        "mutation_failed": 17
       }
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.soundness.blind_spot_ratio",
     "axis": "oracle",
     "category": "soundness",
     "label": "Blind spot ratio (always-detected configs / total configs, min 2 runs)",
-    "value": 0.07142857142857142,
+    "value": 0.3,
     "details": {
-      "always_detected_count": 1,
-      "total_configs": 14
+      "always_detected_count": 6,
+      "total_configs": 20
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.soundness.evasion_config_ratio",
     "axis": "oracle",
     "category": "soundness",
     "label": "Evasion config ratio (never-detected configs / total)",
-    "value": 0.0,
+    "value": 0.25,
     "details": {
-      "evasion_configs": 0,
-      "total_configs": 14
+      "evasion_configs": 5,
+      "total_configs": 20
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.attribution.token_ranking",
     "axis": "oracle",
     "category": "attribution",
     "label": "Token lift ranking quality (top importance score)",
-    "value": 0.0,
+    "value": 1.2727272727272727,
     "details": {
       "avoid_tokens": 0,
-      "has_meaningful_tokens": false,
-      "seek_tokens": 0,
+      "has_meaningful_tokens": true,
+      "seek_tokens": 17,
       "top_avoid": [],
-      "total_tokens_scored": 0
+      "total_tokens_scored": 270
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.attribution.top5_stability",
     "axis": "oracle",
     "category": "attribution",
     "label": "Top-5 token stability (overlap between 1st and 2nd half)",
-    "value": 0.0,
+    "value": 0.2,
     "details": {
-      "first_half_top5": [],
-      "overlap": 0,
-      "second_half_top5": [],
-      "window_size": 8
+      "first_half_top5": [
+        "image:mswsock.dll",
+        "seq2:NtResumeThread→thread_create",
+        "seq2:NtCreateEvent→NtResumeThread",
+        "api_arg:NtAllocateVirtualMemory:alloc_type=COMMIT",
+        "seq2:LdrGetProcedureAddress→image_load"
+      ],
+      "overlap": 1,
+      "second_half_top5": [
+        "seq2:NtCreateEvent→NtResumeThread",
+        "seq2:NtCreateEvent→thread_create",
+        "seq2:NtFreeVirtualMemory→image_load",
+        "exit_code:3221225477",
+        "seq2:NtAllocateVirtualMemory→NtAllocateVirtualMemory"
+      ],
+      "window_size": 14
     },
-    "n": 50
+    "n": 51
+  },
+  {
+    "metric_id": "oracle.attribution.counterfactual",
+    "axis": "oracle",
+    "category": "attribution",
+    "label": "Counterfactual delta (detection rate with vs without top token)",
+    "value": 0.2727272727272727,
+    "details": {
+      "detect_rate_with": 1.0,
+      "detect_rate_without": 0.7272727272727273,
+      "n_with": 6,
+      "n_without": 22,
+      "top_token": "mutation:binary.rich_header:donor=notepad"
+    },
+    "n": 51
   },
   {
     "metric_id": "oracle.stability.flaky_rate",
@@ -568,21 +599,21 @@
     "value": 0.0,
     "details": {
       "flaky": 0,
-      "trustworthy_plus_flaky": 16
+      "trustworthy_plus_flaky": 28
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.stability.behavior_match_rate",
     "axis": "oracle",
     "category": "stability",
     "label": "Behavior match rate (runs where baseline and instrumented agree)",
-    "value": 0.3,
+    "value": 0.5490196078431373,
     "details": {
-      "matched": 15,
-      "total": 50
+      "matched": 28,
+      "total": 51
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.stability.config_consistency",
@@ -592,192 +623,215 @@
     "value": 1.0,
     "details": {
       "inconsistent": 0,
-      "multi_run_configs": 1
+      "multi_run_configs": 7
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "oracle.stability.score_variance",
     "axis": "oracle",
     "category": "stability",
     "label": "Mean evasion score std dev per config (lower = more stable)",
-    "value": 0.06543010689956795,
+    "value": 0.13427814485001757,
     "details": {
-      "configs_with_repeats": 1,
+      "configs_with_repeats": 12,
       "stddevs": [
-        0.06543010689956795
+        0.0,
+        0.0,
+        0.132,
+        0.0,
+        0.00047140452079103207,
+        0.41454248542486233,
+        0.3698773445346444,
+        0.0005000000000000004,
+        0.317,
+        0.0,
+        0.3769465037199134,
+        0.0
       ]
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.feedback_quality.coverage_correlation",
     "axis": "guidance",
     "category": "feedback_quality",
     "label": "Coverage ↔ evasion score Pearson correlation",
-    "value": 0.9185311354253347,
+    "value": 0.67955645194383,
     "details": {
       "n_pairs": 50
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.feedback_quality.guidance_strength",
     "axis": "guidance",
     "category": "feedback_quality",
     "label": "Guidance strength (avoid+seek tokens / total scored)",
-    "value": 0.0,
+    "value": 0.06296296296296296,
     "details": {
       "avoid_count": 0,
       "avoid_tokens": [],
-      "seek_count": 0,
-      "seek_tokens": [],
-      "total_scored": 0
+      "seek_count": 17,
+      "seek_tokens": [
+        "mutation:binary.rich_header:donor=explorer",
+        "mutation:binary.string_inject:count=13",
+        "mutation:ast.benign_preamble:count=3",
+        "mutation:binary.entropy_normalize:target=6.24",
+        "mutation:binary.timestamp:age_days=414",
+        "mutation:binary.size_pad:target_kb=604",
+        "seq2:image_load→NtAllocateVirtualMemory",
+        "seq2:hooking_finished→image_load",
+        "mutation:ast.fill_pattern:pattern=xor",
+        "mutation:binary.string_inject:count=38"
+      ],
+      "total_scored": 270
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.search_efficiency.evasions_per_round",
     "axis": "guidance",
     "category": "search_efficiency",
     "label": "Evasions per round",
-    "value": 0.0,
+    "value": 0.11764705882352941,
     "details": {
-      "evasion_count": 0,
-      "total_rounds": 50
+      "evasion_count": 6,
+      "total_rounds": 51
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.search_efficiency.time_to_first_evasion",
     "axis": "guidance",
     "category": "search_efficiency",
     "label": "Time-to-first-evasion (round number, lower is better)",
-    "value": 0.0,
+    "value": 5.0,
     "details": {
-      "first_evasion_round": null,
-      "found": false,
-      "normalized": 1.0
+      "first_evasion_round": 5,
+      "found": true,
+      "normalized": 0.09803921568627451
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.search_efficiency.evasions_at_n",
     "axis": "guidance",
     "category": "search_efficiency",
     "label": "Best evasion rate across N checkpoints",
-    "value": 0.0,
+    "value": 0.2,
     "details": {
       "at_n": {
-        "evasions@10": 0,
-        "evasions@20": 0,
-        "evasions@5": 0,
-        "evasions@50": 0
+        "evasions@10": 1,
+        "evasions@20": 2,
+        "evasions@5": 1,
+        "evasions@50": 6
       }
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.search_efficiency.score_trajectory",
     "axis": "guidance",
     "category": "search_efficiency",
     "label": "Evasion score trajectory improvement (last - first rolling mean)",
-    "value": -0.088,
+    "value": -0.048200000000000076,
     "details": {
-      "first_window_avg": 0.1404,
-      "last_window_avg": 0.0524,
+      "first_window_avg": 0.31880000000000003,
+      "last_window_avg": 0.27059999999999995,
       "trajectory": [
-        0.1404,
-        0.142,
-        0.1416,
-        0.18839999999999998,
-        0.14179999999999998,
-        0.1432,
-        0.1416,
-        0.09480000000000001,
-        0.095,
-        0.1466,
-        0.199,
-        0.1994,
-        0.2472,
-        0.2002,
-        0.1486,
+        0.31880000000000003,
+        0.31860000000000005,
+        0.31860000000000005,
+        0.31860000000000005,
+        0.3668,
+        0.23500000000000001,
+        0.23500000000000001,
+        0.3146,
+        0.26799999999999996,
+        0.2198,
+        0.21960000000000002,
+        0.35259999999999997,
+        0.35259999999999997,
+        0.35259999999999997,
+        0.35259999999999997,
+        0.3526,
+        0.2998,
+        0.1734,
+        0.352,
+        0.352,
+        0.3054,
+        0.1786,
+        0.35819999999999996,
+        0.2262,
+        0.273,
+        0.273,
+        0.3198,
+        0.187,
+        0.14040000000000002,
+        0.2206,
+        0.2688,
+        0.4016,
+        0.3548,
+        0.48179999999999995,
+        0.3548,
+        0.3534,
+        0.1738,
+        0.2218,
         0.0948,
-        0.047799999999999995,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0164,
-        0.0164,
-        0.0164,
-        0.0164,
-        0.0164,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.051000000000000004,
-        0.051000000000000004,
-        0.051000000000000004,
-        0.051000000000000004,
-        0.051000000000000004,
-        0.0524,
-        0.0524,
-        0.0524,
-        0.0524
+        0.143,
+        0.27599999999999997,
+        0.27599999999999997,
+        0.276,
+        0.403,
+        0.40259999999999996,
+        0.22279999999999997,
+        0.27059999999999995
       ],
       "window_size": 5
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.baseline_comparison.evasion_rate_delta",
     "axis": "guidance",
     "category": "baseline_comparison",
     "label": "Evasion rate delta (guided - random baseline)",
-    "value": -0.2,
+    "value": -0.0784313725490196,
     "details": {
-      "guided_evasions": 0,
-      "guided_rate": 0.0,
+      "guided_evasions": 6,
+      "guided_rate": 0.11764705882352941,
       "random_evasions": 10,
-      "random_rate": 0.2,
-      "total_rounds": 50
+      "random_rate": 0.19607843137254902,
+      "total_rounds": 51
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.baseline_comparison.score_delta",
     "axis": "guidance",
     "category": "baseline_comparison",
     "label": "Mean evasion score delta (guided - random)",
-    "value": -0.21992638987687552,
+    "value": -0.0022807743890936316,
     "details": {
-      "guided_mean": 0.06971999999999999,
-      "random_mean": 0.2896463898768755
+      "guided_mean": 0.28168627450980394,
+      "random_mean": 0.28396704889889757
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.baseline_comparison.mutation_ablation",
     "axis": "guidance",
     "category": "baseline_comparison",
     "label": "Mutation ablation (score with mutations - score without)",
-    "value": -0.1666122448979592,
+    "value": 0.04863999999999999,
     "details": {
-      "rounds_with": 49,
+      "rounds_with": 50,
       "rounds_without": 1,
-      "score_with": 0.06638775510204081,
-      "score_without": 0.233
+      "score_with": 0.28264,
+      "score_without": 0.234
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.baseline_comparison.token_guidance_usage",
@@ -787,9 +841,9 @@
     "value": 0.0,
     "details": {
       "guided": 0,
-      "unguided": 50
+      "unguided": 51
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.convergence.decay_ratio",
@@ -798,30 +852,30 @@
     "label": "Discovery decay ratio (2nd half evasions / 1st half, >1 = improving)",
     "value": 1.0,
     "details": {
-      "first_half_evasions": 0,
-      "second_half_evasions": 0
+      "first_half_evasions": 3,
+      "second_half_evasions": 3
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.convergence.plateau_round",
     "axis": "guidance",
     "category": "convergence",
     "label": "Plateau onset (fraction of total rounds before score stalls)",
-    "value": 0.1,
+    "value": 0.09803921568627451,
     "details": {
       "improvement_threshold": 0.01,
       "plateau_round": 5,
-      "total_rounds": 50
+      "total_rounds": 51
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.convergence.config_discovery_decay",
     "axis": "guidance",
     "category": "convergence",
     "label": "Config discovery decay (2nd half new configs / 1st half)",
-    "value": 0.0,
+    "value": 0.9333333333333333,
     "details": {
       "cumulative": [
         1,
@@ -835,51 +889,52 @@
         9,
         10,
         11,
+        11,
+        12,
+        12,
         12,
         13,
+        13,
+        14,
+        14,
+        14,
+        14,
         14,
         15,
+        15,
+        15,
+        15,
+        15,
+        16,
         16,
         17,
         18,
+        18,
         19,
         20,
+        20,
         21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21,
-        21
+        22,
+        22,
+        23,
+        24,
+        25,
+        25,
+        25,
+        26,
+        26,
+        27,
+        28,
+        28,
+        29,
+        29,
+        29
       ],
-      "first_half_configs": 21,
-      "second_half_new": 0,
-      "total_unique": 21
+      "first_half_configs": 15,
+      "second_half_new": 14,
+      "total_unique": 29
     },
-    "n": 50
+    "n": 51
   },
   {
     "metric_id": "guidance.convergence.exploitation_ratio",
@@ -890,8 +945,8 @@
     "details": {
       "exploit": 0,
       "explore": 0,
-      "unclassified": 50
+      "unclassified": 51
     },
-    "n": 50
+    "n": 51
   }
 ]

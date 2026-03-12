@@ -1,0 +1,33 @@
+\begin{table}[htbp]
+\centering
+\caption{Component-Level Evaluation Metrics}
+\label{tab:component-metrics}
+\begin{tabular}{llrr}
+\toprule
+Metric ID & Label & Value & $n$ \\
+\midrule
+\texttt{b2.classifier\_analysis.confusion\_matrix} & Confusion matrix (verdict → differential category) & 3.0000 & 40 \\
+\texttt{b2.classifier\_analysis.sankey\_flows} & Verdict → category Sankey diagram flows & 3.0000 & 40 \\
+\texttt{b2.classifier\_analysis.score\_by\_category} & Evasion score distribution by differential category & 3.0000 & 40 \\
+\texttt{b2.classifier\_analysis.verdict\_agreement} & Verdict ↔ differential category agreement rate & 0.4500 & 40 \\
+\midrule
+\texttt{b3.telemetry\_completeness.coverage\_by\_verdict} & Coverage distribution by differential category & 55.5150 & 40 \\
+\texttt{b3.telemetry\_completeness.coverage\_detection\_corr} & Coverage ↔ detection Pearson correlation & 0.9447 & 40 \\
+\texttt{b3.telemetry\_completeness.coverage\_histogram} & Coverage percent histogram & 40.0000 & 40 \\
+\texttt{b3.telemetry\_completeness.token\_counts} & Token counts by differential category & 40.0000 & 40 \\
+\texttt{b3.telemetry\_completeness.trustworthy\_trajectory} & Trustworthy round fraction (1 - contamination rate) & 0.4500 & 40 \\
+\midrule
+\texttt{c3.token\_coverage.category\_proportions} & Per-round token category proportions (for stacked bar) & 8.0000 & 40 \\
+\texttt{c3.token\_coverage.category\_table} & Token category coverage (active categories / 9 total) & 0.8889 & 40 \\
+\texttt{c3.token\_coverage.presence\_heatmap} & Token presence heatmap (top-20 tokens × rounds) & 445.0000 & 40 \\
+\texttt{c3.token\_coverage.tokens\_per\_round} & Mean tokens per round & 124.4750 & 40 \\
+\midrule
+\texttt{c4.scoring\_convergence.actionable\_stability} & Round where actionable token count stabilizes & 5.0000 & 40 \\
+\texttt{c4.scoring\_convergence.lift\_variance} & Lift variance convergence (final variance) & 0.0000 & 40 \\
+\texttt{c4.scoring\_convergence.top5\_overlap} & Top-5 token overlap convergence (final overlap fraction) & 0.0000 & 40 \\
+\midrule
+\texttt{c5.counterfactual.effect\_sizes} & Largest absolute detection rate delta & 0.0000 & 40 \\
+\texttt{c5.counterfactual.forest\_plot} & Counterfactual validation: significant tokens (Bonferroni α & 0.0000 & 40 \\
+\bottomrule
+\end{tabular}
+\end{table}
