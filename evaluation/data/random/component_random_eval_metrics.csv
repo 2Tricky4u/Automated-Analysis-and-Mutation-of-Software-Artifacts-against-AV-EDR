@@ -1,0 +1,19 @@
+metric_id,axis,category,label,value,n
+component.c3.token_coverage.category_table,component,triage_engine,Token category coverage (active categories / 9 total),0.8888888888888888,50
+component.c3.token_coverage.tokens_per_round,component,triage_engine,Mean tokens per round,107.34,50
+component.c3.token_coverage.presence_heatmap,component,triage_engine,Token presence heatmap (top-20 tokens × rounds),633,50
+component.c3.token_coverage.category_proportions,component,triage_engine,Per-round token category proportions (for stacked bar),8,50
+component.c4.scoring_convergence.top5_overlap,component,triage_engine,Top-5 token overlap convergence (final overlap fraction),0,50
+component.c4.scoring_convergence.actionable_stability,component,triage_engine,Round where actionable token count stabilizes,5,50
+component.c4.scoring_convergence.lift_variance,component,triage_engine,Lift variance convergence (final variance),0,50
+component.c5.counterfactual.forest_plot,component,triage_engine,Counterfactual validation: significant tokens (Bonferroni α=0.05),0,50
+component.c5.counterfactual.effect_sizes,component,triage_engine,Largest absolute detection rate delta,0,50
+component.b3.telemetry_completeness.coverage_by_verdict,component,execution_engine,Coverage distribution by differential category,47.13600000000001,50
+component.b3.telemetry_completeness.coverage_detection_corr,component,execution_engine,Coverage ↔ detection Pearson correlation,0.9191014104247993,50
+component.b3.telemetry_completeness.coverage_histogram,component,execution_engine,Coverage percent histogram,50,50
+component.b3.telemetry_completeness.token_counts,component,execution_engine,Token counts by differential category,50,50
+component.b3.telemetry_completeness.trustworthy_trajectory,component,execution_engine,Trustworthy round fraction (1 - contamination rate),0.32,50
+component.b2.classifier_analysis.confusion_matrix,component,execution_engine,Confusion matrix (verdict → differential category),2,50
+component.b2.classifier_analysis.verdict_agreement,component,execution_engine,Verdict ↔ differential category agreement rate,0.32,50
+component.b2.classifier_analysis.sankey_flows,component,execution_engine,Verdict → category Sankey diagram flows,2,50
+component.b2.classifier_analysis.score_by_category,component,execution_engine,Evasion score distribution by differential category,2,50
