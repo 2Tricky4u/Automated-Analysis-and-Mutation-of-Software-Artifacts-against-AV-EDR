@@ -1,0 +1,40 @@
+metric_id,axis,category,label,value,n
+input.expressiveness.module_coverage,input,expressiveness,Module variant coverage (used/total across all categories),0.4117647058823529,50
+input.expressiveness.mutation_coverage,input,expressiveness,Mutation pool coverage (used/available),1,50
+input.expressiveness.unique_configs,input,expressiveness,Unique configuration ratio (distinct configs / total rounds),0.42,50
+input.expressiveness.category_reachability,input,expressiveness,Category reachability (categories with >1 variant used),0,50
+input.validity.rejection_rate,input,validity,Rejection rate (broken artifacts / total),0.68,50
+input.validity.execution_rate,input,validity,Semantic execution rate (non-broken / total),0.32,50
+input.validity.mutation_failure_correlation,input,validity,Per-mutation failure rate,0.9090909090909091,50
+input.diversity.mutation_jaccard,input,diversity,Mean pairwise Jaccard distance of mutation sets,0.23254724542602737,50
+input.diversity.module_entropy,input,diversity,Mean normalized Shannon entropy of module distributions,0,50
+input.diversity.config_discovery_rate,input,diversity,Config discovery rate (fraction of rounds introducing new configs),0.40816326530612246,50
+input.diversity.seq2_uniqueness,input,diversity,Seq2 token uniqueness (unique seq2 / total seq2 occurrences),0.05319148936170213,50
+oracle.precision.fp_proxy_rate,oracle,precision,FP proxy rate (InstrumentationArtifact / total),0,50
+oracle.precision.fn_proxy_rate,oracle,precision,FN proxy rate (Flaky / total),0,50
+oracle.precision.trustworthy_ratio,oracle,precision,Trustworthy ratio (RealDetection+Evasion+StaticDetection / total),0.32,50
+oracle.precision.dryrun_resolution_rate,oracle,precision,Dryrun resolution rate (resolved MutationFailed/PayloadFailed via dryrun),0.68,50
+oracle.soundness.static_ratio,oracle,soundness,Static detection ratio (static / all detections),0,50
+oracle.soundness.evasion_rate,oracle,soundness,Overall evasion rate,0,50
+oracle.soundness.blind_spot_ratio,oracle,soundness,"Blind spot ratio (always-detected configs / total configs, min 2 runs)",0.07142857142857142,50
+oracle.soundness.evasion_config_ratio,oracle,soundness,Evasion config ratio (never-detected configs / total),0,50
+oracle.attribution.token_ranking,oracle,attribution,Token lift ranking quality (top importance score),0,50
+oracle.attribution.top5_stability,oracle,attribution,Top-5 token stability (overlap between 1st and 2nd half),0,50
+oracle.stability.flaky_rate,oracle,stability,Flaky rate (flaky / trustworthy+flaky),0,50
+oracle.stability.behavior_match_rate,oracle,stability,Behavior match rate (runs where baseline and instrumented agree),0.3,50
+oracle.stability.config_consistency,oracle,stability,Config detection consistency (1 - inconsistent/multi-run configs),1,50
+oracle.stability.score_variance,oracle,stability,Mean evasion score std dev per config (lower = more stable),0.06543010689956795,50
+guidance.feedback_quality.coverage_correlation,guidance,feedback_quality,Coverage ↔ evasion score Pearson correlation,0.9185311354253347,50
+guidance.feedback_quality.guidance_strength,guidance,feedback_quality,Guidance strength (avoid+seek tokens / total scored),0,50
+guidance.search_efficiency.evasions_per_round,guidance,search_efficiency,Evasions per round,0,50
+guidance.search_efficiency.time_to_first_evasion,guidance,search_efficiency,"Time-to-first-evasion (round number, lower is better)",0,50
+guidance.search_efficiency.evasions_at_n,guidance,search_efficiency,Best evasion rate across N checkpoints,0,50
+guidance.search_efficiency.score_trajectory,guidance,search_efficiency,Evasion score trajectory improvement (last - first rolling mean),-0.088,50
+guidance.baseline_comparison.evasion_rate_delta,guidance,baseline_comparison,Evasion rate delta (guided - random baseline),-0.2,50
+guidance.baseline_comparison.score_delta,guidance,baseline_comparison,Mean evasion score delta (guided - random),-0.21992638987687552,50
+guidance.baseline_comparison.mutation_ablation,guidance,baseline_comparison,Mutation ablation (score with mutations - score without),-0.1666122448979592,50
+guidance.baseline_comparison.token_guidance_usage,guidance,baseline_comparison,Token guidance usage rate (selections with avoid/seek tokens),0,50
+guidance.convergence.decay_ratio,guidance,convergence,"Discovery decay ratio (2nd half evasions / 1st half, >1 = improving)",1,50
+guidance.convergence.plateau_round,guidance,convergence,Plateau onset (fraction of total rounds before score stalls),0.1,50
+guidance.convergence.config_discovery_decay,guidance,convergence,Config discovery decay (2nd half new configs / 1st half),0,50
+guidance.convergence.exploitation_ratio,guidance,convergence,Exploitation ratio (exploit / exploit+explore from rationale),0.5,50
