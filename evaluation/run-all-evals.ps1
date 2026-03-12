@@ -9,10 +9,10 @@
     All outputs are placed in evaluation/data/{name}/.
 #>
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 $repoRoot = (git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
-$dataDir = Join-Path $repoRoot "evaluation" "data"
+$dataDir = Join-Path (Join-Path $repoRoot "evaluation") "data"
 
 $evalFiles = Get-ChildItem -Path $dataDir -Filter "*_eval.json" -File
 if ($evalFiles.Count -eq 0) {
@@ -52,7 +52,7 @@ foreach ($file in $evalFiles) {
         "--csv", $evalCsv,
         "--summary", $evalSummary
     )
-    & cargo @evalArgs 2>&1
+    & cargo @evalArgs
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [ERR] evaluate failed for $name" -ForegroundColor Red
         $failed += "$name/evaluate"
@@ -71,7 +71,7 @@ foreach ($file in $evalFiles) {
         "--output", $compReport,
         "--csv", $compCsv
     )
-    & cargo @compArgs 2>&1
+    & cargo @compArgs
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [ERR] component-eval failed for $name" -ForegroundColor Red
         $failed += "$name/component-eval"
@@ -86,8 +86,8 @@ foreach ($file in $evalFiles) {
         New-Item -ItemType Directory -Path $figDir -Force | Out-Null
     }
 
-    $plotScript = Join-Path $repoRoot "evaluation" "scripts" "plots.py"
-    & python $plotScript --input $compReport --outdir $figDir 2>&1
+    $plotScript = Join-Path (Join-Path (Join-Path $repoRoot "evaluation") "scripts") "plots.py"
+    & python $plotScript --input $compReport --outdir $figDir
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [ERR] plots.py failed for $name" -ForegroundColor Red
         $failed += "$name/plots"

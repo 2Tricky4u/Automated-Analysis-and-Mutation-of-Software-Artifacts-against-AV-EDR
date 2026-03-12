@@ -1,0 +1,37 @@
+\begin{table}[htbp]
+\centering
+\caption{Component-Level Evaluation Metrics}
+\label{tab:component-metrics}
+\begin{tabular}{llrr}
+\toprule
+Metric ID & Label & Value & $n$ \\
+\midrule
+\texttt{b2.classifier\_analysis.confusion\_matrix} & Confusion matrix (verdict → differential category) & 3.0000 & 51 \\
+\texttt{b2.classifier\_analysis.sankey\_flows} & Verdict → category Sankey diagram flows & 4.0000 & 51 \\
+\texttt{b2.classifier\_analysis.score\_by\_category} & Evasion score distribution by differential category & 4.0000 & 51 \\
+\texttt{b2.classifier\_analysis.verdict\_agreement} & Verdict ↔ differential category agreement rate & 0.5490 & 51 \\
+\midrule
+\texttt{b3.telemetry\_completeness.coverage\_by\_verdict} & Coverage distribution by differential category & 68.6320 & 51 \\
+\texttt{b3.telemetry\_completeness.coverage\_detection\_corr} & Coverage ↔ detection Pearson correlation & 0.5887 & 51 \\
+\texttt{b3.telemetry\_completeness.coverage\_histogram} & Coverage percent histogram & 50.0000 & 51 \\
+\texttt{b3.telemetry\_completeness.token\_counts} & Token counts by differential category & 51.0000 & 51 \\
+\texttt{b3.telemetry\_completeness.trustworthy\_trajectory} & Trustworthy round fraction (1 - contamination rate) & 0.5490 & 51 \\
+\midrule
+\texttt{c1.token\_sensitivity.default\_operating\_point} & Default operating point (lift=1.5, confidence=0.3) & 0.0630 & 51 \\
+\texttt{c1.token\_sensitivity.heatmap} & Token sensitivity heatmap (5×5 lift × confidence grid) & 0.2741 & 51 \\
+\texttt{c1.token\_sensitivity.lift\_distribution} & Token lift distribution statistics & 0.3232 & 51 \\
+\midrule
+\texttt{c3.token\_coverage.category\_proportions} & Per-round token category proportions (for stacked bar) & 8.0000 & 51 \\
+\texttt{c3.token\_coverage.category\_table} & Token category coverage (active categories / 9 total) & 0.8889 & 51 \\
+\texttt{c3.token\_coverage.presence\_heatmap} & Token presence heatmap (top-20 tokens × rounds) & 306.0000 & 51 \\
+\texttt{c3.token\_coverage.tokens\_per\_round} & Mean tokens per round & 129.5686 & 51 \\
+\midrule
+\texttt{c4.scoring\_convergence.actionable\_stability} & Round where actionable token count stabilizes & 0.0000 & 51 \\
+\texttt{c4.scoring\_convergence.lift\_variance} & Lift variance convergence (final variance) & 0.1221 & 51 \\
+\texttt{c4.scoring\_convergence.top5\_overlap} & Top-5 token overlap convergence (final overlap fraction) & 0.0000 & 51 \\
+\midrule
+\texttt{c5.counterfactual.effect\_sizes} & Largest absolute detection rate delta & 1.0000 & 51 \\
+\texttt{c5.counterfactual.forest\_plot} & Counterfactual validation: significant tokens (Bonferroni α & 0.3020 & 51 \\
+\bottomrule
+\end{tabular}
+\end{table}
