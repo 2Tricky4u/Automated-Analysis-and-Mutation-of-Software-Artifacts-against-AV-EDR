@@ -16,6 +16,10 @@ use automutate_config::WorkerConfig;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Disable QuickEdit Mode on Windows console to prevent process freeze
+    // when the user accidentally clicks inside the cmd window.
+    disable_quick_edit();
+
     // Load generated TOML config
     let config = WorkerConfig::load().unwrap_or_else(|e| {
         eprintln!("Failed to load worker config: {}", e);
@@ -118,3 +122,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+/// Disable Windows Console QuickEdit Mode.
+///
+/// When QuickEdit is enabled (default), clicking inside the console window
+/// selects text and **blocks** all stdout/stderr writes — freezing the process
+/// until the user presses Enter/Escape. This is the classic "worker stuck until
+/// I press Enter" symptom.
+#[cfg(windows)]
+fn disable_quick_edit() {
+    use windows::Win32::System::Console::{
+        CONSOLE_MODE, ENABLE_EXTENDED_FLAGS, ENABLE_QUICK_EDIT_MODE, GetConsoleMode, GetStdHandle,
+        STD_INPUT_HANDLE, SetConsoleMode,
+    };
+
+    unsafe {
+        let handle = match GetStdHandle(STD_INPUT_HANDLE) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        let mut mode = CONSOLE_MODE::default();
+        if GetConsoleMode(handle, &mut mode).is_err() {
+            return;
+        }
+        // Clear QUICK_EDIT, set EXTENDED_FLAGS (required for the change to take effect)
+        mode &= !ENABLE_QUICK_EDIT_MODE;
+        mode |= ENABLE_EXTENDED_FLAGS;
+        let _ = SetConsoleMode(handle, mode);
+    }
+}
+
+#[cfg(not(windows))]
+fn disable_quick_edit() {}

@@ -263,18 +263,94 @@ fn export_job(session: &JobSession) -> anyhow::Result<()> {
 }
 ```
 
-### 4.2 From ElasticSearch (Manual Export)
+### 4.2 From ElasticSearch
 
-If you have round data in ES, query it and build the JSON manually:
+The `EvalDataset` requires data from two ES indices. A third field (`selections`) is **not persisted to ES** and is stubbed.
+
+#### 4.2a `rounds-*` Query
 
 ```bash
-# Query rounds from ES
-curl -s "http://localhost:9200/rounds-*/_search?q=job_id:job-abc123&size=100" \
+curl -s -X POST 'http://localhost:9200/rounds-*/_search' \
+  -H 'Content-Type: application/json' \
+  -d '{"query":{"term":{"job_id":"job-abc123"}},"sort":[{"round_number":"asc"}],"size":500}' \
   | jq '[.hits.hits[]._source]' > rounds_raw.json
-
-# Then use a script to reshape into the EvalDataset schema.
-# The key fields needed per round are listed in Section 3.1.
 ```
+
+**Field mapping** (ES → `RoundSummary`):
+
+| ES field | RoundSummary field | Notes |
+|----------|-------------------|-------|
+| `round_id` | `round_id` | Wrapped in `RoundId` |
+| `round_number` | `round_number` | u32 |
+| `mutations` | `mutations` | `Vec<String>` |
+| `mutation_recipe` | `mutation_specs` | Array of `{id, params}` |
+| `modules` | `modules` | 7 keyword fields → `ModuleSelectionSpec` |
+| `detected` | `detected` | bool |
+| `behavior_match` | `behavior_match` | bool |
+| `evasion_score` | `evasion_score` | f64 |
+| `differential_category` | `differential_category` | snake_case via `as_str()` (e.g., `"real_detection"`) |
+| `completed_at` | `completed_at` | RFC 3339 string → `SystemTime` |
+| `dry_run_exit_code` | `dry_run_exit_code` | `Option<i32>` |
+| `has_dryrun` | `has_dryrun` | bool |
+| `detection_verdict` | `detection_verdict` | String |
+| `coverage_percent` | `coverage_percent` | `Option<f64>`, may be null if async update hasn't run |
+
+#### 4.2b `tokens-*` Query
+
+```bash
+curl -s -X POST 'http://localhost:9200/tokens-*/_search' \
+  -H 'Content-Type: application/json' \
+  -d '{"query":{"term":{"job_id":"job-abc123"}},"sort":[{"timestamp":"asc"}],"size":500}' \
+  | jq '[.hits.hits[]._source]' > tokens_raw.json
+```
+
+**Field mapping** (ES → `TokenMatrixEntry`):
+
+| ES field | TokenMatrixEntry field | Notes |
+|----------|----------------------|-------|
+| `tokens` | `tokens` | Full combined set: module + mutation + api + seq2 + etw + checkpoint |
+| `detected` | `detected` | bool |
+| `differential_category` | `trustworthy` | PascalCase via `format!("{:?}", ...)` → `is_trustworthy()` |
+| `round_id` | `round_number` | Cross-reference with rounds data (tokens-* has no round_number) |
+
+**Important:** The `tokens-*` index stores `differential_category` in **PascalCase** (`"RealDetection"`), while `rounds-*` uses **snake_case** (`"real_detection"`). The parser handles both formats.
+
+#### 4.2c `selections` Gap
+
+`SelectionRecord` data (rationale, avoid/seek tokens) is **not persisted to ElasticSearch**. This data only exists in-memory during job execution within the `JobWorker`.
+
+**Impact on metrics:**
+- `guidance.convergence.exploitation_ratio` produces a neutral value (0.5) with stub selections
+- `guidance.baseline_comparison` may show reduced signal without real avoid/seek token lists
+- For full selection data, use the in-memory export path (Section 4.1)
+
+When exporting from ES, selections are stubbed with:
+- `rationale`: `"unknown (not persisted to ES)"`
+- `avoid_tokens`: `[]`
+- `seek_tokens`: `[]`
+
+#### 4.2d CLI Export Tool
+
+The `eval-export` binary supports a `--source es` mode that queries ES and assembles the complete dataset:
+
+```bash
+cargo run -p evaluation --bin eval-export -- \
+  --source es \
+  --job-id job-abc123 \
+  --es-url http://localhost:9200 \
+  --output job_abc123_eval.json
+```
+
+Output summary:
+```
+Exported 42 rounds from ES job job-abc123 to job_abc123_eval.json (15.2 KB)
+  rounds:           42
+  token_matrices:   42 (from tokens-* index, full telemetry tokens included)
+  selections:       42 (stub — rationale/avoid/seek not persisted to ES)
+  telemetry_tokens: None
+```
+
+A warning is emitted if `token_matrices` count differs from `rounds` count, indicating incomplete token extraction in the pipeline.
 
 ### 4.3 Synthetic Data (for Testing)
 
