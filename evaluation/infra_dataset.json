@@ -1,0 +1,569 @@
+{
+  "payload_encoding": [
+    {
+      "encoding_type": "xor",
+      "payload_size": 1,
+      "encoded_size": 1,
+      "encoded_entropy": 0.0,
+      "roundtrip_correct": true,
+      "encode_time_us": 116.89999999999999,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 1,
+      "encoded_size": 4,
+      "encoded_entropy": 1.5,
+      "roundtrip_correct": true,
+      "encode_time_us": 5.6,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 1,
+      "encoded_size": 2,
+      "encoded_entropy": 1.0,
+      "roundtrip_correct": true,
+      "encode_time_us": 39.400000000000006,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 1,
+      "encoded_size": 1,
+      "encoded_entropy": 0.0,
+      "roundtrip_correct": true,
+      "encode_time_us": 4.199999999999999,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 16,
+      "encoded_size": 16,
+      "encoded_entropy": 1.543564443199596,
+      "roundtrip_correct": true,
+      "encode_time_us": 69.9,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 16,
+      "encoded_size": 79,
+      "encoded_entropy": 2.1631092834784984,
+      "roundtrip_correct": true,
+      "encode_time_us": 16.799999999999997,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 16,
+      "encoded_size": 32,
+      "encoded_entropy": 1.4185644431995963,
+      "roundtrip_correct": true,
+      "encode_time_us": 29.4,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 16,
+      "encoded_size": 16,
+      "encoded_entropy": 0.5435644431995964,
+      "roundtrip_correct": true,
+      "encode_time_us": 2.9000000000000004,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 64,
+      "encoded_size": 64,
+      "encoded_entropy": 1.2006223243127148,
+      "roundtrip_correct": true,
+      "encode_time_us": 12.9,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 64,
+      "encoded_size": 319,
+      "encoded_entropy": 2.007487608167783,
+      "roundtrip_correct": true,
+      "encode_time_us": 25.5,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 64,
+      "encoded_size": 128,
+      "encoded_entropy": 1.1693723243127148,
+      "roundtrip_correct": true,
+      "encode_time_us": 34.8,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 64,
+      "encoded_size": 64,
+      "encoded_entropy": 0.20062232431271465,
+      "roundtrip_correct": true,
+      "encode_time_us": 2.2,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 256,
+      "encoded_size": 256,
+      "encoded_entropy": 1.0659144123432416,
+      "roundtrip_correct": true,
+      "encode_time_us": 22.3,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 256,
+      "encoded_size": 1279,
+      "encoded_entropy": 1.9495681097595445,
+      "roundtrip_correct": true,
+      "encode_time_us": 80.3,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 256,
+      "encoded_size": 512,
+      "encoded_entropy": 1.0581019123432416,
+      "roundtrip_correct": true,
+      "encode_time_us": 43.699999999999996,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 256,
+      "encoded_size": 256,
+      "encoded_entropy": 0.06591441234324169,
+      "roundtrip_correct": true,
+      "encode_time_us": 4.1,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 1024,
+      "encoded_size": 1024,
+      "encoded_entropy": 1.0203931352360849,
+      "roundtrip_correct": true,
+      "encode_time_us": 37.6,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 1024,
+      "encoded_size": 5119,
+      "encoded_entropy": 1.9303996689154554,
+      "roundtrip_correct": true,
+      "encode_time_us": 205.3,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 1024,
+      "encoded_size": 2048,
+      "encoded_entropy": 1.0184400102360849,
+      "roundtrip_correct": true,
+      "encode_time_us": 46.199999999999996,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 1024,
+      "encoded_size": 1024,
+      "encoded_entropy": 0.020393135236084953,
+      "roundtrip_correct": true,
+      "encode_time_us": 5.5,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 4096,
+      "encoded_size": 4096,
+      "encoded_entropy": 1.0060753626772843,
+      "roundtrip_correct": true,
+      "encode_time_us": 59.1,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 4096,
+      "encoded_size": 20479,
+      "encoded_entropy": 1.9244364977613724,
+      "roundtrip_correct": true,
+      "encode_time_us": 981.6,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 4096,
+      "encoded_size": 8192,
+      "encoded_entropy": 1.0055870814272843,
+      "roundtrip_correct": true,
+      "encode_time_us": 101.39999999999999,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 4096,
+      "encoded_size": 4096,
+      "encoded_entropy": 0.006075362677284398,
+      "roundtrip_correct": true,
+      "encode_time_us": 5.0,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 8192,
+      "encoded_size": 8192,
+      "encoded_entropy": 1.003281864969805,
+      "roundtrip_correct": true,
+      "encode_time_us": 122.10000000000001,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 8192,
+      "encoded_size": 40959,
+      "encoded_entropy": 1.9232799389594706,
+      "roundtrip_correct": true,
+      "encode_time_us": 1650.3,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 8192,
+      "encoded_size": 16384,
+      "encoded_entropy": 1.003037724344805,
+      "roundtrip_correct": true,
+      "encode_time_us": 139.70000000000002,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 8192,
+      "encoded_size": 8192,
+      "encoded_entropy": 0.0032818649698048933,
+      "roundtrip_correct": true,
+      "encode_time_us": 6.1,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 16384,
+      "encoded_size": 16384,
+      "encoded_entropy": 1.0017630135476305,
+      "roundtrip_correct": true,
+      "encode_time_us": 173.5,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 16384,
+      "encoded_size": 81919,
+      "encoded_entropy": 1.9226528410484036,
+      "roundtrip_correct": true,
+      "encode_time_us": 3830.8,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 16384,
+      "encoded_size": 32768,
+      "encoded_entropy": 1.0016409432351305,
+      "roundtrip_correct": true,
+      "encode_time_us": 292.40000000000003,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 16384,
+      "encoded_size": 16384,
+      "encoded_entropy": 0.001763013547630436,
+      "roundtrip_correct": true,
+      "encode_time_us": 8.399999999999999,
+      "header_compiles": true
+    }
+  ],
+  "ast_mutation": [
+    {
+      "mutation_id": "ast.decon_rounds:count=50",
+      "input_lines": 71,
+      "output_lines": 71,
+      "line_delta": 0,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 62,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 1513.6
+    },
+    {
+      "mutation_id": "ast.fill_pattern:pattern=0xCC",
+      "input_lines": 71,
+      "output_lines": 71,
+      "line_delta": 0,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 62,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 1433.5
+    },
+    {
+      "mutation_id": "ast.timing_pattern:method=rdtsc",
+      "input_lines": 71,
+      "output_lines": 72,
+      "line_delta": 1,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 63,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 1163.3
+    },
+    {
+      "mutation_id": "ast.protection_transition:strategy=rw_rx",
+      "input_lines": 71,
+      "output_lines": 71,
+      "line_delta": 0,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 62,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 1166.8
+    },
+    {
+      "mutation_id": "ast.benign_preamble:count=5",
+      "input_lines": 71,
+      "output_lines": 78,
+      "line_delta": 7,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 69,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 1199.4
+    },
+    {
+      "mutation_id": "ast.exec_decoy:target=calc",
+      "input_lines": 71,
+      "output_lines": 71,
+      "line_delta": 0,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 62,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 1138.2
+    },
+    {
+      "mutation_id": "ast.api_sequence_obfuscation:inserts=3",
+      "input_lines": 71,
+      "output_lines": 77,
+      "line_delta": 6,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 68,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 1389.8
+    },
+    {
+      "mutation_id": "ast.const_obfuscation",
+      "input_lines": 71,
+      "output_lines": 87,
+      "line_delta": 16,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 78,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 2444.1
+    },
+    {
+      "mutation_id": "ast.string_xor:xor_key=0xAA",
+      "input_lines": 71,
+      "output_lines": 71,
+      "line_delta": 0,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 88,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 1723.8
+    },
+    {
+      "mutation_id": "ast.benign_syscall_insert:count=5",
+      "input_lines": 71,
+      "output_lines": 71,
+      "line_delta": 0,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 62,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 1274.6999999999998
+    }
+  ],
+  "ir_mutation": [
+    {
+      "mutation_id": "llvm.nop_insert:density=1.0",
+      "density": 1.0,
+      "input_lines": 45,
+      "output_lines": 52,
+      "insertions": 7,
+      "survives_o2": null,
+      "deterministic": true,
+      "transform_time_us": 32.9
+    },
+    {
+      "mutation_id": "llvm.opaque_predicate:density=1.0,mode=robust",
+      "density": 1.0,
+      "input_lines": 45,
+      "output_lines": 51,
+      "insertions": 6,
+      "survives_o2": null,
+      "deterministic": true,
+      "transform_time_us": 51.1
+    },
+    {
+      "mutation_id": "llvm.opaque_predicate:density=1.0,mode=trivial",
+      "density": 1.0,
+      "input_lines": 45,
+      "output_lines": 48,
+      "insertions": 3,
+      "survives_o2": null,
+      "deterministic": true,
+      "transform_time_us": 41.1
+    },
+    {
+      "mutation_id": "llvm.junk_block:count=3",
+      "density": 1.0,
+      "input_lines": 45,
+      "output_lines": 63,
+      "insertions": 18,
+      "survives_o2": null,
+      "deterministic": true,
+      "transform_time_us": 44.8
+    }
+  ],
+  "binary_mutation": null,
+  "template_assembly": [],
+  "instrumentation": null,
+  "token_extraction": [
+    {
+      "input_doc_count": 5,
+      "output_token_count": 8,
+      "category_counts": {
+        "api": 4,
+        "seq2": 3,
+        "etw_event": 1
+      },
+      "categories_active": 3,
+      "extraction_time_us": 49.0,
+      "deterministic": true
+    },
+    {
+      "input_doc_count": 10,
+      "output_token_count": 15,
+      "category_counts": {
+        "api": 6,
+        "seq2": 7,
+        "etw_event": 2
+      },
+      "categories_active": 3,
+      "extraction_time_us": 50.0,
+      "deterministic": true
+    },
+    {
+      "input_doc_count": 25,
+      "output_token_count": 31,
+      "category_counts": {
+        "seq2": 18,
+        "etw_event": 3,
+        "api": 10
+      },
+      "categories_active": 3,
+      "extraction_time_us": 99.4,
+      "deterministic": true
+    },
+    {
+      "input_doc_count": 50,
+      "output_token_count": 40,
+      "category_counts": {
+        "api": 10,
+        "seq2": 27,
+        "etw_event": 3
+      },
+      "categories_active": 3,
+      "extraction_time_us": 198.4,
+      "deterministic": true
+    },
+    {
+      "input_doc_count": 100,
+      "output_token_count": 40,
+      "category_counts": {
+        "etw_event": 3,
+        "seq2": 27,
+        "api": 10
+      },
+      "categories_active": 3,
+      "extraction_time_us": 324.0,
+      "deterministic": true
+    }
+  ],
+  "token_scoring": [
+    {
+      "test_case": "perfect_correlation",
+      "input_rounds": 4,
+      "expected_lift": 2.0,
+      "computed_lift": 2.0,
+      "lift_error": 0.0,
+      "guidance_correct": true
+    },
+    {
+      "test_case": "anti_correlation",
+      "input_rounds": 4,
+      "expected_lift": 0.0,
+      "computed_lift": 0.0,
+      "lift_error": 0.0,
+      "guidance_correct": true
+    },
+    {
+      "test_case": "neutral",
+      "input_rounds": 4,
+      "expected_lift": 1.0,
+      "computed_lift": 1.0,
+      "lift_error": 0.0,
+      "guidance_correct": true
+    },
+    {
+      "test_case": "all_detected_degenerate",
+      "input_rounds": 3,
+      "expected_lift": 0.0,
+      "computed_lift": 0.0,
+      "lift_error": 0.0,
+      "guidance_correct": true
+    },
+    {
+      "test_case": "all_clean_degenerate",
+      "input_rounds": 3,
+      "expected_lift": 0.0,
+      "computed_lift": 0.0,
+      "lift_error": 0.0,
+      "guidance_correct": true
+    },
+    {
+      "test_case": "single_round",
+      "input_rounds": 1,
+      "expected_lift": 0.0,
+      "computed_lift": 0.0,
+      "lift_error": 0.0,
+      "guidance_correct": true
+    },
+    {
+      "test_case": "larger_matrix_hot_token",
+      "input_rounds": 10,
+      "expected_lift": 1.6666666666666667,
+      "computed_lift": 1.6666666666666667,
+      "lift_error": 0.0,
+      "guidance_correct": true
+    }
+  ]
+}

@@ -1,0 +1,790 @@
+[
+  {
+    "metric_id": "infra.i1.payload_encoding.entropy_comparison",
+    "axis": "infrastructure",
+    "category": "payload_encoding",
+    "label": "Encoding entropy comparison (max range across types)",
+    "value": 1.8099149239755215,
+    "details": {
+      "encoding_types": [
+        "subbyte",
+        "none",
+        "english",
+        "xor"
+      ],
+      "entropy_range": 1.8099149239755215,
+      "type_entropies": [
+        {
+          "by_size": [
+            {
+              "entropy": 1.0,
+              "payload_size": 1
+            },
+            {
+              "entropy": 1.4185644431995963,
+              "payload_size": 16
+            },
+            {
+              "entropy": 1.1693723243127148,
+              "payload_size": 64
+            },
+            {
+              "entropy": 1.0581019123432416,
+              "payload_size": 256
+            },
+            {
+              "entropy": 1.0184400102360849,
+              "payload_size": 1024
+            },
+            {
+              "entropy": 1.0055870814272845,
+              "payload_size": 4096
+            },
+            {
+              "entropy": 1.003037724344805,
+              "payload_size": 8192
+            },
+            {
+              "entropy": 1.0016409432351303,
+              "payload_size": 16384
+            }
+          ],
+          "encoding_type": "subbyte",
+          "max_entropy": 1.4185644431995963,
+          "mean_entropy": 1.0843430548873572,
+          "min_entropy": 1.0
+        },
+        {
+          "by_size": [
+            {
+              "entropy": 0.0,
+              "payload_size": 1
+            },
+            {
+              "entropy": 0.5435644431995964,
+              "payload_size": 16
+            },
+            {
+              "entropy": 0.20062232431271465,
+              "payload_size": 64
+            },
+            {
+              "entropy": 0.06591441234324169,
+              "payload_size": 256
+            },
+            {
+              "entropy": 0.020393135236084953,
+              "payload_size": 1024
+            },
+            {
+              "entropy": 0.006075362677284398,
+              "payload_size": 4096
+            },
+            {
+              "entropy": 0.0032818649698048933,
+              "payload_size": 8192
+            },
+            {
+              "entropy": 0.001763013547630436,
+              "payload_size": 16384
+            }
+          ],
+          "encoding_type": "none",
+          "max_entropy": 0.5435644431995964,
+          "mean_entropy": 0.10520181953579467,
+          "min_entropy": 0.0
+        },
+        {
+          "by_size": [
+            {
+              "entropy": 1.5,
+              "payload_size": 1
+            },
+            {
+              "entropy": 2.1631092834784984,
+              "payload_size": 16
+            },
+            {
+              "entropy": 2.007487608167783,
+              "payload_size": 64
+            },
+            {
+              "entropy": 1.9495681097595443,
+              "payload_size": 256
+            },
+            {
+              "entropy": 1.9303996689154552,
+              "payload_size": 1024
+            },
+            {
+              "entropy": 1.9244364977613724,
+              "payload_size": 4096
+            },
+            {
+              "entropy": 1.9232799389594704,
+              "payload_size": 8192
+            },
+            {
+              "entropy": 1.9226528410484036,
+              "payload_size": 16384
+            }
+          ],
+          "encoding_type": "english",
+          "max_entropy": 2.1631092834784984,
+          "mean_entropy": 1.915116743511316,
+          "min_entropy": 1.5
+        },
+        {
+          "by_size": [
+            {
+              "entropy": 0.0,
+              "payload_size": 1
+            },
+            {
+              "entropy": 1.543564443199596,
+              "payload_size": 16
+            },
+            {
+              "entropy": 1.2006223243127148,
+              "payload_size": 64
+            },
+            {
+              "entropy": 1.0659144123432416,
+              "payload_size": 256
+            },
+            {
+              "entropy": 1.0203931352360849,
+              "payload_size": 1024
+            },
+            {
+              "entropy": 1.0060753626772845,
+              "payload_size": 4096
+            },
+            {
+              "entropy": 1.003281864969805,
+              "payload_size": 8192
+            },
+            {
+              "entropy": 1.0017630135476303,
+              "payload_size": 16384
+            }
+          ],
+          "encoding_type": "xor",
+          "max_entropy": 1.543564443199596,
+          "mean_entropy": 0.9802018195357945,
+          "min_entropy": 0.0
+        }
+      ]
+    },
+    "n": 32
+  },
+  {
+    "metric_id": "infra.i1.payload_encoding.roundtrip_correctness",
+    "axis": "infrastructure",
+    "category": "payload_encoding",
+    "label": "Roundtrip correctness (fraction correct)",
+    "value": 1.0,
+    "details": {
+      "correct": 32,
+      "incorrect_cases": [],
+      "total": 32
+    },
+    "n": 32
+  },
+  {
+    "metric_id": "infra.i1.payload_encoding.size_expansion",
+    "axis": "infrastructure",
+    "category": "payload_encoding",
+    "label": "Size expansion ratio (encoded/original)",
+    "value": 2.2161426544189453,
+    "details": {
+      "by_type": [
+        {
+          "encoding_type": "subbyte",
+          "max_expansion": 2.0,
+          "mean_expansion": 2.0
+        },
+        {
+          "encoding_type": "none",
+          "max_expansion": 1.0,
+          "mean_expansion": 1.0
+        },
+        {
+          "encoding_type": "english",
+          "max_expansion": 4.99993896484375,
+          "mean_expansion": 4.864570617675781
+        },
+        {
+          "encoding_type": "xor",
+          "max_expansion": 1.0,
+          "mean_expansion": 1.0
+        }
+      ],
+      "overall_mean": 2.2161426544189453
+    },
+    "n": 32
+  },
+  {
+    "metric_id": "infra.i1.payload_encoding.latency",
+    "axis": "infrastructure",
+    "category": "payload_encoding",
+    "label": "Mean encode latency (µs)",
+    "value": 255.496875,
+    "details": {
+      "all_times_us": [
+        116.9,
+        5.6,
+        39.400000000000006,
+        4.199999999999999,
+        69.9,
+        16.799999999999997,
+        29.4,
+        2.9000000000000004,
+        12.9,
+        25.5,
+        34.8,
+        2.2,
+        22.3,
+        80.3,
+        43.7,
+        4.1,
+        37.6,
+        205.3,
+        46.2,
+        5.5,
+        59.1,
+        981.6,
+        101.4,
+        5.0,
+        122.1,
+        1650.3,
+        139.70000000000002,
+        6.1,
+        173.5,
+        3830.8,
+        292.40000000000003,
+        8.399999999999999
+      ],
+      "by_type": [
+        {
+          "encoding_type": "subbyte",
+          "max_us": 292.40000000000003,
+          "mean_us": 90.875
+        },
+        {
+          "encoding_type": "none",
+          "max_us": 8.399999999999999,
+          "mean_us": 4.8
+        },
+        {
+          "encoding_type": "english",
+          "max_us": 3830.8,
+          "mean_us": 849.525
+        },
+        {
+          "encoding_type": "xor",
+          "max_us": 173.5,
+          "mean_us": 76.78750000000001
+        }
+      ],
+      "mean_us": 255.496875
+    },
+    "n": 32
+  },
+  {
+    "metric_id": "infra.i2.ast_mutation.line_impact",
+    "axis": "infrastructure",
+    "category": "ast_mutation",
+    "label": "Per-mutation line delta table",
+    "value": 3.0,
+    "details": {
+      "max_abs_delta": 16,
+      "mean_abs_delta": 3.0,
+      "mutations": [
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 16,
+          "mutation_id": "ast.const_obfuscation",
+          "node_delta": 16,
+          "output_ast_nodes": 78,
+          "output_lines": 87
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 7,
+          "mutation_id": "ast.benign_preamble:count=5",
+          "node_delta": 7,
+          "output_ast_nodes": 69,
+          "output_lines": 78
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 6,
+          "mutation_id": "ast.api_sequence_obfuscation:inserts=3",
+          "node_delta": 6,
+          "output_ast_nodes": 68,
+          "output_lines": 77
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 1,
+          "mutation_id": "ast.timing_pattern:method=rdtsc",
+          "node_delta": 1,
+          "output_ast_nodes": 63,
+          "output_lines": 72
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 0,
+          "mutation_id": "ast.decon_rounds:count=50",
+          "node_delta": 0,
+          "output_ast_nodes": 62,
+          "output_lines": 71
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 0,
+          "mutation_id": "ast.fill_pattern:pattern=0xCC",
+          "node_delta": 0,
+          "output_ast_nodes": 62,
+          "output_lines": 71
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 0,
+          "mutation_id": "ast.protection_transition:strategy=rw_rx",
+          "node_delta": 0,
+          "output_ast_nodes": 62,
+          "output_lines": 71
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 0,
+          "mutation_id": "ast.exec_decoy:target=calc",
+          "node_delta": 0,
+          "output_ast_nodes": 62,
+          "output_lines": 71
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 0,
+          "mutation_id": "ast.string_xor:xor_key=0xAA",
+          "node_delta": 26,
+          "output_ast_nodes": 88,
+          "output_lines": 71
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 0,
+          "mutation_id": "ast.benign_syscall_insert:count=5",
+          "node_delta": 0,
+          "output_ast_nodes": 62,
+          "output_lines": 71
+        }
+      ]
+    },
+    "n": 10
+  },
+  {
+    "metric_id": "infra.i2.ast_mutation.parse_validity",
+    "axis": "infrastructure",
+    "category": "ast_mutation",
+    "label": "Fraction of mutations producing valid C",
+    "value": 1.0,
+    "details": {
+      "invalid_mutations": [],
+      "total": 10,
+      "valid": 10
+    },
+    "n": 10
+  },
+  {
+    "metric_id": "infra.i2.ast_mutation.transform_latency",
+    "axis": "infrastructure",
+    "category": "ast_mutation",
+    "label": "Mean AST transform latency (µs)",
+    "value": 1444.72,
+    "details": {
+      "by_mutation": [
+        {
+          "mutation_id": "ast.decon_rounds:count=50",
+          "time_us": 1513.6
+        },
+        {
+          "mutation_id": "ast.fill_pattern:pattern=0xCC",
+          "time_us": 1433.5
+        },
+        {
+          "mutation_id": "ast.timing_pattern:method=rdtsc",
+          "time_us": 1163.3
+        },
+        {
+          "mutation_id": "ast.protection_transition:strategy=rw_rx",
+          "time_us": 1166.8
+        },
+        {
+          "mutation_id": "ast.benign_preamble:count=5",
+          "time_us": 1199.4
+        },
+        {
+          "mutation_id": "ast.exec_decoy:target=calc",
+          "time_us": 1138.2
+        },
+        {
+          "mutation_id": "ast.api_sequence_obfuscation:inserts=3",
+          "time_us": 1389.8
+        },
+        {
+          "mutation_id": "ast.const_obfuscation",
+          "time_us": 2444.1
+        },
+        {
+          "mutation_id": "ast.string_xor:xor_key=0xAA",
+          "time_us": 1723.8
+        },
+        {
+          "mutation_id": "ast.benign_syscall_insert:count=5",
+          "time_us": 1274.6999999999998
+        }
+      ],
+      "mean_us": 1444.72
+    },
+    "n": 10
+  },
+  {
+    "metric_id": "infra.i3.ir_mutation.insertion_effectiveness",
+    "axis": "infrastructure",
+    "category": "ir_mutation",
+    "label": "Insertions per input line (by mutation)",
+    "value": 0.18888888888888888,
+    "details": {
+      "by_mutation": [
+        {
+          "density": 1.0,
+          "effectiveness": 0.15555555555555556,
+          "input_lines": 45,
+          "insertions": 7,
+          "line_bloat": 1.1555555555555554,
+          "mutation_id": "llvm.nop_insert:density=1.0",
+          "output_lines": 52
+        },
+        {
+          "density": 1.0,
+          "effectiveness": 0.13333333333333333,
+          "input_lines": 45,
+          "insertions": 6,
+          "line_bloat": 1.1333333333333333,
+          "mutation_id": "llvm.opaque_predicate:density=1.0,mode=robust",
+          "output_lines": 51
+        },
+        {
+          "density": 1.0,
+          "effectiveness": 0.06666666666666667,
+          "input_lines": 45,
+          "insertions": 3,
+          "line_bloat": 1.0666666666666667,
+          "mutation_id": "llvm.opaque_predicate:density=1.0,mode=trivial",
+          "output_lines": 48
+        },
+        {
+          "density": 1.0,
+          "effectiveness": 0.4,
+          "input_lines": 45,
+          "insertions": 18,
+          "line_bloat": 1.4,
+          "mutation_id": "llvm.junk_block:count=3",
+          "output_lines": 63
+        }
+      ],
+      "total_input_lines": 180,
+      "total_insertions": 34
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i3.ir_mutation.o2_survival",
+    "axis": "infrastructure",
+    "category": "ir_mutation",
+    "label": "Fraction surviving -O2 optimization",
+    "value": 0.0,
+    "details": {
+      "survival_table": [
+        {
+          "mutation_id": "llvm.nop_insert:density=1.0",
+          "survives_o2": null,
+          "tested": false
+        },
+        {
+          "mutation_id": "llvm.opaque_predicate:density=1.0,mode=robust",
+          "survives_o2": null,
+          "tested": false
+        },
+        {
+          "mutation_id": "llvm.opaque_predicate:density=1.0,mode=trivial",
+          "survives_o2": null,
+          "tested": false
+        },
+        {
+          "mutation_id": "llvm.junk_block:count=3",
+          "survives_o2": null,
+          "tested": false
+        }
+      ],
+      "survived": 0,
+      "tested": 0
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i3.ir_mutation.determinism",
+    "axis": "infrastructure",
+    "category": "ir_mutation",
+    "label": "Fraction producing deterministic output from same seed",
+    "value": 1.0,
+    "details": {
+      "deterministic": 4,
+      "total": 4
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i3.ir_mutation.line_bloat",
+    "axis": "infrastructure",
+    "category": "ir_mutation",
+    "label": "Mean output/input line ratio",
+    "value": 1.1888888888888887,
+    "details": {
+      "bloat_ratios": [
+        1.1555555555555554,
+        1.1333333333333333,
+        1.0666666666666667,
+        1.4
+      ],
+      "mean_bloat": 1.1888888888888887
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i7.token_extraction.category_coverage",
+    "axis": "infrastructure",
+    "category": "token_extraction",
+    "label": "Active token categories / total (9)",
+    "value": 0.3333333333333333,
+    "details": {
+      "active_categories": 3,
+      "category_table": [
+        {
+          "category": "seq2",
+          "total_tokens": 82
+        },
+        {
+          "category": "api",
+          "total_tokens": 40
+        },
+        {
+          "category": "etw_event",
+          "total_tokens": 12
+        }
+      ],
+      "max_active_single_run": 3,
+      "total_categories": 9
+    },
+    "n": 5
+  },
+  {
+    "metric_id": "infra.i7.token_extraction.tokens_per_doc",
+    "axis": "infrastructure",
+    "category": "token_extraction",
+    "label": "Mean tokens per input document",
+    "value": 1.108,
+    "details": {
+      "by_run": [
+        {
+          "category_counts": {
+            "api": 4,
+            "etw_event": 1,
+            "seq2": 3
+          },
+          "input_docs": 5,
+          "output_tokens": 8,
+          "run": 0,
+          "tokens_per_doc": 1.6
+        },
+        {
+          "category_counts": {
+            "api": 6,
+            "etw_event": 2,
+            "seq2": 7
+          },
+          "input_docs": 10,
+          "output_tokens": 15,
+          "run": 1,
+          "tokens_per_doc": 1.5
+        },
+        {
+          "category_counts": {
+            "api": 10,
+            "etw_event": 3,
+            "seq2": 18
+          },
+          "input_docs": 25,
+          "output_tokens": 31,
+          "run": 2,
+          "tokens_per_doc": 1.24
+        },
+        {
+          "category_counts": {
+            "api": 10,
+            "etw_event": 3,
+            "seq2": 27
+          },
+          "input_docs": 50,
+          "output_tokens": 40,
+          "run": 3,
+          "tokens_per_doc": 0.8
+        },
+        {
+          "category_counts": {
+            "api": 10,
+            "etw_event": 3,
+            "seq2": 27
+          },
+          "input_docs": 100,
+          "output_tokens": 40,
+          "run": 4,
+          "tokens_per_doc": 0.4
+        }
+      ],
+      "mean_yield": 1.108
+    },
+    "n": 5
+  },
+  {
+    "metric_id": "infra.i7.token_extraction.latency_distribution",
+    "axis": "infrastructure",
+    "category": "token_extraction",
+    "label": "Extraction latency distribution (µs)",
+    "value": 144.16,
+    "details": {
+      "all_times_us": [
+        49.0,
+        50.0,
+        99.4,
+        198.4,
+        324.0
+      ],
+      "max_us": 324.0,
+      "mean_us": 144.16,
+      "p50_us": 99.4,
+      "p95_us": 324.0,
+      "p99_us": 324.0
+    },
+    "n": 5
+  },
+  {
+    "metric_id": "infra.i7.token_extraction.determinism",
+    "axis": "infrastructure",
+    "category": "token_extraction",
+    "label": "Fraction of runs producing deterministic output",
+    "value": 1.0,
+    "details": {
+      "deterministic": 5,
+      "total": 5
+    },
+    "n": 5
+  },
+  {
+    "metric_id": "infra.i8.token_scoring.lift_accuracy",
+    "axis": "infrastructure",
+    "category": "token_scoring",
+    "label": "Lift computation accuracy (1 - max_error)",
+    "value": 1.0,
+    "details": {
+      "all_pass": true,
+      "max_absolute_error": 0.0,
+      "mean_absolute_error": 0.0,
+      "test_cases": [
+        {
+          "computed_lift": 2.0,
+          "expected_lift": 2.0,
+          "input_rounds": 4,
+          "lift_error": 0.0,
+          "pass": true,
+          "test_case": "perfect_correlation"
+        },
+        {
+          "computed_lift": 0.0,
+          "expected_lift": 0.0,
+          "input_rounds": 4,
+          "lift_error": 0.0,
+          "pass": true,
+          "test_case": "anti_correlation"
+        },
+        {
+          "computed_lift": 1.0,
+          "expected_lift": 1.0,
+          "input_rounds": 4,
+          "lift_error": 0.0,
+          "pass": true,
+          "test_case": "neutral"
+        },
+        {
+          "computed_lift": 0.0,
+          "expected_lift": 0.0,
+          "input_rounds": 3,
+          "lift_error": 0.0,
+          "pass": true,
+          "test_case": "all_detected_degenerate"
+        },
+        {
+          "computed_lift": 0.0,
+          "expected_lift": 0.0,
+          "input_rounds": 3,
+          "lift_error": 0.0,
+          "pass": true,
+          "test_case": "all_clean_degenerate"
+        },
+        {
+          "computed_lift": 0.0,
+          "expected_lift": 0.0,
+          "input_rounds": 1,
+          "lift_error": 0.0,
+          "pass": true,
+          "test_case": "single_round"
+        },
+        {
+          "computed_lift": 1.6666666666666667,
+          "expected_lift": 1.6666666666666667,
+          "input_rounds": 10,
+          "lift_error": 0.0,
+          "pass": true,
+          "test_case": "larger_matrix_hot_token"
+        }
+      ]
+    },
+    "n": 7
+  },
+  {
+    "metric_id": "infra.i8.token_scoring.guidance_correctness",
+    "axis": "infrastructure",
+    "category": "token_scoring",
+    "label": "Avoid/seek classification accuracy",
+    "value": 1.0,
+    "details": {
+      "correct": 7,
+      "incorrect_cases": [],
+      "total": 7
+    },
+    "n": 7
+  }
+]

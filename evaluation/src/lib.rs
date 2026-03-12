@@ -247,6 +247,73 @@ pub struct TokenScoringResult {
     pub guidance_correct: bool,
 }
 
+/// Result of an input diversity benchmark (I9).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputDiversityResult {
+    pub mutation_a: String,
+    pub mutation_b: String,
+    pub line_delta_a: i64,
+    pub line_delta_b: i64,
+    pub normalized_distance: f64,
+    pub outputs_differ: bool,
+}
+
+/// Result of an oracle stability benchmark (I10).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OracleStabilityResult {
+    pub test_case: String,
+    pub repeated_deterministic: bool,
+    pub permutation_top5_jaccard: f64,
+    pub permutation_lift_variance: f64,
+    pub incremental_snapshots: Vec<IncrementalSnapshot>,
+}
+
+/// Snapshot of guidance state at a given round count (I10 sub-struct).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncrementalSnapshot {
+    pub round_count: usize,
+    pub avoid_count: usize,
+    pub seek_count: usize,
+    pub jaccard_with_full: f64,
+}
+
+/// Result of a selector comparison benchmark (I11).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelectorComparisonResult {
+    pub selector_name: String,
+    pub rounds_evaluated: usize,
+    pub unique_mutation_sets: usize,
+    pub mutation_pool_coverage: f64,
+    pub mean_recipe_size: f64,
+    pub exploration_rate: f64,
+    pub per_round_mutations: Vec<Vec<String>>,
+}
+
+/// Result of a guidance utilization benchmark (I12).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuidanceUtilizationResult {
+    pub selector_name: String,
+    pub rounds: usize,
+    pub mutations_without_guidance: Vec<Vec<String>>,
+    pub mutations_with_guidance: Vec<Vec<String>>,
+    pub avoid_tokens: Vec<String>,
+    pub seek_tokens: Vec<String>,
+    pub avoidance_rate: f64,
+    pub seek_adoption_rate: f64,
+    pub recipe_jaccard_delta: f64,
+}
+
+/// Result of a convergence simulation benchmark (I13).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvergenceSimulationResult {
+    pub total_rounds: usize,
+    pub phase_transitions: Vec<(u32, String)>,
+    pub recipe_size_trajectory: Vec<(u32, usize)>,
+    pub diversity_trajectory: Vec<(u32, f64)>,
+    pub best_score_trajectory: Vec<(u32, f64)>,
+    pub marginal_contribution_count: Vec<(u32, usize)>,
+}
+
 /// Dataset for infrastructure-level evaluation (parallel to EvalDataset).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InfraEvalDataset {
@@ -258,6 +325,11 @@ pub struct InfraEvalDataset {
     pub instrumentation: Option<Vec<InstrumentationResult>>,
     pub token_extraction: Option<Vec<TokenExtractionResult>>,
     pub token_scoring: Option<Vec<TokenScoringResult>>,
+    pub input_diversity: Option<Vec<InputDiversityResult>>,
+    pub oracle_stability: Option<Vec<OracleStabilityResult>>,
+    pub selector_comparison: Option<Vec<SelectorComparisonResult>>,
+    pub guidance_utilization: Option<Vec<GuidanceUtilizationResult>>,
+    pub convergence_simulation: Option<Vec<ConvergenceSimulationResult>>,
 }
 
 /// Every infrastructure metric implements this. Stateless, pure computation.

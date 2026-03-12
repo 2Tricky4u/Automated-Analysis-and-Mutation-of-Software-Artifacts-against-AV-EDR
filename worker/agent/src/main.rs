@@ -3,8 +3,11 @@
 //! Loads configuration, detects host capabilities (RedEDR, Defender, MDE, Cortex),
 //! and starts the gRPC server that accepts controller commands.
 
+use std::fs::OpenOptions;
 use tonic::transport::Server;
 use tracing::info;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use worker_agent::{WorkerAgentService, automutate, capabilities};
 
@@ -29,16 +32,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Initialize logging with per-crate suppression support
-    let env_filter = tracing_subscriber::EnvFilter::try_new(config.logging.to_env_filter_string())
-        .unwrap_or_else(|e| {
+    let env_filter =
+        EnvFilter::try_new(config.logging.to_env_filter_string()).unwrap_or_else(|e| {
             eprintln!(
                 "Invalid log filter '{}': {}, defaulting to INFO",
                 config.logging.level, e
             );
-            tracing_subscriber::EnvFilter::new("info")
+            EnvFilter::new("info")
         });
 
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    // File layer — write to worker.log (truncated on each start)
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("worker.log")?;
+
+    let console_layer = tracing_subscriber::fmt::layer().with_ansi(true);
+
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(file)
+        .with_ansi(true);
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(console_layer)
+        .with(file_layer)
+        .init();
 
     let worker_id = config.worker.worker_id.clone();
 

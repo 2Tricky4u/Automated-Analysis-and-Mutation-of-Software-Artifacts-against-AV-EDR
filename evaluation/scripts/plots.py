@@ -13,7 +13,7 @@ Requirements:
 
 Generates figures for:
     Component: C1, C3, C4, C5, B2, B3
-    Infrastructure: I1-I8 (with --infra flag)
+    Infrastructure: I1-I13 (with --infra flag)
 """
 
 import argparse
@@ -807,6 +807,308 @@ def plot_i8_scoring(metrics, outdir):
     print("  I8: i8_scoring_validation.pdf")
 
 
+# ── I9: Input Diversity Heatmap ──────────────────────────────────────────
+
+def plot_i9_diversity(metrics, outdir):
+    """I9: 10x10 pairwise mutation distance heatmap."""
+    m = find_metric(metrics, 'infra.i9.input_diversity.pairwise_distance')
+    if not m:
+        print("  Skipping I9 diversity: metric not found")
+        return
+
+    d = m['details']
+    hm = d.get('heatmap', {})
+    labels = hm.get('labels', [])
+    matrix = np.array(hm.get('matrix', []))
+
+    if matrix.size == 0 or len(labels) == 0:
+        print("  Skipping I9 diversity: no heatmap data")
+        return
+
+    fig, ax = plt.subplots(figsize=(8, 7))
+    im = ax.imshow(matrix, cmap='YlOrRd', aspect='auto', vmin=0, vmax=1)
+
+    short_labels = [l.split(':')[0].replace('ast.', '') for l in labels]
+    ax.set_xticks(range(len(short_labels)))
+    ax.set_xticklabels(short_labels, rotation=45, ha='right', fontsize=8)
+    ax.set_yticks(range(len(short_labels)))
+    ax.set_yticklabels(short_labels, fontsize=8)
+    ax.set_title('I9: Pairwise Mutation Output Distance')
+
+    # Annotate cells
+    for i in range(len(labels)):
+        for j in range(len(labels)):
+            if i != j:
+                val = matrix[i, j]
+                color = 'white' if val > 0.5 else 'black'
+                ax.text(j, i, f'{val:.2f}', ha='center', va='center',
+                        color=color, fontsize=7)
+
+    fig.colorbar(im, ax=ax, label='Normalized Distance')
+    fig.savefig(os.path.join(outdir, 'i9_input_diversity_heatmap.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i9_input_diversity_heatmap.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I9: i9_input_diversity_heatmap.pdf")
+
+
+# ── I10: Oracle Stability ───────────────────────────────────────────────
+
+def plot_i10_stability(metrics, outdir):
+    """I10: Line plot of guidance Jaccard similarity vs round fraction."""
+    m = find_metric(metrics, 'infra.i10.oracle_stability.incremental_convergence')
+    if not m:
+        print("  Skipping I10 stability: metric not found")
+        return
+
+    d = m['details']
+    curve = d.get('convergence_curve', [])
+
+    if not curve:
+        print("  Skipping I10 stability: no convergence curve data")
+        return
+
+    rounds = [pt['round_count'] for pt in curve]
+    jaccards = [pt['jaccard_with_full'] for pt in curve]
+    avoid_counts = [pt['avoid_count'] for pt in curve]
+    seek_counts = [pt['seek_count'] for pt in curve]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
+
+    # Left: Jaccard similarity vs rounds
+    ax1.plot(rounds, jaccards, 'o-', color='#2196F3', linewidth=2, markersize=8)
+    ax1.axhline(y=0.8, color='gray', linestyle='--', alpha=0.5, label='80% threshold')
+    ax1.set_xlabel('Rounds Included')
+    ax1.set_ylabel('Jaccard Similarity with Full')
+    ax1.set_title('I10: Guidance Convergence')
+    ax1.set_ylim(-0.05, 1.05)
+    ax1.legend()
+
+    # Right: Avoid/seek counts vs rounds
+    ax2.plot(rounds, avoid_counts, 's-', color='#f44336', linewidth=2, markersize=8, label='Avoid')
+    ax2.plot(rounds, seek_counts, 'D-', color='#4CAF50', linewidth=2, markersize=8, label='Seek')
+    ax2.set_xlabel('Rounds Included')
+    ax2.set_ylabel('Token Count')
+    ax2.set_title('I10: Guidance Token Counts over Rounds')
+    ax2.legend()
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, 'i10_oracle_stability.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i10_oracle_stability.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I10: i10_oracle_stability.pdf")
+
+
+# ── I11: Selector Comparison ───────────────────────────────────────────
+
+def plot_i11_selectors(metrics, outdir):
+    """I11: Grouped bar of mutation pool coverage by selector + diversity."""
+    m_cov = find_metric(metrics, 'infra.i11.selector_comparison.coverage_by_selector')
+    m_div = find_metric(metrics, 'infra.i11.selector_comparison.diversity_by_selector')
+    if not m_cov:
+        print("  Skipping I11 selectors: metrics not found")
+        return
+
+    cov_data = m_cov['details']['by_selector']
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Left: coverage bar
+    selectors = [e['selector'] for e in cov_data]
+    coverages = [e['coverage'] for e in cov_data]
+    unique_sets = [e['unique_sets'] for e in cov_data]
+
+    colors = ['#2196F3', '#FF9800', '#4CAF50', '#9E9E9E']
+    bars = axes[0].bar(selectors, coverages, color=colors[:len(selectors)], alpha=0.85)
+    axes[0].set_ylabel('Mutation Pool Coverage')
+    axes[0].set_title('I11: Pool Coverage by Selector')
+    axes[0].set_ylim(0, 1.1)
+
+    for bar, val, us in zip(bars, coverages, unique_sets):
+        axes[0].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                     f'{val:.2f}\n({us} sets)', ha='center', fontsize=8)
+
+    # Right: diversity (if available)
+    if m_div:
+        div_data = m_div['details']['by_selector']
+        div_selectors = [e['selector'] for e in div_data]
+        diversities = [e['diversity'] for e in div_data]
+        recipe_sizes = [e['mean_recipe_size'] for e in div_data]
+
+        x = np.arange(len(div_selectors))
+        axes[1].bar(x - 0.2, diversities, 0.35, label='Diversity (Jaccard)',
+                    color='#2196F3', alpha=0.8)
+        axes[1].bar(x + 0.2, [r / max(max(recipe_sizes, default=1), 1) for r in recipe_sizes],
+                    0.35, label='Recipe Size (normalized)', color='#FF9800', alpha=0.8)
+        axes[1].set_xticks(x)
+        axes[1].set_xticklabels(div_selectors)
+        axes[1].set_ylabel('Score')
+        axes[1].set_title('I11: Selection Diversity & Recipe Size')
+        axes[1].legend()
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, 'i11_selector_comparison.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i11_selector_comparison.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I11: i11_selector_comparison.pdf")
+
+
+# ── I12: Guidance Utilization ───────────────────────────────────────────
+
+def plot_i12_guidance(metrics, outdir):
+    """I12: Side-by-side bar of mutation frequency with/without guidance."""
+    m = find_metric(metrics, 'infra.i12.guidance_utilization.recipe_delta')
+    if not m:
+        print("  Skipping I12 guidance: metric not found")
+        return
+
+    d = m['details']
+    by_selector = d.get('by_selector', [])
+
+    if not by_selector:
+        print("  Skipping I12 guidance: no selector data")
+        return
+
+    # Use first selector for detailed plot
+    sel = by_selector[0]
+    freq_data = sel.get('mutation_frequencies', [])
+
+    if not freq_data:
+        print("  Skipping I12 guidance: no frequency data")
+        return
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Left: mutation frequency comparison for first selector
+    mutations = [f['mutation'].replace('ast.', '')[:20] for f in freq_data]
+    without = [f['without_guidance'] for f in freq_data]
+    with_g = [f['with_guidance'] for f in freq_data]
+
+    x = np.arange(len(mutations))
+    ax1.barh(x - 0.2, without, 0.35, label='Without Guidance', color='#9E9E9E', alpha=0.8)
+    ax1.barh(x + 0.2, with_g, 0.35, label='With Guidance', color='#2196F3', alpha=0.8)
+    ax1.set_yticks(x)
+    ax1.set_yticklabels(mutations, fontsize=8)
+    ax1.set_xlabel('Selection Frequency')
+    ax1.set_title(f'I12: {sel["selector"]} Mutation Frequency')
+    ax1.legend()
+
+    # Right: avoidance/seek rates across selectors
+    m_avoid = find_metric(metrics, 'infra.i12.guidance_utilization.avoidance_rate')
+    m_seek = find_metric(metrics, 'infra.i12.guidance_utilization.seek_adoption_rate')
+
+    if m_avoid and m_seek:
+        avoid_data = m_avoid['details']['by_selector']
+        seek_data = m_seek['details']['by_selector']
+
+        names = [e['selector'] for e in avoid_data]
+        avoid_rates = [e['avoidance_rate'] for e in avoid_data]
+        seek_rates = [s['seek_adoption_rate'] for s in seek_data]
+
+        x2 = np.arange(len(names))
+        ax2.bar(x2 - 0.2, avoid_rates, 0.35, label='Avoidance Rate', color='#f44336', alpha=0.8)
+        ax2.bar(x2 + 0.2, seek_rates, 0.35, label='Seek Adoption Rate', color='#4CAF50', alpha=0.8)
+        ax2.set_xticks(x2)
+        ax2.set_xticklabels(names)
+        ax2.set_ylabel('Rate')
+        ax2.set_title('I12: Guidance Response by Selector')
+        ax2.set_ylim(0, 1.1)
+        ax2.legend()
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, 'i12_guidance_utilization.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i12_guidance_utilization.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I12: i12_guidance_utilization.pdf")
+
+
+# ── I13: Convergence Simulation ─────────────────────────────────────────
+
+def plot_i13_convergence(metrics, outdir):
+    """I13: Multi-panel: recipe size + diversity + score vs round."""
+    m_growth = find_metric(metrics, 'infra.i13.convergence_simulation.recipe_growth_rate')
+    m_div = find_metric(metrics, 'infra.i13.convergence_simulation.diversity_preservation')
+    m_score = find_metric(metrics, 'infra.i13.convergence_simulation.score_plateau_round')
+    m_phase = find_metric(metrics, 'infra.i13.convergence_simulation.phase_transition_round')
+
+    if not m_growth:
+        print("  Skipping I13 convergence: metrics not found")
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
+
+    # Phase transition lines
+    transitions = []
+    if m_phase:
+        transitions = m_phase['details'].get('all_transitions', [])
+
+    phase_colors = {
+        'Baseline': '#9E9E9E',
+        'IndividualExploration': '#FF9800',
+        'Accumulation': '#4CAF50',
+    }
+
+    # Panel 1: Recipe size trajectory
+    recipe_data = m_growth['details'].get('recipe_trajectory', [])
+    if recipe_data:
+        rounds_r = [pt['round'] for pt in recipe_data]
+        sizes = [pt['recipe_size'] for pt in recipe_data]
+        axes[0].plot(rounds_r, sizes, 'o-', color='#2196F3', linewidth=2, markersize=4)
+        axes[0].set_xlabel('Round')
+        axes[0].set_ylabel('Recipe Size')
+        axes[0].set_title('Recipe Growth')
+        for t in transitions:
+            axes[0].axvline(x=t['round'], color=phase_colors.get(t['phase'], 'gray'),
+                           linestyle='--', alpha=0.7, linewidth=1)
+
+    # Panel 2: Diversity trajectory
+    if m_div:
+        div_data = m_div['details'].get('diversity_trajectory', [])
+        if div_data:
+            rounds_d = [pt['round'] for pt in div_data]
+            diversities = [pt['diversity'] for pt in div_data]
+            axes[1].plot(rounds_d, diversities, 's-', color='#FF9800', linewidth=2, markersize=4)
+            axes[1].set_xlabel('Round')
+            axes[1].set_ylabel('Recipe Diversity')
+            axes[1].set_title('Diversity over Rounds')
+            axes[1].set_ylim(-0.05, 1.05)
+            for t in transitions:
+                axes[1].axvline(x=t['round'], color=phase_colors.get(t['phase'], 'gray'),
+                               linestyle='--', alpha=0.7, linewidth=1)
+
+    # Panel 3: Score trajectory
+    if m_score:
+        score_data = m_score['details'].get('score_trajectory', [])
+        if score_data:
+            rounds_s = [pt['round'] for pt in score_data]
+            scores = [pt['score'] for pt in score_data]
+            axes[2].plot(rounds_s, scores, 'D-', color='#4CAF50', linewidth=2, markersize=4)
+            axes[2].set_xlabel('Round')
+            axes[2].set_ylabel('Best Evasion Score')
+            axes[2].set_title('Score Convergence')
+            for t in transitions:
+                axes[2].axvline(x=t['round'], color=phase_colors.get(t['phase'], 'gray'),
+                               linestyle='--', alpha=0.7, linewidth=1)
+
+            # Mark plateau
+            plateau_round = m_score['details'].get('plateau_round', 0)
+            if plateau_round > 0:
+                axes[2].axvline(x=plateau_round, color='red', linestyle=':',
+                               alpha=0.8, linewidth=2, label=f'Plateau (r={plateau_round})')
+                axes[2].legend()
+
+    # Add phase legend
+    from matplotlib.lines import Line2D
+    legend_elements = [Line2D([0], [0], color=c, linestyle='--', label=p)
+                       for p, c in phase_colors.items()]
+    axes[0].legend(handles=legend_elements, fontsize=7, loc='upper left')
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, 'i13_convergence_simulation.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i13_convergence_simulation.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I13: i13_convergence_simulation.pdf")
+
+
 # ── Infrastructure Summary Table ─────────────────────────────────────────
 
 def generate_infra_summary_table(metrics, outdir):
@@ -897,6 +1199,11 @@ def main():
         plot_i6_overhead(metrics, args.outdir)
         plot_i7_tokens(metrics, args.outdir)
         plot_i8_scoring(metrics, args.outdir)
+        plot_i9_diversity(metrics, args.outdir)
+        plot_i10_stability(metrics, args.outdir)
+        plot_i11_selectors(metrics, args.outdir)
+        plot_i12_guidance(metrics, args.outdir)
+        plot_i13_convergence(metrics, args.outdir)
 
         print("\nGenerating tables:")
         generate_infra_summary_table(metrics, args.outdir)
