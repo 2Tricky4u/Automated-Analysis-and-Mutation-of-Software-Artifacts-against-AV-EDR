@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
 """
-Component-Level Evaluation Plots
+Component-Level and Infrastructure-Level Evaluation Plots
 
-Generates thesis-quality figures from the component_eval_report.json output.
+Generates thesis-quality figures from evaluation report JSON files.
 
 Usage:
     python evaluation/scripts/plots.py [--input component_eval_report.json] [--outdir figures/]
+    python evaluation/scripts/plots.py --infra [--input infra_eval_report.json] [--outdir figures/]
 
 Requirements:
     pip install matplotlib seaborn numpy
 
 Generates figures for:
-    C1: Token sensitivity heatmap
-    C3: Token coverage stacked bar + presence heatmap
-    C4: Scoring convergence curves
-    C5: Counterfactual forest plot + volcano plot
-    B2: Classifier confusion matrix + Sankey
-    B3: Telemetry coverage by verdict
+    Component: C1, C3, C4, C5, B2, B3
+    Infrastructure: I1-I8 (with --infra flag)
 """
 
 import argparse
@@ -472,19 +469,415 @@ def generate_summary_table(metrics, outdir):
     print(f"  Summary: {latex_path}")
 
 
+# ── I1: Payload Encoding ─────────────────────────────────────────────────
+
+def plot_i1_entropy(metrics, outdir):
+    """I1: Grouped bar chart of entropy by encoding type x payload size."""
+    m = find_metric(metrics, 'infra.i1.payload_encoding.entropy_comparison')
+    if not m:
+        print("  Skipping I1 entropy: metric not found")
+        return
+
+    d = m['details']
+    type_data = d['type_entropies']
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    n_types = len(type_data)
+    width = 0.8 / max(n_types, 1)
+
+    for idx, entry in enumerate(sorted(type_data, key=lambda x: x['encoding_type'])):
+        sizes = [pt['payload_size'] for pt in entry['by_size']]
+        entropies = [pt['entropy'] for pt in entry['by_size']]
+        x = np.arange(len(sizes))
+        offset = (idx - n_types / 2 + 0.5) * width
+        ax.bar(x + offset, entropies, width, label=entry['encoding_type'], alpha=0.85)
+
+    ax.set_xticks(range(len(sizes)))
+    ax.set_xticklabels([str(s) for s in sizes])
+    ax.set_xlabel('Payload Size (bytes)')
+    ax.set_ylabel('Shannon Entropy (bits/byte)')
+    ax.set_title('I1: Encoded Payload Entropy by Encoding Type')
+    ax.legend()
+    ax.set_ylim(0, 9)
+
+    fig.savefig(os.path.join(outdir, 'i1_encoding_entropy.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i1_encoding_entropy.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I1: i1_encoding_entropy.pdf")
+
+
+def plot_i1_expansion(metrics, outdir):
+    """I1: Grouped bar chart of size expansion ratio per encoding type."""
+    m = find_metric(metrics, 'infra.i1.payload_encoding.size_expansion')
+    if not m:
+        print("  Skipping I1 expansion: metric not found")
+        return
+
+    d = m['details']
+    by_type = d['by_type']
+
+    types = [e['encoding_type'] for e in by_type]
+    means = [e['mean_expansion'] for e in by_type]
+    maxes = [e['max_expansion'] for e in by_type]
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    x = np.arange(len(types))
+    ax.bar(x - 0.15, means, 0.3, label='Mean', color='#2196F3', alpha=0.8)
+    ax.bar(x + 0.15, maxes, 0.3, label='Max', color='#FF9800', alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(types)
+    ax.set_xlabel('Encoding Type')
+    ax.set_ylabel('Size Expansion Ratio (encoded/original)')
+    ax.set_title('I1: Payload Size Expansion by Encoding Type')
+    ax.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5)
+    ax.legend()
+
+    fig.savefig(os.path.join(outdir, 'i1_encoding_expansion.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i1_encoding_expansion.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I1: i1_encoding_expansion.pdf")
+
+
+# ── I2: AST Mutation Impact ─────────────────────────────────────────────
+
+def plot_i2_impact(metrics, outdir):
+    """I2: Horizontal bar chart of line delta per AST mutation."""
+    m = find_metric(metrics, 'infra.i2.ast_mutation.line_impact')
+    if not m:
+        print("  Skipping I2 impact: metric not found")
+        return
+
+    d = m['details']
+    mutations = d['mutations']
+
+    labels = [mut['mutation_id'][:35] for mut in mutations]
+    deltas = [mut['line_delta'] for mut in mutations]
+    valid = [True] * len(mutations)  # Check parse_validity metric separately
+
+    fig, ax = plt.subplots(figsize=(9, max(4, len(labels) * 0.4)))
+    colors = ['#4CAF50' if d >= 0 else '#f44336' for d in deltas]
+    ax.barh(range(len(labels)), deltas, color=colors, alpha=0.8)
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.set_xlabel('Line Delta (output - input)')
+    ax.set_title('I2: AST Mutation Source Impact')
+    ax.axvline(x=0, color='black', linewidth=0.8)
+
+    for i, d in enumerate(deltas):
+        ax.text(d + (1 if d >= 0 else -1), i, str(d), va='center', fontsize=8)
+
+    fig.savefig(os.path.join(outdir, 'i2_ast_mutation_impact.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i2_ast_mutation_impact.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I2: i2_ast_mutation_impact.pdf")
+
+
+# ── I3: IR Mutation Analysis ─────────────────────────────────────────────
+
+def plot_i3_ir_analysis(metrics, outdir):
+    """I3: Grouped bar of insertions by mutation + O2 survival table."""
+    m = find_metric(metrics, 'infra.i3.ir_mutation.insertion_effectiveness')
+    if not m:
+        print("  Skipping I3 analysis: metric not found")
+        return
+
+    d = m['details']
+    by_mut = d['by_mutation']
+
+    labels = [e['mutation_id'][:40] for e in by_mut]
+    insertions = [e['insertions'] for e in by_mut]
+    bloat = [e['line_bloat'] for e in by_mut]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Left: insertions
+    ax1.barh(range(len(labels)), insertions, color='#2196F3', alpha=0.8)
+    ax1.set_yticks(range(len(labels)))
+    ax1.set_yticklabels(labels, fontsize=8)
+    ax1.set_xlabel('Lines Inserted')
+    ax1.set_title('I3: IR Mutation Insertions')
+
+    # Right: line bloat ratio
+    ax2.barh(range(len(labels)), bloat, color='#FF9800', alpha=0.8)
+    ax2.set_yticks(range(len(labels)))
+    ax2.set_yticklabels(labels, fontsize=8)
+    ax2.set_xlabel('Output/Input Line Ratio')
+    ax2.set_title('I3: IR Line Bloat')
+    ax2.axvline(x=1.0, color='gray', linestyle='--', alpha=0.5)
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, 'i3_ir_mutation_analysis.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i3_ir_mutation_analysis.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I3: i3_ir_mutation_analysis.pdf")
+
+
+# ── I4: Binary Mutation Heatmap ──────────────────────────────────────────
+
+def plot_i4_pe_heatmap(metrics, outdir):
+    """I4: Heatmap of 9 mutations x 4 features."""
+    m = find_metric(metrics, 'infra.i4.binary_mutation.feature_heatmap')
+    if not m:
+        print("  Skipping I4 heatmap: metric not found")
+        return
+
+    d = m['details']
+    heatmap_data = d['heatmap']
+    features = d['features']
+
+    labels = [e['mutation_id'][:30] for e in heatmap_data]
+    data = np.zeros((len(labels), len(features)))
+    for i, entry in enumerate(heatmap_data):
+        for j, feat in enumerate(features):
+            val = entry.get(feat, 0)
+            data[i, j] = val
+
+    # Normalize each column to [0,1] for display
+    for j in range(data.shape[1]):
+        col_max = np.abs(data[:, j]).max()
+        if col_max > 0:
+            data[:, j] = data[:, j] / col_max
+
+    fig, ax = plt.subplots(figsize=(8, max(4, len(labels) * 0.4)))
+    im = ax.imshow(data, cmap='RdYlBu_r', aspect='auto', vmin=-1, vmax=1)
+    ax.set_xticks(range(len(features)))
+    ax.set_xticklabels([f.replace('_', ' ') for f in features], rotation=45, ha='right')
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.set_title('I4: Binary Mutation Feature Impact (normalized)')
+    fig.colorbar(im, ax=ax, label='Normalized Impact')
+
+    fig.savefig(os.path.join(outdir, 'i4_binary_mutation_heatmap.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i4_binary_mutation_heatmap.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I4: i4_binary_mutation_heatmap.pdf")
+
+
+# ── I5: Template Assembly ────────────────────────────────────────────────
+
+def plot_i5_assembly(metrics, outdir):
+    """I5: Assembly time histogram + marker resolution rate."""
+    m = find_metric(metrics, 'infra.i5.template_assembly.latency')
+    if not m:
+        print("  Skipping I5 assembly: metric not found")
+        return
+
+    d = m['details']
+    times = d['all_times_us']
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.hist(times, bins=20, color='#4CAF50', edgecolor='white', alpha=0.8)
+    ax.set_xlabel('Assembly Time (us)')
+    ax.set_ylabel('Frequency')
+    ax.set_title(f'I5: Template Assembly Time Distribution (n={len(times)})')
+    ax.axvline(x=d['mean_us'], color='red', linestyle='--',
+               label=f'Mean = {d["mean_us"]:.0f} us')
+    ax.legend()
+
+    fig.savefig(os.path.join(outdir, 'i5_template_assembly.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i5_template_assembly.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I5: i5_template_assembly.pdf")
+
+
+# ── I6: Instrumentation Overhead ─────────────────────────────────────────
+
+def plot_i6_overhead(metrics, outdir):
+    """I6: Grouped bar of size ratio per carrier module."""
+    m = find_metric(metrics, 'infra.i6.instrumentation.size_overhead')
+    if not m:
+        print("  Skipping I6 overhead: metric not found")
+        return
+
+    d = m['details']
+    per_carrier = d['per_carrier']
+
+    carriers = [e['carrier'] for e in per_carrier]
+    baseline = [e['baseline_size'] for e in per_carrier]
+    instrumented = [e['instrumented_size'] for e in per_carrier]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    x = np.arange(len(carriers))
+    ax.bar(x - 0.2, baseline, 0.35, label='Baseline', color='#2196F3', alpha=0.8)
+    ax.bar(x + 0.2, instrumented, 0.35, label='Instrumented', color='#FF9800', alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(carriers)
+    ax.set_xlabel('Carrier Module')
+    ax.set_ylabel('PE Size (bytes)')
+    ax.set_title('I6: Instrumentation Size Overhead by Carrier')
+    ax.legend()
+
+    # Add ratio labels
+    for i, entry in enumerate(per_carrier):
+        ratio = entry['size_ratio']
+        ax.text(i, max(baseline[i], instrumented[i]) * 1.02,
+                f'{ratio:.2f}x', ha='center', fontsize=9)
+
+    fig.savefig(os.path.join(outdir, 'i6_instrumentation_overhead.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i6_instrumentation_overhead.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I6: i6_instrumentation_overhead.pdf")
+
+
+# ── I7: Token Extraction ─────────────────────────────────────────────────
+
+def plot_i7_tokens(metrics, outdir):
+    """I7: Stacked bar of tokens per category + latency histogram."""
+    m_cat = find_metric(metrics, 'infra.i7.token_extraction.category_coverage')
+    m_lat = find_metric(metrics, 'infra.i7.token_extraction.latency_distribution')
+    if not m_cat and not m_lat:
+        print("  Skipping I7 tokens: metrics not found")
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Left: category coverage stacked bar
+    if m_cat:
+        table = m_cat['details']['category_table']
+        cats = [e['category'] for e in table]
+        counts = [e['total_tokens'] for e in table]
+        colors = plt.cm.Set3(np.linspace(0, 1, len(cats)))
+        axes[0].barh(cats, counts, color=colors, alpha=0.85)
+        axes[0].set_xlabel('Total Tokens Extracted')
+        axes[0].set_title(f'I7: Token Categories ({m_cat["details"]["active_categories"]}/{m_cat["details"]["total_categories"]} active)')
+
+    # Right: latency histogram
+    if m_lat:
+        times = m_lat['details']['all_times_us']
+        axes[1].hist(times, bins=15, color='#42A5F5', edgecolor='white', alpha=0.8)
+        axes[1].set_xlabel('Extraction Time (us)')
+        axes[1].set_ylabel('Frequency')
+        axes[1].set_title('I7: Extraction Latency Distribution')
+        mean_t = m_lat['details']['mean_us']
+        axes[1].axvline(x=mean_t, color='red', linestyle='--',
+                        label=f'Mean = {mean_t:.0f} us')
+        axes[1].legend()
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, 'i7_token_extraction.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i7_token_extraction.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I7: i7_token_extraction.pdf")
+
+
+# ── I8: Scoring Validation ───────────────────────────────────────────────
+
+def plot_i8_scoring(metrics, outdir):
+    """I8: Table figure showing expected vs computed lift values."""
+    m = find_metric(metrics, 'infra.i8.token_scoring.lift_accuracy')
+    if not m:
+        print("  Skipping I8 scoring: metric not found")
+        return
+
+    d = m['details']
+    cases = d['test_cases']
+
+    fig, ax = plt.subplots(figsize=(10, max(3, len(cases) * 0.5 + 1)))
+    ax.axis('off')
+
+    col_labels = ['Test Case', 'Rounds', 'Expected Lift', 'Computed Lift', 'Error', 'Pass']
+    cell_text = []
+    cell_colors = []
+
+    for c in cases:
+        passed = c['pass']
+        row = [
+            c['test_case'],
+            str(c['input_rounds']),
+            f"{c['expected_lift']:.4f}",
+            f"{c['computed_lift']:.4f}",
+            f"{c['lift_error']:.6f}",
+            'PASS' if passed else 'FAIL',
+        ]
+        cell_text.append(row)
+        bg = '#e8f5e9' if passed else '#ffebee'
+        cell_colors.append([bg] * 6)
+
+    table = ax.table(cellText=cell_text, colLabels=col_labels,
+                     cellColours=cell_colors, loc='center', cellLoc='center')
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1.0, 1.4)
+
+    ax.set_title('I8: Token Scoring Validation Results', fontsize=12, pad=20)
+
+    fig.savefig(os.path.join(outdir, 'i8_scoring_validation.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i8_scoring_validation.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I8: i8_scoring_validation.pdf")
+
+
+# ── Infrastructure Summary Table ─────────────────────────────────────────
+
+def generate_infra_summary_table(metrics, outdir):
+    """Generate a LaTeX summary table of all infrastructure metrics."""
+    rows = []
+    for mid, m in sorted(metrics.items()):
+        if not mid.startswith('infra.'):
+            continue
+        rows.append({
+            'id': mid.replace('infra.', ''),
+            'label': m['label'][:60],
+            'value': m['value'],
+            'n': m['n'],
+        })
+
+    if not rows:
+        print("  Skipping infra summary: no infra metrics found")
+        return
+
+    latex_path = os.path.join(outdir, 'infra_metrics_table.tex')
+    with open(latex_path, 'w') as f:
+        f.write('\\begin{table}[htbp]\n')
+        f.write('\\centering\n')
+        f.write('\\caption{Infrastructure-Level Evaluation Metrics}\n')
+        f.write('\\label{tab:infra-metrics}\n')
+        f.write('\\begin{tabular}{llrr}\n')
+        f.write('\\toprule\n')
+        f.write('Metric ID & Label & Value & $n$ \\\\\n')
+        f.write('\\midrule\n')
+
+        current_prefix = ''
+        for row in rows:
+            prefix = row['id'].split('.')[0]
+            if prefix != current_prefix:
+                if current_prefix:
+                    f.write('\\midrule\n')
+                current_prefix = prefix
+
+            label = row['label'].replace('&', '\\&').replace('_', '\\_')
+            mid_tex = row['id'].replace('_', '\\_')
+            f.write(f"\\texttt{{{mid_tex}}} & {label} & {row['value']:.4f} & {row['n']} \\\\\n")
+
+        f.write('\\bottomrule\n')
+        f.write('\\end{tabular}\n')
+        f.write('\\end{table}\n')
+
+    print(f"  Infra Summary: {latex_path}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description='Generate evaluation figures')
-    parser.add_argument('--input', default='component_eval_report.json',
-                        help='Input JSON report from component-eval')
+    parser.add_argument('--input', default=None,
+                        help='Input JSON report (default: auto-detect based on mode)')
     parser.add_argument('--outdir', default='figures',
                         help='Output directory for figures')
+    parser.add_argument('--infra', action='store_true',
+                        help='Generate infrastructure-level plots (I1-I8)')
     args = parser.parse_args()
+
+    # Auto-detect input based on mode
+    if args.input is None:
+        args.input = 'infra_eval_report.json' if args.infra else 'component_eval_report.json'
 
     if not os.path.exists(args.input):
         print(f"Error: {args.input} not found")
-        print("Run: cargo run -p evaluation --features full --bin component-eval")
+        if args.infra:
+            print("Run: cargo run -p evaluation --bin infra-eval")
+        else:
+            print("Run: cargo run -p evaluation --features full --bin component-eval")
         sys.exit(1)
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -492,20 +885,36 @@ def main():
     print(f"Loaded {len(metrics)} metrics from {args.input}")
     print(f"Output directory: {args.outdir}\n")
 
-    # Generate all plots
-    print("Generating plots:")
-    plot_c1_heatmap(metrics, args.outdir)
-    plot_c3_coverage(metrics, args.outdir)
-    plot_c3_heatmap(metrics, args.outdir)
-    plot_c4_convergence(metrics, args.outdir)
-    plot_c5_forest(metrics, args.outdir)
-    plot_c5_volcano(metrics, args.outdir)
-    plot_b2_confusion(metrics, args.outdir)
-    plot_b3_coverage(metrics, args.outdir)
-    plot_b3_histogram(metrics, args.outdir)
+    if args.infra:
+        # Infrastructure plots
+        print("Generating infrastructure plots:")
+        plot_i1_entropy(metrics, args.outdir)
+        plot_i1_expansion(metrics, args.outdir)
+        plot_i2_impact(metrics, args.outdir)
+        plot_i3_ir_analysis(metrics, args.outdir)
+        plot_i4_pe_heatmap(metrics, args.outdir)
+        plot_i5_assembly(metrics, args.outdir)
+        plot_i6_overhead(metrics, args.outdir)
+        plot_i7_tokens(metrics, args.outdir)
+        plot_i8_scoring(metrics, args.outdir)
 
-    print("\nGenerating tables:")
-    generate_summary_table(metrics, args.outdir)
+        print("\nGenerating tables:")
+        generate_infra_summary_table(metrics, args.outdir)
+    else:
+        # Component plots
+        print("Generating component plots:")
+        plot_c1_heatmap(metrics, args.outdir)
+        plot_c3_coverage(metrics, args.outdir)
+        plot_c3_heatmap(metrics, args.outdir)
+        plot_c4_convergence(metrics, args.outdir)
+        plot_c5_forest(metrics, args.outdir)
+        plot_c5_volcano(metrics, args.outdir)
+        plot_b2_confusion(metrics, args.outdir)
+        plot_b3_coverage(metrics, args.outdir)
+        plot_b3_histogram(metrics, args.outdir)
+
+        print("\nGenerating tables:")
+        generate_summary_table(metrics, args.outdir)
 
     print(f"\nDone. {len(os.listdir(args.outdir))} files in {args.outdir}/")
 

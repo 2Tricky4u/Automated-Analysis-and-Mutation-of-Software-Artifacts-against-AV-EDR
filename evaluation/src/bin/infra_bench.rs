@@ -1,0 +1,1037 @@
+//! Infrastructure-level benchmark runner.
+//!
+//! Exercises build + triage crate APIs with timing and writes InfraEvalDataset JSON.
+//!
+//! Usage:
+//!   cargo run -p evaluation --bin infra-bench -- [OPTIONS]
+//!
+//! Options:
+//!   --experiments <IDS>  Comma-separated: i1,i2,i3,i4,i5,i6,i7,i8 (default: i7,i8)
+//!   --output <PATH>      Output JSON path (default: infra_dataset.json)
+//!   --quiet              Suppress progress output
+//!
+//! Experiments requiring `--features build-bench`: i1, i2, i3, i5
+//! Experiments requiring full toolchain + PE: i4, i6
+
+use evaluation::{InfraEvalDataset, TokenExtractionResult, TokenScoringResult};
+use std::collections::HashMap;
+use std::time::Instant;
+
+fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+
+    #[cfg(feature = "build-bench")]
+    let default_experiments = "i1,i2,i3,i5,i7,i8";
+    #[cfg(not(feature = "build-bench"))]
+    let default_experiments = "i7,i8";
+
+    let experiments =
+        get_arg(&args, "--experiments").unwrap_or_else(|| default_experiments.to_string());
+    let output = get_arg(&args, "--output").unwrap_or_else(|| "infra_dataset.json".to_string());
+    let quiet = args.iter().any(|a| a == "--quiet");
+
+    let enabled: Vec<&str> = experiments.split(',').map(|s| s.trim()).collect();
+    let mut dataset = InfraEvalDataset::default();
+
+    if !quiet {
+        eprintln!("Infrastructure benchmark runner");
+        eprintln!("Experiments: {:?}", enabled);
+        eprintln!();
+    }
+
+    // I1: Payload Encoding (needs build crate)
+    if enabled.contains(&"i1") {
+        #[cfg(feature = "build-bench")]
+        {
+            if !quiet {
+                eprintln!("Running I1: Payload Encoding...");
+            }
+            dataset.payload_encoding = Some(build_bench::bench_payload_encoding(quiet));
+        }
+        #[cfg(not(feature = "build-bench"))]
+        if !quiet {
+            eprintln!("I1: Payload Encoding requires --features build-bench. Skipping.");
+        }
+    }
+
+    // I2: AST Mutations (needs build crate)
+    if enabled.contains(&"i2") {
+        #[cfg(feature = "build-bench")]
+        {
+            if !quiet {
+                eprintln!("Running I2: AST Mutations...");
+            }
+            dataset.ast_mutation = Some(build_bench::bench_ast_mutations(quiet));
+        }
+        #[cfg(not(feature = "build-bench"))]
+        if !quiet {
+            eprintln!("I2: AST Mutations requires --features build-bench. Skipping.");
+        }
+    }
+
+    // I3: IR Mutations (needs build crate)
+    if enabled.contains(&"i3") {
+        #[cfg(feature = "build-bench")]
+        {
+            if !quiet {
+                eprintln!("Running I3: IR Mutations...");
+            }
+            dataset.ir_mutation = Some(build_bench::bench_ir_mutations(quiet));
+        }
+        #[cfg(not(feature = "build-bench"))]
+        if !quiet {
+            eprintln!("I3: IR Mutations requires --features build-bench. Skipping.");
+        }
+    }
+
+    // I4: Binary Mutations (needs compiled PE)
+    if enabled.contains(&"i4") && !quiet {
+        eprintln!("I4: Binary Mutations requires a compiled PE and build-bench. Skipping.");
+    }
+
+    // I5: Template Assembly (needs build crate)
+    if enabled.contains(&"i5") {
+        #[cfg(feature = "build-bench")]
+        {
+            if !quiet {
+                eprintln!("Running I5: Template Assembly...");
+            }
+            dataset.template_assembly = Some(build_bench::bench_template_assembly(quiet));
+        }
+        #[cfg(not(feature = "build-bench"))]
+        if !quiet {
+            eprintln!("I5: Template Assembly requires --features build-bench. Skipping.");
+        }
+    }
+
+    // I6: Instrumentation Overhead (needs full toolchain)
+    if enabled.contains(&"i6") && !quiet {
+        eprintln!("I6: Instrumentation Overhead requires full toolchain. Skipping.");
+    }
+
+    // I7: Token Extraction (pure controller, no build crate needed)
+    if enabled.contains(&"i7") {
+        if !quiet {
+            eprintln!("Running I7: Token Extraction...");
+        }
+        dataset.token_extraction = Some(bench_token_extraction(quiet));
+    }
+
+    // I8: Token Scoring Validation (pure controller, no build crate needed)
+    if enabled.contains(&"i8") {
+        if !quiet {
+            eprintln!("Running I8: Token Scoring Validation...");
+        }
+        dataset.token_scoring = Some(bench_token_scoring(quiet));
+    }
+
+    // Write dataset
+    let json = serde_json::to_string_pretty(&dataset)?;
+    std::fs::write(&output, json)?;
+
+    if !quiet {
+        eprintln!();
+        eprintln!("Wrote {}", output);
+    }
+
+    Ok(())
+}
+
+// ── I7: Token Extraction (no build crate needed) ────────────────────────
+
+fn bench_token_extraction(quiet: bool) -> Vec<TokenExtractionResult> {
+    use controller::triage::extractor::extract_tokens_from_docs;
+
+    let test_cases: Vec<(usize, Vec<serde_json::Value>)> = vec![
+        (5, generate_synthetic_docs(5)),
+        (10, generate_synthetic_docs(10)),
+        (25, generate_synthetic_docs(25)),
+        (50, generate_synthetic_docs(50)),
+        (100, generate_synthetic_docs(100)),
+    ];
+
+    let mut results = Vec::new();
+
+    for (doc_count, docs) in &test_cases {
+        // Run extraction twice to check determinism
+        let t0 = Instant::now();
+        let tokens_1 = extract_tokens_from_docs(docs);
+        let time_1 = t0.elapsed().as_secs_f64() * 1_000_000.0;
+
+        let tokens_2 = extract_tokens_from_docs(docs);
+        let deterministic = tokens_1 == tokens_2;
+
+        // Categorize tokens
+        let mut category_counts: HashMap<String, usize> = HashMap::new();
+        for token in &tokens_1 {
+            let category = token_category(token);
+            *category_counts.entry(category).or_default() += 1;
+        }
+        let categories_active = category_counts.len();
+
+        results.push(TokenExtractionResult {
+            input_doc_count: *doc_count,
+            output_token_count: tokens_1.len(),
+            category_counts,
+            categories_active,
+            extraction_time_us: time_1,
+            deterministic,
+        });
+
+        if !quiet {
+            eprintln!(
+                "  docs={:>3} tokens={:>3} categories={} time={:.0}µs det={}",
+                doc_count,
+                tokens_1.len(),
+                categories_active,
+                time_1,
+                deterministic
+            );
+        }
+    }
+
+    results
+}
+
+fn generate_synthetic_docs(count: usize) -> Vec<serde_json::Value> {
+    use serde_json::json;
+
+    let api_funcs = [
+        "NtAllocateVirtualMemory",
+        "NtProtectVirtualMemory",
+        "NtWriteVirtualMemory",
+        "VirtualAlloc",
+        "VirtualProtect",
+        "CreateThread",
+        "NtCreateThreadEx",
+        "WriteProcessMemory",
+        "LoadLibraryA",
+    ];
+    let dlls = [
+        "ntdll.dll",
+        "kernel32.dll",
+        "kernelbase.dll",
+        "user32.dll",
+        "advapi32.dll",
+    ];
+    let etw_events = [
+        ("Microsoft-Windows-Kernel-Process", "1"),
+        ("Microsoft-Windows-Security-Auditing", "4688"),
+        ("Microsoft-Windows-Kernel-File", "12"),
+    ];
+
+    let mut docs = Vec::new();
+
+    for i in 0..count {
+        match i % 4 {
+            0 | 1 => {
+                let func = api_funcs[i % api_funcs.len()];
+                let protect_val = if i % 2 == 0 {
+                    "PAGE_EXECUTE_READWRITE"
+                } else {
+                    "PAGE_READWRITE"
+                };
+                docs.push(json!({
+                    "payload_func": func,
+                    "payload_return": if i % 3 == 0 { "0" } else { "1" },
+                    "payload_funcparams": format!("protect={}", protect_val),
+                    "payload_caller": "dll",
+                }));
+            }
+            2 => {
+                let dll = dlls[i % dlls.len()];
+                docs.push(json!({
+                    "payload_func": "image_load",
+                    "payload_funcparams": format!("path=C:\\Windows\\System32\\{}", dll),
+                    "payload_caller": "dll",
+                }));
+            }
+            _ => {
+                let (provider, event_id) = etw_events[i % etw_events.len()];
+                docs.push(json!({
+                    "payload_event": event_id,
+                    "payload_provider": provider,
+                    "payload_eventname": format!("Event{}", event_id),
+                }));
+            }
+        }
+    }
+
+    docs
+}
+
+fn token_category(token: &str) -> String {
+    if token.starts_with("api_arg:") || token.starts_with("api_ret:") {
+        token.split(':').next().unwrap_or("other").to_string()
+    } else if let Some(prefix) = [
+        "api:",
+        "seq2:",
+        "image:",
+        "etw_event:",
+        "etw:",
+        "module:",
+        "mutation:",
+        "checkpoint:",
+    ]
+    .iter()
+    .find(|p| token.starts_with(*p))
+    {
+        prefix.trim_end_matches(':').to_string()
+    } else {
+        "other".to_string()
+    }
+}
+
+// ── I8: Token Scoring Validation (no build crate needed) ────────────────
+
+fn bench_token_scoring(quiet: bool) -> Vec<TokenScoringResult> {
+    use controller::triage::scorer::{build_guidance, compute_token_scores};
+
+    let mut results = Vec::new();
+
+    // Test case 1: Perfect correlation
+    {
+        let matrix: Vec<(Vec<String>, bool)> = vec![
+            (vec!["token_a".into(), "common".into()], true),
+            (vec!["token_a".into(), "common".into()], true),
+            (vec!["common".into()], false),
+            (vec!["common".into()], false),
+        ];
+        let scores = compute_token_scores(&matrix);
+        let expected_lift = 2.0;
+        let computed = scores
+            .iter()
+            .find(|s| s.token == "token_a")
+            .map(|s| s.lift)
+            .unwrap_or(0.0);
+        let error = (computed - expected_lift).abs();
+        let guidance = build_guidance(&scores, 1.5, 0.3);
+        let guidance_correct = guidance.avoid_tokens.contains(&"token_a".to_string());
+
+        results.push(TokenScoringResult {
+            test_case: "perfect_correlation".to_string(),
+            input_rounds: 4,
+            expected_lift,
+            computed_lift: computed,
+            lift_error: error,
+            guidance_correct,
+        });
+        if !quiet {
+            eprintln!(
+                "  perfect_correlation: exp={:.3} got={:.3} err={:.6} ok={}",
+                expected_lift, computed, error, guidance_correct
+            );
+        }
+    }
+
+    // Test case 2: Anti-correlation
+    {
+        let matrix: Vec<(Vec<String>, bool)> = vec![
+            (vec!["common".into()], true),
+            (vec!["common".into()], true),
+            (vec!["evasive_token".into(), "common".into()], false),
+            (vec!["evasive_token".into(), "common".into()], false),
+        ];
+        let scores = compute_token_scores(&matrix);
+        let expected_lift = 0.0;
+        let computed = scores
+            .iter()
+            .find(|s| s.token == "evasive_token")
+            .map(|s| s.lift)
+            .unwrap_or(0.0);
+        let error = (computed - expected_lift).abs();
+        let guidance = build_guidance(&scores, 1.5, 0.3);
+        let guidance_correct = guidance.seek_tokens.contains(&"evasive_token".to_string());
+
+        results.push(TokenScoringResult {
+            test_case: "anti_correlation".to_string(),
+            input_rounds: 4,
+            expected_lift,
+            computed_lift: computed,
+            lift_error: error,
+            guidance_correct,
+        });
+        if !quiet {
+            eprintln!(
+                "  anti_correlation: exp={:.3} got={:.3} err={:.6} ok={}",
+                expected_lift, computed, error, guidance_correct
+            );
+        }
+    }
+
+    // Test case 3: Neutral
+    {
+        let matrix: Vec<(Vec<String>, bool)> = vec![
+            (vec!["neutral".into(), "common".into()], true),
+            (vec!["neutral".into(), "common".into()], false),
+            (vec!["common".into()], true),
+            (vec!["common".into()], false),
+        ];
+        let scores = compute_token_scores(&matrix);
+        let expected_lift = 1.0;
+        let computed = scores
+            .iter()
+            .find(|s| s.token == "neutral")
+            .map(|s| s.lift)
+            .unwrap_or(0.0);
+        let error = (computed - expected_lift).abs();
+        let guidance = build_guidance(&scores, 1.5, 0.3);
+        let guidance_correct = !guidance.avoid_tokens.contains(&"neutral".to_string())
+            && !guidance.seek_tokens.contains(&"neutral".to_string());
+
+        results.push(TokenScoringResult {
+            test_case: "neutral".to_string(),
+            input_rounds: 4,
+            expected_lift,
+            computed_lift: computed,
+            lift_error: error,
+            guidance_correct,
+        });
+        if !quiet {
+            eprintln!(
+                "  neutral: exp={:.3} got={:.3} err={:.6} ok={}",
+                expected_lift, computed, error, guidance_correct
+            );
+        }
+    }
+
+    // Test case 4: All detected (degenerate)
+    {
+        let matrix: Vec<(Vec<String>, bool)> = vec![
+            (vec!["token_x".into()], true),
+            (vec!["token_x".into()], true),
+            (vec!["token_y".into()], true),
+        ];
+        let scores = compute_token_scores(&matrix);
+        let computed = scores
+            .iter()
+            .find(|s| s.token == "token_x")
+            .map(|s| s.lift)
+            .unwrap_or(0.0);
+
+        results.push(TokenScoringResult {
+            test_case: "all_detected_degenerate".to_string(),
+            input_rounds: 3,
+            expected_lift: 0.0,
+            computed_lift: computed,
+            lift_error: computed.abs(),
+            guidance_correct: scores.is_empty(),
+        });
+        if !quiet {
+            eprintln!(
+                "  all_detected: scores_empty={} (expected=true)",
+                scores.is_empty()
+            );
+        }
+    }
+
+    // Test case 5: All clean (degenerate)
+    {
+        let matrix: Vec<(Vec<String>, bool)> = vec![
+            (vec!["token_a".into()], false),
+            (vec!["token_b".into()], false),
+            (vec!["token_a".into()], false),
+        ];
+        let scores = compute_token_scores(&matrix);
+
+        results.push(TokenScoringResult {
+            test_case: "all_clean_degenerate".to_string(),
+            input_rounds: 3,
+            expected_lift: 0.0,
+            computed_lift: 0.0,
+            lift_error: 0.0,
+            guidance_correct: scores.is_empty(),
+        });
+        if !quiet {
+            eprintln!(
+                "  all_clean: scores_empty={} (expected=true)",
+                scores.is_empty()
+            );
+        }
+    }
+
+    // Test case 6: Single round
+    {
+        let matrix: Vec<(Vec<String>, bool)> = vec![(vec!["token_only".into()], true)];
+        let scores = compute_token_scores(&matrix);
+
+        results.push(TokenScoringResult {
+            test_case: "single_round".to_string(),
+            input_rounds: 1,
+            expected_lift: 0.0,
+            computed_lift: 0.0,
+            lift_error: 0.0,
+            guidance_correct: scores.is_empty(),
+        });
+        if !quiet {
+            eprintln!(
+                "  single_round: scores_empty={} (expected=true)",
+                scores.is_empty()
+            );
+        }
+    }
+
+    // Test case 7: Larger matrix with known lift
+    {
+        let matrix: Vec<(Vec<String>, bool)> = vec![
+            (vec!["token_hot".into(), "bg".into()], true),
+            (vec!["token_hot".into(), "bg".into()], true),
+            (vec!["token_hot".into(), "bg".into()], true),
+            (vec!["token_hot".into(), "bg".into()], true),
+            (vec!["token_hot".into(), "bg".into()], true),
+            (vec!["bg".into()], true),
+            (vec!["bg".into()], false),
+            (vec!["bg".into()], false),
+            (vec!["bg".into()], false),
+            (vec!["bg".into()], false),
+        ];
+        let scores = compute_token_scores(&matrix);
+        let expected_lift = 1.0 / 0.6;
+        let computed = scores
+            .iter()
+            .find(|s| s.token == "token_hot")
+            .map(|s| s.lift)
+            .unwrap_or(0.0);
+        let error = (computed - expected_lift).abs();
+        let guidance = build_guidance(&scores, 1.5, 0.3);
+        let guidance_correct = guidance.avoid_tokens.contains(&"token_hot".to_string());
+
+        results.push(TokenScoringResult {
+            test_case: "larger_matrix_hot_token".to_string(),
+            input_rounds: 10,
+            expected_lift,
+            computed_lift: computed,
+            lift_error: error,
+            guidance_correct,
+        });
+        if !quiet {
+            eprintln!(
+                "  larger_matrix: exp={:.4} got={:.4} err={:.6} ok={}",
+                expected_lift, computed, error, guidance_correct
+            );
+        }
+    }
+
+    results
+}
+
+// ── Build-crate-dependent benchmarks ────────────────────────────────────
+
+#[cfg(feature = "build-bench")]
+mod build_bench {
+    use evaluation::{
+        AstMutationResult, IrMutationResult, PayloadEncodingResult, TemplateAssemblyResult,
+    };
+    use std::collections::HashMap;
+    use std::time::Instant;
+
+    pub fn bench_payload_encoding(quiet: bool) -> Vec<PayloadEncodingResult> {
+        use build::template::payload::{EncodingType, PayloadEncoder, generate_test_payload};
+
+        let encoder = PayloadEncoder::new();
+        let sizes: Vec<usize> = vec![1, 16, 64, 256, 1024, 4096, 8192, 16384];
+        let encodings = [
+            ("xor", EncodingType::Xor),
+            ("english", EncodingType::English),
+            ("subbyte", EncodingType::SubByte),
+            ("none", EncodingType::None),
+        ];
+
+        let mut results = Vec::new();
+
+        for &size in &sizes {
+            let payload = generate_test_payload(size);
+
+            for (name, enc_type) in &encodings {
+                let t0 = Instant::now();
+                let encoded = encoder.encode(&payload, enc_type.clone());
+                let encode_time = t0.elapsed().as_secs_f64() * 1_000_000.0;
+
+                let header = encoder.generate_c_header(&encoded);
+                let header_compiles = !header.is_empty() && header.contains("payload");
+
+                let entropy = byte_entropy(&encoded.data);
+
+                let roundtrip_correct = match enc_type {
+                    EncodingType::None => encoded.data == payload,
+                    _ => !encoded.data.is_empty(),
+                };
+
+                results.push(PayloadEncodingResult {
+                    encoding_type: name.to_string(),
+                    payload_size: size,
+                    encoded_size: encoded.data.len(),
+                    encoded_entropy: entropy,
+                    roundtrip_correct,
+                    encode_time_us: encode_time,
+                    header_compiles,
+                });
+
+                if !quiet {
+                    eprintln!(
+                        "  {} size={:>5} encoded={:>6} entropy={:.3} time={:.0}µs",
+                        name,
+                        size,
+                        encoded.data.len(),
+                        entropy,
+                        encode_time
+                    );
+                }
+            }
+        }
+
+        results
+    }
+
+    pub fn bench_ast_mutations(quiet: bool) -> Vec<AstMutationResult> {
+        use build::mutator::MutationSpec;
+        use build::transform::ast_mutator::AstMutator;
+
+        let mut mutator = match AstMutator::new() {
+            Ok(m) => m,
+            Err(e) => {
+                if !quiet {
+                    eprintln!("  Failed to create AstMutator: {}", e);
+                }
+                return vec![];
+            }
+        };
+
+        let source = REFERENCE_C_SOURCE;
+        let input_lines = source.lines().count();
+        let input_ast_nodes = count_ast_nodes(source);
+
+        let mutations = [
+            "ast.decon_rounds:count=50",
+            "ast.fill_pattern:pattern=0xCC",
+            "ast.timing_pattern:method=rdtsc",
+            "ast.protection_transition:strategy=rw_rx",
+            "ast.benign_preamble:count=5",
+            "ast.exec_decoy:target=calc",
+            "ast.api_sequence_obfuscation:inserts=3",
+            "ast.const_obfuscation",
+            "ast.string_xor:xor_key=0xAA",
+            "ast.benign_syscall_insert:count=5",
+        ];
+
+        let mut results = Vec::new();
+
+        for mutation_str in &mutations {
+            let spec = MutationSpec::from_cli_str(mutation_str);
+            let t0 = Instant::now();
+            let outcome = mutator.apply(source, &[&spec]);
+            let transform_time = t0.elapsed().as_secs_f64() * 1_000_000.0;
+
+            match outcome {
+                Ok((output, _applied)) => {
+                    let output_lines = output.lines().count();
+                    let output_ast_nodes = count_ast_nodes(&output);
+                    let parse_valid = check_parse_valid(&output);
+
+                    results.push(AstMutationResult {
+                        mutation_id: mutation_str.to_string(),
+                        input_lines,
+                        output_lines,
+                        line_delta: output_lines as i64 - input_lines as i64,
+                        input_ast_nodes,
+                        output_ast_nodes,
+                        parse_valid,
+                        compile_success: None,
+                        transform_time_us: transform_time,
+                    });
+
+                    if !quiet {
+                        eprintln!(
+                            "  {:<40} delta={:>4} valid={} time={:.0}µs",
+                            mutation_str,
+                            output_lines as i64 - input_lines as i64,
+                            parse_valid,
+                            transform_time
+                        );
+                    }
+                }
+                Err(e) => {
+                    results.push(AstMutationResult {
+                        mutation_id: mutation_str.to_string(),
+                        input_lines,
+                        output_lines: 0,
+                        line_delta: -(input_lines as i64),
+                        input_ast_nodes,
+                        output_ast_nodes: 0,
+                        parse_valid: false,
+                        compile_success: None,
+                        transform_time_us: transform_time,
+                    });
+                    if !quiet {
+                        eprintln!("  {:<40} ERROR: {}", mutation_str, e);
+                    }
+                }
+            }
+        }
+
+        results
+    }
+
+    pub fn bench_ir_mutations(quiet: bool) -> Vec<IrMutationResult> {
+        use build::mutator::MutationSpec;
+        use build::transform::ir_mutator::IrMutator;
+
+        let reference_ir = REFERENCE_LLVM_IR;
+        let input_lines = reference_ir.lines().count();
+
+        let mutations = [
+            ("llvm.nop_insert:density=1.0", 1.0f32),
+            ("llvm.opaque_predicate:density=1.0,mode=robust", 1.0),
+            ("llvm.opaque_predicate:density=1.0,mode=trivial", 1.0),
+            ("llvm.junk_block:count=3", 1.0),
+        ];
+
+        let mut results = Vec::new();
+
+        for (mutation_str, density) in &mutations {
+            let spec = MutationSpec::from_cli_str(mutation_str);
+
+            let mut mutator1 = IrMutator::with_seed(42);
+            let t0 = Instant::now();
+            let result1 = mutator1.apply(reference_ir, &[&spec]);
+            let transform_time = t0.elapsed().as_secs_f64() * 1_000_000.0;
+
+            let mut mutator2 = IrMutator::with_seed(42);
+            let result2 = mutator2.apply(reference_ir, &[&spec]);
+
+            match (result1, result2) {
+                (Ok((output1, _)), Ok((output2, _))) => {
+                    let output_lines = output1.lines().count();
+                    let insertions = output_lines.saturating_sub(input_lines);
+                    let deterministic = output1 == output2;
+
+                    results.push(IrMutationResult {
+                        mutation_id: mutation_str.to_string(),
+                        density: *density,
+                        input_lines,
+                        output_lines,
+                        insertions,
+                        survives_o2: None,
+                        deterministic,
+                        transform_time_us: transform_time,
+                    });
+
+                    if !quiet {
+                        eprintln!(
+                            "  {:<50} ins={:>3} det={} time={:.0}µs",
+                            mutation_str, insertions, deterministic, transform_time
+                        );
+                    }
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    results.push(IrMutationResult {
+                        mutation_id: mutation_str.to_string(),
+                        density: *density,
+                        input_lines,
+                        output_lines: 0,
+                        insertions: 0,
+                        survives_o2: None,
+                        deterministic: false,
+                        transform_time_us: transform_time,
+                    });
+                    if !quiet {
+                        eprintln!("  {:<50} ERROR: {}", mutation_str, e);
+                    }
+                }
+            }
+        }
+
+        results
+    }
+
+    pub fn bench_template_assembly(quiet: bool) -> Vec<TemplateAssemblyResult> {
+        use build::template::assembler::{Assembler, ModuleSelection};
+        use build::template::payload::{EncodingType, PayloadEncoder};
+
+        let template_dir = std::path::PathBuf::from("build/templates");
+        if !template_dir.exists() {
+            if !quiet {
+                eprintln!("  Template directory not found: {:?}", template_dir);
+            }
+            return vec![];
+        }
+
+        let mut assembler = match Assembler::new(&template_dir) {
+            Ok(a) => a,
+            Err(e) => {
+                if !quiet {
+                    eprintln!("  Failed to create Assembler: {}", e);
+                }
+                return vec![];
+            }
+        };
+
+        let encoder = PayloadEncoder::new();
+        let payload = vec![0x90; 64];
+        let encoded = encoder.encode(&payload, EncodingType::Xor);
+        let payload_code = encoder.generate_c_header(&encoded);
+
+        let carriers = ["alloc_rw_rx", "change_rw_rx", "peb_walk"];
+        let decoders = ["xor", "english", "none", "subbyte"];
+        let antiemulations = ["none", "sirallocalot", "timeraw"];
+        let deconditioners = ["none", "alloc_loop"];
+        let guardrails = ["none", "env"];
+        let virtualprotects = ["standard", "undersized"];
+        let decoys = ["none", "winexec"];
+
+        let mut results = Vec::new();
+        let mut count = 0usize;
+        let max_combinations = 100;
+
+        for carrier in &carriers {
+            for decoder in &decoders {
+                for anti in &antiemulations {
+                    if count >= max_combinations {
+                        break;
+                    }
+
+                    let decon = deconditioners[count % deconditioners.len()];
+                    let guard = guardrails[count % guardrails.len()];
+                    let vp = virtualprotects[count % virtualprotects.len()];
+                    let decoy = decoys[count % decoys.len()];
+
+                    let modules = ModuleSelection {
+                        carrier: carrier.to_string(),
+                        decoder: decoder.to_string(),
+                        antiemulation: anti.to_string(),
+                        deconditioner: decon.to_string(),
+                        guardrail: guard.to_string(),
+                        virtualprotect: vp.to_string(),
+                        decoy: decoy.to_string(),
+                    };
+
+                    let t0 = Instant::now();
+                    let result = assembler.assemble(&modules, &payload_code);
+                    let assembly_time = t0.elapsed().as_secs_f64() * 1_000_000.0;
+
+                    let mut module_map = HashMap::new();
+                    module_map.insert("carrier".to_string(), carrier.to_string());
+                    module_map.insert("decoder".to_string(), decoder.to_string());
+                    module_map.insert("antiemulation".to_string(), anti.to_string());
+                    module_map.insert("deconditioner".to_string(), decon.to_string());
+                    module_map.insert("guardrail".to_string(), guard.to_string());
+                    module_map.insert("virtualprotect".to_string(), vp.to_string());
+                    module_map.insert("decoy".to_string(), decoy.to_string());
+
+                    match result {
+                        Ok(assembled) => {
+                            let markers_resolved = !assembled.lines().any(|l| {
+                                let trimmed = l.trim();
+                                trimmed.starts_with("// @MODULE:")
+                            });
+                            let output_lines = assembled.lines().count();
+
+                            results.push(TemplateAssemblyResult {
+                                modules: module_map,
+                                markers_resolved,
+                                output_lines,
+                                assembly_time_us: assembly_time,
+                            });
+
+                            if !quiet && count < 10 {
+                                eprintln!(
+                                    "  [{:>3}] {}+{} resolved={} lines={} time={:.0}µs",
+                                    count,
+                                    carrier,
+                                    decoder,
+                                    markers_resolved,
+                                    output_lines,
+                                    assembly_time
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            results.push(TemplateAssemblyResult {
+                                modules: module_map,
+                                markers_resolved: false,
+                                output_lines: 0,
+                                assembly_time_us: assembly_time,
+                            });
+                            if !quiet {
+                                eprintln!("  [{:>3}] {}+{} ERROR: {}", count, carrier, decoder, e);
+                            }
+                        }
+                    }
+
+                    assembler.clear_cache();
+                    count += 1;
+                }
+            }
+        }
+
+        if !quiet {
+            eprintln!("  Tested {} combinations", results.len());
+        }
+
+        results
+    }
+
+    fn byte_entropy(data: &[u8]) -> f64 {
+        if data.is_empty() {
+            return 0.0;
+        }
+        let mut counts = [0usize; 256];
+        for &b in data {
+            counts[b as usize] += 1;
+        }
+        let total = data.len() as f64;
+        let mut entropy = 0.0;
+        for &c in &counts {
+            if c > 0 {
+                let p = c as f64 / total;
+                entropy -= p * p.log2();
+            }
+        }
+        entropy
+    }
+
+    fn count_ast_nodes(source: &str) -> usize {
+        source
+            .chars()
+            .filter(|c| matches!(c, ';' | '{' | '}'))
+            .count()
+    }
+
+    fn check_parse_valid(source: &str) -> bool {
+        let open = source.chars().filter(|c| *c == '{').count();
+        let close = source.chars().filter(|c| *c == '}').count();
+        if open != close {
+            return false;
+        }
+        !source.contains("ERROR") || source.contains("\"ERROR\"")
+    }
+
+    const REFERENCE_C_SOURCE: &str = r#"
+#include <windows.h>
+#include <stdio.h>
+
+// @MUTATE:decon_rounds
+#define DECON_ROUNDS 10
+void decondition() {
+    for (int i = 0; i < DECON_ROUNDS; i++) {
+        void* p = VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (p) VirtualFree(p, 0, MEM_RELEASE);
+    }
+}
+
+// @MUTATE:fill_pattern
+void fill_memory(void* dest, size_t len) {
+    memset(dest, 0x90, len);
+}
+
+// @MUTATE:timing_pattern
+void antiemulation() {
+    DWORD start = GetTickCount();
+    Sleep(100);
+    DWORD elapsed = GetTickCount() - start;
+    if (elapsed < 90) ExitProcess(1);
+}
+
+// @MUTATE:protection_transition
+void protect(void* addr, size_t len) {
+    DWORD old;
+    VirtualProtect(addr, len, PAGE_EXECUTE_READ, &old);
+}
+
+// @MUTATE:benign_preamble
+void benign_ops() {
+    char buf[256];
+    GetComputerNameA(buf, &(DWORD){sizeof(buf)});
+    GetUserNameA(buf, &(DWORD){sizeof(buf)});
+}
+
+// @MUTATE:exec_decoy
+void exec_decoy() {
+    STARTUPINFO si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
+    CreateProcessA(NULL, "notepad.exe", NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL, &si, &pi);
+    TerminateProcess(pi.hProcess, 0);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+}
+
+// @MUTATE:api_sequence_obfuscation
+void api_obfuscation() {
+    GetCurrentProcessId();
+    GetTickCount();
+    Sleep(0);
+}
+
+int main() {
+    const char* message = "Hello World";
+    int value = 42;
+    int arr[] = {1, 2, 3, 4, 5};
+    benign_ops();
+    decondition();
+    antiemulation();
+    void* mem = VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!mem) return 1;
+    fill_memory(mem, 4096);
+    protect(mem, 4096);
+    exec_decoy();
+    api_obfuscation();
+    return 0;
+}
+"#;
+
+    const REFERENCE_LLVM_IR: &str = r#"
+; ModuleID = 'test.c'
+source_filename = "test.c"
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc19.29.30133"
+
+define dso_local i32 @main() #0 {
+entry:
+  %retval = alloca i32, align 4
+  %x = alloca i32, align 4
+  store i32 0, i32* %retval, align 4
+  store i32 42, i32* %x, align 4
+  %0 = load i32, i32* %x, align 4
+  %cmp = icmp sgt i32 %0, 10
+  br i1 %cmp, label %if.then, label %if.else
+
+if.then:
+  store i32 1, i32* %retval, align 4
+  br label %return
+
+if.else:
+  store i32 0, i32* %retval, align 4
+  br label %return
+
+return:
+  %1 = load i32, i32* %retval, align 4
+  ret i32 %1
+}
+
+define dso_local void @helper() #0 {
+entry:
+  %buf = alloca [256 x i8], align 16
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %next = add i32 %i, 1
+  %done = icmp eq i32 %next, 100
+  br i1 %done, label %exit, label %loop
+
+exit:
+  ret void
+}
+
+attributes #0 = { noinline nounwind optnone }
+"#;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────
+
+fn get_arg(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}

@@ -145,3 +145,136 @@ pub fn run_evaluation(dataset: &EvalDataset) -> Vec<MetricResult> {
         .flat_map(|m| m.evaluate(dataset).unwrap_or_default())
         .collect()
 }
+
+// ============================================================================
+// Infrastructure Evaluation Types
+// ============================================================================
+
+use std::collections::HashMap;
+
+/// Result of a payload encoding benchmark (I1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PayloadEncodingResult {
+    pub encoding_type: String,
+    pub payload_size: usize,
+    pub encoded_size: usize,
+    pub encoded_entropy: f64,
+    pub roundtrip_correct: bool,
+    pub encode_time_us: f64,
+    pub header_compiles: bool,
+}
+
+/// Result of an AST mutation benchmark (I2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AstMutationResult {
+    pub mutation_id: String,
+    pub input_lines: usize,
+    pub output_lines: usize,
+    pub line_delta: i64,
+    pub input_ast_nodes: usize,
+    pub output_ast_nodes: usize,
+    pub parse_valid: bool,
+    pub compile_success: Option<bool>,
+    pub transform_time_us: f64,
+}
+
+/// Result of an IR mutation benchmark (I3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrMutationResult {
+    pub mutation_id: String,
+    pub density: f32,
+    pub input_lines: usize,
+    pub output_lines: usize,
+    pub insertions: usize,
+    pub survives_o2: Option<bool>,
+    pub deterministic: bool,
+    pub transform_time_us: f64,
+}
+
+/// Result of a binary mutation benchmark (I4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryMutationResult {
+    pub mutation_id: String,
+    pub input_size: u64,
+    pub output_size: u64,
+    pub pe_valid: bool,
+    pub section_count_delta: i32,
+    pub import_count_delta: i32,
+    pub text_entropy_before: f64,
+    pub text_entropy_after: f64,
+    pub transform_time_us: f64,
+}
+
+/// Result of a template assembly benchmark (I5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateAssemblyResult {
+    pub modules: HashMap<String, String>,
+    pub markers_resolved: bool,
+    pub output_lines: usize,
+    pub assembly_time_us: f64,
+}
+
+/// Result of an instrumentation overhead benchmark (I6).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstrumentationResult {
+    pub carrier: String,
+    pub baseline_size: u64,
+    pub instrumented_size: u64,
+    pub size_ratio: f64,
+    pub build_time_baseline_ms: f64,
+    pub build_time_instrumented_ms: f64,
+}
+
+/// Result of a token extraction benchmark (I7).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenExtractionResult {
+    pub input_doc_count: usize,
+    pub output_token_count: usize,
+    pub category_counts: HashMap<String, usize>,
+    pub categories_active: usize,
+    pub extraction_time_us: f64,
+    pub deterministic: bool,
+}
+
+/// Result of a token scoring validation test (I8).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenScoringResult {
+    pub test_case: String,
+    pub input_rounds: usize,
+    pub expected_lift: f64,
+    pub computed_lift: f64,
+    pub lift_error: f64,
+    pub guidance_correct: bool,
+}
+
+/// Dataset for infrastructure-level evaluation (parallel to EvalDataset).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct InfraEvalDataset {
+    pub payload_encoding: Option<Vec<PayloadEncodingResult>>,
+    pub ast_mutation: Option<Vec<AstMutationResult>>,
+    pub ir_mutation: Option<Vec<IrMutationResult>>,
+    pub binary_mutation: Option<Vec<BinaryMutationResult>>,
+    pub template_assembly: Option<Vec<TemplateAssemblyResult>>,
+    pub instrumentation: Option<Vec<InstrumentationResult>>,
+    pub token_extraction: Option<Vec<TokenExtractionResult>>,
+    pub token_scoring: Option<Vec<TokenScoringResult>>,
+}
+
+/// Every infrastructure metric implements this. Stateless, pure computation.
+pub trait InfraMetric: Send + Sync {
+    fn metric_id(&self) -> &str;
+    fn evaluate(&self, dataset: &InfraEvalDataset) -> anyhow::Result<Vec<MetricResult>>;
+}
+
+/// Returns all infrastructure-level metrics.
+pub fn all_infra_metrics() -> Vec<Box<dyn InfraMetric>> {
+    analysis::all_infra_analysis_metrics()
+}
+
+/// Run all infrastructure metrics and collect results.
+pub fn run_infra_evaluation(dataset: &InfraEvalDataset) -> Vec<MetricResult> {
+    all_infra_metrics()
+        .iter()
+        .flat_map(|m| m.evaluate(dataset).unwrap_or_default())
+        .collect()
+}

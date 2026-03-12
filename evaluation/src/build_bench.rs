@@ -22,8 +22,7 @@ pub mod bench {
     use std::path::{Path, PathBuf};
     use std::time::Instant;
 
-    use build::builder::{ArtifactBuilder, BuildInput, BuilderConfig, PreparedPayload};
-    use build::mutator::MutationSpec;
+    use build::builder::{self, ArtifactBuilder, BuildInput, BuilderConfig};
     use build::template::assembler::ModuleSelection;
     use build::template::payload::EncodingType;
 
@@ -84,8 +83,7 @@ pub mod bench {
         for _ in 0..iterations {
             // Stage 1: Payload encoding
             let t0 = Instant::now();
-            let prepared =
-                ArtifactBuilder::prepare_payload(&payload, EncodingType::Xor, "off", None)?;
+            let prepared = builder::prepare_payload(&payload, EncodingType::Xor, "off", None)?;
             let payload_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
             // Stage 2-8: Full build (includes assemble + mutate + compile + link + binary mutate)
