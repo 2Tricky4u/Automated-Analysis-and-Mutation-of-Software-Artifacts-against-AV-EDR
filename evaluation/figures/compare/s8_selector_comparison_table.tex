@@ -1,0 +1,21 @@
+\begin{table}[htbp]
+\centering
+\caption{Selector Strategy Comparison Summary}
+\label{tab:selector-comparison}
+\begin{tabular}{lrrrr}
+\toprule
+Metric & Coverage & Fuzzer & Token & Random \\
+\midrule
+Total rounds & 39 & 51 & 40 & 50 \\
+Evasion count & 0 & 6 & 0 & 0 \\
+Evasion rate & 0.0\% & 11.8\% & 0.0\% & 0.0\% \\
+Mean evasion score & 0.226 & 0.282 & 0.121 & 0.070 \\
+Max evasion score & 0.631 & 0.899 & 0.632 & 0.269 \\
+RealDetection count & 34 & 22 & 18 & 16 \\
+MutationFailed rate & 10.3\% & 33.3\% & 52.5\% & 68.0\% \\
+Trustworthy ratio & 87.2\% & 54.9\% & 45.0\% & 32.0\% \\
+Unique AST mutations & 10 & 10 & 7 & 10 \\
+Unique behavioral tokens & 206 & 210 & 206 & 202 \\
+\bottomrule
+\end{tabular}
+\end{table}
