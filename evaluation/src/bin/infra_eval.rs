@@ -1,6 +1,6 @@
 //! Infrastructure-level evaluation runner.
 //!
-//! Reads InfraEvalDataset JSON, runs I1–I8 analysis modules, and writes
+//! Reads InfraEvalDataset JSON, runs I1–I13 analysis modules, and writes
 //! JSON + CSV reports suitable for thesis figures.
 //!
 //! Usage:
@@ -10,7 +10,7 @@
 //!   --input <PATH>       Input InfraEvalDataset JSON (default: infra_dataset.json)
 //!   --output <PATH>      Output JSON report path (default: infra_eval_report.json)
 //!   --csv <PATH>         Output CSV report path (default: infra_eval_metrics.csv)
-//!   --experiment <ID>    Only run specific experiment: i1–i8 (default: all)
+//!   --experiment <ID>    Only run specific experiment: i1–i13 (default: all)
 //!   --quiet              Suppress output to stderr
 
 use evaluation::report::csv_report::{format_csv, write_csv_report};
@@ -66,6 +66,29 @@ fn main() -> anyhow::Result<()> {
             "  token_scoring:     {}",
             dataset.token_scoring.as_ref().map_or(0, |v| v.len())
         );
+        eprintln!(
+            "  input_diversity:   {}",
+            dataset.input_diversity.as_ref().map_or(0, |v| v.len())
+        );
+        eprintln!(
+            "  oracle_stability:  {}",
+            dataset.oracle_stability.as_ref().map_or(0, |v| v.len())
+        );
+        eprintln!(
+            "  selector_cmp:      {}",
+            dataset.selector_comparison.as_ref().map_or(0, |v| v.len())
+        );
+        eprintln!(
+            "  guidance_util:     {}",
+            dataset.guidance_utilization.as_ref().map_or(0, |v| v.len())
+        );
+        eprintln!(
+            "  convergence_sim:   {}",
+            dataset
+                .convergence_simulation
+                .as_ref()
+                .map_or(0, |v| v.len())
+        );
     }
 
     // Get all infrastructure metrics
@@ -82,6 +105,11 @@ fn main() -> anyhow::Result<()> {
             "i6" => "infra.i6",
             "i7" => "infra.i7",
             "i8" => "infra.i8",
+            "i9" => "infra.i9",
+            "i10" => "infra.i10",
+            "i11" => "infra.i11",
+            "i12" => "infra.i12",
+            "i13" => "infra.i13",
             other => other,
         };
         all_metrics
