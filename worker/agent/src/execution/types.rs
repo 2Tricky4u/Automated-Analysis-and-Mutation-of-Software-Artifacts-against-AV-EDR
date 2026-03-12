@@ -13,18 +13,11 @@ use crate::automutate::common::{SampleResponse, TelemetryData};
 use automutate_config::WorkerConfig;
 
 // ============================================================================
-// Synthetic exit codes assigned by the engine (never from Windows).
-// Real Windows exit codes are >= 0 and passed through verbatim.
+// Synthetic exit codes — re-exported from automutate_common.
+// Values in the -100_00x range — unreachable from Windows ExitProcess(UINT).
 // ============================================================================
 
-/// OS error on `child.wait()`.
-pub const EXIT_WAIT_FAILED: i32 = -1;
-/// Process exited but `status.code() == None` (externally terminated).
-pub const EXIT_NO_CODE: i32 = -2;
-/// Timeout expired, process killed.
-pub const EXIT_TIMEOUT: i32 = -3;
-/// Never reached execution (spawn/setup failure).
-pub const EXIT_INFRA: i32 = -4;
+pub use automutate_common::{EXIT_INFRA, EXIT_NO_CODE, EXIT_TIMEOUT, EXIT_WAIT_FAILED};
 
 /// Typed request for executing an artifact run.
 ///

@@ -9,11 +9,7 @@
 //!
 //! Run: cargo test -p evaluation --test classifier_coverage
 
-/// Synthetic exit codes mirroring worker/agent/src/execution/types.rs.
-const EXIT_INFRA: i32 = -4;
-const EXIT_TIMEOUT: i32 = -3;
-const EXIT_NO_CODE: i32 = -2;
-const EXIT_WAIT_FAILED: i32 = -1;
+use automutate_common::{EXIT_INFRA, EXIT_NO_CODE, EXIT_TIMEOUT, EXIT_WAIT_FAILED};
 
 /// AV NTSTATUS codes (from classifier.rs).
 const AV_NTSTATUS_1: i32 = 0xC0000906u32 as i32; // STATUS_VIRUS_INFECTED
@@ -63,8 +59,8 @@ fn classify(exit_code: i32, timed_out: bool, has_launched: bool) -> &'static str
         return "Detected";
     }
 
-    // Branch 8: AV NTSTATUS codes
-    if exit_code == AV_NTSTATUS_1 || exit_code == AV_NTSTATUS_2 {
+    // Branch 8: AV NTSTATUS codes + EDR forced termination
+    if exit_code == AV_NTSTATUS_1 || exit_code == AV_NTSTATUS_2 || exit_code == -1 {
         return "Detected";
     }
 
@@ -178,6 +174,13 @@ fn test_all_classifier_branches() {
             has_launched: true,
             expected_verdict: "Detected",
             description: "STATUS_VIRUS_DELETED → Detected",
+        },
+        TestCase {
+            exit_code: 0xFFFFFFFF_u32 as i32,
+            timed_out: false,
+            has_launched: true,
+            expected_verdict: "Detected",
+            description: "EDR forced termination (0xFFFFFFFF) → Detected",
         },
         // Branch 9: Crash NTSTATUS
         TestCase {
