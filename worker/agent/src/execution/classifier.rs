@@ -21,6 +21,7 @@ use automutate_common::has_launched;
 const AV_NTSTATUS_CODES: &[i32] = &[
     0xC0000906_u32 as i32, // STATUS_VIRUS_INFECTED
     0xC0000907_u32 as i32, // STATUS_VIRUS_DELETED
+    0xFFFFFFFF_u32 as i32, // EDR forced termination (Cortex XDR, etc.)
 ];
 
 /// Known crash NTSTATUS codes.
@@ -83,14 +84,14 @@ fn extract_evidence(telemetry_events: &[TelemetryData]) -> (bool, Option<String>
 /// Takes a [`ClassificationEvidence`] and returns a [`DetectionVerdict`].
 ///
 /// Decision order:
-///  1. EXIT_INFRA (-4)                             → InfraError
-///  2. EXIT_WAIT_FAILED (-1)                       → InfraError
+///  1. EXIT_INFRA (-100_004)                       → InfraError
+///  2. EXIT_WAIT_FAILED (-100_001)                 → InfraError
 ///  3. exit_code 10-19 (guardrail)                 → InfraError
 ///  4. exit_code == 0                              → Evasion
 ///  5. timed_out + has_launched                     → Evasion
 ///  6. timed_out + !has_launched                    → Stalled
-///  7. EXIT_NO_CODE (-2)                           → Detected
-///  8. AV NTSTATUS (0xC0000906, 0xC0000907)       → Detected
+///  7. EXIT_NO_CODE (-100_002)                     → Detected
+///  8. AV NTSTATUS / EDR kill (0xC0000906, 0xC0000907, 0xFFFFFFFF) → Detected
 ///  9. Crash NTSTATUS (0xC0000005, etc.)           → Ambiguous
 /// 10. exit_code 30-39 (carrier codes)             → Ambiguous
 /// 11. Other nonzero                               → Ambiguous
@@ -288,6 +289,12 @@ mod tests {
     #[test]
     fn test_av_ntstatus_virus_deleted_is_detected() {
         let ev = evidence(0xC0000907_u32 as i32, false, true);
+        assert_eq!(classify_outcome(&ev), DetectionVerdict::Detected);
+    }
+
+    #[test]
+    fn test_edr_termination_0xffffffff_is_detected() {
+        let ev = evidence(0xFFFFFFFF_u32 as i32, false, false);
         assert_eq!(classify_outcome(&ev), DetectionVerdict::Detected);
     }
 

@@ -5,7 +5,7 @@
 //! outcomes via [`RoundAgg`], and yields a [`RoundSummary`] that feeds back
 //! into the [`Selector`](crate::triage::Selector).
 
-use automutate_common::{DetectionVerdict, has_launched};
+use automutate_common::{DetectionVerdict, EXIT_TIMEOUT, has_launched};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
@@ -440,8 +440,8 @@ pub(crate) fn override_with_dryrun(
     baseline: &RunOutcome,
     instrumented_checkpoint: &str,
 ) -> DetectionVerdict {
-    let dr_timeout = dryrun.exit_code == -3; // EXIT_TIMEOUT
-    let bl_timeout = baseline.exit_code == -3;
+    let dr_timeout = dryrun.exit_code == EXIT_TIMEOUT;
+    let bl_timeout = baseline.exit_code == EXIT_TIMEOUT;
     let dr_clean = dryrun.exit_code == 0;
     let bl_clean = baseline.exit_code == 0;
 
@@ -514,6 +514,7 @@ pub(crate) fn override_with_dryrun(
 mod tests {
     use super::super::config::{ModularBuildSpec, ModuleSelectionSpec};
     use super::*;
+    use automutate_common::EXIT_NO_CODE;
     use std::path::PathBuf;
 
     fn test_build_spec() -> ModularBuildSpec {
@@ -1132,7 +1133,7 @@ mod tests {
         let mut agg = test_round_agg(test_round_spec("r-rd"));
         agg.baseline = Some(RunOutcome {
             detected: true,
-            exit_code: -2,
+            exit_code: EXIT_NO_CODE,
             error: None,
             success: false,
             elapsed_ms: 50_000.0,
@@ -1141,7 +1142,7 @@ mod tests {
         });
         agg.instrumented = Some(RunOutcome {
             detected: true,
-            exit_code: -2,
+            exit_code: EXIT_NO_CODE,
             error: None,
             success: false,
             elapsed_ms: 48_000.0,
@@ -1168,7 +1169,7 @@ mod tests {
             let mut agg = test_round_agg(test_round_spec("r"));
             agg.baseline = Some(RunOutcome {
                 detected: true,
-                exit_code: -2,
+                exit_code: EXIT_NO_CODE,
                 error: None,
                 success: false,
                 elapsed_ms: elapsed,
@@ -1177,7 +1178,7 @@ mod tests {
             });
             agg.instrumented = Some(RunOutcome {
                 detected: true,
-                exit_code: -2,
+                exit_code: EXIT_NO_CODE,
                 error: None,
                 success: false,
                 elapsed_ms: elapsed,
@@ -1213,7 +1214,7 @@ mod tests {
         let mut agg = test_round_agg(spec);
         agg.baseline = Some(RunOutcome {
             detected: false,
-            exit_code: -2,
+            exit_code: EXIT_NO_CODE,
             error: None,
             success: false,
             elapsed_ms: 5_000.0,
@@ -1222,7 +1223,7 @@ mod tests {
         });
         agg.instrumented = Some(RunOutcome {
             detected: true,
-            exit_code: -2,
+            exit_code: EXIT_NO_CODE,
             error: None,
             success: false,
             elapsed_ms: 5_000.0,

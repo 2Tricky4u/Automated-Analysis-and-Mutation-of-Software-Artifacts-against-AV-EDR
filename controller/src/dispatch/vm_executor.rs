@@ -18,6 +18,8 @@ use crate::vm::TargetManager;
 
 use super::channels::{JobRunResult, RemoteRunResult};
 use super::run_pool::RunPool;
+use automutate_common::EXIT_INFRA;
+
 use super::types::{RunEnvelope, RunOutcome, VMInfo};
 
 // ============================================================================
@@ -317,7 +319,7 @@ impl VMExecutor {
             round_id: envelope.round_id.clone(),
             outcome: RunOutcome {
                 detected: false,
-                exit_code: -1,
+                exit_code: EXIT_INFRA,
                 error: Some(error),
                 success: false,
                 elapsed_ms: 0.0,

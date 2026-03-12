@@ -74,6 +74,18 @@ impl DetectionVerdict {
     }
 }
 
+// === Synthetic Exit Codes (shared between worker and controller) ===
+// Values in the -100_00x range — unreachable from Windows ExitProcess(UINT).
+
+/// OS error on `child.wait()`.
+pub const EXIT_WAIT_FAILED: i32 = -100_001;
+/// Process exited but `status.code() == None` (externally terminated).
+pub const EXIT_NO_CODE: i32 = -100_002;
+/// Timeout expired, process killed.
+pub const EXIT_TIMEOUT: i32 = -100_003;
+/// Never reached execution (spawn/setup failure).
+pub const EXIT_INFRA: i32 = -100_004;
+
 /// True if the artifact reached carrier execution (Launching checkpoint or beyond).
 /// Used by both worker classifier and controller dry-run override.
 pub fn has_launched(last_checkpoint: &str) -> bool {
