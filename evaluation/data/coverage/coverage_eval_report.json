@@ -83,26 +83,26 @@
         "ast.protection_transition"
       ],
       "used": [
+        "ast.benign_syscall_insert",
+        "binary.rich_header",
+        "binary.resource_inject",
+        "binary.string_inject",
+        "ast.fill_pattern",
+        "binary.import_pad",
+        "ast.string_xor",
+        "llvm.opaque_predicate",
+        "binary.entropy_normalize",
         "binary.size_pad",
-        "ast.api_sequence_obfuscation",
-        "ast.benign_preamble",
+        "binary.timestamp",
+        "ast.const_obfuscation",
         "ast.timing_pattern",
         "binary.debug_dir",
-        "binary.entropy_normalize",
-        "binary.rich_header",
-        "ast.const_obfuscation",
-        "ast.protection_transition",
-        "binary.string_inject",
-        "ast.string_xor",
-        "binary.resource_inject",
-        "ast.benign_syscall_insert",
-        "binary.section_rename",
-        "llvm.opaque_predicate",
-        "binary.import_pad",
-        "ast.decon_rounds",
-        "ast.fill_pattern",
         "ast.exec_decoy",
-        "binary.timestamp"
+        "ast.decon_rounds",
+        "ast.api_sequence_obfuscation",
+        "ast.benign_preamble",
+        "binary.section_rename",
+        "ast.protection_transition"
       ]
     },
     "n": 39
@@ -174,31 +174,7 @@
         {
           "broken": 4,
           "failure_rate": 0.10256410256410256,
-          "mutation": "binary.section_rename",
-          "total": 39
-        },
-        {
-          "broken": 4,
-          "failure_rate": 0.10256410256410256,
-          "mutation": "binary.debug_dir",
-          "total": 39
-        },
-        {
-          "broken": 4,
-          "failure_rate": 0.10256410256410256,
-          "mutation": "binary.string_inject",
-          "total": 39
-        },
-        {
-          "broken": 4,
-          "failure_rate": 0.10256410256410256,
-          "mutation": "llvm.opaque_predicate",
-          "total": 39
-        },
-        {
-          "broken": 4,
-          "failure_rate": 0.10256410256410256,
-          "mutation": "binary.entropy_normalize",
+          "mutation": "binary.import_pad",
           "total": 39
         },
         {
@@ -210,7 +186,13 @@
         {
           "broken": 4,
           "failure_rate": 0.10256410256410256,
-          "mutation": "binary.rich_header",
+          "mutation": "binary.section_rename",
+          "total": 39
+        },
+        {
+          "broken": 4,
+          "failure_rate": 0.10256410256410256,
+          "mutation": "llvm.opaque_predicate",
           "total": 39
         },
         {
@@ -222,7 +204,25 @@
         {
           "broken": 4,
           "failure_rate": 0.10256410256410256,
-          "mutation": "binary.import_pad",
+          "mutation": "binary.string_inject",
+          "total": 39
+        },
+        {
+          "broken": 4,
+          "failure_rate": 0.10256410256410256,
+          "mutation": "binary.entropy_normalize",
+          "total": 39
+        },
+        {
+          "broken": 4,
+          "failure_rate": 0.10256410256410256,
+          "mutation": "binary.rich_header",
+          "total": 39
+        },
+        {
+          "broken": 4,
+          "failure_rate": 0.10256410256410256,
+          "mutation": "binary.debug_dir",
           "total": 39
         },
         {
@@ -234,32 +234,8 @@
         {
           "broken": 0,
           "failure_rate": 0.0,
-          "mutation": "ast.benign_preamble",
-          "total": 1
-        },
-        {
-          "broken": 0,
-          "failure_rate": 0.0,
-          "mutation": "ast.timing_pattern",
-          "total": 11
-        },
-        {
-          "broken": 0,
-          "failure_rate": 0.0,
-          "mutation": "ast.benign_syscall_insert",
-          "total": 1
-        },
-        {
-          "broken": 0,
-          "failure_rate": 0.0,
-          "mutation": "ast.const_obfuscation",
-          "total": 15
-        },
-        {
-          "broken": 0,
-          "failure_rate": 0.0,
-          "mutation": "ast.decon_rounds",
-          "total": 6
+          "mutation": "ast.fill_pattern",
+          "total": 2
         },
         {
           "broken": 0,
@@ -270,14 +246,38 @@
         {
           "broken": 0,
           "failure_rate": 0.0,
-          "mutation": "ast.string_xor",
+          "mutation": "ast.const_obfuscation",
+          "total": 15
+        },
+        {
+          "broken": 0,
+          "failure_rate": 0.0,
+          "mutation": "ast.benign_syscall_insert",
           "total": 1
         },
         {
           "broken": 0,
           "failure_rate": 0.0,
-          "mutation": "ast.fill_pattern",
-          "total": 2
+          "mutation": "ast.decon_rounds",
+          "total": 6
+        },
+        {
+          "broken": 0,
+          "failure_rate": 0.0,
+          "mutation": "ast.timing_pattern",
+          "total": 11
+        },
+        {
+          "broken": 0,
+          "failure_rate": 0.0,
+          "mutation": "ast.benign_preamble",
+          "total": 1
+        },
+        {
+          "broken": 0,
+          "failure_rate": 0.0,
+          "mutation": "ast.string_xor",
+          "total": 1
         },
         {
           "broken": 0,
@@ -592,15 +592,15 @@
     "axis": "oracle",
     "category": "stability",
     "label": "Mean evasion score std dev per config (lower = more stable)",
-    "value": 0.050800831891575846,
+    "value": 0.05080083189157584,
     "details": {
       "configs_with_repeats": 5,
       "stddevs": [
-        0.0012041594578792306,
-        0.00040000000000000034,
         0.25239999999999996,
         2.7755575615628914e-17,
-        0.0
+        0.0,
+        0.00040000000000000034,
+        0.0012041594578792306
       ]
     },
     "n": 39

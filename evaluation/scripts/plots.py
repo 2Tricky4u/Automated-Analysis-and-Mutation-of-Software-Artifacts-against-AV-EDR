@@ -173,7 +173,7 @@ def plot_c3_heatmap(metrics, outdir):
     # Truncate long labels
     short_labels = [l[:40] for l in labels]
     ax.set_yticklabels(short_labels, fontsize=7)
-    ax.set_title('C3: Token Presence Heatmap (Top-20 Tokens)')
+    ax.set_title('C3: Token Presence Heatmap (20 Rarest Tokens)')
 
     fig.colorbar(im, ax=ax, label='Present', ticks=[0, 1])
     fig.savefig(os.path.join(outdir, 'c3_presence_heatmap.pdf'), bbox_inches='tight')

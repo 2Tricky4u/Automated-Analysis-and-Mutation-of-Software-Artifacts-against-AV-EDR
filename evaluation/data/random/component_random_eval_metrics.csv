@@ -1,7 +1,7 @@
 metric_id,axis,category,label,value,n
 component.c3.token_coverage.category_table,component,triage_engine,Token category coverage (active categories / 9 total),0.8888888888888888,50
 component.c3.token_coverage.tokens_per_round,component,triage_engine,Mean tokens per round,107.34,50
-component.c3.token_coverage.presence_heatmap,component,triage_engine,Token presence heatmap (top-20 tokens × rounds),633,50
+component.c3.token_coverage.presence_heatmap,component,triage_engine,Token presence heatmap (bottom-20 rarest tokens × rounds),633,50
 component.c3.token_coverage.category_proportions,component,triage_engine,Per-round token category proportions (for stacked bar),8,50
 component.c4.scoring_convergence.top5_overlap,component,triage_engine,Top-5 token overlap convergence (final overlap fraction),0,50
 component.c4.scoring_convergence.actionable_stability,component,triage_engine,Round where actionable token count stabilizes,5,50

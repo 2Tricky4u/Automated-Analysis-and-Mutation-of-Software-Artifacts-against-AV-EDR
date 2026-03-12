@@ -162,7 +162,10 @@ impl EvalMetric for TokenCoverage {
         }
 
         let mut freq_sorted: Vec<(String, usize)> = token_freq.into_iter().collect();
-        freq_sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        // Filter: keep tokens present in ≥2 rounds (avoid noise from one-off tokens)
+        // Exclude mutation:* tokens — they mirror the selector input, not observed behavior
+        freq_sorted.retain(|(token, count)| *count >= 2 && !token.starts_with("mutation:"));
+        freq_sorted.sort_by(|a, b| a.1.cmp(&b.1)); // ascending — rarest first
         let top_tokens: Vec<String> = freq_sorted
             .iter()
             .take(20)
@@ -183,7 +186,7 @@ impl EvalMetric for TokenCoverage {
             metric_id: "component.c3.token_coverage.presence_heatmap".to_string(),
             axis: "component".to_string(),
             category: "triage_engine".to_string(),
-            label: "Token presence heatmap (top-20 tokens × rounds)".to_string(),
+            label: "Token presence heatmap (bottom-20 rarest tokens × rounds)".to_string(),
             value: all_unique_tokens.len() as f64,
             details: json!({
                 "token_labels": top_tokens,
