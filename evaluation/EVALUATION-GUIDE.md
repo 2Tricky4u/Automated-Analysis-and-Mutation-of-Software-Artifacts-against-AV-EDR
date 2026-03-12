@@ -22,6 +22,7 @@ The evaluation crate measures AutoMutate++'s fuzzer quality along three canonica
 11. [Component-Level Experiments](#11-component-level-experiments)
 12. [Running Tests](#12-running-tests)
 13. [End-to-End Analysis Pipeline](#13-end-to-end-analysis-pipeline)
+14. [Infrastructure-Level Experiments (I1–I8)](#14-infrastructure-level-experiments-i1i8)
 
 ---
 
@@ -1020,4 +1021,267 @@ python evaluation/scripts/plots.py \
 
 # 4. Verify test infrastructure still passes
 cargo test -p evaluation --features full
+```
+
+---
+
+## 14. Infrastructure-Level Experiments (I1–I8)
+
+While the component experiments (Section 11) evaluate the system's campaign-level behavior, the **infrastructure experiments** evaluate each engineering contribution independently — payload encoding, mutation engines, template assembly, token extraction, and token scoring. These produce standalone benchmarks that measure correctness, performance, and effectiveness without needing any campaign data.
+
+### 14.1 Architecture
+
+The infrastructure evaluation mirrors the component pipeline but uses its own data type and binaries:
+
+```
+infra-bench (binary)   → exercises build + triage crate APIs with Instant::now() timing
+                       → writes InfraEvalDataset JSON
+
+infra-eval (binary)    → reads InfraEvalDataset JSON
+                       → runs I1–I8 analysis modules
+                       → writes infra_eval_report.json + CSV
+
+plots.py --infra       → reads infra_eval_report.json
+                       → generates thesis-quality PDF/PNG figures
+```
+
+The key difference from component experiments: **infra-bench actively calls build/triage APIs and records measurements**, whereas component-eval passively analyzes pre-existing campaign data.
+
+### 14.2 Experiment Reference
+
+| ID | Module | What It Measures | Feature Needed | Key Outputs |
+|----|--------|-----------------|:--------------:|-------------|
+| **I1** | `payload_encoding` | 4 encoding types across 8 payload sizes: entropy profiles, roundtrip correctness, size expansion, latency | `build-bench` | Grouped bar: entropy by type; expansion ratio table |
+| **I2** | `ast_mutation_analysis` | 10 AST mutations: line delta, AST node delta, parse validity, transform latency | `build-bench` | Horizontal bar: per-mutation line delta |
+| **I3** | `ir_mutation_analysis` | 3 IR mutations: insertion count, determinism from same seed, O2 survival (if `opt` available) | `build-bench` | Grouped bar: insertions; bloat ratio |
+| **I4** | `binary_mutation_analysis` | 9 PE transforms: PE validity, size/section/import/entropy deltas | `build-bench` + PE | Heatmap: 9 mutations × 4 features |
+| **I5** | `template_assembly_analysis` | 7-slot module system: marker resolution across combinations, assembly latency distribution | `build-bench` | Histogram: assembly time; marker resolution rate |
+| **I6** | `instrumentation_analysis` | Weak-symbol linkage: baseline vs instrumented PE size, build time overhead per carrier | `build-bench` + toolchain | Grouped bar: size ratio per carrier |
+| **I7** | `token_extraction_analysis` | Token extractor: category coverage (9 types), tokens-per-doc yield, latency, determinism | none | Stacked bar: tokens per category; latency histogram |
+| **I8** | `token_scoring_validation` | Lift/confidence computation: mathematical correctness against known ground truth, degenerate input handling | none | Table: expected vs computed values per test case |
+
+### 14.3 Quick Start
+
+```bash
+# Minimal run (I7 + I8 only, no build crate needed)
+cargo run -p evaluation --bin infra-bench -- \
+  --experiments i7,i8 \
+  --output infra_dataset.json
+
+# Full run (I1–I3, I5, I7, I8 — needs build crate)
+cargo run -p evaluation --features build-bench --bin infra-bench -- \
+  --experiments i1,i2,i3,i5,i7,i8 \
+  --output infra_dataset.json
+
+# Run evaluation
+cargo run -p evaluation --bin infra-eval -- \
+  --input infra_dataset.json \
+  --output infra_eval_report.json \
+  --csv infra_eval_metrics.csv
+
+# Generate thesis figures
+python evaluation/scripts/plots.py --infra \
+  --input infra_eval_report.json \
+  --outdir figures/
+```
+
+### 14.4 Feature Requirements
+
+Not all experiments require the same dependencies:
+
+| Tier | Experiments | Cargo Command | What's Needed |
+|------|------------|---------------|---------------|
+| **No dependencies** | I7, I8 | `cargo run -p evaluation --bin infra-bench` | Controller crate only (always available) |
+| **Build crate** | I1, I2, I3, I5 | `cargo run -p evaluation --features build-bench --bin infra-bench` | Build crate Rust APIs (no external toolchain) |
+| **Full toolchain** | I4, I6 | Not yet automated | Clang/LLVM + xwin SDK + compiled PE artifacts |
+
+When an experiment is requested but its feature is not enabled, `infra-bench` prints a skip message and continues with the remaining experiments.
+
+### 14.5 infra-bench Options
+
+```bash
+cargo run -p evaluation [--features build-bench] --bin infra-bench -- [OPTIONS]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--experiments <IDS>` | Comma-separated experiment IDs: `i1,i2,i3,i4,i5,i6,i7,i8` | `i7,i8` (or `i1,i2,i3,i5,i7,i8` with `build-bench`) |
+| `--output <PATH>` | Output `InfraEvalDataset` JSON | `infra_dataset.json` |
+| `--quiet` | Suppress progress output to stderr | off |
+
+### 14.6 infra-eval Options
+
+```bash
+cargo run -p evaluation --bin infra-eval -- [OPTIONS]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--input <PATH>` | Input `InfraEvalDataset` JSON | `infra_dataset.json` |
+| `--output <PATH>` | Output JSON report (with full details for plotting) | `infra_eval_report.json` |
+| `--csv <PATH>` | Output CSV summary | `infra_eval_metrics.csv` |
+| `--experiment <ID>` | Only run one experiment: `i1`–`i8` | all |
+| `--quiet` | Suppress stderr; print CSV to stdout | off |
+
+### 14.7 Metric Reference
+
+Each experiment produces multiple sub-metrics. All use `MetricResult` with structured `details` JSON for plotting.
+
+**I1: Payload Encoding (4 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i1.payload_encoding.entropy_comparison` | Max entropy range across types | Per-type entropy by payload size |
+| `infra.i1.payload_encoding.roundtrip_correctness` | Fraction correct (0.0–1.0) | Incorrect cases list |
+| `infra.i1.payload_encoding.size_expansion` | Mean encoded/original ratio | Per-type expansion |
+| `infra.i1.payload_encoding.latency` | Mean encode time (µs) | Per-type timing |
+
+**I2: AST Mutations (3 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i2.ast_mutation.line_impact` | Mean absolute line delta | Per-mutation table with node deltas |
+| `infra.i2.ast_mutation.parse_validity` | Fraction valid (0.0–1.0) | Invalid mutation list |
+| `infra.i2.ast_mutation.transform_latency` | Mean transform time (µs) | Per-mutation timing |
+
+**I3: IR Mutations (4 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i3.ir_mutation.insertion_effectiveness` | Insertions per input line | Per-mutation breakdown |
+| `infra.i3.ir_mutation.o2_survival` | Fraction surviving `-O2` | Survival table |
+| `infra.i3.ir_mutation.determinism` | Fraction deterministic | Count |
+| `infra.i3.ir_mutation.line_bloat` | Mean output/input ratio | Per-mutation ratios |
+
+**I4: Binary Mutations (4 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i4.binary_mutation.pe_validity` | Fraction valid PE | Validity table |
+| `infra.i4.binary_mutation.size_impact` | Mean size ratio | Per-mutation deltas |
+| `infra.i4.binary_mutation.entropy_shift` | Mean abs entropy delta | Per-mutation shifts |
+| `infra.i4.binary_mutation.feature_heatmap` | Mutation count | 9×4 feature matrix |
+
+**I5: Template Assembly (3 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i5.template_assembly.marker_resolution` | Fraction resolved (0.0–1.0) | Failed combinations |
+| `infra.i5.template_assembly.combination_coverage` | Tested/576 | Coverage percent |
+| `infra.i5.template_assembly.latency` | Mean assembly time (µs) | Histogram bins, all times |
+
+**I6: Instrumentation Overhead (3 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i6.instrumentation.size_overhead` | Mean instrumented/baseline ratio | Per-carrier breakdown |
+| `infra.i6.instrumentation.text_overhead` | Size ratio range | Min/max across carriers |
+| `infra.i6.instrumentation.build_time_overhead` | Mean time ratio | Per-carrier timing |
+
+**I7: Token Extraction (4 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i7.token_extraction.category_coverage` | Active/9 categories | Category table |
+| `infra.i7.token_extraction.tokens_per_doc` | Mean tokens per doc | Per-run breakdown |
+| `infra.i7.token_extraction.latency_distribution` | Mean extraction time (µs) | p50/p95/p99, all times |
+| `infra.i7.token_extraction.determinism` | Fraction deterministic | Count |
+
+**I8: Token Scoring (2 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i8.token_scoring.lift_accuracy` | 1 − max error (0.0–1.0) | Per-case expected vs computed |
+| `infra.i8.token_scoring.guidance_correctness` | Fraction correct (0.0–1.0) | Incorrect cases |
+
+### 14.8 Generated Figures
+
+```bash
+python evaluation/scripts/plots.py --infra \
+  --input infra_eval_report.json --outdir figures/
+```
+
+| File | Experiment | Description |
+|------|-----------|-------------|
+| `i1_encoding_entropy.pdf` | I1 | Grouped bar: Shannon entropy by encoding type × payload size |
+| `i1_encoding_expansion.pdf` | I1 | Grouped bar: mean/max size expansion per encoding type |
+| `i2_ast_mutation_impact.pdf` | I2 | Horizontal bar: line delta per AST mutation |
+| `i3_ir_mutation_analysis.pdf` | I3 | Grouped bar: insertions + line bloat per IR mutation |
+| `i4_binary_mutation_heatmap.pdf` | I4 | Heatmap: 9 mutations × 4 features (normalized) |
+| `i5_template_assembly.pdf` | I5 | Histogram: assembly time distribution |
+| `i6_instrumentation_overhead.pdf` | I6 | Grouped bar: baseline vs instrumented size per carrier |
+| `i7_token_extraction.pdf` | I7 | Stacked bar: tokens per category + latency histogram |
+| `i8_scoring_validation.pdf` | I8 | Table figure: expected vs computed lift per test case |
+| `infra_metrics_table.tex` | All | LaTeX summary table for thesis appendix |
+
+### 14.9 The InfraEvalDataset Schema
+
+The infrastructure pipeline uses `InfraEvalDataset` (parallel to `EvalDataset`). Each field is an optional vector of result structs populated by `infra-bench`:
+
+```rust
+pub struct InfraEvalDataset {
+    pub payload_encoding:  Option<Vec<PayloadEncodingResult>>,   // I1
+    pub ast_mutation:      Option<Vec<AstMutationResult>>,       // I2
+    pub ir_mutation:       Option<Vec<IrMutationResult>>,        // I3
+    pub binary_mutation:   Option<Vec<BinaryMutationResult>>,    // I4
+    pub template_assembly: Option<Vec<TemplateAssemblyResult>>,  // I5
+    pub instrumentation:   Option<Vec<InstrumentationResult>>,   // I6
+    pub token_extraction:  Option<Vec<TokenExtractionResult>>,   // I7
+    pub token_scoring:     Option<Vec<TokenScoringResult>>,      // I8
+}
+```
+
+Fields are `None` for experiments that were not run. Analysis modules gracefully skip missing data and return empty results.
+
+### 14.10 Programmatic Usage
+
+```rust
+use evaluation::{InfraEvalDataset, InfraMetric, all_infra_metrics, run_infra_evaluation};
+
+// Load dataset
+let json = std::fs::read_to_string("infra_dataset.json")?;
+let dataset: InfraEvalDataset = serde_json::from_str(&json)?;
+
+// Run all infrastructure metrics
+let results = run_infra_evaluation(&dataset);
+
+// Or run individual metrics
+let metrics = all_infra_metrics();
+for metric in &metrics {
+    if metric.metric_id().starts_with("infra.i8") {
+        let metric_results = metric.evaluate(&dataset)?;
+        for r in metric_results {
+            println!("{}: {:.4}", r.metric_id, r.value);
+        }
+    }
+}
+```
+
+### 14.11 Example Output
+
+```
+$ cargo run -p evaluation --features build-bench --bin infra-bench -- --output infra_dataset.json
+Infrastructure benchmark runner
+Experiments: ["i1", "i2", "i3", "i5", "i7", "i8"]
+
+Running I1: Payload Encoding...
+  xor size=  256 encoded=   256 entropy=1.066 time=6µs
+  english size=  256 encoded=  1279 entropy=1.950 time=60µs
+  ...
+Running I8: Token Scoring Validation...
+  perfect_correlation: exp=2.000 got=2.000 err=0.000000 ok=true
+  anti_correlation: exp=0.000 got=0.000 err=0.000000 ok=true
+  ...
+Wrote infra_dataset.json
+
+$ cargo run -p evaluation --bin infra-eval -- --input infra_dataset.json
+  infra.i1.payload_encoding.entropy_comparison       1.8099  (n=32)
+  infra.i1.payload_encoding.roundtrip_correctness    1.0000  (n=32)
+  infra.i2.ast_mutation.parse_validity               1.0000  (n=10)
+  infra.i3.ir_mutation.determinism                   1.0000  (n=4)
+  infra.i5.template_assembly.marker_resolution       1.0000  (n=36)
+  infra.i7.token_extraction.determinism              1.0000  (n=5)
+  infra.i8.token_scoring.lift_accuracy               1.0000  (n=7)
+  infra.i8.token_scoring.guidance_correctness        1.0000  (n=7)
+  INFRASTRUCTURE EVALUATION: 20 metrics from 8 experiments
 ```

@@ -18,6 +18,14 @@ name = "component-eval"
 path = "src/bin/component_eval.rs"
 required-features = ["full"]
 
+[[bin]]
+name = "infra-bench"
+path = "src/bin/infra_bench.rs"
+
+[[bin]]
+name = "infra-eval"
+path = "src/bin/infra_eval.rs"
+
 [features]
 default = []
 input = []
