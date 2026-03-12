@@ -44,7 +44,7 @@ impl InfraMetric for TokenScoringValidation {
             .collect();
 
         // Value: 1.0 - max_error (clamped to [0,1] — closer to 1.0 means more accurate)
-        let accuracy = (1.0 - max_error).max(0.0).min(1.0);
+        let accuracy = (1.0 - max_error).clamp(0.0, 1.0);
 
         metrics.push(MetricResult {
             metric_id: "infra.i8.token_scoring.lift_accuracy".to_string(),

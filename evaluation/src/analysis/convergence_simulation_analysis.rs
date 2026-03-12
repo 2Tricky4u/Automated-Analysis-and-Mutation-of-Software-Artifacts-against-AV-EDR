@@ -24,8 +24,11 @@ impl InfraMetric for ConvergenceSimulationAnalysis {
 
         let mut metrics = Vec::new();
 
-        // Use the first (primary) result for detailed analysis
-        let primary = &results[0];
+        // Use the first accumulation-only result for detailed analysis (selector_name == None)
+        let primary = results
+            .iter()
+            .find(|r| r.selector_name.is_none())
+            .unwrap_or(&results[0]);
 
         // I13.1: Phase transition round — when does accumulation begin?
         let accumulation_round = primary
@@ -154,6 +157,43 @@ impl InfraMetric for ConvergenceSimulationAnalysis {
             }),
             n: scores.len(),
         });
+
+        // I13.5: Per-selector convergence trajectories
+        let selector_results: Vec<&crate::ConvergenceSimulationResult> = results
+            .iter()
+            .filter(|r| r.selector_name.is_some())
+            .collect();
+
+        if !selector_results.is_empty() {
+            let by_selector: Vec<serde_json::Value> = selector_results
+                .iter()
+                .map(|r| {
+                    let name = r.selector_name.as_deref().unwrap_or("Unknown");
+                    json!({
+                        "selector": name,
+                        "score_trajectory": r.best_score_trajectory.iter().map(|(rd, s)| {
+                            json!({"round": rd, "score": s})
+                        }).collect::<Vec<_>>(),
+                        "diversity_trajectory": r.diversity_trajectory.iter().map(|(rd, d)| {
+                            json!({"round": rd, "diversity": d})
+                        }).collect::<Vec<_>>(),
+                        "recipe_size_trajectory": r.recipe_size_trajectory.iter().map(|(rd, s)| {
+                            json!({"round": rd, "recipe_size": s})
+                        }).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+
+            metrics.push(MetricResult {
+                metric_id: "infra.i13.convergence_simulation.selector_convergence".to_string(),
+                axis: "infrastructure".to_string(),
+                category: "convergence_simulation".to_string(),
+                label: "Per-selector score, diversity, and recipe size trajectories".to_string(),
+                value: 0.0,
+                details: json!({"by_selector": by_selector}),
+                n: selector_results.len(),
+            });
+        }
 
         Ok(metrics)
     }
