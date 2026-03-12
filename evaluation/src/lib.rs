@@ -314,6 +314,70 @@ pub struct ConvergenceSimulationResult {
     pub marginal_contribution_count: Vec<(u32, usize)>,
 }
 
+/// Result of a line tracing instrumentation benchmark (I14).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineTracingResult {
+    /// Label for the source input (e.g., "reference_c", "assembled_alloc_rw_rx")
+    pub source_label: String,
+    /// Number of lines in input source
+    pub input_lines: usize,
+    /// Number of lines in output (after injection)
+    pub output_lines: usize,
+    /// Number of trace calls injected
+    pub trace_calls_injected: usize,
+    /// Number of deferred trace calls (loop optimization)
+    pub deferred_trace_calls: usize,
+    /// Trace format used (binary or base64)
+    pub trace_format: String,
+    /// Transform time in microseconds (single run)
+    pub transform_time_us: f64,
+    /// Mean transform time across N iterations
+    pub mean_transform_time_us: f64,
+    /// Standard deviation of transform time
+    pub stddev_transform_time_us: f64,
+    /// Number of timing iterations
+    pub iterations: usize,
+    /// Whether the output parses as valid C (tree-sitter re-parse)
+    pub output_valid: bool,
+    /// Characters per microsecond (throughput metric)
+    pub chars_per_us: f64,
+}
+
+/// Result of a shellcode checkpoint patching benchmark (I15).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScCheckpointResult {
+    /// Shellcode file name (e.g., "calc64.bin")
+    pub shellcode_name: String,
+    /// Size of input shellcode in bytes
+    pub shellcode_size: usize,
+    /// Requested checkpoint count
+    pub requested_checkpoints: u32,
+    /// Actual checkpoints inserted (may be clamped)
+    pub actual_checkpoints: usize,
+    /// Size after stub prepend (stub_size + shellcode_size)
+    pub size_with_stub: usize,
+    /// Number of reachable instruction boundaries found
+    pub reachable_boundaries: usize,
+    /// Patch time in microseconds (disassemble + insert INT3s)
+    pub patch_time_us: f64,
+    /// Mean patch time across N iterations
+    pub mean_patch_time_us: f64,
+    /// Standard deviation of patch time
+    pub stddev_patch_time_us: f64,
+    /// Stub prepend time in microseconds
+    pub stub_prepend_time_us: f64,
+    /// C header generation time in microseconds
+    pub header_gen_time_us: f64,
+    /// Number of timing iterations
+    pub iterations: usize,
+    /// Bytes per microsecond (throughput metric)
+    pub bytes_per_us: f64,
+    /// Whether all patched offsets are at instruction boundaries
+    pub boundary_correct: bool,
+    /// Progress percentages of inserted checkpoints
+    pub checkpoint_progress_pcts: Vec<u8>,
+}
+
 /// Dataset for infrastructure-level evaluation (parallel to EvalDataset).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InfraEvalDataset {
@@ -330,6 +394,8 @@ pub struct InfraEvalDataset {
     pub selector_comparison: Option<Vec<SelectorComparisonResult>>,
     pub guidance_utilization: Option<Vec<GuidanceUtilizationResult>>,
     pub convergence_simulation: Option<Vec<ConvergenceSimulationResult>>,
+    pub line_tracing: Option<Vec<LineTracingResult>>,
+    pub sc_checkpoint: Option<Vec<ScCheckpointResult>>,
 }
 
 /// Every infrastructure metric implements this. Stateless, pure computation.

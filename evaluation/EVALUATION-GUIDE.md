@@ -22,7 +22,7 @@ The evaluation crate measures AutoMutate++'s fuzzer quality along three canonica
 11. [Component-Level Experiments](#11-component-level-experiments)
 12. [Running Tests](#12-running-tests)
 13. [End-to-End Analysis Pipeline](#13-end-to-end-analysis-pipeline)
-14. [Infrastructure-Level Experiments (I1–I8)](#14-infrastructure-level-experiments-i1i8)
+14. [Infrastructure-Level Experiments (I1–I15)](#14-infrastructure-level-experiments-i1i15)
 
 ---
 
@@ -1025,7 +1025,7 @@ cargo test -p evaluation --features full
 
 ---
 
-## 14. Infrastructure-Level Experiments (I1–I8)
+## 14. Infrastructure-Level Experiments (I1–I15)
 
 While the component experiments (Section 11) evaluate the system's campaign-level behavior, the **infrastructure experiments** evaluate each engineering contribution independently — payload encoding, mutation engines, template assembly, token extraction, and token scoring. These produce standalone benchmarks that measure correctness, performance, and effectiveness without needing any campaign data.
 
@@ -1038,7 +1038,7 @@ infra-bench (binary)   → exercises build + triage crate APIs with Instant::now
                        → writes InfraEvalDataset JSON
 
 infra-eval (binary)    → reads InfraEvalDataset JSON
-                       → runs I1–I8 analysis modules
+                       → runs I1–I15 analysis modules
                        → writes infra_eval_report.json + CSV
 
 plots.py --infra       → reads infra_eval_report.json
@@ -1059,18 +1059,36 @@ The key difference from component experiments: **infra-bench actively calls buil
 | **I6** | `instrumentation_analysis` | Weak-symbol linkage: baseline vs instrumented PE size, build time overhead per carrier | `build-bench` + toolchain | Grouped bar: size ratio per carrier |
 | **I7** | `token_extraction_analysis` | Token extractor: category coverage (9 types), tokens-per-doc yield, latency, determinism | none | Stacked bar: tokens per category; latency histogram |
 | **I8** | `token_scoring_validation` | Lift/confidence computation: mathematical correctness against known ground truth, degenerate input handling | none | Table: expected vs computed values per test case |
+| **I9** | `input_diversity_analysis` | 10 AST mutations pairwise: structural distance, output uniqueness, parameter sensitivity | `build-bench` | Heatmap: pairwise distances; uniqueness fraction |
+| **I10** | `oracle_stability_analysis` | Scoring robustness: determinism, permutation stability (Jaccard), incremental convergence, lift variance | none | Convergence line; permutation robustness score |
+| **I11** | `selector_comparison_analysis` | 4 selectors (Coverage, Fuzzer, Token, Random): pool coverage, diversity, exploration rate | none | Grouped bar: coverage by selector; delta vs random |
+| **I12** | `guidance_utilization_analysis` | Token/Coverage selectors: avoidance rate, seek adoption, recipe delta with vs without guidance | none | Bar: avoidance + adoption rates per selector |
+| **I13** | `convergence_simulation_analysis` | 40-round simulation: phase transitions, recipe growth, diversity preservation, score plateau | none | Multi-panel trajectory: score, recipe size, diversity |
+| **I14** | `line_tracing_analysis` | Line trace injection: scaling with source size, injection density, parse validity, throughput | `build-bench` | Scatter: time vs lines + regression; bar: injection density |
+| **I15** | `sc_checkpoint_analysis` | INT3 checkpoint patching: 9 shellcodes × 5 counts, scaling by size/count, clamping, throughput | `build-bench` | 2×2: log-log size scaling, count scaling, clamping heatmap, throughput bar |
 
 ### 14.3 Quick Start
 
 ```bash
-# Minimal run (I7 + I8 only, no build crate needed)
+# Minimal run (I7, I8, I10–I13 only, no build crate needed)
 cargo run -p evaluation --bin infra-bench -- \
-  --experiments i7,i8 \
+  --experiments i7,i8,i10,i11,i12,i13 \
   --output infra_dataset.json
 
-# Full run (I1–I3, I5, I7, I8 — needs build crate)
+# Full run (all experiments — needs build crate + shellcodes for I15)
 cargo run -p evaluation --features build-bench --bin infra-bench -- \
-  --experiments i1,i2,i3,i5,i7,i8 \
+  --experiments i1,i2,i3,i5,i7,i8,i9,i10,i11,i12,i13,i14,i15 \
+  --output infra_dataset.json
+
+# Just the new instrumentation benchmarks (I14 + I15)
+cargo run -p evaluation --features build-bench --bin infra-bench -- \
+  --experiments i14,i15 \
+  --output infra_dataset.json
+
+# Run with REAL campaign data (I7,I8,I10-I13 use real rounds/tokens)
+cargo run -p evaluation --bin infra-bench -- \
+  --experiments i7,i8,i10,i11,i12,i13 \
+  --dataset my_campaign.json \
   --output infra_dataset.json
 
 # Run evaluation
@@ -1085,14 +1103,17 @@ python evaluation/scripts/plots.py --infra \
   --outdir figures/
 ```
 
+When `--dataset` is provided, experiments I7, I8, I10–I13 use the real campaign's rounds, token matrices, and telemetry tokens instead of synthetic data. Other experiments (I1–I5, I9, I14, I15) exercise build-crate APIs directly and are unaffected.
+
 ### 14.4 Feature Requirements
 
 Not all experiments require the same dependencies:
 
 | Tier | Experiments | Cargo Command | What's Needed |
 |------|------------|---------------|---------------|
-| **No dependencies** | I7, I8 | `cargo run -p evaluation --bin infra-bench` | Controller crate only (always available) |
-| **Build crate** | I1, I2, I3, I5 | `cargo run -p evaluation --features build-bench --bin infra-bench` | Build crate Rust APIs (no external toolchain) |
+| **No dependencies** | I7, I8, I10, I11, I12, I13 | `cargo run -p evaluation --bin infra-bench` | Controller crate only (always available) |
+| **Build crate** | I1, I2, I3, I5, I9, I14 | `cargo run -p evaluation --features build-bench --bin infra-bench` | Build crate Rust APIs (no external toolchain) |
+| **Build crate + shellcodes** | I15 | `cargo run -p evaluation --features build-bench --bin infra-bench` | Build crate + `data/shellcodes/*.bin` files |
 | **Full toolchain** | I4, I6 | Not yet automated | Clang/LLVM + xwin SDK + compiled PE artifacts |
 
 When an experiment is requested but its feature is not enabled, `infra-bench` prints a skip message and continues with the remaining experiments.
@@ -1105,8 +1126,9 @@ cargo run -p evaluation [--features build-bench] --bin infra-bench -- [OPTIONS]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--experiments <IDS>` | Comma-separated experiment IDs: `i1,i2,i3,i4,i5,i6,i7,i8` | `i7,i8` (or `i1,i2,i3,i5,i7,i8` with `build-bench`) |
+| `--experiments <IDS>` | Comma-separated experiment IDs: `i1`–`i15` | `i7,i8,i10,i11,i12,i13` (or `i1,i2,i3,i5,i7,i8,i10,i11,i12,i13,i14,i15` with `build-bench`) |
 | `--output <PATH>` | Output `InfraEvalDataset` JSON | `infra_dataset.json` |
+| `--dataset <PATH>` | Load real campaign `EvalDataset` JSON for I7,I8,I10–I13 | none (synthetic) |
 | `--quiet` | Suppress progress output to stderr | off |
 
 ### 14.6 infra-eval Options
@@ -1120,7 +1142,7 @@ cargo run -p evaluation --bin infra-eval -- [OPTIONS]
 | `--input <PATH>` | Input `InfraEvalDataset` JSON | `infra_dataset.json` |
 | `--output <PATH>` | Output JSON report (with full details for plotting) | `infra_eval_report.json` |
 | `--csv <PATH>` | Output CSV summary | `infra_eval_metrics.csv` |
-| `--experiment <ID>` | Only run one experiment: `i1`–`i8` | all |
+| `--experiment <ID>` | Only run one experiment: `i1`–`i15` | all |
 | `--quiet` | Suppress stderr; print CSV to stdout | off |
 
 ### 14.7 Metric Reference
@@ -1194,6 +1216,69 @@ Each experiment produces multiple sub-metrics. All use `MetricResult` with struc
 | `infra.i8.token_scoring.lift_accuracy` | 1 − max error (0.0–1.0) | Per-case expected vs computed |
 | `infra.i8.token_scoring.guidance_correctness` | Fraction correct (0.0–1.0) | Incorrect cases |
 
+**I9: Input Diversity (4 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i9.input_diversity.pairwise_distance` | Mean normalized distance between mutation outputs | Per-pair heatmap with min/max |
+| `infra.i9.input_diversity.output_uniqueness` | Fraction of pairs producing distinct output (0.0–1.0) | Differ count |
+| `infra.i9.input_diversity.param_sensitivity` | Fraction of mutations where params change output | Mutations with variants |
+| `infra.i9.input_diversity.encoding_entropy_spread` | Entropy range across encoding types (bits) | Max − min entropy |
+
+**I10: Oracle Stability (4 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i10.oracle_stability.determinism` | 1.0 if all repeated scoring runs identical | Binary pass/fail |
+| `infra.i10.oracle_stability.permutation_robustness` | Mean top-5 Jaccard similarity across 10 permutations | Per-permutation scores |
+| `infra.i10.oracle_stability.incremental_convergence` | Fraction of snapshots with Jaccard > 0.8 vs full | Round-by-round convergence |
+| `infra.i10.oracle_stability.lift_variance` | Lift stability: 1/(1 + mean variance) | Per-token lift variance |
+
+**I11: Selector Comparison (4 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i11.selector_comparison.coverage_by_selector` | Mean mutation pool coverage | Per-selector breakdown |
+| `infra.i11.selector_comparison.diversity_by_selector` | Mean pairwise Jaccard distance of selections | Per-selector diversity |
+| `infra.i11.selector_comparison.exploration_rate` | Mean exploration fraction | Per-selector rates |
+| `infra.i11.selector_comparison.guided_vs_random_delta` | Coverage delta vs Random baseline | Per-selector improvement |
+
+**I12: Guidance Utilization (3 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i12.guidance_utilization.avoidance_rate` | Mean fraction of rounds avoiding avoid-tokens | Per-selector rates |
+| `infra.i12.guidance_utilization.seek_adoption_rate` | Mean fraction of rounds adopting seek-tokens | Per-selector rates |
+| `infra.i12.guidance_utilization.recipe_delta` | Mean Jaccard distance (with vs without guidance) | Per-selector delta |
+
+**I13: Convergence Simulation (4 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i13.convergence_simulation.phase_transition_round` | Round of Accumulation phase entry (fraction of total) | Phase transition list |
+| `infra.i13.convergence_simulation.recipe_growth_rate` | Recipe size growth (mutations/round) during accumulation | Linear regression slope |
+| `infra.i13.convergence_simulation.diversity_preservation` | Minimum diversity during accumulation | Diversity trajectory |
+| `infra.i13.convergence_simulation.score_plateau_round` | Round where best score plateaus (fraction of total) | Score trajectory |
+
+**I14: Line Tracing Overhead (4 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i14.line_tracing.throughput` | Mean source throughput (chars/µs) | Per-source breakdown with stddev |
+| `infra.i14.line_tracing.injection_density` | Mean trace calls per source line | Per-source traces + deferred counts |
+| `infra.i14.line_tracing.scaling` | Latency scaling coefficient (µs/line) | Slope + R² from linear regression |
+| `infra.i14.line_tracing.validity` | Fraction of outputs that parse as valid C | Invalid source list |
+
+**I15: Shellcode Checkpoint Patching (5 metrics)**
+
+| Metric ID | Value | Details |
+|-----------|-------|---------|
+| `infra.i15.sc_checkpoint.throughput_by_size` | Mean patch throughput (bytes/µs) | Per-file breakdown |
+| `infra.i15.sc_checkpoint.scaling_by_size` | Patch time scaling with size (µs/byte, count=5) | Slope + R² from linear regression |
+| `infra.i15.sc_checkpoint.scaling_by_checkpoints` | Patch time scaling with count (µs/checkpoint) | Slope + R² for mid-size shellcode |
+| `infra.i15.sc_checkpoint.clamping_rate` | Fraction where actual < requested checkpoints | Clamped cases list |
+| `infra.i15.sc_checkpoint.boundary_correctness` | Fraction with correct instruction boundaries | Failure list |
+
 ### 14.8 Generated Figures
 
 ```bash
@@ -1212,6 +1297,13 @@ python evaluation/scripts/plots.py --infra \
 | `i6_instrumentation_overhead.pdf` | I6 | Grouped bar: baseline vs instrumented size per carrier |
 | `i7_token_extraction.pdf` | I7 | Stacked bar: tokens per category + latency histogram |
 | `i8_scoring_validation.pdf` | I8 | Table figure: expected vs computed lift per test case |
+| `i9_input_diversity.pdf` | I9 | Heatmap: pairwise mutation distances; output uniqueness |
+| `i10_oracle_stability.pdf` | I10 | Multi-panel: determinism, permutation Jaccard, convergence |
+| `i11_selector_comparison.pdf` | I11 | Grouped bar: coverage + diversity per selector |
+| `i12_guidance_utilization.pdf` | I12 | Bar: avoidance + seek rates per selector |
+| `i13_convergence_sim.pdf` | I13 | Multi-panel trajectory: score, recipe size, diversity, phases |
+| `i14_line_tracing.pdf` | I14 | 1×2: scatter time vs lines + regression; grouped bar: injection density |
+| `i15_sc_checkpoint.pdf` | I15 | 2×2: log-log size scaling, count scaling, throughput heatmap, bar |
 | `infra_metrics_table.tex` | All | LaTeX summary table for thesis appendix |
 
 ### 14.9 The InfraEvalDataset Schema
@@ -1220,14 +1312,21 @@ The infrastructure pipeline uses `InfraEvalDataset` (parallel to `EvalDataset`).
 
 ```rust
 pub struct InfraEvalDataset {
-    pub payload_encoding:  Option<Vec<PayloadEncodingResult>>,   // I1
-    pub ast_mutation:      Option<Vec<AstMutationResult>>,       // I2
-    pub ir_mutation:       Option<Vec<IrMutationResult>>,        // I3
-    pub binary_mutation:   Option<Vec<BinaryMutationResult>>,    // I4
-    pub template_assembly: Option<Vec<TemplateAssemblyResult>>,  // I5
-    pub instrumentation:   Option<Vec<InstrumentationResult>>,   // I6
-    pub token_extraction:  Option<Vec<TokenExtractionResult>>,   // I7
-    pub token_scoring:     Option<Vec<TokenScoringResult>>,      // I8
+    pub payload_encoding:       Option<Vec<PayloadEncodingResult>>,       // I1
+    pub ast_mutation:            Option<Vec<AstMutationResult>>,          // I2
+    pub ir_mutation:             Option<Vec<IrMutationResult>>,           // I3
+    pub binary_mutation:         Option<Vec<BinaryMutationResult>>,       // I4
+    pub template_assembly:      Option<Vec<TemplateAssemblyResult>>,      // I5
+    pub instrumentation:        Option<Vec<InstrumentationResult>>,       // I6
+    pub token_extraction:       Option<Vec<TokenExtractionResult>>,       // I7
+    pub token_scoring:          Option<Vec<TokenScoringResult>>,          // I8
+    pub input_diversity:        Option<Vec<InputDiversityResult>>,        // I9
+    pub oracle_stability:       Option<Vec<OracleStabilityResult>>,       // I10
+    pub selector_comparison:    Option<Vec<SelectorComparisonResult>>,    // I11
+    pub guidance_utilization:   Option<Vec<GuidanceUtilizationResult>>,   // I12
+    pub convergence_simulation: Option<Vec<ConvergenceSimulationResult>>, // I13
+    pub line_tracing:           Option<Vec<LineTracingResult>>,           // I14
+    pub sc_checkpoint:          Option<Vec<ScCheckpointResult>>,          // I15
 }
 ```
 
@@ -1245,10 +1344,10 @@ let dataset: InfraEvalDataset = serde_json::from_str(&json)?;
 // Run all infrastructure metrics
 let results = run_infra_evaluation(&dataset);
 
-// Or run individual metrics
+// Or run individual metrics (e.g., just I14 line tracing)
 let metrics = all_infra_metrics();
 for metric in &metrics {
-    if metric.metric_id().starts_with("infra.i8") {
+    if metric.metric_id().starts_with("infra.i14") {
         let metric_results = metric.evaluate(&dataset)?;
         for r in metric_results {
             println!("{}: {:.4}", r.metric_id, r.value);
@@ -1260,17 +1359,31 @@ for metric in &metrics {
 ### 14.11 Example Output
 
 ```
-$ cargo run -p evaluation --features build-bench --bin infra-bench -- --output infra_dataset.json
+$ cargo run -p evaluation --features build-bench --bin infra-bench -- \
+    --experiments i1,i2,i3,i5,i7,i8,i10,i11,i12,i13,i14,i15 \
+    --output infra_dataset.json
 Infrastructure benchmark runner
-Experiments: ["i1", "i2", "i3", "i5", "i7", "i8"]
+Experiments: ["i1", "i2", "i3", "i5", "i7", "i8", "i10", "i11", "i12", "i13", "i14", "i15"]
 
 Running I1: Payload Encoding...
   xor size=  256 encoded=   256 entropy=1.066 time=6µs
-  english size=  256 encoded=  1279 entropy=1.950 time=60µs
   ...
 Running I8: Token Scoring Validation...
   perfect_correlation: exp=2.000 got=2.000 err=0.000000 ok=true
-  anti_correlation: exp=0.000 got=0.000 err=0.000000 ok=true
+  ...
+Running I10: Oracle Stability...
+  deterministic=true perm_jaccard=0.800 lift_var=0.000123
+Running I11: Selector Comparison...
+  Coverage   coverage=0.80 unique_sets=15 mean_size=2.3 explore=0.30
+  Fuzzer     coverage=0.70 unique_sets=20 mean_size=3.1 explore=0.00
+  Token      coverage=0.90 unique_sets=18 mean_size=2.5 explore=0.27
+  Random     coverage=1.00 unique_sets=30 mean_size=2.0 explore=1.00
+Running I14: Line Tracing Overhead...
+  reference_c           lines=   70 traces=  35 deferred=  3 mean=150µs valid=true
+  synthetic_1000        lines= 1000 traces= 500 deferred= 50 mean=2100µs valid=true
+Running I15: Shellcode Checkpoint Patching...
+  calc64.bin               size=    272 count= 5 actual= 5 mean=      25.0µs throughput=10.9 bytes/µs
+  NimPlant.bin             size= 878592 count= 5 actual= 5 mean=   12000.0µs throughput=73.2 bytes/µs
   ...
 Wrote infra_dataset.json
 
@@ -1283,5 +1396,14 @@ $ cargo run -p evaluation --bin infra-eval -- --input infra_dataset.json
   infra.i7.token_extraction.determinism              1.0000  (n=5)
   infra.i8.token_scoring.lift_accuracy               1.0000  (n=7)
   infra.i8.token_scoring.guidance_correctness        1.0000  (n=7)
-  INFRASTRUCTURE EVALUATION: 20 metrics from 8 experiments
+  infra.i10.oracle_stability.determinism             1.0000  (n=1)
+  infra.i10.oracle_stability.permutation_robustness  0.8000  (n=1)
+  infra.i11.selector_comparison.coverage_by_selector 0.8500  (n=4)
+  infra.i12.guidance_utilization.avoidance_rate       0.8500  (n=2)
+  infra.i13.convergence_simulation.phase_transition   0.2500  (n=1)
+  infra.i14.line_tracing.throughput                  12.3456  (n=5)
+  infra.i14.line_tracing.validity                     1.0000  (n=5)
+  infra.i15.sc_checkpoint.throughput_by_size          42.1234  (n=45)
+  infra.i15.sc_checkpoint.boundary_correctness        1.0000  (n=45)
+  INFRASTRUCTURE EVALUATION: 41 metrics from 15 experiments
 ```

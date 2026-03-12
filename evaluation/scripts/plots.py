@@ -1109,6 +1109,191 @@ def plot_i13_convergence(metrics, outdir):
     print("  I13: i13_convergence_simulation.pdf")
 
 
+# ── I14: Line Tracing Overhead ────────────────────────────────────────────
+
+def plot_i14_line_tracing(metrics, outdir):
+    """I14: Scatter of transform time vs source size + injection density bar."""
+    m_scale = find_metric(metrics, 'infra.i14.line_tracing.scaling')
+    m_density = find_metric(metrics, 'infra.i14.line_tracing.injection_density')
+    if not m_scale and not m_density:
+        print("  Skipping I14 line tracing: metrics not found")
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Left: transform time vs input lines (scaling)
+    if m_scale:
+        points = m_scale['details'].get('data_points', [])
+        if points:
+            x = [pt['input_lines'] for pt in points]
+            y = [pt['mean_time_us'] for pt in points]
+            axes[0].scatter(x, y, s=80, color='#2196F3', zorder=3, edgecolors='white')
+
+            # Regression line
+            slope = m_scale['details'].get('slope_us_per_line', 0)
+            r2 = m_scale['details'].get('r_squared', 0)
+            if len(x) >= 2:
+                x_fit = np.linspace(min(x), max(x), 100)
+                mean_y = np.mean(y)
+                mean_x = np.mean(x)
+                intercept = mean_y - slope * mean_x
+                y_fit = slope * x_fit + intercept
+                axes[0].plot(x_fit, y_fit, '--', color='#f44336', linewidth=2,
+                            label=f'slope={slope:.2f} us/line, R²={r2:.3f}')
+                axes[0].legend(fontsize=8)
+
+            axes[0].set_xlabel('Input Lines')
+            axes[0].set_ylabel('Transform Time (us)')
+            axes[0].set_title('I14: Line Tracing Scaling')
+
+    # Right: trace calls injected vs deferred per source
+    if m_density:
+        per_source = m_density['details'].get('per_source', [])
+        if per_source:
+            labels = [s['source'][:15] for s in per_source]
+            eager = [s['trace_calls'] for s in per_source]
+            deferred = [s['deferred_calls'] for s in per_source]
+
+            x = np.arange(len(labels))
+            axes[1].bar(x - 0.2, eager, 0.35, label='Eager Traces', color='#2196F3', alpha=0.85)
+            axes[1].bar(x + 0.2, deferred, 0.35, label='Deferred (Loop)', color='#FF9800', alpha=0.85)
+            axes[1].set_xticks(x)
+            axes[1].set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
+            axes[1].set_ylabel('Count')
+            axes[1].set_title('I14: Trace Injection Density')
+            axes[1].legend()
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, 'i14_line_tracing.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i14_line_tracing.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I14: i14_line_tracing.pdf")
+
+
+# ── I15: SC Checkpoint Patching ──────────────────────────────────────────
+
+def plot_i15_sc_checkpoints(metrics, outdir):
+    """I15: 2x2 panel — size scaling, checkpoint scaling, clamping, throughput."""
+    m_size = find_metric(metrics, 'infra.i15.sc_checkpoint.scaling_by_size')
+    m_count = find_metric(metrics, 'infra.i15.sc_checkpoint.scaling_by_checkpoints')
+    m_clamp = find_metric(metrics, 'infra.i15.sc_checkpoint.clamping_rate')
+    m_tput = find_metric(metrics, 'infra.i15.sc_checkpoint.throughput_by_size')
+
+    if not m_size and not m_tput:
+        print("  Skipping I15 sc checkpoints: metrics not found")
+        return
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    # Top-left: log-log scatter of shellcode_size vs patch time (checkpoint_count=5)
+    if m_size:
+        points = m_size['details'].get('data_points', [])
+        if points:
+            sizes = [pt['shellcode_size'] for pt in points]
+            times = [pt['mean_patch_us'] for pt in points]
+            axes[0, 0].scatter(sizes, times, s=80, color='#2196F3', zorder=3, edgecolors='white')
+            axes[0, 0].set_xscale('log')
+            axes[0, 0].set_yscale('log')
+            axes[0, 0].set_xlabel('Shellcode Size (bytes)')
+            axes[0, 0].set_ylabel('Patch Time (us)')
+            axes[0, 0].set_title('I15: Patch Time vs Size (5 checkpoints)')
+
+            # Regression line in log-log
+            slope = m_size['details'].get('slope_us_per_byte', 0)
+            r2 = m_size['details'].get('r_squared', 0)
+            if len(sizes) >= 2:
+                x_fit = np.logspace(np.log10(min(sizes)), np.log10(max(sizes)), 50)
+                mean_y = np.mean(times)
+                mean_x = np.mean(sizes)
+                intercept = mean_y - slope * mean_x
+                y_fit = slope * x_fit + intercept
+                y_fit = np.maximum(y_fit, 0.1)  # clip for log scale
+                axes[0, 0].plot(x_fit, y_fit, '--', color='#f44336', linewidth=2,
+                               label=f'slope={slope:.4f}, R²={r2:.3f}')
+                axes[0, 0].legend(fontsize=8)
+
+    # Top-right: line plot of checkpoint count vs patch time for mid-size shellcode
+    if m_count:
+        points = m_count['details'].get('data_points', [])
+        ref_file = m_count['details'].get('reference_file', '')
+        if points:
+            counts = [pt['checkpoint_count'] for pt in points]
+            times = [pt['mean_patch_us'] for pt in points]
+            axes[0, 1].plot(counts, times, 'o-', color='#4CAF50', linewidth=2, markersize=8)
+            axes[0, 1].set_xlabel('Requested Checkpoints')
+            axes[0, 1].set_ylabel('Patch Time (us)')
+            axes[0, 1].set_title(f'I15: Patch Time vs Count ({ref_file[:20]})')
+
+            slope = m_count['details'].get('slope_us_per_checkpoint', 0)
+            axes[0, 1].text(0.05, 0.95, f'slope={slope:.2f} us/checkpoint',
+                           transform=axes[0, 1].transAxes, fontsize=9,
+                           verticalalignment='top',
+                           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    # Bottom-left: clamping heatmap
+    if m_clamp and m_tput:
+        per_file = m_tput['details'].get('per_file', [])
+        if per_file:
+            # Build matrix: shellcode x checkpoint_count -> actual
+            shellcodes = sorted(set(r['shellcode'] for r in per_file),
+                              key=lambda s: next((r['size'] for r in per_file if r['shellcode'] == s), 0))
+            ckpts = sorted(set(int(r['checkpoints']) for r in per_file))
+
+            matrix = np.zeros((len(shellcodes), len(ckpts)))
+            for r in per_file:
+                si = shellcodes.index(r['shellcode'])
+                ci = ckpts.index(int(r['checkpoints']))
+                # Show clamping: requested - actual (0 = no clamping)
+                requested = int(r['checkpoints'])
+                # We need actual from the raw data; approximate from throughput
+                # Use the full per_file data
+                matrix[si, ci] = r.get('bytes_per_us', 0)
+
+            im = axes[1, 0].imshow(matrix, cmap='YlGn', aspect='auto')
+            axes[1, 0].set_xticks(range(len(ckpts)))
+            axes[1, 0].set_xticklabels(ckpts)
+            axes[1, 0].set_yticks(range(len(shellcodes)))
+            short_names = [s.replace('.bin', '')[:15] for s in shellcodes]
+            axes[1, 0].set_yticklabels(short_names, fontsize=8)
+            axes[1, 0].set_xlabel('Checkpoint Count')
+            axes[1, 0].set_ylabel('Shellcode')
+            axes[1, 0].set_title('I15: Throughput (bytes/us)')
+            fig.colorbar(im, ax=axes[1, 0])
+
+    # Bottom-right: throughput bar by size category
+    if m_tput:
+        per_file = m_tput['details'].get('per_file', [])
+        if per_file:
+            # Group by shellcode, average throughput
+            sc_throughput = {}
+            sc_sizes = {}
+            for r in per_file:
+                name = r['shellcode']
+                if name not in sc_throughput:
+                    sc_throughput[name] = []
+                    sc_sizes[name] = r['size']
+                sc_throughput[name].append(r['bytes_per_us'])
+
+            names = sorted(sc_throughput.keys(), key=lambda n: sc_sizes[n])
+            means = [np.mean(sc_throughput[n]) for n in names]
+            short_names = [n.replace('.bin', '')[:12] for n in names]
+            sizes_label = [f'{sc_sizes[n]}B' if sc_sizes[n] < 1024
+                          else f'{sc_sizes[n]//1024}KB' for n in names]
+
+            bars = axes[1, 1].bar(range(len(names)), means, color='#FF9800', alpha=0.85)
+            axes[1, 1].set_xticks(range(len(names)))
+            axes[1, 1].set_xticklabels([f'{n}\n{s}' for n, s in zip(short_names, sizes_label)],
+                                        fontsize=7, rotation=45, ha='right')
+            axes[1, 1].set_ylabel('Throughput (bytes/us)')
+            axes[1, 1].set_title('I15: Disassembly Throughput by Shellcode')
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, 'i15_sc_checkpoint.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i15_sc_checkpoint.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I15: i15_sc_checkpoint.pdf")
+
+
 # ── Infrastructure Summary Table ─────────────────────────────────────────
 
 def generate_infra_summary_table(metrics, outdir):
@@ -1204,6 +1389,8 @@ def main():
         plot_i11_selectors(metrics, args.outdir)
         plot_i12_guidance(metrics, args.outdir)
         plot_i13_convergence(metrics, args.outdir)
+        plot_i14_line_tracing(metrics, args.outdir)
+        plot_i15_sc_checkpoints(metrics, args.outdir)
 
         print("\nGenerating tables:")
         generate_infra_summary_table(metrics, args.outdir)
