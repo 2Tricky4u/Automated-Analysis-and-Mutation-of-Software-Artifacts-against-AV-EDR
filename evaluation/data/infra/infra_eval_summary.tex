@@ -1,0 +1,62 @@
+\begin{table*}[htbp]
+\centering
+\caption{Infrastructure-level evaluation metrics. Build-pipeline experiments (I1--I5, I9, I14--I15) use synthetic benchmarks; triage-pipeline experiments (I7--I8, I10--I13) use GA campaign data (=51$ rounds). I4 and I6 are skipped (require full toolchain at runtime).}
+\label{tab:infra-metrics}
+\renewcommand{\arraystretch}{1.25}
+\small
+\begin{tabular}{@{}llrrl@{}}
+\toprule
+\textbf{Experiment} & \textbf{Metric} & \textbf{Value} & $ & \textbf{Source} \\
+\midrule
+\multicolumn{5}{@{}l}{\textit{Build Pipeline (synthetic benchmarks)}} \\[2pt]
+I1 Payload Encoding & Encoding entropy comparison (max range across types) & 1.8099 & 32 & Synthetic \\
+I1 Payload Encoding & Mean encode latency (µs) & 556.9250 & 32 & Synthetic \\
+I1 Payload Encoding & Roundtrip correctness (fraction correct) & 1 & 32 & Synthetic \\
+I1 Payload Encoding & Size expansion ratio (encoded/original) & 2.2161 & 32 & Synthetic \\
+I14 Line Tracing & Mean trace calls per source line & 0.6053 & 5 & Synthetic \\
+I14 Line Tracing & Latency scaling coefficient (µs/line) & 26.2415 & 5 & Synthetic \\
+I14 Line Tracing & Mean source throughput (chars/µs) & 0.6122 & 5 & Synthetic \\
+I14 Line Tracing & Fraction of outputs that parse as valid C & 1 & 5 & Synthetic \\
+I2 AST Mutation Impact & Per-mutation line delta table & 3 & 10 & Synthetic \\
+I2 AST Mutation Impact & Fraction of mutations producing valid C & 1 & 10 & Synthetic \\
+I2 AST Mutation Impact & Mean AST transform latency (µs) & 4354.9300 & 10 & Synthetic \\
+I3 IR Mutation Analysis & Fraction producing deterministic output from same seed & 1 & 4 & Synthetic \\
+I3 IR Mutation Analysis & Insertions per input line (by mutation) & 0.1889 & 4 & Synthetic \\
+I3 IR Mutation Analysis & Mean output/input line ratio & 1.1889 & 4 & Synthetic \\
+I3 IR Mutation Analysis & Fraction surviving -O2 optimization & 0 & 4 & Synthetic \\
+I9 Input Diversity & Entropy range across encoding types (bits) & 2.1631 & 32 & Synthetic \\
+I9 Input Diversity & Fraction of mutation pairs producing distinct output & 0.8667 & 45 & Synthetic \\
+I9 Input Diversity & Mean pairwise normalized distance between mutation outp & 0.6213 & 45 & Synthetic \\
+I9 Input Diversity & Fraction of mutations where different params produce di & 0 & 0 & Synthetic \\
+\midrule
+\multicolumn{5}{@{}l}{\textit{Triage Pipeline (GA campaign, =51$ rounds)}} \\[2pt]
+I10 Oracle Stability & Scoring determinism (1.0 if all repeated runs identical & 0 & 1 & Real \\
+I10 Oracle Stability & Fraction of incremental snapshots with Jaccard > 0.8 & 0.2000 & 1 & Real \\
+I10 Oracle Stability & Lift stability score: 1/(1+mean\_variance) & 1 & 1 & Real \\
+I10 Oracle Stability & Mean top-5 Jaccard similarity across round permutations & 0.0222 & 1 & Real \\
+I11 Selector Comparison & Mutation pool coverage by selector strategy & 0.9250 & 4 & Real \\
+I11 Selector Comparison & Round at which each selector hits 80\% pool coverage & 8.2500 & 4 & Real \\
+I11 Selector Comparison & Cumulative mutation coverage trajectory per selector & 0.9625 & 4 & Real \\
+I11 Selector Comparison & Mean pairwise Jaccard distance of round selections & 0.2054 & 4 & Real \\
+I11 Selector Comparison & Rolling pairwise Jaccard diversity trajectory (window=5 & 0.2054 & 4 & Real \\
+I11 Selector Comparison & Per-selector exploration fraction & 0.2833 & 4 & Real \\
+I11 Selector Comparison & Coverage delta: guided selectors vs Random baseline & -0.1000 & 4 & Real \\
+I11 Selector Comparison & Mutation selection frequency matrix (mutation × selecto & 0 & 4 & Real \\
+I12 Guidance Utilization & Fraction of guided rounds avoiding avoid-correlated mut & 0.3000 & 4 & Real \\
+I12 Guidance Utilization & Per-round avoidance and seek compliance per selector & 0.3000 & 4 & Real \\
+I12 Guidance Utilization & Mean recipe difference with vs without guidance & 0.0508 & 4 & Real \\
+I12 Guidance Utilization & Fraction of guided rounds adopting seek-correlated muta & 0 & 4 & Real \\
+I13 Convergence Simulation & Minimum recipe diversity during accumulation phase & 0.1628 & 40 & Real \\
+I13 Convergence Simulation & Round of first Accumulation phase entry (as fraction of & 0.2353 & 1 & Real \\
+I13 Convergence Simulation & Recipe size growth rate during accumulation (mutations/ & 0.0495 & 40 & Real \\
+I13 Convergence Simulation & Round where best score plateaus (as fraction of total) & 0.0392 & 51 & Real \\
+I13 Convergence Simulation & Per-selector score, diversity, and recipe size trajecto & 0 & 4 & Real \\
+I7 Token Extraction & Active token categories / total (9) & 0.2222 & 5 & Real \\
+I7 Token Extraction & Fraction of runs producing deterministic output & 1 & 5 & Real \\
+I7 Token Extraction & Extraction latency distribution (µs) & 235.2600 & 5 & Real \\
+I7 Token Extraction & Mean tokens per input document & 0.7192 & 5 & Real \\
+I8 Token Scoring & Avoid/seek classification accuracy & 0.6667 & 3 & Real \\
+I8 Token Scoring & Lift computation accuracy (1 - max\_error) & 1 & 3 & Real \\
+\bottomrule
+\end{tabular}
+\end{table*}
