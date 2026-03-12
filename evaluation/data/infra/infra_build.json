@@ -1,0 +1,890 @@
+{
+  "payload_encoding": [
+    {
+      "encoding_type": "xor",
+      "payload_size": 1,
+      "encoded_size": 1,
+      "encoded_entropy": 0.0,
+      "roundtrip_correct": true,
+      "encode_time_us": 148.70000000000002,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 1,
+      "encoded_size": 4,
+      "encoded_entropy": 1.5,
+      "roundtrip_correct": true,
+      "encode_time_us": 16.6,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 1,
+      "encoded_size": 2,
+      "encoded_entropy": 1.0,
+      "roundtrip_correct": true,
+      "encode_time_us": 216.0,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 1,
+      "encoded_size": 1,
+      "encoded_entropy": 0.0,
+      "roundtrip_correct": true,
+      "encode_time_us": 8.7,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 16,
+      "encoded_size": 16,
+      "encoded_entropy": 1.543564443199596,
+      "roundtrip_correct": true,
+      "encode_time_us": 29.0,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 16,
+      "encoded_size": 79,
+      "encoded_entropy": 2.1631092834784984,
+      "roundtrip_correct": true,
+      "encode_time_us": 26.0,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 16,
+      "encoded_size": 32,
+      "encoded_entropy": 1.4185644431995963,
+      "roundtrip_correct": true,
+      "encode_time_us": 66.1,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 16,
+      "encoded_size": 16,
+      "encoded_entropy": 0.5435644431995964,
+      "roundtrip_correct": true,
+      "encode_time_us": 6.6000000000000005,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 64,
+      "encoded_size": 64,
+      "encoded_entropy": 1.2006223243127148,
+      "roundtrip_correct": true,
+      "encode_time_us": 27.4,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 64,
+      "encoded_size": 319,
+      "encoded_entropy": 2.007487608167783,
+      "roundtrip_correct": true,
+      "encode_time_us": 55.2,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 64,
+      "encoded_size": 128,
+      "encoded_entropy": 1.1693723243127148,
+      "roundtrip_correct": true,
+      "encode_time_us": 63.4,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 64,
+      "encoded_size": 64,
+      "encoded_entropy": 0.20062232431271465,
+      "roundtrip_correct": true,
+      "encode_time_us": 5.800000000000001,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 256,
+      "encoded_size": 256,
+      "encoded_entropy": 1.0659144123432416,
+      "roundtrip_correct": true,
+      "encode_time_us": 30.9,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 256,
+      "encoded_size": 1279,
+      "encoded_entropy": 1.9495681097595445,
+      "roundtrip_correct": true,
+      "encode_time_us": 233.3,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 256,
+      "encoded_size": 512,
+      "encoded_entropy": 1.0581019123432416,
+      "roundtrip_correct": true,
+      "encode_time_us": 135.1,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 256,
+      "encoded_size": 256,
+      "encoded_entropy": 0.06591441234324169,
+      "roundtrip_correct": true,
+      "encode_time_us": 7.0,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 1024,
+      "encoded_size": 1024,
+      "encoded_entropy": 1.0203931352360849,
+      "roundtrip_correct": true,
+      "encode_time_us": 53.6,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 1024,
+      "encoded_size": 5119,
+      "encoded_entropy": 1.9303996689154554,
+      "roundtrip_correct": true,
+      "encode_time_us": 580.6,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 1024,
+      "encoded_size": 2048,
+      "encoded_entropy": 1.0184400102360849,
+      "roundtrip_correct": true,
+      "encode_time_us": 116.39999999999999,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 1024,
+      "encoded_size": 1024,
+      "encoded_entropy": 0.020393135236084953,
+      "roundtrip_correct": true,
+      "encode_time_us": 12.4,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 4096,
+      "encoded_size": 4096,
+      "encoded_entropy": 1.0060753626772843,
+      "roundtrip_correct": true,
+      "encode_time_us": 110.60000000000001,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 4096,
+      "encoded_size": 20479,
+      "encoded_entropy": 1.9244364977613724,
+      "roundtrip_correct": true,
+      "encode_time_us": 1613.0,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 4096,
+      "encoded_size": 8192,
+      "encoded_entropy": 1.0055870814272843,
+      "roundtrip_correct": true,
+      "encode_time_us": 160.70000000000002,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 4096,
+      "encoded_size": 4096,
+      "encoded_entropy": 0.006075362677284398,
+      "roundtrip_correct": true,
+      "encode_time_us": 15.400000000000002,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 8192,
+      "encoded_size": 8192,
+      "encoded_entropy": 1.003281864969805,
+      "roundtrip_correct": true,
+      "encode_time_us": 199.7,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 8192,
+      "encoded_size": 40959,
+      "encoded_entropy": 1.9232799389594706,
+      "roundtrip_correct": true,
+      "encode_time_us": 4761.8,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 8192,
+      "encoded_size": 16384,
+      "encoded_entropy": 1.003037724344805,
+      "roundtrip_correct": true,
+      "encode_time_us": 258.6,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 8192,
+      "encoded_size": 8192,
+      "encoded_entropy": 0.0032818649698048933,
+      "roundtrip_correct": true,
+      "encode_time_us": 8.9,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "xor",
+      "payload_size": 16384,
+      "encoded_size": 16384,
+      "encoded_entropy": 1.0017630135476305,
+      "roundtrip_correct": true,
+      "encode_time_us": 394.4,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "english",
+      "payload_size": 16384,
+      "encoded_size": 81919,
+      "encoded_entropy": 1.9226528410484036,
+      "roundtrip_correct": true,
+      "encode_time_us": 7767.099999999999,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "subbyte",
+      "payload_size": 16384,
+      "encoded_size": 32768,
+      "encoded_entropy": 1.0016409432351305,
+      "roundtrip_correct": true,
+      "encode_time_us": 677.8,
+      "header_compiles": true
+    },
+    {
+      "encoding_type": "none",
+      "payload_size": 16384,
+      "encoded_size": 16384,
+      "encoded_entropy": 0.001763013547630436,
+      "roundtrip_correct": true,
+      "encode_time_us": 14.8,
+      "header_compiles": true
+    }
+  ],
+  "ast_mutation": [
+    {
+      "mutation_id": "ast.decon_rounds:count=50",
+      "input_lines": 71,
+      "output_lines": 71,
+      "line_delta": 0,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 62,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 3603.1000000000004
+    },
+    {
+      "mutation_id": "ast.fill_pattern:pattern=0xCC",
+      "input_lines": 71,
+      "output_lines": 71,
+      "line_delta": 0,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 62,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 2939.0
+    },
+    {
+      "mutation_id": "ast.timing_pattern:method=rdtsc",
+      "input_lines": 71,
+      "output_lines": 72,
+      "line_delta": 1,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 63,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 3264.6
+    },
+    {
+      "mutation_id": "ast.protection_transition:strategy=rw_rx",
+      "input_lines": 71,
+      "output_lines": 71,
+      "line_delta": 0,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 62,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 3471.1
+    },
+    {
+      "mutation_id": "ast.benign_preamble:count=5",
+      "input_lines": 71,
+      "output_lines": 78,
+      "line_delta": 7,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 69,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 5852.099999999999
+    },
+    {
+      "mutation_id": "ast.exec_decoy:target=calc",
+      "input_lines": 71,
+      "output_lines": 71,
+      "line_delta": 0,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 62,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 5942.099999999999
+    },
+    {
+      "mutation_id": "ast.api_sequence_obfuscation:inserts=3",
+      "input_lines": 71,
+      "output_lines": 77,
+      "line_delta": 6,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 68,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 3076.4
+    },
+    {
+      "mutation_id": "ast.const_obfuscation",
+      "input_lines": 71,
+      "output_lines": 87,
+      "line_delta": 16,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 78,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 8405.0
+    },
+    {
+      "mutation_id": "ast.string_xor:xor_key=0xAA",
+      "input_lines": 71,
+      "output_lines": 71,
+      "line_delta": 0,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 88,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 3369.1
+    },
+    {
+      "mutation_id": "ast.benign_syscall_insert:count=5",
+      "input_lines": 71,
+      "output_lines": 71,
+      "line_delta": 0,
+      "input_ast_nodes": 62,
+      "output_ast_nodes": 62,
+      "parse_valid": true,
+      "compile_success": null,
+      "transform_time_us": 3626.7999999999997
+    }
+  ],
+  "ir_mutation": [
+    {
+      "mutation_id": "llvm.nop_insert:density=1.0",
+      "density": 1.0,
+      "input_lines": 45,
+      "output_lines": 52,
+      "insertions": 7,
+      "survives_o2": null,
+      "deterministic": true,
+      "transform_time_us": 62.3
+    },
+    {
+      "mutation_id": "llvm.opaque_predicate:density=1.0,mode=robust",
+      "density": 1.0,
+      "input_lines": 45,
+      "output_lines": 51,
+      "insertions": 6,
+      "survives_o2": null,
+      "deterministic": true,
+      "transform_time_us": 90.69999999999999
+    },
+    {
+      "mutation_id": "llvm.opaque_predicate:density=1.0,mode=trivial",
+      "density": 1.0,
+      "input_lines": 45,
+      "output_lines": 48,
+      "insertions": 3,
+      "survives_o2": null,
+      "deterministic": true,
+      "transform_time_us": 155.20000000000002
+    },
+    {
+      "mutation_id": "llvm.junk_block:count=3",
+      "density": 1.0,
+      "input_lines": 45,
+      "output_lines": 63,
+      "insertions": 18,
+      "survives_o2": null,
+      "deterministic": true,
+      "transform_time_us": 131.0
+    }
+  ],
+  "binary_mutation": null,
+  "template_assembly": [],
+  "instrumentation": null,
+  "token_extraction": null,
+  "token_scoring": null,
+  "input_diversity": [
+    {
+      "mutation_a": "ast.decon_rounds:count=50",
+      "mutation_b": "ast.fill_pattern:pattern=0xCC",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.decon_rounds:count=50",
+      "mutation_b": "ast.timing_pattern:method=rdtsc",
+      "line_delta_a": 0,
+      "line_delta_b": 1,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.decon_rounds:count=50",
+      "mutation_b": "ast.protection_transition:strategy=rw_rx",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.decon_rounds:count=50",
+      "mutation_b": "ast.benign_preamble:count=5",
+      "line_delta_a": 0,
+      "line_delta_b": 7,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.decon_rounds:count=50",
+      "mutation_b": "ast.exec_decoy:target=calc",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.decon_rounds:count=50",
+      "mutation_b": "ast.api_sequence_obfuscation:inserts=3",
+      "line_delta_a": 0,
+      "line_delta_b": 6,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.decon_rounds:count=50",
+      "mutation_b": "ast.const_obfuscation",
+      "line_delta_a": 0,
+      "line_delta_b": 16,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.decon_rounds:count=50",
+      "mutation_b": "ast.string_xor:xor_key=0xAA",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.decon_rounds:count=50",
+      "mutation_b": "ast.benign_syscall_insert:count=5",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.fill_pattern:pattern=0xCC",
+      "mutation_b": "ast.timing_pattern:method=rdtsc",
+      "line_delta_a": 0,
+      "line_delta_b": 1,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.fill_pattern:pattern=0xCC",
+      "mutation_b": "ast.protection_transition:strategy=rw_rx",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": false
+    },
+    {
+      "mutation_a": "ast.fill_pattern:pattern=0xCC",
+      "mutation_b": "ast.benign_preamble:count=5",
+      "line_delta_a": 0,
+      "line_delta_b": 7,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.fill_pattern:pattern=0xCC",
+      "mutation_b": "ast.exec_decoy:target=calc",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": false
+    },
+    {
+      "mutation_a": "ast.fill_pattern:pattern=0xCC",
+      "mutation_b": "ast.api_sequence_obfuscation:inserts=3",
+      "line_delta_a": 0,
+      "line_delta_b": 6,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.fill_pattern:pattern=0xCC",
+      "mutation_b": "ast.const_obfuscation",
+      "line_delta_a": 0,
+      "line_delta_b": 16,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.fill_pattern:pattern=0xCC",
+      "mutation_b": "ast.string_xor:xor_key=0xAA",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.fill_pattern:pattern=0xCC",
+      "mutation_b": "ast.benign_syscall_insert:count=5",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": false
+    },
+    {
+      "mutation_a": "ast.timing_pattern:method=rdtsc",
+      "mutation_b": "ast.protection_transition:strategy=rw_rx",
+      "line_delta_a": 1,
+      "line_delta_b": 0,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.timing_pattern:method=rdtsc",
+      "mutation_b": "ast.benign_preamble:count=5",
+      "line_delta_a": 1,
+      "line_delta_b": 7,
+      "normalized_distance": 0.8571428571428571,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.timing_pattern:method=rdtsc",
+      "mutation_b": "ast.exec_decoy:target=calc",
+      "line_delta_a": 1,
+      "line_delta_b": 0,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.timing_pattern:method=rdtsc",
+      "mutation_b": "ast.api_sequence_obfuscation:inserts=3",
+      "line_delta_a": 1,
+      "line_delta_b": 6,
+      "normalized_distance": 0.8333333333333334,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.timing_pattern:method=rdtsc",
+      "mutation_b": "ast.const_obfuscation",
+      "line_delta_a": 1,
+      "line_delta_b": 16,
+      "normalized_distance": 0.9375,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.timing_pattern:method=rdtsc",
+      "mutation_b": "ast.string_xor:xor_key=0xAA",
+      "line_delta_a": 1,
+      "line_delta_b": 0,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.timing_pattern:method=rdtsc",
+      "mutation_b": "ast.benign_syscall_insert:count=5",
+      "line_delta_a": 1,
+      "line_delta_b": 0,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.protection_transition:strategy=rw_rx",
+      "mutation_b": "ast.benign_preamble:count=5",
+      "line_delta_a": 0,
+      "line_delta_b": 7,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.protection_transition:strategy=rw_rx",
+      "mutation_b": "ast.exec_decoy:target=calc",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": false
+    },
+    {
+      "mutation_a": "ast.protection_transition:strategy=rw_rx",
+      "mutation_b": "ast.api_sequence_obfuscation:inserts=3",
+      "line_delta_a": 0,
+      "line_delta_b": 6,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.protection_transition:strategy=rw_rx",
+      "mutation_b": "ast.const_obfuscation",
+      "line_delta_a": 0,
+      "line_delta_b": 16,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.protection_transition:strategy=rw_rx",
+      "mutation_b": "ast.string_xor:xor_key=0xAA",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.protection_transition:strategy=rw_rx",
+      "mutation_b": "ast.benign_syscall_insert:count=5",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": false
+    },
+    {
+      "mutation_a": "ast.benign_preamble:count=5",
+      "mutation_b": "ast.exec_decoy:target=calc",
+      "line_delta_a": 7,
+      "line_delta_b": 0,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.benign_preamble:count=5",
+      "mutation_b": "ast.api_sequence_obfuscation:inserts=3",
+      "line_delta_a": 7,
+      "line_delta_b": 6,
+      "normalized_distance": 0.14285714285714285,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.benign_preamble:count=5",
+      "mutation_b": "ast.const_obfuscation",
+      "line_delta_a": 7,
+      "line_delta_b": 16,
+      "normalized_distance": 0.5625,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.benign_preamble:count=5",
+      "mutation_b": "ast.string_xor:xor_key=0xAA",
+      "line_delta_a": 7,
+      "line_delta_b": 0,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.benign_preamble:count=5",
+      "mutation_b": "ast.benign_syscall_insert:count=5",
+      "line_delta_a": 7,
+      "line_delta_b": 0,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.exec_decoy:target=calc",
+      "mutation_b": "ast.api_sequence_obfuscation:inserts=3",
+      "line_delta_a": 0,
+      "line_delta_b": 6,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.exec_decoy:target=calc",
+      "mutation_b": "ast.const_obfuscation",
+      "line_delta_a": 0,
+      "line_delta_b": 16,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.exec_decoy:target=calc",
+      "mutation_b": "ast.string_xor:xor_key=0xAA",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.exec_decoy:target=calc",
+      "mutation_b": "ast.benign_syscall_insert:count=5",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": false
+    },
+    {
+      "mutation_a": "ast.api_sequence_obfuscation:inserts=3",
+      "mutation_b": "ast.const_obfuscation",
+      "line_delta_a": 6,
+      "line_delta_b": 16,
+      "normalized_distance": 0.625,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.api_sequence_obfuscation:inserts=3",
+      "mutation_b": "ast.string_xor:xor_key=0xAA",
+      "line_delta_a": 6,
+      "line_delta_b": 0,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.api_sequence_obfuscation:inserts=3",
+      "mutation_b": "ast.benign_syscall_insert:count=5",
+      "line_delta_a": 6,
+      "line_delta_b": 0,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.const_obfuscation",
+      "mutation_b": "ast.string_xor:xor_key=0xAA",
+      "line_delta_a": 16,
+      "line_delta_b": 0,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.const_obfuscation",
+      "mutation_b": "ast.benign_syscall_insert:count=5",
+      "line_delta_a": 16,
+      "line_delta_b": 0,
+      "normalized_distance": 1.0,
+      "outputs_differ": true
+    },
+    {
+      "mutation_a": "ast.string_xor:xor_key=0xAA",
+      "mutation_b": "ast.benign_syscall_insert:count=5",
+      "line_delta_a": 0,
+      "line_delta_b": 0,
+      "normalized_distance": 0.0,
+      "outputs_differ": true
+    }
+  ],
+  "oracle_stability": null,
+  "selector_comparison": null,
+  "guidance_utilization": null,
+  "convergence_simulation": null,
+  "line_tracing": [
+    {
+      "source_label": "reference_c",
+      "input_lines": 71,
+      "output_lines": 114,
+      "trace_calls_injected": 36,
+      "deferred_trace_calls": 3,
+      "trace_format": "binary",
+      "transform_time_us": 2776.5,
+      "mean_transform_time_us": 3288.7099999999996,
+      "stddev_transform_time_us": 462.83606532696547,
+      "iterations": 50,
+      "output_valid": true,
+      "chars_per_us": 0.5187444317072653
+    },
+    {
+      "source_label": "synthetic_100",
+      "input_lines": 116,
+      "output_lines": 240,
+      "trace_calls_injected": 72,
+      "deferred_trace_calls": 30,
+      "trace_format": "binary",
+      "transform_time_us": 5375.3,
+      "mean_transform_time_us": 4573.768,
+      "stddev_transform_time_us": 857.697366217436,
+      "iterations": 50,
+      "output_valid": true,
+      "chars_per_us": 0.44602174837027153
+    },
+    {
+      "source_label": "synthetic_300",
+      "input_lines": 336,
+      "output_lines": 700,
+      "trace_calls_injected": 212,
+      "deferred_trace_calls": 90,
+      "trace_format": "binary",
+      "transform_time_us": 10538.0,
+      "mean_transform_time_us": 8628.518,
+      "stddev_transform_time_us": 1007.2255327140094,
+      "iterations": 50,
+      "output_valid": true,
+      "chars_per_us": 0.6976864393166938
+    },
+    {
+      "source_label": "synthetic_500",
+      "input_lines": 556,
+      "output_lines": 1160,
+      "trace_calls_injected": 352,
+      "deferred_trace_calls": 150,
+      "trace_format": "binary",
+      "transform_time_us": 13772.3,
+      "mean_transform_time_us": 13347.235999999999,
+      "stddev_transform_time_us": 1290.4441857890388,
+      "iterations": 50,
+      "output_valid": true,
+      "chars_per_us": 0.7492187895681174
+    },
+    {
+      "source_label": "synthetic_1000",
+      "input_lines": 1106,
+      "output_lines": 2310,
+      "trace_calls_injected": 702,
+      "deferred_trace_calls": 300,
+      "trace_format": "binary",
+      "transform_time_us": 26104.5,
+      "mean_transform_time_us": 30729.613999999998,
+      "stddev_transform_time_us": 4468.176799391036,
+      "iterations": 50,
+      "output_valid": true,
+      "chars_per_us": 0.6492108882330901
+    }
+  ],
+  "sc_checkpoint": []
+}

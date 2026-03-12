@@ -1,0 +1,67 @@
+\begin{table}[htbp]
+\centering
+\caption{Infrastructure-Level Evaluation Metrics}
+\label{tab:infra-metrics}
+\begin{tabular}{llrr}
+\toprule
+Metric ID & Label & Value & $n$ \\
+\midrule
+\texttt{i1.payload\_encoding.entropy\_comparison} & Encoding entropy comparison (max range across types) & 1.8099 & 32 \\
+\texttt{i1.payload\_encoding.latency} & Mean encode latency (µs) & 556.9250 & 32 \\
+\texttt{i1.payload\_encoding.roundtrip\_correctness} & Roundtrip correctness (fraction correct) & 1.0000 & 32 \\
+\texttt{i1.payload\_encoding.size\_expansion} & Size expansion ratio (encoded/original) & 2.2161 & 32 \\
+\midrule
+\texttt{i10.oracle\_stability.determinism} & Scoring determinism (1.0 if all repeated runs identical) & 0.0000 & 1 \\
+\texttt{i10.oracle\_stability.incremental\_convergence} & Fraction of incremental snapshots with Jaccard > 0.8 & 0.2000 & 1 \\
+\texttt{i10.oracle\_stability.lift\_variance} & Lift stability score: 1/(1+mean\_variance) & 1.0000 & 1 \\
+\texttt{i10.oracle\_stability.permutation\_robustness} & Mean top-5 Jaccard similarity across round permutations & 0.0222 & 1 \\
+\midrule
+\texttt{i11.selector\_comparison.coverage\_by\_selector} & Mutation pool coverage by selector strategy & 0.9250 & 4 \\
+\texttt{i11.selector\_comparison.coverage\_saturation} & Round at which each selector hits 80% pool coverage & 8.2500 & 4 \\
+\texttt{i11.selector\_comparison.coverage\_trajectory} & Cumulative mutation coverage trajectory per selector & 0.9625 & 4 \\
+\texttt{i11.selector\_comparison.diversity\_by\_selector} & Mean pairwise Jaccard distance of round selections & 0.2054 & 4 \\
+\texttt{i11.selector\_comparison.diversity\_trajectory} & Rolling pairwise Jaccard diversity trajectory (window=5) & 0.2054 & 4 \\
+\texttt{i11.selector\_comparison.exploration\_rate} & Per-selector exploration fraction & 0.2833 & 4 \\
+\texttt{i11.selector\_comparison.guided\_vs\_random\_delta} & Coverage delta: guided selectors vs Random baseline & -0.1000 & 4 \\
+\texttt{i11.selector\_comparison.mutation\_frequency\_heatmap} & Mutation selection frequency matrix (mutation × selector) & 0.0000 & 4 \\
+\midrule
+\texttt{i12.guidance\_utilization.avoidance\_rate} & Fraction of guided rounds avoiding avoid-correlated mutation & 0.3000 & 4 \\
+\texttt{i12.guidance\_utilization.guidance\_trajectory} & Per-round avoidance and seek compliance per selector & 0.3000 & 4 \\
+\texttt{i12.guidance\_utilization.recipe\_delta} & Mean recipe difference with vs without guidance & 0.0508 & 4 \\
+\texttt{i12.guidance\_utilization.seek\_adoption\_rate} & Fraction of guided rounds adopting seek-correlated mutations & 0.0000 & 4 \\
+\midrule
+\texttt{i13.convergence\_simulation.diversity\_preservation} & Minimum recipe diversity during accumulation phase & 0.1628 & 40 \\
+\texttt{i13.convergence\_simulation.phase\_transition\_round} & Round of first Accumulation phase entry (as fraction of tota & 0.2353 & 1 \\
+\texttt{i13.convergence\_simulation.recipe\_growth\_rate} & Recipe size growth rate during accumulation (mutations/round & 0.0495 & 40 \\
+\texttt{i13.convergence\_simulation.score\_plateau\_round} & Round where best score plateaus (as fraction of total) & 0.0392 & 51 \\
+\texttt{i13.convergence\_simulation.selector\_convergence} & Per-selector score, diversity, and recipe size trajectories & 0.0000 & 4 \\
+\midrule
+\texttt{i14.line\_tracing.injection\_density} & Mean trace calls per source line & 0.6053 & 5 \\
+\texttt{i14.line\_tracing.scaling} & Latency scaling coefficient (µs/line) & 26.2415 & 5 \\
+\texttt{i14.line\_tracing.throughput} & Mean source throughput (chars/µs) & 0.6122 & 5 \\
+\texttt{i14.line\_tracing.validity} & Fraction of outputs that parse as valid C & 1.0000 & 5 \\
+\midrule
+\texttt{i2.ast\_mutation.line\_impact} & Per-mutation line delta table & 3.0000 & 10 \\
+\texttt{i2.ast\_mutation.parse\_validity} & Fraction of mutations producing valid C & 1.0000 & 10 \\
+\texttt{i2.ast\_mutation.transform\_latency} & Mean AST transform latency (µs) & 4354.9300 & 10 \\
+\midrule
+\texttt{i3.ir\_mutation.determinism} & Fraction producing deterministic output from same seed & 1.0000 & 4 \\
+\texttt{i3.ir\_mutation.insertion\_effectiveness} & Insertions per input line (by mutation) & 0.1889 & 4 \\
+\texttt{i3.ir\_mutation.line\_bloat} & Mean output/input line ratio & 1.1889 & 4 \\
+\texttt{i3.ir\_mutation.o2\_survival} & Fraction surviving -O2 optimization & 0.0000 & 4 \\
+\midrule
+\texttt{i7.token\_extraction.category\_coverage} & Active token categories / total (9) & 0.2222 & 5 \\
+\texttt{i7.token\_extraction.determinism} & Fraction of runs producing deterministic output & 1.0000 & 5 \\
+\texttt{i7.token\_extraction.latency\_distribution} & Extraction latency distribution (µs) & 235.2600 & 5 \\
+\texttt{i7.token\_extraction.tokens\_per\_doc} & Mean tokens per input document & 0.7192 & 5 \\
+\midrule
+\texttt{i8.token\_scoring.guidance\_correctness} & Avoid/seek classification accuracy & 0.6667 & 3 \\
+\texttt{i8.token\_scoring.lift\_accuracy} & Lift computation accuracy (1 - max\_error) & 1.0000 & 3 \\
+\midrule
+\texttt{i9.input\_diversity.encoding\_entropy\_spread} & Entropy range across encoding types (bits) & 2.1631 & 32 \\
+\texttt{i9.input\_diversity.output\_uniqueness} & Fraction of mutation pairs producing distinct output & 0.8667 & 45 \\
+\texttt{i9.input\_diversity.pairwise\_distance} & Mean pairwise normalized distance between mutation outputs & 0.6213 & 45 \\
+\texttt{i9.input\_diversity.param\_sensitivity} & Fraction of mutations where different params produce differe & 0.0000 & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}

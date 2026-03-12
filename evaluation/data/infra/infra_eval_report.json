@@ -1,0 +1,6384 @@
+[
+  {
+    "metric_id": "infra.i1.payload_encoding.entropy_comparison",
+    "axis": "infrastructure",
+    "category": "payload_encoding",
+    "label": "Encoding entropy comparison (max range across types)",
+    "value": 1.8099149239755215,
+    "details": {
+      "encoding_types": [
+        "subbyte",
+        "none",
+        "xor",
+        "english"
+      ],
+      "entropy_range": 1.8099149239755215,
+      "type_entropies": [
+        {
+          "by_size": [
+            {
+              "entropy": 1.0,
+              "payload_size": 1
+            },
+            {
+              "entropy": 1.4185644431995963,
+              "payload_size": 16
+            },
+            {
+              "entropy": 1.1693723243127148,
+              "payload_size": 64
+            },
+            {
+              "entropy": 1.0581019123432416,
+              "payload_size": 256
+            },
+            {
+              "entropy": 1.0184400102360849,
+              "payload_size": 1024
+            },
+            {
+              "entropy": 1.0055870814272845,
+              "payload_size": 4096
+            },
+            {
+              "entropy": 1.003037724344805,
+              "payload_size": 8192
+            },
+            {
+              "entropy": 1.0016409432351303,
+              "payload_size": 16384
+            }
+          ],
+          "encoding_type": "subbyte",
+          "max_entropy": 1.4185644431995963,
+          "mean_entropy": 1.0843430548873572,
+          "min_entropy": 1.0
+        },
+        {
+          "by_size": [
+            {
+              "entropy": 0.0,
+              "payload_size": 1
+            },
+            {
+              "entropy": 0.5435644431995964,
+              "payload_size": 16
+            },
+            {
+              "entropy": 0.20062232431271465,
+              "payload_size": 64
+            },
+            {
+              "entropy": 0.06591441234324169,
+              "payload_size": 256
+            },
+            {
+              "entropy": 0.020393135236084953,
+              "payload_size": 1024
+            },
+            {
+              "entropy": 0.006075362677284398,
+              "payload_size": 4096
+            },
+            {
+              "entropy": 0.0032818649698048933,
+              "payload_size": 8192
+            },
+            {
+              "entropy": 0.001763013547630436,
+              "payload_size": 16384
+            }
+          ],
+          "encoding_type": "none",
+          "max_entropy": 0.5435644431995964,
+          "mean_entropy": 0.10520181953579467,
+          "min_entropy": 0.0
+        },
+        {
+          "by_size": [
+            {
+              "entropy": 0.0,
+              "payload_size": 1
+            },
+            {
+              "entropy": 1.543564443199596,
+              "payload_size": 16
+            },
+            {
+              "entropy": 1.2006223243127148,
+              "payload_size": 64
+            },
+            {
+              "entropy": 1.0659144123432416,
+              "payload_size": 256
+            },
+            {
+              "entropy": 1.0203931352360849,
+              "payload_size": 1024
+            },
+            {
+              "entropy": 1.0060753626772845,
+              "payload_size": 4096
+            },
+            {
+              "entropy": 1.003281864969805,
+              "payload_size": 8192
+            },
+            {
+              "entropy": 1.0017630135476303,
+              "payload_size": 16384
+            }
+          ],
+          "encoding_type": "xor",
+          "max_entropy": 1.543564443199596,
+          "mean_entropy": 0.9802018195357945,
+          "min_entropy": 0.0
+        },
+        {
+          "by_size": [
+            {
+              "entropy": 1.5,
+              "payload_size": 1
+            },
+            {
+              "entropy": 2.1631092834784984,
+              "payload_size": 16
+            },
+            {
+              "entropy": 2.007487608167783,
+              "payload_size": 64
+            },
+            {
+              "entropy": 1.9495681097595443,
+              "payload_size": 256
+            },
+            {
+              "entropy": 1.9303996689154552,
+              "payload_size": 1024
+            },
+            {
+              "entropy": 1.9244364977613724,
+              "payload_size": 4096
+            },
+            {
+              "entropy": 1.9232799389594704,
+              "payload_size": 8192
+            },
+            {
+              "entropy": 1.9226528410484036,
+              "payload_size": 16384
+            }
+          ],
+          "encoding_type": "english",
+          "max_entropy": 2.1631092834784984,
+          "mean_entropy": 1.915116743511316,
+          "min_entropy": 1.5
+        }
+      ]
+    },
+    "n": 32
+  },
+  {
+    "metric_id": "infra.i1.payload_encoding.roundtrip_correctness",
+    "axis": "infrastructure",
+    "category": "payload_encoding",
+    "label": "Roundtrip correctness (fraction correct)",
+    "value": 1.0,
+    "details": {
+      "correct": 32,
+      "incorrect_cases": [],
+      "total": 32
+    },
+    "n": 32
+  },
+  {
+    "metric_id": "infra.i1.payload_encoding.size_expansion",
+    "axis": "infrastructure",
+    "category": "payload_encoding",
+    "label": "Size expansion ratio (encoded/original)",
+    "value": 2.2161426544189453,
+    "details": {
+      "by_type": [
+        {
+          "encoding_type": "subbyte",
+          "max_expansion": 2.0,
+          "mean_expansion": 2.0
+        },
+        {
+          "encoding_type": "none",
+          "max_expansion": 1.0,
+          "mean_expansion": 1.0
+        },
+        {
+          "encoding_type": "xor",
+          "max_expansion": 1.0,
+          "mean_expansion": 1.0
+        },
+        {
+          "encoding_type": "english",
+          "max_expansion": 4.99993896484375,
+          "mean_expansion": 4.864570617675781
+        }
+      ],
+      "overall_mean": 2.2161426544189453
+    },
+    "n": 32
+  },
+  {
+    "metric_id": "infra.i1.payload_encoding.latency",
+    "axis": "infrastructure",
+    "category": "payload_encoding",
+    "label": "Mean encode latency (µs)",
+    "value": 556.925,
+    "details": {
+      "all_times_us": [
+        148.70000000000002,
+        16.6,
+        216.0,
+        8.7,
+        29.0,
+        26.0,
+        66.1,
+        6.6000000000000005,
+        27.4,
+        55.2,
+        63.4,
+        5.800000000000001,
+        30.9,
+        233.3,
+        135.1,
+        7.0,
+        53.6,
+        580.6,
+        116.4,
+        12.4,
+        110.6,
+        1613.0,
+        160.70000000000002,
+        15.400000000000002,
+        199.7,
+        4761.8,
+        258.6,
+        8.9,
+        394.4,
+        7767.099999999999,
+        677.8,
+        14.8
+      ],
+      "by_type": [
+        {
+          "encoding_type": "subbyte",
+          "max_us": 677.8,
+          "mean_us": 211.7625
+        },
+        {
+          "encoding_type": "none",
+          "max_us": 15.400000000000002,
+          "mean_us": 9.950000000000001
+        },
+        {
+          "encoding_type": "xor",
+          "max_us": 394.4,
+          "mean_us": 124.28750000000001
+        },
+        {
+          "encoding_type": "english",
+          "max_us": 7767.099999999999,
+          "mean_us": 1881.6999999999998
+        }
+      ],
+      "mean_us": 556.925
+    },
+    "n": 32
+  },
+  {
+    "metric_id": "infra.i2.ast_mutation.line_impact",
+    "axis": "infrastructure",
+    "category": "ast_mutation",
+    "label": "Per-mutation line delta table",
+    "value": 3.0,
+    "details": {
+      "max_abs_delta": 16,
+      "mean_abs_delta": 3.0,
+      "mutations": [
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 16,
+          "mutation_id": "ast.const_obfuscation",
+          "node_delta": 16,
+          "output_ast_nodes": 78,
+          "output_lines": 87
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 7,
+          "mutation_id": "ast.benign_preamble:count=5",
+          "node_delta": 7,
+          "output_ast_nodes": 69,
+          "output_lines": 78
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 6,
+          "mutation_id": "ast.api_sequence_obfuscation:inserts=3",
+          "node_delta": 6,
+          "output_ast_nodes": 68,
+          "output_lines": 77
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 1,
+          "mutation_id": "ast.timing_pattern:method=rdtsc",
+          "node_delta": 1,
+          "output_ast_nodes": 63,
+          "output_lines": 72
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 0,
+          "mutation_id": "ast.decon_rounds:count=50",
+          "node_delta": 0,
+          "output_ast_nodes": 62,
+          "output_lines": 71
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 0,
+          "mutation_id": "ast.fill_pattern:pattern=0xCC",
+          "node_delta": 0,
+          "output_ast_nodes": 62,
+          "output_lines": 71
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 0,
+          "mutation_id": "ast.protection_transition:strategy=rw_rx",
+          "node_delta": 0,
+          "output_ast_nodes": 62,
+          "output_lines": 71
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 0,
+          "mutation_id": "ast.exec_decoy:target=calc",
+          "node_delta": 0,
+          "output_ast_nodes": 62,
+          "output_lines": 71
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 0,
+          "mutation_id": "ast.string_xor:xor_key=0xAA",
+          "node_delta": 26,
+          "output_ast_nodes": 88,
+          "output_lines": 71
+        },
+        {
+          "input_ast_nodes": 62,
+          "input_lines": 71,
+          "line_delta": 0,
+          "mutation_id": "ast.benign_syscall_insert:count=5",
+          "node_delta": 0,
+          "output_ast_nodes": 62,
+          "output_lines": 71
+        }
+      ]
+    },
+    "n": 10
+  },
+  {
+    "metric_id": "infra.i2.ast_mutation.parse_validity",
+    "axis": "infrastructure",
+    "category": "ast_mutation",
+    "label": "Fraction of mutations producing valid C",
+    "value": 1.0,
+    "details": {
+      "invalid_mutations": [],
+      "total": 10,
+      "valid": 10
+    },
+    "n": 10
+  },
+  {
+    "metric_id": "infra.i2.ast_mutation.transform_latency",
+    "axis": "infrastructure",
+    "category": "ast_mutation",
+    "label": "Mean AST transform latency (µs)",
+    "value": 4354.93,
+    "details": {
+      "by_mutation": [
+        {
+          "mutation_id": "ast.decon_rounds:count=50",
+          "time_us": 3603.1
+        },
+        {
+          "mutation_id": "ast.fill_pattern:pattern=0xCC",
+          "time_us": 2939.0
+        },
+        {
+          "mutation_id": "ast.timing_pattern:method=rdtsc",
+          "time_us": 3264.6
+        },
+        {
+          "mutation_id": "ast.protection_transition:strategy=rw_rx",
+          "time_us": 3471.1
+        },
+        {
+          "mutation_id": "ast.benign_preamble:count=5",
+          "time_us": 5852.099999999999
+        },
+        {
+          "mutation_id": "ast.exec_decoy:target=calc",
+          "time_us": 5942.099999999999
+        },
+        {
+          "mutation_id": "ast.api_sequence_obfuscation:inserts=3",
+          "time_us": 3076.4
+        },
+        {
+          "mutation_id": "ast.const_obfuscation",
+          "time_us": 8405.0
+        },
+        {
+          "mutation_id": "ast.string_xor:xor_key=0xAA",
+          "time_us": 3369.1
+        },
+        {
+          "mutation_id": "ast.benign_syscall_insert:count=5",
+          "time_us": 3626.8
+        }
+      ],
+      "mean_us": 4354.93
+    },
+    "n": 10
+  },
+  {
+    "metric_id": "infra.i3.ir_mutation.insertion_effectiveness",
+    "axis": "infrastructure",
+    "category": "ir_mutation",
+    "label": "Insertions per input line (by mutation)",
+    "value": 0.18888888888888888,
+    "details": {
+      "by_mutation": [
+        {
+          "density": 1.0,
+          "effectiveness": 0.15555555555555556,
+          "input_lines": 45,
+          "insertions": 7,
+          "line_bloat": 1.1555555555555554,
+          "mutation_id": "llvm.nop_insert:density=1.0",
+          "output_lines": 52
+        },
+        {
+          "density": 1.0,
+          "effectiveness": 0.13333333333333333,
+          "input_lines": 45,
+          "insertions": 6,
+          "line_bloat": 1.1333333333333333,
+          "mutation_id": "llvm.opaque_predicate:density=1.0,mode=robust",
+          "output_lines": 51
+        },
+        {
+          "density": 1.0,
+          "effectiveness": 0.06666666666666667,
+          "input_lines": 45,
+          "insertions": 3,
+          "line_bloat": 1.0666666666666667,
+          "mutation_id": "llvm.opaque_predicate:density=1.0,mode=trivial",
+          "output_lines": 48
+        },
+        {
+          "density": 1.0,
+          "effectiveness": 0.4,
+          "input_lines": 45,
+          "insertions": 18,
+          "line_bloat": 1.4,
+          "mutation_id": "llvm.junk_block:count=3",
+          "output_lines": 63
+        }
+      ],
+      "total_input_lines": 180,
+      "total_insertions": 34
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i3.ir_mutation.o2_survival",
+    "axis": "infrastructure",
+    "category": "ir_mutation",
+    "label": "Fraction surviving -O2 optimization",
+    "value": 0.0,
+    "details": {
+      "survival_table": [
+        {
+          "mutation_id": "llvm.nop_insert:density=1.0",
+          "survives_o2": null,
+          "tested": false
+        },
+        {
+          "mutation_id": "llvm.opaque_predicate:density=1.0,mode=robust",
+          "survives_o2": null,
+          "tested": false
+        },
+        {
+          "mutation_id": "llvm.opaque_predicate:density=1.0,mode=trivial",
+          "survives_o2": null,
+          "tested": false
+        },
+        {
+          "mutation_id": "llvm.junk_block:count=3",
+          "survives_o2": null,
+          "tested": false
+        }
+      ],
+      "survived": 0,
+      "tested": 0
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i3.ir_mutation.determinism",
+    "axis": "infrastructure",
+    "category": "ir_mutation",
+    "label": "Fraction producing deterministic output from same seed",
+    "value": 1.0,
+    "details": {
+      "deterministic": 4,
+      "total": 4
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i3.ir_mutation.line_bloat",
+    "axis": "infrastructure",
+    "category": "ir_mutation",
+    "label": "Mean output/input line ratio",
+    "value": 1.1888888888888887,
+    "details": {
+      "bloat_ratios": [
+        1.1555555555555554,
+        1.1333333333333333,
+        1.0666666666666667,
+        1.4
+      ],
+      "mean_bloat": 1.1888888888888887
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i7.token_extraction.category_coverage",
+    "axis": "infrastructure",
+    "category": "token_extraction",
+    "label": "Active token categories / total (9)",
+    "value": 0.2222222222222222,
+    "details": {
+      "active_categories": 2,
+      "category_table": [
+        {
+          "category": "api",
+          "total_tokens": 25
+        },
+        {
+          "category": "seq2",
+          "total_tokens": 24
+        }
+      ],
+      "max_active_single_run": 2,
+      "total_categories": 9
+    },
+    "n": 5
+  },
+  {
+    "metric_id": "infra.i7.token_extraction.tokens_per_doc",
+    "axis": "infrastructure",
+    "category": "token_extraction",
+    "label": "Mean tokens per input document",
+    "value": 0.7192156862745098,
+    "details": {
+      "by_run": [
+        {
+          "category_counts": {
+            "api": 5,
+            "seq2": 4
+          },
+          "input_docs": 5,
+          "output_tokens": 9,
+          "run": 0,
+          "tokens_per_doc": 1.8
+        },
+        {
+          "category_counts": {
+            "api": 5,
+            "seq2": 5
+          },
+          "input_docs": 10,
+          "output_tokens": 10,
+          "run": 1,
+          "tokens_per_doc": 1.0
+        },
+        {
+          "category_counts": {
+            "api": 5,
+            "seq2": 5
+          },
+          "input_docs": 25,
+          "output_tokens": 10,
+          "run": 2,
+          "tokens_per_doc": 0.4
+        },
+        {
+          "category_counts": {
+            "api": 5,
+            "seq2": 5
+          },
+          "input_docs": 50,
+          "output_tokens": 10,
+          "run": 3,
+          "tokens_per_doc": 0.2
+        },
+        {
+          "category_counts": {
+            "api": 5,
+            "seq2": 5
+          },
+          "input_docs": 51,
+          "output_tokens": 10,
+          "run": 4,
+          "tokens_per_doc": 0.19607843137254902
+        }
+      ],
+      "mean_yield": 0.7192156862745098
+    },
+    "n": 5
+  },
+  {
+    "metric_id": "infra.i7.token_extraction.latency_distribution",
+    "axis": "infrastructure",
+    "category": "token_extraction",
+    "label": "Extraction latency distribution (µs)",
+    "value": 235.26000000000005,
+    "details": {
+      "all_times_us": [
+        246.40000000000003,
+        101.3,
+        247.5,
+        292.7,
+        288.40000000000003
+      ],
+      "max_us": 292.7,
+      "mean_us": 235.26000000000005,
+      "p50_us": 247.5,
+      "p95_us": 292.7,
+      "p99_us": 292.7
+    },
+    "n": 5
+  },
+  {
+    "metric_id": "infra.i7.token_extraction.determinism",
+    "axis": "infrastructure",
+    "category": "token_extraction",
+    "label": "Fraction of runs producing deterministic output",
+    "value": 1.0,
+    "details": {
+      "deterministic": 5,
+      "total": 5
+    },
+    "n": 5
+  },
+  {
+    "metric_id": "infra.i8.token_scoring.lift_accuracy",
+    "axis": "infrastructure",
+    "category": "token_scoring",
+    "label": "Lift computation accuracy (1 - max_error)",
+    "value": 1.0,
+    "details": {
+      "all_pass": true,
+      "max_absolute_error": 0.0,
+      "mean_absolute_error": 0.0,
+      "test_cases": [
+        {
+          "computed_lift": 1.2727272727272727,
+          "expected_lift": 1.2727272727272727,
+          "input_rounds": 28,
+          "lift_error": 0.0,
+          "pass": true,
+          "test_case": "real_full_matrix_28_rounds"
+        },
+        {
+          "computed_lift": 0.0,
+          "expected_lift": 0.0,
+          "input_rounds": 28,
+          "lift_error": 0.0,
+          "pass": true,
+          "test_case": "real_determinism"
+        },
+        {
+          "computed_lift": 1.2727272727272727,
+          "expected_lift": 1.2727272727272727,
+          "input_rounds": 14,
+          "lift_error": 0.0,
+          "pass": true,
+          "test_case": "real_half_convergence_14_rounds"
+        }
+      ]
+    },
+    "n": 3
+  },
+  {
+    "metric_id": "infra.i8.token_scoring.guidance_correctness",
+    "axis": "infrastructure",
+    "category": "token_scoring",
+    "label": "Avoid/seek classification accuracy",
+    "value": 0.6666666666666666,
+    "details": {
+      "correct": 2,
+      "incorrect_cases": [
+        {
+          "computed_lift": 0.0,
+          "expected_lift": 0.0,
+          "test_case": "real_determinism"
+        }
+      ],
+      "total": 3
+    },
+    "n": 3
+  },
+  {
+    "metric_id": "infra.i9.input_diversity.pairwise_distance",
+    "axis": "infrastructure",
+    "category": "input_diversity",
+    "label": "Mean pairwise normalized distance between mutation outputs",
+    "value": 0.6212962962962962,
+    "details": {
+      "heatmap": {
+        "labels": [
+          "ast.api_sequence_obfuscation:inserts=3",
+          "ast.benign_preamble:count=5",
+          "ast.benign_syscall_insert:count=5",
+          "ast.const_obfuscation",
+          "ast.decon_rounds:count=50",
+          "ast.exec_decoy:target=calc",
+          "ast.fill_pattern:pattern=0xCC",
+          "ast.protection_transition:strategy=rw_rx",
+          "ast.string_xor:xor_key=0xAA",
+          "ast.timing_pattern:method=rdtsc"
+        ],
+        "matrix": [
+          [
+            0.0,
+            0.14285714285714285,
+            1.0,
+            0.625,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.8333333333333334
+          ],
+          [
+            0.14285714285714285,
+            0.0,
+            1.0,
+            0.5625,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.8571428571428571
+          ],
+          [
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          [
+            0.625,
+            0.5625,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.9375
+          ],
+          [
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          [
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          [
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          [
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          [
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          [
+            0.8333333333333334,
+            0.8571428571428571,
+            1.0,
+            0.9375,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ]
+        ]
+      },
+      "max_distance": 1.0,
+      "mean_distance": 0.6212962962962962,
+      "min_distance": 0.0
+    },
+    "n": 45
+  },
+  {
+    "metric_id": "infra.i9.input_diversity.output_uniqueness",
+    "axis": "infrastructure",
+    "category": "input_diversity",
+    "label": "Fraction of mutation pairs producing distinct output",
+    "value": 0.8666666666666667,
+    "details": {
+      "differ_count": 39,
+      "total_pairs": 45
+    },
+    "n": 45
+  },
+  {
+    "metric_id": "infra.i9.input_diversity.param_sensitivity",
+    "axis": "infrastructure",
+    "category": "input_diversity",
+    "label": "Fraction of mutations where different params produce different output",
+    "value": 0.0,
+    "details": {
+      "mutations_with_different_output": 0,
+      "mutations_with_variants": 0
+    },
+    "n": 0
+  },
+  {
+    "metric_id": "infra.i9.input_diversity.encoding_entropy_spread",
+    "axis": "infrastructure",
+    "category": "input_diversity",
+    "label": "Entropy range across encoding types (bits)",
+    "value": 2.1631092834784984,
+    "details": {
+      "max_entropy": 2.1631092834784984,
+      "min_entropy": 0.0,
+      "spread": 2.1631092834784984
+    },
+    "n": 32
+  },
+  {
+    "metric_id": "infra.i10.oracle_stability.determinism",
+    "axis": "infrastructure",
+    "category": "oracle_stability",
+    "label": "Scoring determinism (1.0 if all repeated runs identical)",
+    "value": 0.0,
+    "details": {
+      "all_deterministic": false,
+      "per_case": [
+        {
+          "deterministic": false,
+          "test_case": "real_28_rounds"
+        }
+      ]
+    },
+    "n": 1
+  },
+  {
+    "metric_id": "infra.i10.oracle_stability.permutation_robustness",
+    "axis": "infrastructure",
+    "category": "oracle_stability",
+    "label": "Mean top-5 Jaccard similarity across round permutations",
+    "value": 0.022222222222222233,
+    "details": {
+      "mean_jaccard": 0.022222222222222233,
+      "per_case": [
+        {
+          "jaccard": 0.022222222222222233,
+          "test_case": "real_28_rounds"
+        }
+      ]
+    },
+    "n": 1
+  },
+  {
+    "metric_id": "infra.i10.oracle_stability.incremental_convergence",
+    "axis": "infrastructure",
+    "category": "oracle_stability",
+    "label": "Fraction of incremental snapshots with Jaccard > 0.8",
+    "value": 0.2,
+    "details": {
+      "convergence_curve": [
+        {
+          "avoid_count": 0,
+          "jaccard_with_full": 0.05000000000000005,
+          "round_count": 5,
+          "seek_count": 4
+        },
+        {
+          "avoid_count": 0,
+          "jaccard_with_full": 0.0,
+          "round_count": 11,
+          "seek_count": 0
+        },
+        {
+          "avoid_count": 0,
+          "jaccard_with_full": 0.42105263157894735,
+          "round_count": 16,
+          "seek_count": 10
+        },
+        {
+          "avoid_count": 0,
+          "jaccard_with_full": 0.7,
+          "round_count": 22,
+          "seek_count": 17
+        },
+        {
+          "avoid_count": 0,
+          "jaccard_with_full": 1.0,
+          "round_count": 28,
+          "seek_count": 17
+        }
+      ],
+      "mean_convergence": 0.2
+    },
+    "n": 1
+  },
+  {
+    "metric_id": "infra.i10.oracle_stability.lift_variance",
+    "axis": "infrastructure",
+    "category": "oracle_stability",
+    "label": "Lift stability score: 1/(1+mean_variance)",
+    "value": 1.0,
+    "details": {
+      "mean_lift_variance": 3.384564294037559e-32,
+      "per_case": [
+        {
+          "lift_variance": 3.384564294037559e-32,
+          "test_case": "real_28_rounds"
+        }
+      ],
+      "stability_score": 1.0
+    },
+    "n": 1
+  },
+  {
+    "metric_id": "infra.i11.selector_comparison.coverage_by_selector",
+    "axis": "infrastructure",
+    "category": "selector_comparison",
+    "label": "Mutation pool coverage by selector strategy",
+    "value": 0.925,
+    "details": {
+      "by_selector": [
+        {
+          "coverage": 1.0,
+          "rounds": 30,
+          "selector": "Coverage",
+          "unique_sets": 8
+        },
+        {
+          "coverage": 1.0,
+          "rounds": 30,
+          "selector": "Fuzzer",
+          "unique_sets": 23
+        },
+        {
+          "coverage": 0.7,
+          "rounds": 30,
+          "selector": "Token",
+          "unique_sets": 6
+        },
+        {
+          "coverage": 1.0,
+          "rounds": 30,
+          "selector": "Random",
+          "unique_sets": 19
+        }
+      ]
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i11.selector_comparison.diversity_by_selector",
+    "axis": "infrastructure",
+    "category": "selector_comparison",
+    "label": "Mean pairwise Jaccard distance of round selections",
+    "value": 0.20537335147889582,
+    "details": {
+      "by_selector": [
+        {
+          "diversity": 0.19956212370005755,
+          "mean_recipe_size": 13.0,
+          "selector": "Coverage"
+        },
+        {
+          "diversity": 0.21835769144085604,
+          "mean_recipe_size": 12.566666666666666,
+          "selector": "Fuzzer"
+        },
+        {
+          "diversity": 0.13462506841817207,
+          "mean_recipe_size": 13.0,
+          "selector": "Token"
+        },
+        {
+          "diversity": 0.2689485223564977,
+          "mean_recipe_size": 15.833333333333334,
+          "selector": "Random"
+        }
+      ]
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i11.selector_comparison.exploration_rate",
+    "axis": "infrastructure",
+    "category": "selector_comparison",
+    "label": "Per-selector exploration fraction",
+    "value": 0.2833333333333333,
+    "details": {
+      "by_selector": [
+        {
+          "exploration_rate": 0.6666666666666666,
+          "selector": "Coverage"
+        },
+        {
+          "exploration_rate": 0.3333333333333333,
+          "selector": "Fuzzer"
+        },
+        {
+          "exploration_rate": 0.13333333333333333,
+          "selector": "Token"
+        },
+        {
+          "exploration_rate": 0.0,
+          "selector": "Random"
+        }
+      ]
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i11.selector_comparison.guided_vs_random_delta",
+    "axis": "infrastructure",
+    "category": "selector_comparison",
+    "label": "Coverage delta: guided selectors vs Random baseline",
+    "value": -0.10000000000000002,
+    "details": {
+      "guided_deltas": [
+        {
+          "coverage": 1.0,
+          "delta": 0.0,
+          "selector": "Coverage"
+        },
+        {
+          "coverage": 1.0,
+          "delta": 0.0,
+          "selector": "Fuzzer"
+        },
+        {
+          "coverage": 0.7,
+          "delta": -0.30000000000000004,
+          "selector": "Token"
+        }
+      ],
+      "random_coverage": 1.0
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i11.selector_comparison.coverage_trajectory",
+    "axis": "infrastructure",
+    "category": "selector_comparison",
+    "label": "Cumulative mutation coverage trajectory per selector",
+    "value": 0.9625,
+    "details": {
+      "by_selector": [
+        {
+          "selector": "Coverage",
+          "trajectory": [
+            {
+              "coverage": 0.55,
+              "round": 1
+            },
+            {
+              "coverage": 0.55,
+              "round": 2
+            },
+            {
+              "coverage": 0.55,
+              "round": 3
+            },
+            {
+              "coverage": 0.55,
+              "round": 4
+            },
+            {
+              "coverage": 0.55,
+              "round": 5
+            },
+            {
+              "coverage": 0.55,
+              "round": 6
+            },
+            {
+              "coverage": 0.55,
+              "round": 7
+            },
+            {
+              "coverage": 0.55,
+              "round": 8
+            },
+            {
+              "coverage": 0.55,
+              "round": 9
+            },
+            {
+              "coverage": 0.55,
+              "round": 10
+            },
+            {
+              "coverage": 0.75,
+              "round": 11
+            },
+            {
+              "coverage": 0.75,
+              "round": 12
+            },
+            {
+              "coverage": 0.8,
+              "round": 13
+            },
+            {
+              "coverage": 0.8,
+              "round": 14
+            },
+            {
+              "coverage": 0.85,
+              "round": 15
+            },
+            {
+              "coverage": 0.85,
+              "round": 16
+            },
+            {
+              "coverage": 0.9,
+              "round": 17
+            },
+            {
+              "coverage": 0.95,
+              "round": 18
+            },
+            {
+              "coverage": 0.95,
+              "round": 19
+            },
+            {
+              "coverage": 0.95,
+              "round": 20
+            },
+            {
+              "coverage": 1.0,
+              "round": 21
+            },
+            {
+              "coverage": 1.0,
+              "round": 22
+            },
+            {
+              "coverage": 1.0,
+              "round": 23
+            },
+            {
+              "coverage": 1.0,
+              "round": 24
+            },
+            {
+              "coverage": 1.0,
+              "round": 25
+            },
+            {
+              "coverage": 1.0,
+              "round": 26
+            },
+            {
+              "coverage": 1.0,
+              "round": 27
+            },
+            {
+              "coverage": 1.0,
+              "round": 28
+            },
+            {
+              "coverage": 1.0,
+              "round": 29
+            },
+            {
+              "coverage": 1.0,
+              "round": 30
+            }
+          ]
+        },
+        {
+          "selector": "Fuzzer",
+          "trajectory": [
+            {
+              "coverage": 0.55,
+              "round": 1
+            },
+            {
+              "coverage": 0.6,
+              "round": 2
+            },
+            {
+              "coverage": 0.65,
+              "round": 3
+            },
+            {
+              "coverage": 0.7,
+              "round": 4
+            },
+            {
+              "coverage": 0.75,
+              "round": 5
+            },
+            {
+              "coverage": 0.8,
+              "round": 6
+            },
+            {
+              "coverage": 0.85,
+              "round": 7
+            },
+            {
+              "coverage": 0.9,
+              "round": 8
+            },
+            {
+              "coverage": 0.95,
+              "round": 9
+            },
+            {
+              "coverage": 1.0,
+              "round": 10
+            },
+            {
+              "coverage": 1.0,
+              "round": 11
+            },
+            {
+              "coverage": 1.0,
+              "round": 12
+            },
+            {
+              "coverage": 1.0,
+              "round": 13
+            },
+            {
+              "coverage": 1.0,
+              "round": 14
+            },
+            {
+              "coverage": 1.0,
+              "round": 15
+            },
+            {
+              "coverage": 1.0,
+              "round": 16
+            },
+            {
+              "coverage": 1.0,
+              "round": 17
+            },
+            {
+              "coverage": 1.0,
+              "round": 18
+            },
+            {
+              "coverage": 1.0,
+              "round": 19
+            },
+            {
+              "coverage": 1.0,
+              "round": 20
+            },
+            {
+              "coverage": 1.0,
+              "round": 21
+            },
+            {
+              "coverage": 1.0,
+              "round": 22
+            },
+            {
+              "coverage": 1.0,
+              "round": 23
+            },
+            {
+              "coverage": 1.0,
+              "round": 24
+            },
+            {
+              "coverage": 1.0,
+              "round": 25
+            },
+            {
+              "coverage": 1.0,
+              "round": 26
+            },
+            {
+              "coverage": 1.0,
+              "round": 27
+            },
+            {
+              "coverage": 1.0,
+              "round": 28
+            },
+            {
+              "coverage": 1.0,
+              "round": 29
+            },
+            {
+              "coverage": 1.0,
+              "round": 30
+            }
+          ]
+        },
+        {
+          "selector": "Token",
+          "trajectory": [
+            {
+              "coverage": 0.55,
+              "round": 1
+            },
+            {
+              "coverage": 0.6,
+              "round": 2
+            },
+            {
+              "coverage": 0.6,
+              "round": 3
+            },
+            {
+              "coverage": 0.65,
+              "round": 4
+            },
+            {
+              "coverage": 0.65,
+              "round": 5
+            },
+            {
+              "coverage": 0.65,
+              "round": 6
+            },
+            {
+              "coverage": 0.7,
+              "round": 7
+            },
+            {
+              "coverage": 0.7,
+              "round": 8
+            },
+            {
+              "coverage": 0.7,
+              "round": 9
+            },
+            {
+              "coverage": 0.7,
+              "round": 10
+            },
+            {
+              "coverage": 0.85,
+              "round": 11
+            },
+            {
+              "coverage": 0.85,
+              "round": 12
+            },
+            {
+              "coverage": 0.85,
+              "round": 13
+            },
+            {
+              "coverage": 0.85,
+              "round": 14
+            },
+            {
+              "coverage": 0.85,
+              "round": 15
+            },
+            {
+              "coverage": 0.85,
+              "round": 16
+            },
+            {
+              "coverage": 0.85,
+              "round": 17
+            },
+            {
+              "coverage": 0.85,
+              "round": 18
+            },
+            {
+              "coverage": 0.85,
+              "round": 19
+            },
+            {
+              "coverage": 0.85,
+              "round": 20
+            },
+            {
+              "coverage": 0.85,
+              "round": 21
+            },
+            {
+              "coverage": 0.85,
+              "round": 22
+            },
+            {
+              "coverage": 0.85,
+              "round": 23
+            },
+            {
+              "coverage": 0.85,
+              "round": 24
+            },
+            {
+              "coverage": 0.85,
+              "round": 25
+            },
+            {
+              "coverage": 0.85,
+              "round": 26
+            },
+            {
+              "coverage": 0.85,
+              "round": 27
+            },
+            {
+              "coverage": 0.85,
+              "round": 28
+            },
+            {
+              "coverage": 0.85,
+              "round": 29
+            },
+            {
+              "coverage": 0.85,
+              "round": 30
+            }
+          ]
+        },
+        {
+          "selector": "Random",
+          "trajectory": [
+            {
+              "coverage": 0.6,
+              "round": 1
+            },
+            {
+              "coverage": 0.7,
+              "round": 2
+            },
+            {
+              "coverage": 0.8,
+              "round": 3
+            },
+            {
+              "coverage": 0.8,
+              "round": 4
+            },
+            {
+              "coverage": 0.85,
+              "round": 5
+            },
+            {
+              "coverage": 0.85,
+              "round": 6
+            },
+            {
+              "coverage": 0.85,
+              "round": 7
+            },
+            {
+              "coverage": 0.85,
+              "round": 8
+            },
+            {
+              "coverage": 0.9,
+              "round": 9
+            },
+            {
+              "coverage": 0.95,
+              "round": 10
+            },
+            {
+              "coverage": 0.95,
+              "round": 11
+            },
+            {
+              "coverage": 0.95,
+              "round": 12
+            },
+            {
+              "coverage": 1.0,
+              "round": 13
+            },
+            {
+              "coverage": 1.0,
+              "round": 14
+            },
+            {
+              "coverage": 1.0,
+              "round": 15
+            },
+            {
+              "coverage": 1.0,
+              "round": 16
+            },
+            {
+              "coverage": 1.0,
+              "round": 17
+            },
+            {
+              "coverage": 1.0,
+              "round": 18
+            },
+            {
+              "coverage": 1.0,
+              "round": 19
+            },
+            {
+              "coverage": 1.0,
+              "round": 20
+            },
+            {
+              "coverage": 1.0,
+              "round": 21
+            },
+            {
+              "coverage": 1.0,
+              "round": 22
+            },
+            {
+              "coverage": 1.0,
+              "round": 23
+            },
+            {
+              "coverage": 1.0,
+              "round": 24
+            },
+            {
+              "coverage": 1.0,
+              "round": 25
+            },
+            {
+              "coverage": 1.0,
+              "round": 26
+            },
+            {
+              "coverage": 1.0,
+              "round": 27
+            },
+            {
+              "coverage": 1.0,
+              "round": 28
+            },
+            {
+              "coverage": 1.0,
+              "round": 29
+            },
+            {
+              "coverage": 1.0,
+              "round": 30
+            }
+          ]
+        }
+      ]
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i11.selector_comparison.diversity_trajectory",
+    "axis": "infrastructure",
+    "category": "selector_comparison",
+    "label": "Rolling pairwise Jaccard diversity trajectory (window=5)",
+    "value": 0.20537335147889582,
+    "details": {
+      "by_selector": [
+        {
+          "selector": "Coverage",
+          "trajectory": [
+            {
+              "diversity": 0.0,
+              "round": 1
+            },
+            {
+              "diversity": 0.0,
+              "round": 2
+            },
+            {
+              "diversity": 0.0,
+              "round": 3
+            },
+            {
+              "diversity": 0.0,
+              "round": 4
+            },
+            {
+              "diversity": 0.0,
+              "round": 5
+            },
+            {
+              "diversity": 0.0,
+              "round": 6
+            },
+            {
+              "diversity": 0.0,
+              "round": 7
+            },
+            {
+              "diversity": 0.0,
+              "round": 8
+            },
+            {
+              "diversity": 0.0,
+              "round": 9
+            },
+            {
+              "diversity": 0.0,
+              "round": 10
+            },
+            {
+              "diversity": 0.13333333333333336,
+              "round": 11
+            },
+            {
+              "diversity": 0.20000000000000004,
+              "round": 12
+            },
+            {
+              "diversity": 0.2266666666666667,
+              "round": 13
+            },
+            {
+              "diversity": 0.18666666666666668,
+              "round": 14
+            },
+            {
+              "diversity": 0.10666666666666665,
+              "round": 15
+            },
+            {
+              "diversity": 0.11999999999999997,
+              "round": 16
+            },
+            {
+              "diversity": 0.11999999999999997,
+              "round": 17
+            },
+            {
+              "diversity": 0.1333333333333333,
+              "round": 18
+            },
+            {
+              "diversity": 0.1333333333333333,
+              "round": 19
+            },
+            {
+              "diversity": 0.11999999999999997,
+              "round": 20
+            },
+            {
+              "diversity": 0.11999999999999997,
+              "round": 21
+            },
+            {
+              "diversity": 0.11999999999999997,
+              "round": 22
+            },
+            {
+              "diversity": 0.09333333333333331,
+              "round": 23
+            },
+            {
+              "diversity": 0.11999999999999997,
+              "round": 24
+            },
+            {
+              "diversity": 0.11999999999999997,
+              "round": 25
+            },
+            {
+              "diversity": 0.11999999999999997,
+              "round": 26
+            },
+            {
+              "diversity": 0.11999999999999997,
+              "round": 27
+            },
+            {
+              "diversity": 0.09333333333333331,
+              "round": 28
+            },
+            {
+              "diversity": 0.09333333333333331,
+              "round": 29
+            },
+            {
+              "diversity": 0.09333333333333331,
+              "round": 30
+            }
+          ]
+        },
+        {
+          "selector": "Fuzzer",
+          "trajectory": [
+            {
+              "diversity": 0.0,
+              "round": 1
+            },
+            {
+              "diversity": 0.16666666666666663,
+              "round": 2
+            },
+            {
+              "diversity": 0.16666666666666663,
+              "round": 3
+            },
+            {
+              "diversity": 0.16666666666666663,
+              "round": 4
+            },
+            {
+              "diversity": 0.1666666666666666,
+              "round": 5
+            },
+            {
+              "diversity": 0.1666666666666666,
+              "round": 6
+            },
+            {
+              "diversity": 0.1666666666666666,
+              "round": 7
+            },
+            {
+              "diversity": 0.1666666666666666,
+              "round": 8
+            },
+            {
+              "diversity": 0.1666666666666666,
+              "round": 9
+            },
+            {
+              "diversity": 0.1666666666666666,
+              "round": 10
+            },
+            {
+              "diversity": 0.17756410256410254,
+              "round": 11
+            },
+            {
+              "diversity": 0.14615384615384613,
+              "round": 12
+            },
+            {
+              "diversity": 0.21034798534798532,
+              "round": 13
+            },
+            {
+              "diversity": 0.23804487179487183,
+              "round": 14
+            },
+            {
+              "diversity": 0.25218837535014005,
+              "round": 15
+            },
+            {
+              "diversity": 0.2369502801120448,
+              "round": 16
+            },
+            {
+              "diversity": 0.22360294117647056,
+              "round": 17
+            },
+            {
+              "diversity": 0.12833333333333333,
+              "round": 18
+            },
+            {
+              "diversity": 0.15499999999999997,
+              "round": 19
+            },
+            {
+              "diversity": 0.1688095238095238,
+              "round": 20
+            },
+            {
+              "diversity": 0.10952380952380951,
+              "round": 21
+            },
+            {
+              "diversity": 0.09666666666666665,
+              "round": 22
+            },
+            {
+              "diversity": 0.08681318681318681,
+              "round": 23
+            },
+            {
+              "diversity": 0.1115018315018315,
+              "round": 24
+            },
+            {
+              "diversity": 0.1837007110536522,
+              "round": 25
+            },
+            {
+              "diversity": 0.21577731092436975,
+              "round": 26
+            },
+            {
+              "diversity": 0.19469887955182072,
+              "round": 27
+            },
+            {
+              "diversity": 0.2051155462184874,
+              "round": 28
+            },
+            {
+              "diversity": 0.1716208791208791,
+              "round": 29
+            },
+            {
+              "diversity": 0.20751023486317605,
+              "round": 30
+            }
+          ]
+        },
+        {
+          "selector": "Token",
+          "trajectory": [
+            {
+              "diversity": 0.0,
+              "round": 1
+            },
+            {
+              "diversity": 0.16666666666666663,
+              "round": 2
+            },
+            {
+              "diversity": 0.11111111111111109,
+              "round": 3
+            },
+            {
+              "diversity": 0.13888888888888887,
+              "round": 4
+            },
+            {
+              "diversity": 0.11666666666666665,
+              "round": 5
+            },
+            {
+              "diversity": 0.06666666666666665,
+              "round": 6
+            },
+            {
+              "diversity": 0.11666666666666665,
+              "round": 7
+            },
+            {
+              "diversity": 0.11666666666666665,
+              "round": 8
+            },
+            {
+              "diversity": 0.06666666666666665,
+              "round": 9
+            },
+            {
+              "diversity": 0.06666666666666665,
+              "round": 10
+            },
+            {
+              "diversity": 0.14761904761904762,
+              "round": 11
+            },
+            {
+              "diversity": 0.12857142857142861,
+              "round": 12
+            },
+            {
+              "diversity": 0.12857142857142861,
+              "round": 13
+            },
+            {
+              "diversity": 0.08571428571428572,
+              "round": 14
+            },
+            {
+              "diversity": 0.0,
+              "round": 15
+            },
+            {
+              "diversity": 0.0,
+              "round": 16
+            },
+            {
+              "diversity": 0.0,
+              "round": 17
+            },
+            {
+              "diversity": 0.0,
+              "round": 18
+            },
+            {
+              "diversity": 0.0,
+              "round": 19
+            },
+            {
+              "diversity": 0.0,
+              "round": 20
+            },
+            {
+              "diversity": 0.0,
+              "round": 21
+            },
+            {
+              "diversity": 0.0,
+              "round": 22
+            },
+            {
+              "diversity": 0.0,
+              "round": 23
+            },
+            {
+              "diversity": 0.0,
+              "round": 24
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 25
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 26
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 27
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 28
+            },
+            {
+              "diversity": 0.07999999999999999,
+              "round": 29
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 30
+            }
+          ]
+        },
+        {
+          "selector": "Random",
+          "trajectory": [
+            {
+              "diversity": 0.0,
+              "round": 1
+            },
+            {
+              "diversity": 0.2142857142857143,
+              "round": 2
+            },
+            {
+              "diversity": 0.2777777777777778,
+              "round": 3
+            },
+            {
+              "diversity": 0.2388583638583639,
+              "round": 4
+            },
+            {
+              "diversity": 0.2436813186813187,
+              "round": 5
+            },
+            {
+              "diversity": 0.23186813186813188,
+              "round": 6
+            },
+            {
+              "diversity": 0.1811355311355311,
+              "round": 7
+            },
+            {
+              "diversity": 0.15320512820512824,
+              "round": 8
+            },
+            {
+              "diversity": 0.1901098901098901,
+              "round": 9
+            },
+            {
+              "diversity": 0.23049450549450548,
+              "round": 10
+            },
+            {
+              "diversity": 0.24523809523809526,
+              "round": 11
+            },
+            {
+              "diversity": 0.2087912087912088,
+              "round": 12
+            },
+            {
+              "diversity": 0.20476190476190478,
+              "round": 13
+            },
+            {
+              "diversity": 0.23549908424908428,
+              "round": 14
+            },
+            {
+              "diversity": 0.27628770739064856,
+              "round": 15
+            },
+            {
+              "diversity": 0.28893416138385175,
+              "round": 16
+            },
+            {
+              "diversity": 0.2845889232886137,
+              "round": 17
+            },
+            {
+              "diversity": 0.2763523391812866,
+              "round": 18
+            },
+            {
+              "diversity": 0.22877192982456135,
+              "round": 19
+            },
+            {
+              "diversity": 0.17271929824561402,
+              "round": 20
+            },
+            {
+              "diversity": 0.12000000000000002,
+              "round": 21
+            },
+            {
+              "diversity": 0.06000000000000001,
+              "round": 22
+            },
+            {
+              "diversity": 0.020000000000000018,
+              "round": 23
+            },
+            {
+              "diversity": 0.0,
+              "round": 24
+            },
+            {
+              "diversity": 0.0,
+              "round": 25
+            },
+            {
+              "diversity": 0.0,
+              "round": 26
+            },
+            {
+              "diversity": 0.0,
+              "round": 27
+            },
+            {
+              "diversity": 0.0,
+              "round": 28
+            },
+            {
+              "diversity": 0.0,
+              "round": 29
+            },
+            {
+              "diversity": 0.0,
+              "round": 30
+            }
+          ]
+        }
+      ]
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i11.selector_comparison.mutation_frequency_heatmap",
+    "axis": "infrastructure",
+    "category": "selector_comparison",
+    "label": "Mutation selection frequency matrix (mutation × selector)",
+    "value": 0.0,
+    "details": {
+      "frequencies": [
+        [
+          2,
+          20,
+          20,
+          3,
+          5,
+          11,
+          1,
+          2,
+          6,
+          20,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30
+        ],
+        [
+          3,
+          11,
+          20,
+          7,
+          7,
+          1,
+          6,
+          3,
+          3,
+          16,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30
+        ],
+        [
+          0,
+          20,
+          20,
+          3,
+          0,
+          18,
+          1,
+          0,
+          1,
+          27,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30
+        ],
+        [
+          17,
+          17,
+          19,
+          16,
+          19,
+          18,
+          21,
+          15,
+          18,
+          15,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30,
+          30
+        ]
+      ],
+      "mutations": [
+        "ast.api_sequence_obfuscation",
+        "ast.benign_preamble",
+        "ast.benign_syscall_insert",
+        "ast.const_obfuscation",
+        "ast.decon_rounds",
+        "ast.exec_decoy",
+        "ast.fill_pattern",
+        "ast.protection_transition",
+        "ast.string_xor",
+        "ast.timing_pattern",
+        "binary.debug_dir",
+        "binary.entropy_normalize",
+        "binary.import_pad",
+        "binary.resource_inject",
+        "binary.rich_header",
+        "binary.section_rename",
+        "binary.size_pad",
+        "binary.string_inject",
+        "binary.timestamp",
+        "llvm.opaque_predicate"
+      ],
+      "selectors": [
+        "Coverage",
+        "Fuzzer",
+        "Token",
+        "Random"
+      ]
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i11.selector_comparison.coverage_saturation",
+    "axis": "infrastructure",
+    "category": "selector_comparison",
+    "label": "Round at which each selector hits 80% pool coverage",
+    "value": 8.25,
+    "details": {
+      "by_selector": [
+        {
+          "saturation_round": 13,
+          "selector": "Coverage"
+        },
+        {
+          "saturation_round": 6,
+          "selector": "Fuzzer"
+        },
+        {
+          "saturation_round": 11,
+          "selector": "Token"
+        },
+        {
+          "saturation_round": 3,
+          "selector": "Random"
+        }
+      ]
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i12.guidance_utilization.avoidance_rate",
+    "axis": "infrastructure",
+    "category": "guidance_utilization",
+    "label": "Fraction of guided rounds avoiding avoid-correlated mutations",
+    "value": 0.3,
+    "details": {
+      "by_selector": [
+        {
+          "avoid_tokens": [
+            "mutation:ast.exec_decoy",
+            "mutation:ast.timing_pattern",
+            "mutation:ast.decon_rounds"
+          ],
+          "avoidance_rate": 0.0,
+          "selector": "Coverage"
+        },
+        {
+          "avoid_tokens": [
+            "mutation:ast.exec_decoy",
+            "mutation:ast.timing_pattern",
+            "mutation:ast.decon_rounds"
+          ],
+          "avoidance_rate": 0.45,
+          "selector": "Fuzzer"
+        },
+        {
+          "avoid_tokens": [
+            "mutation:ast.exec_decoy",
+            "mutation:ast.timing_pattern",
+            "mutation:ast.decon_rounds"
+          ],
+          "avoidance_rate": 0.5,
+          "selector": "Token"
+        },
+        {
+          "avoid_tokens": [
+            "mutation:ast.exec_decoy",
+            "mutation:ast.timing_pattern",
+            "mutation:ast.decon_rounds"
+          ],
+          "avoidance_rate": 0.25,
+          "selector": "Random"
+        }
+      ],
+      "mean_avoidance_rate": 0.3
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i12.guidance_utilization.seek_adoption_rate",
+    "axis": "infrastructure",
+    "category": "guidance_utilization",
+    "label": "Fraction of guided rounds adopting seek-correlated mutations",
+    "value": 0.0,
+    "details": {
+      "by_selector": [
+        {
+          "seek_adoption_rate": 0.0,
+          "seek_tokens": [
+            "mutation:binary.rich_header:donor=explorer",
+            "mutation:binary.string_inject:count=13",
+            "mutation:binary.entropy_normalize:target=6.24"
+          ],
+          "selector": "Coverage"
+        },
+        {
+          "seek_adoption_rate": 0.0,
+          "seek_tokens": [
+            "mutation:binary.rich_header:donor=explorer",
+            "mutation:binary.string_inject:count=13",
+            "mutation:binary.entropy_normalize:target=6.24"
+          ],
+          "selector": "Fuzzer"
+        },
+        {
+          "seek_adoption_rate": 0.0,
+          "seek_tokens": [
+            "mutation:binary.rich_header:donor=explorer",
+            "mutation:binary.string_inject:count=13",
+            "mutation:binary.entropy_normalize:target=6.24"
+          ],
+          "selector": "Token"
+        },
+        {
+          "seek_adoption_rate": 0.0,
+          "seek_tokens": [
+            "mutation:binary.rich_header:donor=explorer",
+            "mutation:binary.string_inject:count=13",
+            "mutation:binary.entropy_normalize:target=6.24"
+          ],
+          "selector": "Random"
+        }
+      ],
+      "mean_seek_rate": 0.0
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i12.guidance_utilization.recipe_delta",
+    "axis": "infrastructure",
+    "category": "guidance_utilization",
+    "label": "Mean recipe difference with vs without guidance",
+    "value": 0.05083333333333332,
+    "details": {
+      "by_selector": [
+        {
+          "mutation_frequencies": [
+            {
+              "delta": 4,
+              "mutation": "ast.api_sequence_obfuscation",
+              "with_guidance": 4,
+              "without_guidance": 0
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.benign_preamble",
+              "with_guidance": 10,
+              "without_guidance": 10
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.benign_syscall_insert",
+              "with_guidance": 10,
+              "without_guidance": 10
+            },
+            {
+              "delta": -4,
+              "mutation": "ast.const_obfuscation",
+              "with_guidance": 0,
+              "without_guidance": 4
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.decon_rounds",
+              "with_guidance": 1,
+              "without_guidance": 1
+            },
+            {
+              "delta": -1,
+              "mutation": "ast.exec_decoy",
+              "with_guidance": 10,
+              "without_guidance": 11
+            },
+            {
+              "delta": 1,
+              "mutation": "ast.fill_pattern",
+              "with_guidance": 3,
+              "without_guidance": 2
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.protection_transition",
+              "with_guidance": 1,
+              "without_guidance": 1
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.string_xor",
+              "with_guidance": 1,
+              "without_guidance": 1
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.timing_pattern",
+              "with_guidance": 10,
+              "without_guidance": 10
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.debug_dir",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.entropy_normalize",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.import_pad",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.resource_inject",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.rich_header",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.section_rename",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.size_pad",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.string_inject",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.timestamp",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "llvm.opaque_predicate",
+              "with_guidance": 20,
+              "without_guidance": 20
+            }
+          ],
+          "recipe_jaccard_delta": 0.06666666666666665,
+          "rounds": 20,
+          "selector": "Coverage"
+        },
+        {
+          "mutation_frequencies": [
+            {
+              "delta": 0,
+              "mutation": "ast.api_sequence_obfuscation",
+              "with_guidance": 3,
+              "without_guidance": 3
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.benign_preamble",
+              "with_guidance": 6,
+              "without_guidance": 6
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.benign_syscall_insert",
+              "with_guidance": 10,
+              "without_guidance": 10
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.const_obfuscation",
+              "with_guidance": 4,
+              "without_guidance": 4
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.decon_rounds",
+              "with_guidance": 4,
+              "without_guidance": 4
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.exec_decoy",
+              "with_guidance": 1,
+              "without_guidance": 1
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.fill_pattern",
+              "with_guidance": 4,
+              "without_guidance": 4
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.protection_transition",
+              "with_guidance": 2,
+              "without_guidance": 2
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.string_xor",
+              "with_guidance": 1,
+              "without_guidance": 1
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.timing_pattern",
+              "with_guidance": 8,
+              "without_guidance": 8
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.debug_dir",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.entropy_normalize",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.import_pad",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.resource_inject",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.rich_header",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.section_rename",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.size_pad",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.string_inject",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.timestamp",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "llvm.opaque_predicate",
+              "with_guidance": 20,
+              "without_guidance": 20
+            }
+          ],
+          "recipe_jaccard_delta": 0.0,
+          "rounds": 20,
+          "selector": "Fuzzer"
+        },
+        {
+          "mutation_frequencies": [
+            {
+              "delta": 0,
+              "mutation": "ast.api_sequence_obfuscation",
+              "with_guidance": 1,
+              "without_guidance": 1
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.benign_preamble",
+              "with_guidance": 10,
+              "without_guidance": 10
+            },
+            {
+              "delta": 9,
+              "mutation": "ast.benign_syscall_insert",
+              "with_guidance": 19,
+              "without_guidance": 10
+            },
+            {
+              "delta": 5,
+              "mutation": "ast.const_obfuscation",
+              "with_guidance": 8,
+              "without_guidance": 3
+            },
+            {
+              "delta": 1,
+              "mutation": "ast.decon_rounds",
+              "with_guidance": 1,
+              "without_guidance": 0
+            },
+            {
+              "delta": -10,
+              "mutation": "ast.exec_decoy",
+              "with_guidance": 0,
+              "without_guidance": 10
+            },
+            {
+              "delta": -2,
+              "mutation": "ast.fill_pattern",
+              "with_guidance": 0,
+              "without_guidance": 2
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.protection_transition",
+              "with_guidance": 1,
+              "without_guidance": 1
+            },
+            {
+              "delta": -3,
+              "mutation": "ast.string_xor",
+              "with_guidance": 0,
+              "without_guidance": 3
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.timing_pattern",
+              "with_guidance": 10,
+              "without_guidance": 10
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.debug_dir",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.entropy_normalize",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.import_pad",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.resource_inject",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.rich_header",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.section_rename",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.size_pad",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.string_inject",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.timestamp",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "llvm.opaque_predicate",
+              "with_guidance": 20,
+              "without_guidance": 20
+            }
+          ],
+          "recipe_jaccard_delta": 0.13666666666666663,
+          "rounds": 20,
+          "selector": "Token"
+        },
+        {
+          "mutation_frequencies": [
+            {
+              "delta": 0,
+              "mutation": "ast.api_sequence_obfuscation",
+              "with_guidance": 7,
+              "without_guidance": 7
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.benign_preamble",
+              "with_guidance": 7,
+              "without_guidance": 7
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.benign_syscall_insert",
+              "with_guidance": 9,
+              "without_guidance": 9
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.const_obfuscation",
+              "with_guidance": 6,
+              "without_guidance": 6
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.decon_rounds",
+              "with_guidance": 9,
+              "without_guidance": 9
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.exec_decoy",
+              "with_guidance": 8,
+              "without_guidance": 8
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.fill_pattern",
+              "with_guidance": 11,
+              "without_guidance": 11
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.protection_transition",
+              "with_guidance": 5,
+              "without_guidance": 5
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.string_xor",
+              "with_guidance": 8,
+              "without_guidance": 8
+            },
+            {
+              "delta": 0,
+              "mutation": "ast.timing_pattern",
+              "with_guidance": 5,
+              "without_guidance": 5
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.debug_dir",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.entropy_normalize",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.import_pad",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.resource_inject",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.rich_header",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.section_rename",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.size_pad",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.string_inject",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "binary.timestamp",
+              "with_guidance": 20,
+              "without_guidance": 20
+            },
+            {
+              "delta": 0,
+              "mutation": "llvm.opaque_predicate",
+              "with_guidance": 20,
+              "without_guidance": 20
+            }
+          ],
+          "recipe_jaccard_delta": 0.0,
+          "rounds": 20,
+          "selector": "Random"
+        }
+      ],
+      "mean_recipe_delta": 0.05083333333333332
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i12.guidance_utilization.guidance_trajectory",
+    "axis": "infrastructure",
+    "category": "guidance_utilization",
+    "label": "Per-round avoidance and seek compliance per selector",
+    "value": 0.3,
+    "details": {
+      "by_selector": [
+        {
+          "per_round": [
+            {
+              "avoided": false,
+              "round": 1,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 2,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 3,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 4,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 5,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 6,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 7,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 8,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 9,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 10,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 11,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 12,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 13,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 14,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 15,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 16,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 17,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 18,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 19,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 20,
+              "sought": false
+            }
+          ],
+          "selector": "Coverage"
+        },
+        {
+          "per_round": [
+            {
+              "avoided": false,
+              "round": 1,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 2,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 3,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 4,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 5,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 6,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 7,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 8,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 9,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 10,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 11,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 12,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 13,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 14,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 15,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 16,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 17,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 18,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 19,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 20,
+              "sought": false
+            }
+          ],
+          "selector": "Fuzzer"
+        },
+        {
+          "per_round": [
+            {
+              "avoided": true,
+              "round": 1,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 2,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 3,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 4,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 5,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 6,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 7,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 8,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 9,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 10,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 11,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 12,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 13,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 14,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 15,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 16,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 17,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 18,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 19,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 20,
+              "sought": false
+            }
+          ],
+          "selector": "Token"
+        },
+        {
+          "per_round": [
+            {
+              "avoided": false,
+              "round": 1,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 2,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 3,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 4,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 5,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 6,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 7,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 8,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 9,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 10,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 11,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 12,
+              "sought": false
+            },
+            {
+              "avoided": true,
+              "round": 13,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 14,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 15,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 16,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 17,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 18,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 19,
+              "sought": false
+            },
+            {
+              "avoided": false,
+              "round": 20,
+              "sought": false
+            }
+          ],
+          "selector": "Random"
+        }
+      ]
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i13.convergence_simulation.phase_transition_round",
+    "axis": "infrastructure",
+    "category": "convergence_simulation",
+    "label": "Round of first Accumulation phase entry (as fraction of total)",
+    "value": 0.23529411764705882,
+    "details": {
+      "accumulation_round": 12,
+      "all_transitions": [
+        {
+          "phase": "Baseline",
+          "round": 1
+        },
+        {
+          "phase": "IndividualExploration",
+          "round": 2
+        },
+        {
+          "phase": "Accumulation",
+          "round": 12
+        }
+      ],
+      "total_rounds": 51
+    },
+    "n": 1
+  },
+  {
+    "metric_id": "infra.i13.convergence_simulation.recipe_growth_rate",
+    "axis": "infrastructure",
+    "category": "convergence_simulation",
+    "label": "Recipe size growth rate during accumulation (mutations/round)",
+    "value": 0.04953095684803002,
+    "details": {
+      "growth_rate": 0.04953095684803002,
+      "recipe_trajectory": [
+        {
+          "recipe_size": 0,
+          "round": 1
+        },
+        {
+          "recipe_size": 11,
+          "round": 2
+        },
+        {
+          "recipe_size": 11,
+          "round": 3
+        },
+        {
+          "recipe_size": 11,
+          "round": 4
+        },
+        {
+          "recipe_size": 11,
+          "round": 5
+        },
+        {
+          "recipe_size": 11,
+          "round": 6
+        },
+        {
+          "recipe_size": 11,
+          "round": 7
+        },
+        {
+          "recipe_size": 11,
+          "round": 8
+        },
+        {
+          "recipe_size": 11,
+          "round": 9
+        },
+        {
+          "recipe_size": 11,
+          "round": 10
+        },
+        {
+          "recipe_size": 11,
+          "round": 11
+        },
+        {
+          "recipe_size": 11,
+          "round": 12
+        },
+        {
+          "recipe_size": 11,
+          "round": 13
+        },
+        {
+          "recipe_size": 11,
+          "round": 14
+        },
+        {
+          "recipe_size": 11,
+          "round": 15
+        },
+        {
+          "recipe_size": 12,
+          "round": 16
+        },
+        {
+          "recipe_size": 12,
+          "round": 17
+        },
+        {
+          "recipe_size": 12,
+          "round": 18
+        },
+        {
+          "recipe_size": 12,
+          "round": 19
+        },
+        {
+          "recipe_size": 12,
+          "round": 20
+        },
+        {
+          "recipe_size": 12,
+          "round": 21
+        },
+        {
+          "recipe_size": 12,
+          "round": 22
+        },
+        {
+          "recipe_size": 12,
+          "round": 23
+        },
+        {
+          "recipe_size": 12,
+          "round": 24
+        },
+        {
+          "recipe_size": 12,
+          "round": 25
+        },
+        {
+          "recipe_size": 12,
+          "round": 26
+        },
+        {
+          "recipe_size": 12,
+          "round": 27
+        },
+        {
+          "recipe_size": 12,
+          "round": 28
+        },
+        {
+          "recipe_size": 12,
+          "round": 29
+        },
+        {
+          "recipe_size": 12,
+          "round": 30
+        },
+        {
+          "recipe_size": 12,
+          "round": 31
+        },
+        {
+          "recipe_size": 12,
+          "round": 32
+        },
+        {
+          "recipe_size": 12,
+          "round": 33
+        },
+        {
+          "recipe_size": 12,
+          "round": 34
+        },
+        {
+          "recipe_size": 12,
+          "round": 35
+        },
+        {
+          "recipe_size": 13,
+          "round": 36
+        },
+        {
+          "recipe_size": 13,
+          "round": 37
+        },
+        {
+          "recipe_size": 13,
+          "round": 38
+        },
+        {
+          "recipe_size": 13,
+          "round": 39
+        },
+        {
+          "recipe_size": 13,
+          "round": 40
+        },
+        {
+          "recipe_size": 13,
+          "round": 41
+        },
+        {
+          "recipe_size": 13,
+          "round": 42
+        },
+        {
+          "recipe_size": 13,
+          "round": 43
+        },
+        {
+          "recipe_size": 13,
+          "round": 44
+        },
+        {
+          "recipe_size": 13,
+          "round": 45
+        },
+        {
+          "recipe_size": 13,
+          "round": 46
+        },
+        {
+          "recipe_size": 13,
+          "round": 47
+        },
+        {
+          "recipe_size": 13,
+          "round": 48
+        },
+        {
+          "recipe_size": 13,
+          "round": 49
+        },
+        {
+          "recipe_size": 13,
+          "round": 50
+        },
+        {
+          "recipe_size": 13,
+          "round": 51
+        }
+      ]
+    },
+    "n": 40
+  },
+  {
+    "metric_id": "infra.i13.convergence_simulation.diversity_preservation",
+    "axis": "infrastructure",
+    "category": "convergence_simulation",
+    "label": "Minimum recipe diversity during accumulation phase",
+    "value": 0.16282051282051282,
+    "details": {
+      "diversity_trajectory": [
+        {
+          "diversity": 0.0,
+          "round": 1
+        },
+        {
+          "diversity": 1.0,
+          "round": 2
+        },
+        {
+          "diversity": 0.7222222222222222,
+          "round": 3
+        },
+        {
+          "diversity": 0.7222222222222222,
+          "round": 4
+        },
+        {
+          "diversity": 0.5833333333333334,
+          "round": 5
+        },
+        {
+          "diversity": 0.5,
+          "round": 6
+        },
+        {
+          "diversity": 0.1666666666666666,
+          "round": 7
+        },
+        {
+          "diversity": 0.1666666666666666,
+          "round": 8
+        },
+        {
+          "diversity": 0.1666666666666666,
+          "round": 9
+        },
+        {
+          "diversity": 0.1666666666666666,
+          "round": 10
+        },
+        {
+          "diversity": 0.1666666666666666,
+          "round": 11
+        },
+        {
+          "diversity": 0.1666666666666666,
+          "round": 12
+        },
+        {
+          "diversity": 0.1666666666666666,
+          "round": 13
+        },
+        {
+          "diversity": 0.1666666666666666,
+          "round": 14
+        },
+        {
+          "diversity": 0.1666666666666666,
+          "round": 15
+        },
+        {
+          "diversity": 0.17756410256410252,
+          "round": 16
+        },
+        {
+          "diversity": 0.17756410256410252,
+          "round": 17
+        },
+        {
+          "diversity": 0.17756410256410252,
+          "round": 18
+        },
+        {
+          "diversity": 0.17756410256410252,
+          "round": 19
+        },
+        {
+          "diversity": 0.1756410256410256,
+          "round": 20
+        },
+        {
+          "diversity": 0.1756410256410256,
+          "round": 21
+        },
+        {
+          "diversity": 0.1756410256410256,
+          "round": 22
+        },
+        {
+          "diversity": 0.2038461538461538,
+          "round": 23
+        },
+        {
+          "diversity": 0.2038461538461538,
+          "round": 24
+        },
+        {
+          "diversity": 0.2038461538461538,
+          "round": 25
+        },
+        {
+          "diversity": 0.2038461538461538,
+          "round": 26
+        },
+        {
+          "diversity": 0.18589743589743585,
+          "round": 27
+        },
+        {
+          "diversity": 0.19404761904761908,
+          "round": 28
+        },
+        {
+          "diversity": 0.2129120879120879,
+          "round": 29
+        },
+        {
+          "diversity": 0.2129120879120879,
+          "round": 30
+        },
+        {
+          "diversity": 0.2505494505494505,
+          "round": 31
+        },
+        {
+          "diversity": 0.2351648351648351,
+          "round": 32
+        },
+        {
+          "diversity": 0.2351648351648351,
+          "round": 33
+        },
+        {
+          "diversity": 0.2351648351648351,
+          "round": 34
+        },
+        {
+          "diversity": 0.21227106227106224,
+          "round": 35
+        },
+        {
+          "diversity": 0.2195970695970696,
+          "round": 36
+        },
+        {
+          "diversity": 0.2195970695970696,
+          "round": 37
+        },
+        {
+          "diversity": 0.2195970695970696,
+          "round": 38
+        },
+        {
+          "diversity": 0.2195970695970696,
+          "round": 39
+        },
+        {
+          "diversity": 0.21538461538461545,
+          "round": 40
+        },
+        {
+          "diversity": 0.21538461538461545,
+          "round": 41
+        },
+        {
+          "diversity": 0.20512820512820512,
+          "round": 42
+        },
+        {
+          "diversity": 0.20512820512820512,
+          "round": 43
+        },
+        {
+          "diversity": 0.1891208791208791,
+          "round": 44
+        },
+        {
+          "diversity": 0.2125641025641026,
+          "round": 45
+        },
+        {
+          "diversity": 0.2125641025641026,
+          "round": 46
+        },
+        {
+          "diversity": 0.20265567765567769,
+          "round": 47
+        },
+        {
+          "diversity": 0.20265567765567769,
+          "round": 48
+        },
+        {
+          "diversity": 0.16282051282051282,
+          "round": 49
+        },
+        {
+          "diversity": 0.16282051282051282,
+          "round": 50
+        },
+        {
+          "diversity": 0.17362637362637362,
+          "round": 51
+        }
+      ],
+      "min_diversity": 0.16282051282051282
+    },
+    "n": 40
+  },
+  {
+    "metric_id": "infra.i13.convergence_simulation.score_plateau_round",
+    "axis": "infrastructure",
+    "category": "convergence_simulation",
+    "label": "Round where best score plateaus (as fraction of total)",
+    "value": 0.0392156862745098,
+    "details": {
+      "marginal_contributions": [
+        {
+          "contributing_mutations": 0,
+          "round": 1
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 2
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 3
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 4
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 5
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 6
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 7
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 8
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 9
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 10
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 11
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 12
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 13
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 14
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 15
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 16
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 17
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 18
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 19
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 20
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 21
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 22
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 23
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 24
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 25
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 26
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 27
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 28
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 29
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 30
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 31
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 32
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 33
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 34
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 35
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 36
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 37
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 38
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 39
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 40
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 41
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 42
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 43
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 44
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 45
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 46
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 47
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 48
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 49
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 50
+        },
+        {
+          "contributing_mutations": 0,
+          "round": 51
+        }
+      ],
+      "plateau_round": 2,
+      "score_trajectory": [
+        {
+          "round": 1,
+          "score": 0.234
+        },
+        {
+          "round": 2,
+          "score": 0.234
+        },
+        {
+          "round": 3,
+          "score": 0.234
+        },
+        {
+          "round": 4,
+          "score": 0.234
+        },
+        {
+          "round": 5,
+          "score": 0.893
+        },
+        {
+          "round": 6,
+          "score": 0.893
+        },
+        {
+          "round": 7,
+          "score": 0.893
+        },
+        {
+          "round": 8,
+          "score": 0.893
+        },
+        {
+          "round": 9,
+          "score": 0.893
+        },
+        {
+          "round": 10,
+          "score": 0.893
+        },
+        {
+          "round": 11,
+          "score": 0.893
+        },
+        {
+          "round": 12,
+          "score": 0.893
+        },
+        {
+          "round": 13,
+          "score": 0.893
+        },
+        {
+          "round": 14,
+          "score": 0.893
+        },
+        {
+          "round": 15,
+          "score": 0.893
+        },
+        {
+          "round": 16,
+          "score": 0.898
+        },
+        {
+          "round": 17,
+          "score": 0.898
+        },
+        {
+          "round": 18,
+          "score": 0.898
+        },
+        {
+          "round": 19,
+          "score": 0.898
+        },
+        {
+          "round": 20,
+          "score": 0.898
+        },
+        {
+          "round": 21,
+          "score": 0.898
+        },
+        {
+          "round": 22,
+          "score": 0.898
+        },
+        {
+          "round": 23,
+          "score": 0.898
+        },
+        {
+          "round": 24,
+          "score": 0.898
+        },
+        {
+          "round": 25,
+          "score": 0.898
+        },
+        {
+          "round": 26,
+          "score": 0.898
+        },
+        {
+          "round": 27,
+          "score": 0.898
+        },
+        {
+          "round": 28,
+          "score": 0.898
+        },
+        {
+          "round": 29,
+          "score": 0.898
+        },
+        {
+          "round": 30,
+          "score": 0.898
+        },
+        {
+          "round": 31,
+          "score": 0.898
+        },
+        {
+          "round": 32,
+          "score": 0.898
+        },
+        {
+          "round": 33,
+          "score": 0.898
+        },
+        {
+          "round": 34,
+          "score": 0.898
+        },
+        {
+          "round": 35,
+          "score": 0.898
+        },
+        {
+          "round": 36,
+          "score": 0.898
+        },
+        {
+          "round": 37,
+          "score": 0.898
+        },
+        {
+          "round": 38,
+          "score": 0.898
+        },
+        {
+          "round": 39,
+          "score": 0.898
+        },
+        {
+          "round": 40,
+          "score": 0.898
+        },
+        {
+          "round": 41,
+          "score": 0.898
+        },
+        {
+          "round": 42,
+          "score": 0.898
+        },
+        {
+          "round": 43,
+          "score": 0.898
+        },
+        {
+          "round": 44,
+          "score": 0.898
+        },
+        {
+          "round": 45,
+          "score": 0.899
+        },
+        {
+          "round": 46,
+          "score": 0.899
+        },
+        {
+          "round": 47,
+          "score": 0.899
+        },
+        {
+          "round": 48,
+          "score": 0.899
+        },
+        {
+          "round": 49,
+          "score": 0.899
+        },
+        {
+          "round": 50,
+          "score": 0.899
+        },
+        {
+          "round": 51,
+          "score": 0.899
+        }
+      ],
+      "total_rounds": 51
+    },
+    "n": 51
+  },
+  {
+    "metric_id": "infra.i13.convergence_simulation.selector_convergence",
+    "axis": "infrastructure",
+    "category": "convergence_simulation",
+    "label": "Per-selector score, diversity, and recipe size trajectories",
+    "value": 0.0,
+    "details": {
+      "by_selector": [
+        {
+          "diversity_trajectory": [
+            {
+              "diversity": 0.0,
+              "round": 1
+            },
+            {
+              "diversity": 1.0,
+              "round": 2
+            },
+            {
+              "diversity": 0.6666666666666666,
+              "round": 3
+            },
+            {
+              "diversity": 0.5,
+              "round": 4
+            },
+            {
+              "diversity": 0.4,
+              "round": 5
+            },
+            {
+              "diversity": 0.0,
+              "round": 6
+            },
+            {
+              "diversity": 0.0,
+              "round": 7
+            },
+            {
+              "diversity": 0.0,
+              "round": 8
+            },
+            {
+              "diversity": 0.0,
+              "round": 9
+            },
+            {
+              "diversity": 0.0,
+              "round": 10
+            },
+            {
+              "diversity": 0.0,
+              "round": 11
+            },
+            {
+              "diversity": 0.13333333333333336,
+              "round": 12
+            },
+            {
+              "diversity": 0.21333333333333335,
+              "round": 13
+            },
+            {
+              "diversity": 0.24000000000000005,
+              "round": 14
+            },
+            {
+              "diversity": 0.2,
+              "round": 15
+            },
+            {
+              "diversity": 0.10666666666666665,
+              "round": 16
+            },
+            {
+              "diversity": 0.07999999999999999,
+              "round": 17
+            },
+            {
+              "diversity": 0.09333333333333332,
+              "round": 18
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 19
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 20
+            },
+            {
+              "diversity": 0.10666666666666665,
+              "round": 21
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 22
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 23
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 24
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 25
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 26
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 27
+            },
+            {
+              "diversity": 0.09333333333333332,
+              "round": 28
+            },
+            {
+              "diversity": 0.10666666666666665,
+              "round": 29
+            },
+            {
+              "diversity": 0.10666666666666665,
+              "round": 30
+            },
+            {
+              "diversity": 0.09333333333333332,
+              "round": 31
+            },
+            {
+              "diversity": 0.09333333333333332,
+              "round": 32
+            },
+            {
+              "diversity": 0.09333333333333332,
+              "round": 33
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 34
+            },
+            {
+              "diversity": 0.1333333333333333,
+              "round": 35
+            },
+            {
+              "diversity": 0.1333333333333333,
+              "round": 36
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 37
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 38
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 39
+            },
+            {
+              "diversity": 0.11999999999999995,
+              "round": 40
+            }
+          ],
+          "recipe_size_trajectory": [
+            {
+              "recipe_size": 1,
+              "round": 1
+            },
+            {
+              "recipe_size": 1,
+              "round": 2
+            },
+            {
+              "recipe_size": 1,
+              "round": 3
+            },
+            {
+              "recipe_size": 1,
+              "round": 4
+            },
+            {
+              "recipe_size": 1,
+              "round": 5
+            },
+            {
+              "recipe_size": 1,
+              "round": 6
+            },
+            {
+              "recipe_size": 1,
+              "round": 7
+            },
+            {
+              "recipe_size": 1,
+              "round": 8
+            },
+            {
+              "recipe_size": 1,
+              "round": 9
+            },
+            {
+              "recipe_size": 1,
+              "round": 10
+            },
+            {
+              "recipe_size": 1,
+              "round": 11
+            },
+            {
+              "recipe_size": 1,
+              "round": 12
+            },
+            {
+              "recipe_size": 1,
+              "round": 13
+            },
+            {
+              "recipe_size": 1,
+              "round": 14
+            },
+            {
+              "recipe_size": 1,
+              "round": 15
+            },
+            {
+              "recipe_size": 2,
+              "round": 16
+            },
+            {
+              "recipe_size": 2,
+              "round": 17
+            },
+            {
+              "recipe_size": 2,
+              "round": 18
+            },
+            {
+              "recipe_size": 2,
+              "round": 19
+            },
+            {
+              "recipe_size": 2,
+              "round": 20
+            },
+            {
+              "recipe_size": 1,
+              "round": 21
+            },
+            {
+              "recipe_size": 2,
+              "round": 22
+            },
+            {
+              "recipe_size": 2,
+              "round": 23
+            },
+            {
+              "recipe_size": 2,
+              "round": 24
+            },
+            {
+              "recipe_size": 2,
+              "round": 25
+            },
+            {
+              "recipe_size": 2,
+              "round": 26
+            },
+            {
+              "recipe_size": 2,
+              "round": 27
+            },
+            {
+              "recipe_size": 2,
+              "round": 28
+            },
+            {
+              "recipe_size": 2,
+              "round": 29
+            },
+            {
+              "recipe_size": 3,
+              "round": 30
+            },
+            {
+              "recipe_size": 3,
+              "round": 31
+            },
+            {
+              "recipe_size": 2,
+              "round": 32
+            },
+            {
+              "recipe_size": 3,
+              "round": 33
+            },
+            {
+              "recipe_size": 3,
+              "round": 34
+            },
+            {
+              "recipe_size": 1,
+              "round": 35
+            },
+            {
+              "recipe_size": 2,
+              "round": 36
+            },
+            {
+              "recipe_size": 2,
+              "round": 37
+            },
+            {
+              "recipe_size": 3,
+              "round": 38
+            },
+            {
+              "recipe_size": 3,
+              "round": 39
+            },
+            {
+              "recipe_size": 3,
+              "round": 40
+            }
+          ],
+          "score_trajectory": [
+            {
+              "round": 1,
+              "score": 0.0
+            },
+            {
+              "round": 2,
+              "score": 0.0075
+            },
+            {
+              "round": 3,
+              "score": 0.015
+            },
+            {
+              "round": 4,
+              "score": 0.0225
+            },
+            {
+              "round": 5,
+              "score": 0.03
+            },
+            {
+              "round": 6,
+              "score": 0.0375
+            },
+            {
+              "round": 7,
+              "score": 0.045
+            },
+            {
+              "round": 8,
+              "score": 0.0525
+            },
+            {
+              "round": 9,
+              "score": 0.06
+            },
+            {
+              "round": 10,
+              "score": 0.09000000000000001
+            },
+            {
+              "round": 11,
+              "score": 0.1
+            },
+            {
+              "round": 12,
+              "score": 0.11
+            },
+            {
+              "round": 13,
+              "score": 0.12
+            },
+            {
+              "round": 14,
+              "score": 0.13
+            },
+            {
+              "round": 15,
+              "score": 0.14
+            },
+            {
+              "round": 16,
+              "score": 0.15000000000000002
+            },
+            {
+              "round": 17,
+              "score": 0.16000000000000003
+            },
+            {
+              "round": 18,
+              "score": 0.17
+            },
+            {
+              "round": 19,
+              "score": 0.18000000000000002
+            },
+            {
+              "round": 20,
+              "score": 0.19
+            },
+            {
+              "round": 21,
+              "score": 0.2
+            },
+            {
+              "round": 22,
+              "score": 0.21
+            },
+            {
+              "round": 23,
+              "score": 0.22000000000000003
+            },
+            {
+              "round": 24,
+              "score": 0.23
+            },
+            {
+              "round": 25,
+              "score": 0.78
+            },
+            {
+              "round": 26,
+              "score": 0.78
+            },
+            {
+              "round": 27,
+              "score": 0.78
+            },
+            {
+              "round": 28,
+              "score": 0.8025
+            },
+            {
+              "round": 29,
+              "score": 0.8099999999999999
+            },
+            {
+              "round": 30,
+              "score": 0.8175
+            },
+            {
+              "round": 31,
+              "score": 0.825
+            },
+            {
+              "round": 32,
+              "score": 0.8325
+            },
+            {
+              "round": 33,
+              "score": 0.84
+            },
+            {
+              "round": 34,
+              "score": 0.8474999999999999
+            },
+            {
+              "round": 35,
+              "score": 0.855
+            },
+            {
+              "round": 36,
+              "score": 0.8625
+            },
+            {
+              "round": 37,
+              "score": 0.87
+            },
+            {
+              "round": 38,
+              "score": 0.8775
+            },
+            {
+              "round": 39,
+              "score": 0.885
+            },
+            {
+              "round": 40,
+              "score": 0.8925
+            }
+          ],
+          "selector": "Coverage"
+        },
+        {
+          "diversity_trajectory": [
+            {
+              "diversity": 0.0,
+              "round": 1
+            },
+            {
+              "diversity": 1.0,
+              "round": 2
+            },
+            {
+              "diversity": 0.7222222222222222,
+              "round": 3
+            },
+            {
+              "diversity": 0.5833333333333334,
+              "round": 4
+            },
+            {
+              "diversity": 0.5,
+              "round": 5
+            },
+            {
+              "diversity": 0.1666666666666666,
+              "round": 6
+            },
+            {
+              "diversity": 0.1666666666666666,
+              "round": 7
+            },
+            {
+              "diversity": 0.1666666666666666,
+              "round": 8
+            },
+            {
+              "diversity": 0.1666666666666666,
+              "round": 9
+            },
+            {
+              "diversity": 0.1666666666666666,
+              "round": 10
+            },
+            {
+              "diversity": 0.1666666666666666,
+              "round": 11
+            },
+            {
+              "diversity": 0.23333333333333325,
+              "round": 12
+            },
+            {
+              "diversity": 0.2335164835164835,
+              "round": 13
+            },
+            {
+              "diversity": 0.21575091575091573,
+              "round": 14
+            },
+            {
+              "diversity": 0.2303525641025641,
+              "round": 15
+            },
+            {
+              "diversity": 0.17078754578754576,
+              "round": 16
+            },
+            {
+              "diversity": 0.17205128205128203,
+              "round": 17
+            },
+            {
+              "diversity": 0.16977564102564102,
+              "round": 18
+            },
+            {
+              "diversity": 0.18621794871794872,
+              "round": 19
+            },
+            {
+              "diversity": 0.16615384615384612,
+              "round": 20
+            },
+            {
+              "diversity": 0.15567765567765568,
+              "round": 21
+            },
+            {
+              "diversity": 0.1497893772893773,
+              "round": 22
+            },
+            {
+              "diversity": 0.12648351648351647,
+              "round": 23
+            },
+            {
+              "diversity": 0.11109890109890108,
+              "round": 24
+            },
+            {
+              "diversity": 0.12162087912087909,
+              "round": 25
+            },
+            {
+              "diversity": 0.13269230769230766,
+              "round": 26
+            },
+            {
+              "diversity": 0.13673992673992671,
+              "round": 27
+            },
+            {
+              "diversity": 0.15940476190476188,
+              "round": 28
+            },
+            {
+              "diversity": 0.1051190476190476,
+              "round": 29
+            },
+            {
+              "diversity": 0.12113095238095235,
+              "round": 30
+            },
+            {
+              "diversity": 0.09666666666666664,
+              "round": 31
+            },
+            {
+              "diversity": 0.12388278388278388,
+              "round": 32
+            },
+            {
+              "diversity": 0.08681318681318681,
+              "round": 33
+            },
+            {
+              "diversity": 0.11157509157509156,
+              "round": 34
+            },
+            {
+              "diversity": 0.16221611721611723,
+              "round": 35
+            },
+            {
+              "diversity": 0.17429945054945054,
+              "round": 36
+            },
+            {
+              "diversity": 0.18047619047619048,
+              "round": 37
+            },
+            {
+              "diversity": 0.16666666666666666,
+              "round": 38
+            },
+            {
+              "diversity": 0.1563095238095238,
+              "round": 39
+            },
+            {
+              "diversity": 0.1563095238095238,
+              "round": 40
+            }
+          ],
+          "recipe_size_trajectory": [
+            {
+              "recipe_size": 1,
+              "round": 1
+            },
+            {
+              "recipe_size": 1,
+              "round": 2
+            },
+            {
+              "recipe_size": 1,
+              "round": 3
+            },
+            {
+              "recipe_size": 1,
+              "round": 4
+            },
+            {
+              "recipe_size": 1,
+              "round": 5
+            },
+            {
+              "recipe_size": 1,
+              "round": 6
+            },
+            {
+              "recipe_size": 1,
+              "round": 7
+            },
+            {
+              "recipe_size": 1,
+              "round": 8
+            },
+            {
+              "recipe_size": 1,
+              "round": 9
+            },
+            {
+              "recipe_size": 1,
+              "round": 10
+            },
+            {
+              "recipe_size": 1,
+              "round": 11
+            },
+            {
+              "recipe_size": 1,
+              "round": 12
+            },
+            {
+              "recipe_size": 1,
+              "round": 13
+            },
+            {
+              "recipe_size": 1,
+              "round": 14
+            },
+            {
+              "recipe_size": 1,
+              "round": 15
+            },
+            {
+              "recipe_size": 2,
+              "round": 16
+            },
+            {
+              "recipe_size": 2,
+              "round": 17
+            },
+            {
+              "recipe_size": 2,
+              "round": 18
+            },
+            {
+              "recipe_size": 2,
+              "round": 19
+            },
+            {
+              "recipe_size": 2,
+              "round": 20
+            },
+            {
+              "recipe_size": 1,
+              "round": 21
+            },
+            {
+              "recipe_size": 2,
+              "round": 22
+            },
+            {
+              "recipe_size": 2,
+              "round": 23
+            },
+            {
+              "recipe_size": 2,
+              "round": 24
+            },
+            {
+              "recipe_size": 2,
+              "round": 25
+            },
+            {
+              "recipe_size": 2,
+              "round": 26
+            },
+            {
+              "recipe_size": 2,
+              "round": 27
+            },
+            {
+              "recipe_size": 2,
+              "round": 28
+            },
+            {
+              "recipe_size": 2,
+              "round": 29
+            },
+            {
+              "recipe_size": 3,
+              "round": 30
+            },
+            {
+              "recipe_size": 3,
+              "round": 31
+            },
+            {
+              "recipe_size": 2,
+              "round": 32
+            },
+            {
+              "recipe_size": 3,
+              "round": 33
+            },
+            {
+              "recipe_size": 3,
+              "round": 34
+            },
+            {
+              "recipe_size": 1,
+              "round": 35
+            },
+            {
+              "recipe_size": 2,
+              "round": 36
+            },
+            {
+              "recipe_size": 2,
+              "round": 37
+            },
+            {
+              "recipe_size": 3,
+              "round": 38
+            },
+            {
+              "recipe_size": 3,
+              "round": 39
+            },
+            {
+              "recipe_size": 3,
+              "round": 40
+            }
+          ],
+          "score_trajectory": [
+            {
+              "round": 1,
+              "score": 0.0
+            },
+            {
+              "round": 2,
+              "score": 0.0075
+            },
+            {
+              "round": 3,
+              "score": 0.015
+            },
+            {
+              "round": 4,
+              "score": 0.0225
+            },
+            {
+              "round": 5,
+              "score": 0.03
+            },
+            {
+              "round": 6,
+              "score": 0.0375
+            },
+            {
+              "round": 7,
+              "score": 0.045
+            },
+            {
+              "round": 8,
+              "score": 0.0525
+            },
+            {
+              "round": 9,
+              "score": 0.06
+            },
+            {
+              "round": 10,
+              "score": 0.09000000000000001
+            },
+            {
+              "round": 11,
+              "score": 0.1
+            },
+            {
+              "round": 12,
+              "score": 0.11
+            },
+            {
+              "round": 13,
+              "score": 0.12
+            },
+            {
+              "round": 14,
+              "score": 0.13
+            },
+            {
+              "round": 15,
+              "score": 0.14
+            },
+            {
+              "round": 16,
+              "score": 0.15000000000000002
+            },
+            {
+              "round": 17,
+              "score": 0.16000000000000003
+            },
+            {
+              "round": 18,
+              "score": 0.17
+            },
+            {
+              "round": 19,
+              "score": 0.18000000000000002
+            },
+            {
+              "round": 20,
+              "score": 0.19
+            },
+            {
+              "round": 21,
+              "score": 0.2
+            },
+            {
+              "round": 22,
+              "score": 0.21
+            },
+            {
+              "round": 23,
+              "score": 0.22000000000000003
+            },
+            {
+              "round": 24,
+              "score": 0.23
+            },
+            {
+              "round": 25,
+              "score": 0.78
+            },
+            {
+              "round": 26,
+              "score": 0.78
+            },
+            {
+              "round": 27,
+              "score": 0.78
+            },
+            {
+              "round": 28,
+              "score": 0.8025
+            },
+            {
+              "round": 29,
+              "score": 0.8099999999999999
+            },
+            {
+              "round": 30,
+              "score": 0.8175
+            },
+            {
+              "round": 31,
+              "score": 0.825
+            },
+            {
+              "round": 32,
+              "score": 0.8325
+            },
+            {
+              "round": 33,
+              "score": 0.84
+            },
+            {
+              "round": 34,
+              "score": 0.8474999999999999
+            },
+            {
+              "round": 35,
+              "score": 0.855
+            },
+            {
+              "round": 36,
+              "score": 0.8625
+            },
+            {
+              "round": 37,
+              "score": 0.87
+            },
+            {
+              "round": 38,
+              "score": 0.8775
+            },
+            {
+              "round": 39,
+              "score": 0.885
+            },
+            {
+              "round": 40,
+              "score": 0.8925
+            }
+          ],
+          "selector": "Fuzzer"
+        },
+        {
+          "diversity_trajectory": [
+            {
+              "diversity": 0.0,
+              "round": 1
+            },
+            {
+              "diversity": 1.0,
+              "round": 2
+            },
+            {
+              "diversity": 0.6666666666666666,
+              "round": 3
+            },
+            {
+              "diversity": 0.5,
+              "round": 4
+            },
+            {
+              "diversity": 0.4,
+              "round": 5
+            },
+            {
+              "diversity": 0.0,
+              "round": 6
+            },
+            {
+              "diversity": 0.0,
+              "round": 7
+            },
+            {
+              "diversity": 0.0,
+              "round": 8
+            },
+            {
+              "diversity": 0.0,
+              "round": 9
+            },
+            {
+              "diversity": 0.06666666666666665,
+              "round": 10
+            },
+            {
+              "diversity": 0.06666666666666665,
+              "round": 11
+            },
+            {
+              "diversity": 0.1476190476190476,
+              "round": 12
+            },
+            {
+              "diversity": 0.21095238095238095,
+              "round": 13
+            },
+            {
+              "diversity": 0.20761904761904765,
+              "round": 14
+            },
+            {
+              "diversity": 0.1376190476190476,
+              "round": 15
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 16
+            },
+            {
+              "diversity": 0.09333333333333332,
+              "round": 17
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 18
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 19
+            },
+            {
+              "diversity": 0.09333333333333332,
+              "round": 20
+            },
+            {
+              "diversity": 0.09333333333333332,
+              "round": 21
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 22
+            },
+            {
+              "diversity": 0.07999999999999999,
+              "round": 23
+            },
+            {
+              "diversity": 0.07999999999999999,
+              "round": 24
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 25
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 26
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 27
+            },
+            {
+              "diversity": 0.0,
+              "round": 28
+            },
+            {
+              "diversity": 0.0,
+              "round": 29
+            },
+            {
+              "diversity": 0.0,
+              "round": 30
+            },
+            {
+              "diversity": 0.0,
+              "round": 31
+            },
+            {
+              "diversity": 0.0,
+              "round": 32
+            },
+            {
+              "diversity": 0.0,
+              "round": 33
+            },
+            {
+              "diversity": 0.0,
+              "round": 34
+            },
+            {
+              "diversity": 0.0,
+              "round": 35
+            },
+            {
+              "diversity": 0.0,
+              "round": 36
+            },
+            {
+              "diversity": 0.0,
+              "round": 37
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 38
+            },
+            {
+              "diversity": 0.05333333333333332,
+              "round": 39
+            },
+            {
+              "diversity": 0.07999999999999999,
+              "round": 40
+            }
+          ],
+          "recipe_size_trajectory": [
+            {
+              "recipe_size": 1,
+              "round": 1
+            },
+            {
+              "recipe_size": 1,
+              "round": 2
+            },
+            {
+              "recipe_size": 1,
+              "round": 3
+            },
+            {
+              "recipe_size": 1,
+              "round": 4
+            },
+            {
+              "recipe_size": 1,
+              "round": 5
+            },
+            {
+              "recipe_size": 1,
+              "round": 6
+            },
+            {
+              "recipe_size": 1,
+              "round": 7
+            },
+            {
+              "recipe_size": 1,
+              "round": 8
+            },
+            {
+              "recipe_size": 1,
+              "round": 9
+            },
+            {
+              "recipe_size": 1,
+              "round": 10
+            },
+            {
+              "recipe_size": 1,
+              "round": 11
+            },
+            {
+              "recipe_size": 1,
+              "round": 12
+            },
+            {
+              "recipe_size": 1,
+              "round": 13
+            },
+            {
+              "recipe_size": 1,
+              "round": 14
+            },
+            {
+              "recipe_size": 1,
+              "round": 15
+            },
+            {
+              "recipe_size": 2,
+              "round": 16
+            },
+            {
+              "recipe_size": 2,
+              "round": 17
+            },
+            {
+              "recipe_size": 2,
+              "round": 18
+            },
+            {
+              "recipe_size": 2,
+              "round": 19
+            },
+            {
+              "recipe_size": 2,
+              "round": 20
+            },
+            {
+              "recipe_size": 1,
+              "round": 21
+            },
+            {
+              "recipe_size": 2,
+              "round": 22
+            },
+            {
+              "recipe_size": 2,
+              "round": 23
+            },
+            {
+              "recipe_size": 2,
+              "round": 24
+            },
+            {
+              "recipe_size": 2,
+              "round": 25
+            },
+            {
+              "recipe_size": 2,
+              "round": 26
+            },
+            {
+              "recipe_size": 2,
+              "round": 27
+            },
+            {
+              "recipe_size": 2,
+              "round": 28
+            },
+            {
+              "recipe_size": 2,
+              "round": 29
+            },
+            {
+              "recipe_size": 3,
+              "round": 30
+            },
+            {
+              "recipe_size": 3,
+              "round": 31
+            },
+            {
+              "recipe_size": 2,
+              "round": 32
+            },
+            {
+              "recipe_size": 3,
+              "round": 33
+            },
+            {
+              "recipe_size": 3,
+              "round": 34
+            },
+            {
+              "recipe_size": 1,
+              "round": 35
+            },
+            {
+              "recipe_size": 2,
+              "round": 36
+            },
+            {
+              "recipe_size": 2,
+              "round": 37
+            },
+            {
+              "recipe_size": 3,
+              "round": 38
+            },
+            {
+              "recipe_size": 3,
+              "round": 39
+            },
+            {
+              "recipe_size": 3,
+              "round": 40
+            }
+          ],
+          "score_trajectory": [
+            {
+              "round": 1,
+              "score": 0.0
+            },
+            {
+              "round": 2,
+              "score": 0.0075
+            },
+            {
+              "round": 3,
+              "score": 0.015
+            },
+            {
+              "round": 4,
+              "score": 0.0225
+            },
+            {
+              "round": 5,
+              "score": 0.03
+            },
+            {
+              "round": 6,
+              "score": 0.0375
+            },
+            {
+              "round": 7,
+              "score": 0.045
+            },
+            {
+              "round": 8,
+              "score": 0.0525
+            },
+            {
+              "round": 9,
+              "score": 0.06
+            },
+            {
+              "round": 10,
+              "score": 0.09000000000000001
+            },
+            {
+              "round": 11,
+              "score": 0.1
+            },
+            {
+              "round": 12,
+              "score": 0.11
+            },
+            {
+              "round": 13,
+              "score": 0.12
+            },
+            {
+              "round": 14,
+              "score": 0.13
+            },
+            {
+              "round": 15,
+              "score": 0.14
+            },
+            {
+              "round": 16,
+              "score": 0.15000000000000002
+            },
+            {
+              "round": 17,
+              "score": 0.16000000000000003
+            },
+            {
+              "round": 18,
+              "score": 0.17
+            },
+            {
+              "round": 19,
+              "score": 0.18000000000000002
+            },
+            {
+              "round": 20,
+              "score": 0.19
+            },
+            {
+              "round": 21,
+              "score": 0.2
+            },
+            {
+              "round": 22,
+              "score": 0.21
+            },
+            {
+              "round": 23,
+              "score": 0.22000000000000003
+            },
+            {
+              "round": 24,
+              "score": 0.23
+            },
+            {
+              "round": 25,
+              "score": 0.78
+            },
+            {
+              "round": 26,
+              "score": 0.78
+            },
+            {
+              "round": 27,
+              "score": 0.78
+            },
+            {
+              "round": 28,
+              "score": 0.8025
+            },
+            {
+              "round": 29,
+              "score": 0.8099999999999999
+            },
+            {
+              "round": 30,
+              "score": 0.8175
+            },
+            {
+              "round": 31,
+              "score": 0.825
+            },
+            {
+              "round": 32,
+              "score": 0.8325
+            },
+            {
+              "round": 33,
+              "score": 0.84
+            },
+            {
+              "round": 34,
+              "score": 0.8474999999999999
+            },
+            {
+              "round": 35,
+              "score": 0.855
+            },
+            {
+              "round": 36,
+              "score": 0.8625
+            },
+            {
+              "round": 37,
+              "score": 0.87
+            },
+            {
+              "round": 38,
+              "score": 0.8775
+            },
+            {
+              "round": 39,
+              "score": 0.885
+            },
+            {
+              "round": 40,
+              "score": 0.8925
+            }
+          ],
+          "selector": "Token"
+        },
+        {
+          "diversity_trajectory": [
+            {
+              "diversity": 0.0,
+              "round": 1
+            },
+            {
+              "diversity": 1.0,
+              "round": 2
+            },
+            {
+              "diversity": 0.6944444444444445,
+              "round": 3
+            },
+            {
+              "diversity": 0.5277777777777778,
+              "round": 4
+            },
+            {
+              "diversity": 0.46886446886446886,
+              "round": 5
+            },
+            {
+              "diversity": 0.15384615384615388,
+              "round": 6
+            },
+            {
+              "diversity": 0.20961538461538465,
+              "round": 7
+            },
+            {
+              "diversity": 0.19999999999999996,
+              "round": 8
+            },
+            {
+              "diversity": 0.22307692307692303,
+              "round": 9
+            },
+            {
+              "diversity": 0.2012820512820513,
+              "round": 10
+            },
+            {
+              "diversity": 0.20943223443223444,
+              "round": 11
+            },
+            {
+              "diversity": 0.1981684981684982,
+              "round": 12
+            },
+            {
+              "diversity": 0.2226190476190476,
+              "round": 13
+            },
+            {
+              "diversity": 0.22087912087912084,
+              "round": 14
+            },
+            {
+              "diversity": 0.25918929110105576,
+              "round": 15
+            },
+            {
+              "diversity": 0.2833208539826187,
+              "round": 16
+            },
+            {
+              "diversity": 0.30635246203744654,
+              "round": 17
+            },
+            {
+              "diversity": 0.29221190230478156,
+              "round": 18
+            },
+            {
+              "diversity": 0.2696938424492604,
+              "round": 19
+            },
+            {
+              "diversity": 0.2098692810457517,
+              "round": 20
+            },
+            {
+              "diversity": 0.1636842105263158,
+              "round": 21
+            },
+            {
+              "diversity": 0.10131578947368422,
+              "round": 22
+            },
+            {
+              "diversity": 0.06000000000000001,
+              "round": 23
+            },
+            {
+              "diversity": 0.020000000000000014,
+              "round": 24
+            },
+            {
+              "diversity": 0.0,
+              "round": 25
+            },
+            {
+              "diversity": 0.0,
+              "round": 26
+            },
+            {
+              "diversity": 0.0,
+              "round": 27
+            },
+            {
+              "diversity": 0.0,
+              "round": 28
+            },
+            {
+              "diversity": 0.0,
+              "round": 29
+            },
+            {
+              "diversity": 0.0,
+              "round": 30
+            },
+            {
+              "diversity": 0.0,
+              "round": 31
+            },
+            {
+              "diversity": 0.0,
+              "round": 32
+            },
+            {
+              "diversity": 0.0,
+              "round": 33
+            },
+            {
+              "diversity": 0.0,
+              "round": 34
+            },
+            {
+              "diversity": 0.0,
+              "round": 35
+            },
+            {
+              "diversity": 0.0,
+              "round": 36
+            },
+            {
+              "diversity": 0.0,
+              "round": 37
+            },
+            {
+              "diversity": 0.0,
+              "round": 38
+            },
+            {
+              "diversity": 0.0,
+              "round": 39
+            },
+            {
+              "diversity": 0.0,
+              "round": 40
+            }
+          ],
+          "recipe_size_trajectory": [
+            {
+              "recipe_size": 1,
+              "round": 1
+            },
+            {
+              "recipe_size": 1,
+              "round": 2
+            },
+            {
+              "recipe_size": 1,
+              "round": 3
+            },
+            {
+              "recipe_size": 1,
+              "round": 4
+            },
+            {
+              "recipe_size": 1,
+              "round": 5
+            },
+            {
+              "recipe_size": 1,
+              "round": 6
+            },
+            {
+              "recipe_size": 1,
+              "round": 7
+            },
+            {
+              "recipe_size": 1,
+              "round": 8
+            },
+            {
+              "recipe_size": 1,
+              "round": 9
+            },
+            {
+              "recipe_size": 1,
+              "round": 10
+            },
+            {
+              "recipe_size": 1,
+              "round": 11
+            },
+            {
+              "recipe_size": 1,
+              "round": 12
+            },
+            {
+              "recipe_size": 1,
+              "round": 13
+            },
+            {
+              "recipe_size": 1,
+              "round": 14
+            },
+            {
+              "recipe_size": 1,
+              "round": 15
+            },
+            {
+              "recipe_size": 2,
+              "round": 16
+            },
+            {
+              "recipe_size": 2,
+              "round": 17
+            },
+            {
+              "recipe_size": 2,
+              "round": 18
+            },
+            {
+              "recipe_size": 2,
+              "round": 19
+            },
+            {
+              "recipe_size": 2,
+              "round": 20
+            },
+            {
+              "recipe_size": 1,
+              "round": 21
+            },
+            {
+              "recipe_size": 2,
+              "round": 22
+            },
+            {
+              "recipe_size": 2,
+              "round": 23
+            },
+            {
+              "recipe_size": 2,
+              "round": 24
+            },
+            {
+              "recipe_size": 2,
+              "round": 25
+            },
+            {
+              "recipe_size": 2,
+              "round": 26
+            },
+            {
+              "recipe_size": 2,
+              "round": 27
+            },
+            {
+              "recipe_size": 2,
+              "round": 28
+            },
+            {
+              "recipe_size": 2,
+              "round": 29
+            },
+            {
+              "recipe_size": 3,
+              "round": 30
+            },
+            {
+              "recipe_size": 3,
+              "round": 31
+            },
+            {
+              "recipe_size": 2,
+              "round": 32
+            },
+            {
+              "recipe_size": 3,
+              "round": 33
+            },
+            {
+              "recipe_size": 3,
+              "round": 34
+            },
+            {
+              "recipe_size": 1,
+              "round": 35
+            },
+            {
+              "recipe_size": 2,
+              "round": 36
+            },
+            {
+              "recipe_size": 2,
+              "round": 37
+            },
+            {
+              "recipe_size": 3,
+              "round": 38
+            },
+            {
+              "recipe_size": 3,
+              "round": 39
+            },
+            {
+              "recipe_size": 3,
+              "round": 40
+            }
+          ],
+          "score_trajectory": [
+            {
+              "round": 1,
+              "score": 0.0
+            },
+            {
+              "round": 2,
+              "score": 0.0075
+            },
+            {
+              "round": 3,
+              "score": 0.015
+            },
+            {
+              "round": 4,
+              "score": 0.0225
+            },
+            {
+              "round": 5,
+              "score": 0.03
+            },
+            {
+              "round": 6,
+              "score": 0.0375
+            },
+            {
+              "round": 7,
+              "score": 0.045
+            },
+            {
+              "round": 8,
+              "score": 0.0525
+            },
+            {
+              "round": 9,
+              "score": 0.06
+            },
+            {
+              "round": 10,
+              "score": 0.09000000000000001
+            },
+            {
+              "round": 11,
+              "score": 0.1
+            },
+            {
+              "round": 12,
+              "score": 0.11
+            },
+            {
+              "round": 13,
+              "score": 0.12
+            },
+            {
+              "round": 14,
+              "score": 0.13
+            },
+            {
+              "round": 15,
+              "score": 0.14
+            },
+            {
+              "round": 16,
+              "score": 0.15000000000000002
+            },
+            {
+              "round": 17,
+              "score": 0.16000000000000003
+            },
+            {
+              "round": 18,
+              "score": 0.17
+            },
+            {
+              "round": 19,
+              "score": 0.18000000000000002
+            },
+            {
+              "round": 20,
+              "score": 0.19
+            },
+            {
+              "round": 21,
+              "score": 0.2
+            },
+            {
+              "round": 22,
+              "score": 0.21
+            },
+            {
+              "round": 23,
+              "score": 0.22000000000000003
+            },
+            {
+              "round": 24,
+              "score": 0.23
+            },
+            {
+              "round": 25,
+              "score": 0.78
+            },
+            {
+              "round": 26,
+              "score": 0.78
+            },
+            {
+              "round": 27,
+              "score": 0.78
+            },
+            {
+              "round": 28,
+              "score": 0.8025
+            },
+            {
+              "round": 29,
+              "score": 0.8099999999999999
+            },
+            {
+              "round": 30,
+              "score": 0.8175
+            },
+            {
+              "round": 31,
+              "score": 0.825
+            },
+            {
+              "round": 32,
+              "score": 0.8325
+            },
+            {
+              "round": 33,
+              "score": 0.84
+            },
+            {
+              "round": 34,
+              "score": 0.8474999999999999
+            },
+            {
+              "round": 35,
+              "score": 0.855
+            },
+            {
+              "round": 36,
+              "score": 0.8625
+            },
+            {
+              "round": 37,
+              "score": 0.87
+            },
+            {
+              "round": 38,
+              "score": 0.8775
+            },
+            {
+              "round": 39,
+              "score": 0.885
+            },
+            {
+              "round": 40,
+              "score": 0.8925
+            }
+          ],
+          "selector": "Random"
+        }
+      ]
+    },
+    "n": 4
+  },
+  {
+    "metric_id": "infra.i14.line_tracing.throughput",
+    "axis": "infrastructure",
+    "category": "line_tracing",
+    "label": "Mean source throughput (chars/µs)",
+    "value": 0.6121764594390877,
+    "details": {
+      "per_source": [
+        {
+          "chars_per_us": 0.5187444317072653,
+          "input_lines": 71,
+          "mean_time_us": 3288.7099999999996,
+          "source": "reference_c",
+          "stddev_us": 462.83606532696547
+        },
+        {
+          "chars_per_us": 0.44602174837027153,
+          "input_lines": 116,
+          "mean_time_us": 4573.768,
+          "source": "synthetic_100",
+          "stddev_us": 857.697366217436
+        },
+        {
+          "chars_per_us": 0.6976864393166938,
+          "input_lines": 336,
+          "mean_time_us": 8628.518,
+          "source": "synthetic_300",
+          "stddev_us": 1007.2255327140094
+        },
+        {
+          "chars_per_us": 0.7492187895681174,
+          "input_lines": 556,
+          "mean_time_us": 13347.236,
+          "source": "synthetic_500",
+          "stddev_us": 1290.4441857890388
+        },
+        {
+          "chars_per_us": 0.6492108882330901,
+          "input_lines": 1106,
+          "mean_time_us": 30729.614,
+          "source": "synthetic_1000",
+          "stddev_us": 4468.176799391036
+        }
+      ]
+    },
+    "n": 5
+  },
+  {
+    "metric_id": "infra.i14.line_tracing.injection_density",
+    "axis": "infrastructure",
+    "category": "line_tracing",
+    "label": "Mean trace calls per source line",
+    "value": 0.6052995050989711,
+    "details": {
+      "per_source": [
+        {
+          "deferred_calls": 3,
+          "density": 0.5070422535211268,
+          "input_lines": 71,
+          "source": "reference_c",
+          "trace_calls": 36
+        },
+        {
+          "deferred_calls": 30,
+          "density": 0.6206896551724138,
+          "input_lines": 116,
+          "source": "synthetic_100",
+          "trace_calls": 72
+        },
+        {
+          "deferred_calls": 90,
+          "density": 0.6309523809523809,
+          "input_lines": 336,
+          "source": "synthetic_300",
+          "trace_calls": 212
+        },
+        {
+          "deferred_calls": 150,
+          "density": 0.6330935251798561,
+          "input_lines": 556,
+          "source": "synthetic_500",
+          "trace_calls": 352
+        },
+        {
+          "deferred_calls": 300,
+          "density": 0.6347197106690777,
+          "input_lines": 1106,
+          "source": "synthetic_1000",
+          "trace_calls": 702
+        }
+      ]
+    },
+    "n": 5
+  },
+  {
+    "metric_id": "infra.i14.line_tracing.scaling",
+    "axis": "infrastructure",
+    "category": "line_tracing",
+    "label": "Latency scaling coefficient (µs/line)",
+    "value": 26.241473147886932,
+    "details": {
+      "data_points": [
+        {
+          "input_lines": 71.0,
+          "mean_time_us": 3288.7099999999996
+        },
+        {
+          "input_lines": 116.0,
+          "mean_time_us": 4573.768
+        },
+        {
+          "input_lines": 336.0,
+          "mean_time_us": 8628.518
+        },
+        {
+          "input_lines": 556.0,
+          "mean_time_us": 13347.236
+        },
+        {
+          "input_lines": 1106.0,
+          "mean_time_us": 30729.614
+        }
+      ],
+      "r_squared": 0.9863047203858308,
+      "slope_us_per_line": 26.241473147886932
+    },
+    "n": 5
+  },
+  {
+    "metric_id": "infra.i14.line_tracing.validity",
+    "axis": "infrastructure",
+    "category": "line_tracing",
+    "label": "Fraction of outputs that parse as valid C",
+    "value": 1.0,
+    "details": {
+      "invalid_sources": [],
+      "total": 5,
+      "valid_count": 5
+    },
+    "n": 5
+  }
+]
