@@ -149,6 +149,56 @@ impl InfraMetric for GuidanceUtilizationAnalysis {
             n,
         });
 
+        // I12.4: Per-round guidance trajectory — avoidance + seek compliance per selector
+        let guidance_trajectory: Vec<serde_json::Value> = results
+            .iter()
+            .map(|r| {
+                let avoid_mutation_ids: Vec<String> = r
+                    .avoid_tokens
+                    .iter()
+                    .filter_map(|t| t.strip_prefix("mutation:"))
+                    .map(|s| s.to_string())
+                    .collect();
+                let seek_mutation_ids: Vec<String> = r
+                    .seek_tokens
+                    .iter()
+                    .filter_map(|t| t.strip_prefix("mutation:"))
+                    .map(|s| s.to_string())
+                    .collect();
+
+                let per_round: Vec<serde_json::Value> = r
+                    .mutations_with_guidance
+                    .iter()
+                    .enumerate()
+                    .map(|(i, muts)| {
+                        let avoided = avoid_mutation_ids.is_empty()
+                            || !avoid_mutation_ids.iter().any(|a| muts.contains(a));
+                        let sought = !seek_mutation_ids.is_empty()
+                            && seek_mutation_ids.iter().any(|s| muts.contains(s));
+                        json!({"round": i + 1, "avoided": avoided, "sought": sought})
+                    })
+                    .collect();
+
+                json!({
+                    "selector": r.selector_name,
+                    "per_round": per_round,
+                })
+            })
+            .collect();
+
+        let mean_compliance =
+            results.iter().map(|r| r.avoidance_rate).sum::<f64>() / results.len().max(1) as f64;
+
+        metrics.push(MetricResult {
+            metric_id: "infra.i12.guidance_utilization.guidance_trajectory".to_string(),
+            axis: "infrastructure".to_string(),
+            category: "guidance_utilization".to_string(),
+            label: "Per-round avoidance and seek compliance per selector".to_string(),
+            value: mean_compliance,
+            details: json!({"by_selector": guidance_trajectory}),
+            n,
+        });
+
         Ok(metrics)
     }
 }

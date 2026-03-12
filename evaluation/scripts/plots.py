@@ -952,10 +952,130 @@ def plot_i11_selectors(metrics, outdir):
     print("  I11: i11_selector_comparison.pdf")
 
 
+# ── I11b: Mutation Frequency Heatmap ────────────────────────────────────
+
+def plot_i11_heatmap(metrics, outdir):
+    """I11: Heatmap of mutation selection frequency (mutation x selector)."""
+    m = find_metric(metrics, 'infra.i11.selector_comparison.mutation_frequency_heatmap')
+    if not m:
+        print("  Skipping I11 heatmap: metric not found")
+        return
+
+    d = m['details']
+    mutations = d.get('mutations', [])
+    selectors = d.get('selectors', [])
+    frequencies = d.get('frequencies', [])
+
+    if not mutations or not selectors or not frequencies:
+        print("  Skipping I11 heatmap: insufficient data")
+        return
+
+    # frequencies is selectors x mutations; transpose to mutations x selectors for display
+    freq_matrix = np.array(frequencies).T  # shape: (n_mutations, n_selectors)
+
+    fig, ax = plt.subplots(figsize=(10, max(6, len(mutations) * 0.35)))
+
+    try:
+        import seaborn as sns
+        sns.heatmap(freq_matrix, annot=True, fmt='d', cmap='YlOrRd',
+                    xticklabels=selectors, yticklabels=[m.replace('ast.', '') for m in mutations],
+                    ax=ax, cbar_kws={'label': 'Selection Count'})
+    except ImportError:
+        im = ax.imshow(freq_matrix, cmap='YlOrRd', aspect='auto')
+        ax.set_xticks(range(len(selectors)))
+        ax.set_xticklabels(selectors)
+        ax.set_yticks(range(len(mutations)))
+        ax.set_yticklabels([m.replace('ast.', '') for m in mutations], fontsize=8)
+        for i in range(len(mutations)):
+            for j in range(len(selectors)):
+                ax.text(j, i, str(int(freq_matrix[i, j])), ha='center', va='center', fontsize=8)
+        fig.colorbar(im, ax=ax, label='Selection Count')
+
+    ax.set_title('I11: Mutation Selection Frequency by Selector')
+    ax.set_xlabel('Selector')
+    ax.set_ylabel('Mutation')
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, 'i11_mutation_heatmap.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i11_mutation_heatmap.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I11: i11_mutation_heatmap.pdf")
+
+
+# ── I11c: Coverage & Diversity Trajectories ─────────────────────────────
+
+def plot_i11_trajectories(metrics, outdir):
+    """I11: 1x2 panel — cumulative coverage + rolling diversity over rounds per selector."""
+    m_cov = find_metric(metrics, 'infra.i11.selector_comparison.coverage_trajectory')
+    m_div = find_metric(metrics, 'infra.i11.selector_comparison.diversity_trajectory')
+    m_sat = find_metric(metrics, 'infra.i11.selector_comparison.coverage_saturation')
+
+    if not m_cov and not m_div:
+        print("  Skipping I11 trajectories: metrics not found")
+        return
+
+    selector_style = {
+        'Coverage': ('#2196F3', 'o'), 'Fuzzer': ('#FF9800', 's'),
+        'Token': ('#4CAF50', 'D'), 'Random': ('#9E9E9E', '^'),
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Left: cumulative coverage
+    if m_cov:
+        by_sel = m_cov['details'].get('by_selector', [])
+        for entry in by_sel:
+            name = entry['selector']
+            traj = entry['trajectory']
+            rounds = [pt['round'] for pt in traj]
+            coverage = [pt['coverage'] for pt in traj]
+            color, marker = selector_style.get(name, ('#000000', 'x'))
+            label = name
+            # Add saturation round annotation
+            if m_sat:
+                sat_data = m_sat['details'].get('by_selector', [])
+                for s in sat_data:
+                    if s['selector'] == name and s.get('saturation_round') is not None:
+                        label = f'{name} (sat@r{s["saturation_round"]})'
+                        break
+            axes[0].plot(rounds, coverage, marker=marker, color=color,
+                        linewidth=1.5, markersize=4, label=label, alpha=0.85)
+        axes[0].set_xlabel('Round')
+        axes[0].set_ylabel('Cumulative Coverage')
+        axes[0].set_title('Cumulative Mutation Pool Coverage')
+        axes[0].set_ylim(-0.05, 1.05)
+        axes[0].axhline(y=0.8, color='red', linestyle=':', alpha=0.5, linewidth=1, label='80% threshold')
+        axes[0].legend(fontsize=8)
+
+    # Right: rolling diversity
+    if m_div:
+        by_sel = m_div['details'].get('by_selector', [])
+        for entry in by_sel:
+            name = entry['selector']
+            traj = entry['trajectory']
+            rounds = [pt['round'] for pt in traj]
+            diversity = [pt['diversity'] for pt in traj]
+            color, marker = selector_style.get(name, ('#000000', 'x'))
+            axes[1].plot(rounds, diversity, marker=marker, color=color,
+                        linewidth=1.5, markersize=4, label=name, alpha=0.85)
+        axes[1].set_xlabel('Round')
+        axes[1].set_ylabel('Rolling Jaccard Diversity')
+        axes[1].set_title('Rolling Diversity (window=5)')
+        axes[1].set_ylim(-0.05, 1.05)
+        axes[1].legend(fontsize=8)
+
+    fig.suptitle('I11: Selector Trajectories', fontsize=13)
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, 'i11_selector_trajectories.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i11_selector_trajectories.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I11: i11_selector_trajectories.pdf")
+
+
 # ── I12: Guidance Utilization ───────────────────────────────────────────
 
 def plot_i12_guidance(metrics, outdir):
-    """I12: Side-by-side bar of mutation frequency with/without guidance."""
+    """I12: 2x2 grid of mutation frequency with/without guidance for all 4 selectors."""
     m = find_metric(metrics, 'infra.i12.guidance_utilization.recipe_delta')
     if not m:
         print("  Skipping I12 guidance: metric not found")
@@ -968,52 +1088,47 @@ def plot_i12_guidance(metrics, outdir):
         print("  Skipping I12 guidance: no selector data")
         return
 
-    # Use first selector for detailed plot
-    sel = by_selector[0]
-    freq_data = sel.get('mutation_frequencies', [])
+    n_selectors = len(by_selector)
+    ncols = min(n_selectors, 2)
+    nrows = (n_selectors + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(14, 5 * nrows))
+    if n_selectors == 1:
+        axes = np.array([axes])
+    axes = np.atleast_2d(axes)
 
-    if not freq_data:
-        print("  Skipping I12 guidance: no frequency data")
-        return
+    selector_colors = {
+        'Coverage': '#2196F3', 'Fuzzer': '#FF9800',
+        'Token': '#4CAF50', 'Random': '#9E9E9E',
+    }
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    for idx, sel in enumerate(by_selector):
+        row, col = divmod(idx, ncols)
+        ax = axes[row, col]
+        freq_data = sel.get('mutation_frequencies', [])
+        if not freq_data:
+            ax.set_visible(False)
+            continue
 
-    # Left: mutation frequency comparison for first selector
-    mutations = [f['mutation'].replace('ast.', '')[:20] for f in freq_data]
-    without = [f['without_guidance'] for f in freq_data]
-    with_g = [f['with_guidance'] for f in freq_data]
+        mutations = [f['mutation'].replace('ast.', '')[:20] for f in freq_data]
+        without = [f['without_guidance'] for f in freq_data]
+        with_g = [f['with_guidance'] for f in freq_data]
 
-    x = np.arange(len(mutations))
-    ax1.barh(x - 0.2, without, 0.35, label='Without Guidance', color='#9E9E9E', alpha=0.8)
-    ax1.barh(x + 0.2, with_g, 0.35, label='With Guidance', color='#2196F3', alpha=0.8)
-    ax1.set_yticks(x)
-    ax1.set_yticklabels(mutations, fontsize=8)
-    ax1.set_xlabel('Selection Frequency')
-    ax1.set_title(f'I12: {sel["selector"]} Mutation Frequency')
-    ax1.legend()
+        x = np.arange(len(mutations))
+        ax.barh(x - 0.2, without, 0.35, label='Without Guidance', color='#9E9E9E', alpha=0.8)
+        color = selector_colors.get(sel['selector'], '#2196F3')
+        ax.barh(x + 0.2, with_g, 0.35, label='With Guidance', color=color, alpha=0.8)
+        ax.set_yticks(x)
+        ax.set_yticklabels(mutations, fontsize=7)
+        ax.set_xlabel('Selection Frequency')
+        ax.set_title(f'{sel["selector"]}')
+        ax.legend(fontsize=7)
 
-    # Right: avoidance/seek rates across selectors
-    m_avoid = find_metric(metrics, 'infra.i12.guidance_utilization.avoidance_rate')
-    m_seek = find_metric(metrics, 'infra.i12.guidance_utilization.seek_adoption_rate')
+    # Hide any unused subplots
+    for idx in range(n_selectors, nrows * ncols):
+        row, col = divmod(idx, ncols)
+        axes[row, col].set_visible(False)
 
-    if m_avoid and m_seek:
-        avoid_data = m_avoid['details']['by_selector']
-        seek_data = m_seek['details']['by_selector']
-
-        names = [e['selector'] for e in avoid_data]
-        avoid_rates = [e['avoidance_rate'] for e in avoid_data]
-        seek_rates = [s['seek_adoption_rate'] for s in seek_data]
-
-        x2 = np.arange(len(names))
-        ax2.bar(x2 - 0.2, avoid_rates, 0.35, label='Avoidance Rate', color='#f44336', alpha=0.8)
-        ax2.bar(x2 + 0.2, seek_rates, 0.35, label='Seek Adoption Rate', color='#4CAF50', alpha=0.8)
-        ax2.set_xticks(x2)
-        ax2.set_xticklabels(names)
-        ax2.set_ylabel('Rate')
-        ax2.set_title('I12: Guidance Response by Selector')
-        ax2.set_ylim(0, 1.1)
-        ax2.legend()
-
+    fig.suptitle('I12: Mutation Frequency With/Without Guidance by Selector', fontsize=13)
     fig.tight_layout()
     fig.savefig(os.path.join(outdir, 'i12_guidance_utilization.pdf'), bbox_inches='tight')
     fig.savefig(os.path.join(outdir, 'i12_guidance_utilization.png'), bbox_inches='tight')
@@ -1107,6 +1222,111 @@ def plot_i13_convergence(metrics, outdir):
     fig.savefig(os.path.join(outdir, 'i13_convergence_simulation.png'), bbox_inches='tight')
     plt.close(fig)
     print("  I13: i13_convergence_simulation.pdf")
+
+
+# ── I13b: Per-Selector Convergence ──────────────────────────────────────
+
+def plot_i13_convergence_by_selector(metrics, outdir):
+    """I13: 1x3 panel — recipe size, diversity, best score per selector over rounds."""
+    m = find_metric(metrics, 'infra.i13.convergence_simulation.selector_convergence')
+    if not m:
+        print("  Skipping I13 per-selector convergence: metric not found")
+        return
+
+    by_selector = m['details'].get('by_selector', [])
+    if not by_selector:
+        print("  Skipping I13 per-selector convergence: no selector data")
+        return
+
+    selector_style = {
+        'Coverage': ('#2196F3', 'o'), 'Fuzzer': ('#FF9800', 's'),
+        'Token': ('#4CAF50', 'D'), 'Random': ('#9E9E9E', '^'),
+    }
+
+    # Get phase transitions from the accumulation-only result
+    m_phase = find_metric(metrics, 'infra.i13.convergence_simulation.phase_transition_round')
+    transitions = []
+    if m_phase:
+        transitions = m_phase['details'].get('all_transitions', [])
+    phase_colors = {
+        'Baseline': '#9E9E9E',
+        'IndividualExploration': '#FF9800',
+        'Accumulation': '#4CAF50',
+    }
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+
+    # Panel 1: Recipe size
+    for entry in by_selector:
+        name = entry['selector']
+        traj = entry.get('recipe_size_trajectory', [])
+        if not traj:
+            continue
+        rounds = [pt['round'] for pt in traj]
+        sizes = [pt['recipe_size'] for pt in traj]
+        color, marker = selector_style.get(name, ('#000000', 'x'))
+        axes[0].plot(rounds, sizes, marker=marker, color=color,
+                    linewidth=1.5, markersize=3, label=name, alpha=0.85)
+    axes[0].set_xlabel('Round')
+    axes[0].set_ylabel('Recipe Size')
+    axes[0].set_title('Recipe Size by Selector')
+    axes[0].legend(fontsize=8)
+    for t in transitions:
+        axes[0].axvline(x=t['round'], color=phase_colors.get(t['phase'], 'gray'),
+                       linestyle='--', alpha=0.5, linewidth=1)
+
+    # Panel 2: Diversity
+    for entry in by_selector:
+        name = entry['selector']
+        traj = entry.get('diversity_trajectory', [])
+        if not traj:
+            continue
+        rounds = [pt['round'] for pt in traj]
+        diversity = [pt['diversity'] for pt in traj]
+        color, marker = selector_style.get(name, ('#000000', 'x'))
+        axes[1].plot(rounds, diversity, marker=marker, color=color,
+                    linewidth=1.5, markersize=3, label=name, alpha=0.85)
+    axes[1].set_xlabel('Round')
+    axes[1].set_ylabel('Recipe Diversity')
+    axes[1].set_title('Diversity by Selector')
+    axes[1].set_ylim(-0.05, 1.05)
+    axes[1].legend(fontsize=8)
+    for t in transitions:
+        axes[1].axvline(x=t['round'], color=phase_colors.get(t['phase'], 'gray'),
+                       linestyle='--', alpha=0.5, linewidth=1)
+
+    # Panel 3: Best score
+    for entry in by_selector:
+        name = entry['selector']
+        traj = entry.get('score_trajectory', [])
+        if not traj:
+            continue
+        rounds = [pt['round'] for pt in traj]
+        scores = [pt['score'] for pt in traj]
+        color, marker = selector_style.get(name, ('#000000', 'x'))
+        axes[2].plot(rounds, scores, marker=marker, color=color,
+                    linewidth=1.5, markersize=3, label=name, alpha=0.85)
+    axes[2].set_xlabel('Round')
+    axes[2].set_ylabel('Best Evasion Score')
+    axes[2].set_title('Score Convergence by Selector')
+    axes[2].legend(fontsize=8)
+    for t in transitions:
+        axes[2].axvline(x=t['round'], color=phase_colors.get(t['phase'], 'gray'),
+                       linestyle='--', alpha=0.5, linewidth=1)
+
+    # Add phase legend to first panel
+    from matplotlib.lines import Line2D
+    legend_elements = [Line2D([0], [0], color=c, linestyle='--', label=p)
+                       for p, c in phase_colors.items()]
+    ax_handles, ax_labels = axes[0].get_legend_handles_labels()
+    axes[0].legend(handles=ax_handles + legend_elements, fontsize=7, loc='upper left')
+
+    fig.suptitle('I13: Per-Selector Convergence Simulation', fontsize=13)
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, 'i13_convergence_by_selector.pdf'), bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, 'i13_convergence_by_selector.png'), bbox_inches='tight')
+    plt.close(fig)
+    print("  I13: i13_convergence_by_selector.pdf")
 
 
 # ── I14: Line Tracing Overhead ────────────────────────────────────────────
@@ -1387,8 +1607,11 @@ def main():
         plot_i9_diversity(metrics, args.outdir)
         plot_i10_stability(metrics, args.outdir)
         plot_i11_selectors(metrics, args.outdir)
+        plot_i11_heatmap(metrics, args.outdir)
+        plot_i11_trajectories(metrics, args.outdir)
         plot_i12_guidance(metrics, args.outdir)
         plot_i13_convergence(metrics, args.outdir)
+        plot_i13_convergence_by_selector(metrics, args.outdir)
         plot_i14_line_tracing(metrics, args.outdir)
         plot_i15_sc_checkpoints(metrics, args.outdir)
 

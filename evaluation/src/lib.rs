@@ -306,6 +306,9 @@ pub struct GuidanceUtilizationResult {
 /// Result of a convergence simulation benchmark (I13).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConvergenceSimulationResult {
+    /// None = accumulation-only (original), Some = per-selector simulation
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector_name: Option<String>,
     pub total_rounds: usize,
     pub phase_transitions: Vec<(u32, String)>,
     pub recipe_size_trajectory: Vec<(u32, usize)>,

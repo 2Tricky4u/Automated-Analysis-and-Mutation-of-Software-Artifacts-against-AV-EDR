@@ -269,11 +269,17 @@ fn main() -> anyhow::Result<()> {
                 }
             );
         }
-        dataset.convergence_simulation = Some(if let Some(ref ds) = real_dataset {
+        let mut convergence_results = if let Some(ref ds) = real_dataset {
             bench_convergence_simulation_real(ds, quiet)
         } else {
             bench_convergence_simulation(quiet)
-        });
+        };
+        // Append per-selector convergence simulations
+        if !quiet {
+            eprintln!("  Per-selector convergence:");
+        }
+        convergence_results.extend(bench_convergence_per_selector(quiet));
+        dataset.convergence_simulation = Some(convergence_results);
     }
 
     // I14: Line Tracing Overhead (needs build crate)
@@ -976,6 +982,8 @@ fn bench_selector_comparison(quiet: bool) -> Vec<SelectorComparisonResult> {
 
 fn bench_guidance_utilization(quiet: bool) -> Vec<GuidanceUtilizationResult> {
     use controller::triage::coverage_selector::CoverageSelector;
+    use controller::triage::fuzzer_selector::FuzzerSelector;
+    use controller::triage::random_selector::RandomSelector;
     use controller::triage::scorer::{build_guidance, compute_token_scores};
     use controller::triage::token_selector::TokenSelector;
     use controller::triage::{ScoredToken, SearchSpace, Selector, TriageGuidance};
@@ -1061,8 +1069,10 @@ fn bench_guidance_utilization(quiet: bool) -> Vec<GuidanceUtilizationResult> {
     let default_modules = controller::dispatch::types::ModuleSelectionSpec::default();
 
     let selector_pairs: Vec<(&str, Box<dyn Selector>)> = vec![
-        ("Token", Box::new(TokenSelector::new())),
         ("Coverage", Box::new(CoverageSelector::new())),
+        ("Fuzzer", Box::new(FuzzerSelector::new())),
+        ("Token", Box::new(TokenSelector::new())),
+        ("Random", Box::new(RandomSelector::new())),
     ];
 
     let mut results = Vec::new();
@@ -1242,6 +1252,7 @@ fn bench_convergence_simulation(quiet: bool) -> Vec<ConvergenceSimulationResult>
     }
 
     vec![ConvergenceSimulationResult {
+        selector_name: None,
         total_rounds,
         phase_transitions,
         recipe_size_trajectory,
@@ -1249,6 +1260,145 @@ fn bench_convergence_simulation(quiet: bool) -> Vec<ConvergenceSimulationResult>
         best_score_trajectory,
         marginal_contribution_count,
     }]
+}
+
+// ── I13b: Per-Selector Convergence Simulation ───────────────────────────
+
+fn bench_convergence_per_selector(quiet: bool) -> Vec<ConvergenceSimulationResult> {
+    use controller::triage::accumulation::{
+        AccumulationConfig, compute_recipe_diversity, determine_phase, reconstruct_best_recipe,
+    };
+    use controller::triage::coverage_selector::CoverageSelector;
+    use controller::triage::fuzzer_selector::FuzzerSelector;
+    use controller::triage::random_selector::RandomSelector;
+    use controller::triage::scorer::{build_guidance, compute_token_scores};
+    use controller::triage::token_selector::TokenSelector;
+    use controller::triage::{SearchSpace, Selector};
+    use evaluation::fixtures::round_factory::RoundSequenceBuilder;
+    use evaluation::fixtures::token_factory::build_enriched_token_matrix;
+    use std::collections::{BTreeMap, HashSet};
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+
+    let total_rounds = 40usize;
+    let rounds = {
+        let mut b = RoundSequenceBuilder::new();
+        b.improvement_scenario(total_rounds);
+        b.build()
+    };
+
+    let history: BTreeMap<u32, evaluation::RoundSummary> =
+        rounds.iter().map(|r| (r.round_number, r.clone())).collect();
+
+    // Build guidance from history
+    let matrix = build_enriched_token_matrix(&rounds);
+    let token_matrix: Vec<(Vec<String>, bool)> = matrix
+        .iter()
+        .filter(|e| e.trustworthy)
+        .map(|e| (e.tokens.clone(), e.detected))
+        .collect();
+    let scores = compute_token_scores(&token_matrix);
+    let guidance = build_guidance(&scores, 1.5, 0.3);
+
+    let search_space = SearchSpace::default();
+    let default_modules = controller::dispatch::types::ModuleSelectionSpec::default();
+    let config = AccumulationConfig::default();
+    let pool_size = 10;
+    let fixed_set: HashSet<&str> = HashSet::new();
+
+    let selectors: Vec<(&str, Box<dyn Selector>)> = vec![
+        ("Coverage", Box::new(CoverageSelector::new())),
+        ("Fuzzer", Box::new(FuzzerSelector::new())),
+        ("Token", Box::new(TokenSelector::new())),
+        ("Random", Box::new(RandomSelector::new())),
+    ];
+
+    let mut results = Vec::new();
+
+    for (name, selector) in &selectors {
+        let mut sim_history: BTreeMap<u32, evaluation::RoundSummary> = BTreeMap::new();
+        let mut phase_transitions: Vec<(u32, String)> = Vec::new();
+        let mut recipe_size_trajectory: Vec<(u32, usize)> = Vec::new();
+        let mut diversity_trajectory: Vec<(u32, f64)> = Vec::new();
+        let mut best_score_trajectory: Vec<(u32, f64)> = Vec::new();
+        let mut marginal_contribution_count: Vec<(u32, usize)> = Vec::new();
+        let mut prev_phase = String::new();
+
+        for round_idx in 0..total_rounds {
+            let round_num = (round_idx + 1) as u32;
+
+            // Use selector to pick mutations for this round
+            let selection = rt.block_on(selector.select(
+                "eval-convergence",
+                round_num,
+                &search_space,
+                &default_modules,
+                &history,
+                Some(&guidance),
+            ));
+
+            // Use the corresponding round from the pre-built history as the outcome,
+            // but stamp it with the selector's chosen mutations
+            if let Some(base_round) = rounds.get(round_idx) {
+                let mut sim_round = base_round.clone();
+                sim_round.mutations = selection.mutations.iter().map(|m| m.id.clone()).collect();
+                sim_history.insert(round_num, sim_round);
+            }
+
+            // Phase determination
+            let phase = determine_phase(round_num, pool_size, &config);
+            let phase_name = format!("{:?}", phase);
+            if phase_name != prev_phase {
+                phase_transitions.push((round_num, phase_name.clone()));
+                prev_phase = phase_name;
+            }
+
+            // Recipe reconstruction from simulated history
+            let (recipe, best_score) = reconstruct_best_recipe(&sim_history, &fixed_set);
+            recipe_size_trajectory.push((round_num, recipe.len()));
+            best_score_trajectory.push((round_num, best_score));
+
+            // Diversity
+            let diversity = if round_idx >= 1 {
+                compute_recipe_diversity(&sim_history, &fixed_set, 5)
+            } else {
+                0.0
+            };
+            diversity_trajectory.push((round_num, diversity));
+
+            // Marginal contributions
+            let marginals = controller::triage::accumulation::compute_marginal_contributions(
+                &sim_history,
+                &fixed_set,
+            );
+            let contributing = marginals.values().filter(|&&v| v > 0.0).count();
+            marginal_contribution_count.push((round_num, contributing));
+        }
+
+        if !quiet {
+            let final_score = best_score_trajectory.last().map(|(_, s)| *s).unwrap_or(0.0);
+            let final_recipe = recipe_size_trajectory.last().map(|(_, s)| *s).unwrap_or(0);
+            eprintln!(
+                "  {:<10} recipe={} score={:.3}",
+                name, final_recipe, final_score
+            );
+        }
+
+        results.push(ConvergenceSimulationResult {
+            selector_name: Some(name.to_string()),
+            total_rounds,
+            phase_transitions,
+            recipe_size_trajectory,
+            diversity_trajectory,
+            best_score_trajectory,
+            marginal_contribution_count,
+        });
+    }
+
+    results
 }
 
 // ── Real-data benchmark variants (--dataset) ────────────────────────────
@@ -1804,6 +1954,8 @@ fn bench_guidance_utilization_real(
     quiet: bool,
 ) -> Vec<GuidanceUtilizationResult> {
     use controller::triage::coverage_selector::CoverageSelector;
+    use controller::triage::fuzzer_selector::FuzzerSelector;
+    use controller::triage::random_selector::RandomSelector;
     use controller::triage::scorer::{build_guidance, compute_token_scores};
     use controller::triage::token_selector::TokenSelector;
     use controller::triage::{ScoredToken, SearchSpace, Selector, TriageGuidance};
@@ -1907,8 +2059,10 @@ fn bench_guidance_utilization_real(
     let n_rounds = real.rounds.len().min(20);
 
     let selector_pairs: Vec<(&str, Box<dyn Selector>)> = vec![
-        ("Token", Box::new(TokenSelector::new())),
         ("Coverage", Box::new(CoverageSelector::new())),
+        ("Fuzzer", Box::new(FuzzerSelector::new())),
+        ("Token", Box::new(TokenSelector::new())),
+        ("Random", Box::new(RandomSelector::new())),
     ];
 
     let mut results = Vec::new();
@@ -2083,6 +2237,7 @@ fn bench_convergence_simulation_real(
     }
 
     vec![ConvergenceSimulationResult {
+        selector_name: None,
         total_rounds,
         phase_transitions,
         recipe_size_trajectory,
