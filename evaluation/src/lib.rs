@@ -12,6 +12,7 @@
 pub mod analysis;
 pub mod build_bench;
 pub mod campaign_runner;
+pub mod es_export;
 pub mod es_query;
 pub mod fixtures;
 pub mod helpers;
