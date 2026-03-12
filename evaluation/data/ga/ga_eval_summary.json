@@ -20,16 +20,16 @@
           "avoid_tokens": [],
           "seek_count": 17,
           "seek_tokens": [
-            "mutation:binary.rich_header:donor=explorer",
             "mutation:binary.string_inject:count=13",
-            "mutation:ast.benign_preamble:count=3",
+            "mutation:binary.rich_header:donor=explorer",
             "mutation:binary.entropy_normalize:target=6.24",
-            "mutation:binary.timestamp:age_days=414",
+            "mutation:ast.benign_preamble:count=3",
+            "mutation:ast.fill_pattern:pattern=xor",
+            "seq2:hooking_finished→image_load",
             "mutation:binary.size_pad:target_kb=604",
             "seq2:image_load→NtAllocateVirtualMemory",
-            "seq2:hooking_finished→image_load",
-            "mutation:ast.fill_pattern:pattern=xor",
-            "mutation:binary.string_inject:count=38"
+            "mutation:binary.timestamp:age_days=414",
+            "mutation:binary.size_pad:target_kb=950"
           ],
           "total_scored": 270
         },
@@ -381,26 +381,26 @@
             "ast.protection_transition"
           ],
           "used": [
-            "binary.import_pad",
             "llvm.opaque_predicate",
+            "binary.resource_inject",
             "binary.timestamp",
+            "binary.rich_header",
+            "binary.entropy_normalize",
+            "ast.benign_syscall_insert",
+            "binary.import_pad",
+            "binary.string_inject",
+            "ast.string_xor",
             "ast.protection_transition",
+            "binary.debug_dir",
+            "binary.size_pad",
+            "ast.decon_rounds",
             "binary.section_rename",
             "ast.fill_pattern",
-            "ast.exec_decoy",
             "ast.benign_preamble",
-            "binary.resource_inject",
-            "binary.entropy_normalize",
-            "ast.timing_pattern",
-            "ast.benign_syscall_insert",
-            "binary.string_inject",
-            "binary.debug_dir",
-            "ast.string_xor",
             "ast.const_obfuscation",
-            "ast.decon_rounds",
-            "binary.size_pad",
+            "ast.timing_pattern",
             "ast.api_sequence_obfuscation",
-            "binary.rich_header"
+            "ast.exec_decoy"
           ]
         },
         "label": "Mutation pool coverage (used/available)",
@@ -508,19 +508,7 @@
             {
               "broken": 17,
               "failure_rate": 0.34,
-              "mutation": "binary.string_inject",
-              "total": 50
-            },
-            {
-              "broken": 17,
-              "failure_rate": 0.34,
-              "mutation": "binary.import_pad",
-              "total": 50
-            },
-            {
-              "broken": 17,
-              "failure_rate": 0.34,
-              "mutation": "binary.entropy_normalize",
+              "mutation": "binary.section_rename",
               "total": 50
             },
             {
@@ -532,13 +520,25 @@
             {
               "broken": 17,
               "failure_rate": 0.34,
-              "mutation": "llvm.opaque_predicate",
+              "mutation": "binary.debug_dir",
               "total": 50
             },
             {
               "broken": 17,
               "failure_rate": 0.34,
-              "mutation": "binary.section_rename",
+              "mutation": "binary.rich_header",
+              "total": 50
+            },
+            {
+              "broken": 17,
+              "failure_rate": 0.34,
+              "mutation": "binary.import_pad",
+              "total": 50
+            },
+            {
+              "broken": 17,
+              "failure_rate": 0.34,
+              "mutation": "llvm.opaque_predicate",
               "total": 50
             },
             {
@@ -550,19 +550,19 @@
             {
               "broken": 17,
               "failure_rate": 0.34,
-              "mutation": "binary.debug_dir",
+              "mutation": "binary.entropy_normalize",
+              "total": 50
+            },
+            {
+              "broken": 17,
+              "failure_rate": 0.34,
+              "mutation": "binary.string_inject",
               "total": 50
             },
             {
               "broken": 17,
               "failure_rate": 0.34,
               "mutation": "binary.size_pad",
-              "total": 50
-            },
-            {
-              "broken": 17,
-              "failure_rate": 0.34,
-              "mutation": "binary.rich_header",
               "total": 50
             },
             {
@@ -858,19 +858,19 @@
         "category": "attribution",
         "details": {
           "first_half_top5": [
+            "etw:Microsoft-Windows-Kernel-Audit-API-Calls/4",
+            "api_arg:NtAllocateVirtualMemory:size_bucket=large",
+            "etw_event:Info",
             "image:mswsock.dll",
-            "seq2:NtResumeThread→thread_create",
-            "seq2:NtCreateEvent→NtResumeThread",
-            "api_arg:NtAllocateVirtualMemory:alloc_type=COMMIT",
-            "seq2:LdrGetProcedureAddress→image_load"
+            "seq2:NtCreateEvent→image_load"
           ],
           "overlap": 1,
           "second_half_top5": [
-            "seq2:NtCreateEvent→NtResumeThread",
-            "seq2:NtCreateEvent→thread_create",
-            "seq2:NtFreeVirtualMemory→image_load",
-            "exit_code:3221225477",
-            "seq2:NtAllocateVirtualMemory→NtAllocateVirtualMemory"
+            "image:wininet.dll",
+            "seq2:thread_create→peb",
+            "api_arg:NtFreeVirtualMemory:size_bucket=64K",
+            "etw_event:Info",
+            "api_arg:NtAllocateVirtualMemory:size_bucket=4K"
           ],
           "window_size": 14
         },
@@ -884,15 +884,15 @@
         "category": "attribution",
         "details": {
           "detect_rate_with": 1.0,
-          "detect_rate_without": 0.7272727272727273,
-          "n_with": 6,
-          "n_without": 22,
-          "top_token": "mutation:binary.rich_header:donor=notepad"
+          "detect_rate_without": 0.0,
+          "n_with": 22,
+          "n_without": 6,
+          "top_token": "api_arg:NtFreeVirtualMemory:size_bucket=4K"
         },
         "label": "Counterfactual delta (detection rate with vs without top token)",
         "metric_id": "oracle.attribution.counterfactual",
         "n": 51,
-        "value": 0.2727272727272727
+        "value": 1.0
       },
       {
         "axis": "oracle",
@@ -936,17 +936,17 @@
         "details": {
           "configs_with_repeats": 12,
           "stddevs": [
-            0.0,
-            0.0,
-            0.132,
-            0.0,
-            0.00047140452079103207,
-            0.41454248542486233,
             0.3698773445346444,
+            0.132,
+            0.00047140452079103207,
+            0.3769465037199134,
+            0.0,
             0.0005000000000000004,
+            0.0,
+            0.41454248542486233,
             0.317,
             0.0,
-            0.3769465037199134,
+            0.0,
             0.0
           ]
         },
