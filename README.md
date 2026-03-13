@@ -21,7 +21,7 @@
   <p align="center">
     Automated Analysis and Mutation of Software Artifacts against AV/EDR
     <br />
-    <em>M.Sc. Cybersecurity Thesis &mdash; EPFL / ETH Zurich, 2026</em>
+    <em>M.Sc. Cybersecurity Thesis &mdash; EPFL, 2026</em>
     <br />
     <br />
     <a href="https://github.com/2Tricky4u/Automated-Analysis-and-Mutation-of-Software-Artifacts-against-AV-EDR"><strong>Explore the docs</strong></a>
