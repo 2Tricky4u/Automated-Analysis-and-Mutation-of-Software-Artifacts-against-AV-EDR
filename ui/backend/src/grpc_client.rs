@@ -88,7 +88,7 @@ pub struct ScheduleJobParams {
     /// Explicit loader module selection. `None` lets the controller pick
     /// defaults.
     pub modules: Option<ModuleSelection>,
-    /// Payload encoding: `"xor"`, `"english"`, `"subbyte"`, or `"none"`.
+    /// Payload encoding: `"xor"`, `"english"`, `"subbyte"`, `"zombiezip"`, or `"none"`.
     pub encoding: Option<String>,
     /// Stop the job after the first round that achieves full evasion.
     pub stop_on_evasion: bool,

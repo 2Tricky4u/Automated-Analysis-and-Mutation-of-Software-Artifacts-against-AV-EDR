@@ -40,3 +40,7 @@ goblin = "0.9"
 
 # For x86-64 instruction-boundary-aware shellcode patching (INT3 checkpoints)
 iced-x86 = { version = "1.21", default-features = false, features = ["decoder", "instr_info", "std"] }
+
+# For Zombie ZIP encoding (DEFLATE compression + CRC-32)
+flate2 = "1.1"
+crc32fast = "1.4"

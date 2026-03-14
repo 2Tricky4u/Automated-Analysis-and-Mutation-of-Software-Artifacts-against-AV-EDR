@@ -82,4 +82,8 @@ extern char supermega_payload_str[];
 extern unsigned char SUBBYTE_MAPPING[16];
 #endif
 
+#ifdef ZOMBIEZIP_ENCODING
+/* Zombie ZIP: ZOMBIEZIP_DATA_OFFSET, ZOMBIEZIP_COMPRESSED_LEN from payload.h */
+#endif
+
 #endif

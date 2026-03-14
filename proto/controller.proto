@@ -135,7 +135,7 @@ message JobRequest {
   repeated string required_capabilities = 9;
   // NEW: Modular build configuration (uses defaults if not specified)
   ModuleSelection modules = 10;       // Module selection (default: direct/xor_basic/none/...)
-  string encoding = 11;               // Payload encoding: "xor", "english", "subbyte", or "none" (default: "xor")
+  string encoding = 11;               // Payload encoding: "xor", "english", "subbyte", "zombiezip", or "none" (default: "xor")
   string trace_mode = 12;             // Instrumented run trace mode (default: "lines"). Valid: "off","api","bb","api+bb","lines","all"
   repeated string variable_categories = 13;  // Which module categories the selector may vary across rounds
   string variation_strategy = 14;             // "mutation" (default) or "full"
@@ -306,7 +306,7 @@ message ModularBuildSpec {
   // Raw payload bytes (will be encoded)
   bytes payload = 2;
 
-  // Payload encoding type: "xor" | "english" | "subbyte" | "none"
+  // Payload encoding type: "xor" | "english" | "subbyte" | "zombiezip" | "none"
   string encoding = 3;
 }
 

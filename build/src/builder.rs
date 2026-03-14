@@ -183,6 +183,7 @@ pub fn prepare_payload(
             EncodingType::English => "English",
             EncodingType::None => "None",
             EncodingType::SubByte => "SubByte",
+            EncodingType::ZombieZip => "ZombieZip",
         }
     );
 
