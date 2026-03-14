@@ -11,6 +11,7 @@
 
 use build::EncodingType;
 use build::mutator::MutationSpec;
+use build::pe_inject::decon::DeconPreset;
 use build::pe_inject::{
     InjectedArtifact, InjectionMode, PeInjectConfig, PeInjectInput, PeInjector, RedirectMode,
     scan_injectables_dir,
@@ -173,6 +174,20 @@ fn main() {
 
     let xwin_dir = args.xwin_dir.clone();
 
+    // Build decon spec from CLI flags
+    let decon_spec = if let Some(ref preset_name) = args.decon {
+        let preset = DeconPreset::parse(preset_name).unwrap_or_else(|| {
+            eprintln!(
+                "Error: unknown decon preset '{}' (expected: alloc_loop, alloc_exec, mixed_apis, entropy_flood, thread_alloc)",
+                preset_name
+            );
+            process::exit(1);
+        });
+        Some(preset.to_spec(args.decon_rounds))
+    } else {
+        None
+    };
+
     let input = PeInjectInput {
         payload,
         encoding,
@@ -182,6 +197,7 @@ fn main() {
         redirect_mode,
         sc_checkpoint_count,
         xwin_dir,
+        decon_spec,
     };
 
     eprintln!(
@@ -190,6 +206,13 @@ fn main() {
     );
     if !args.mutations.is_empty() {
         eprintln!("[pe_inject] Binary mutations: {:?}", args.mutations);
+    }
+    if args.decon.is_some() {
+        eprintln!(
+            "[pe_inject] Decon: {:?} ({} rounds)",
+            args.decon.as_deref().unwrap_or("none"),
+            args.decon_rounds,
+        );
     }
 
     let artifact: InjectedArtifact = injector.inject(&input).unwrap_or_else(|e| {
@@ -237,6 +260,9 @@ fn main() {
             artifact.checkpoint_count
         );
     }
+    if artifact.decon_rounds > 0 {
+        eprintln!("[pe_inject] decon rounds:      {}", artifact.decon_rounds);
+    }
 
     // Copy to user-specified output path
     if let Some(dest) = &args.output {
@@ -246,6 +272,125 @@ fn main() {
         });
         eprintln!("[pe_inject] Copied -> {}", dest.display());
     }
+
+    // Dump section for diagnostics
+    if args.dump_section {
+        dump_injected_section(&artifact);
+    }
+}
+
+/// Dump the injected section bytes for diagnostic inspection.
+fn dump_injected_section(artifact: &InjectedArtifact) {
+    let pe_bytes = match fs::read(&artifact.output_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[dump] Failed to read output PE: {}", e);
+            return;
+        }
+    };
+    let pe = match goblin::pe::PE::parse(&pe_bytes) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[dump] Failed to parse output PE: {}", e);
+            return;
+        }
+    };
+    eprintln!("\n[dump] === Injected Section Diagnostic ===");
+    eprintln!("[dump] ImageBase: {:#x}", pe.image_base);
+    eprintln!("[dump] Entry point RVA: {:#x}", pe.entry);
+    eprintln!(
+        "[dump] Injected section RVA: {:#x}",
+        artifact.injected_section_rva
+    );
+
+    // Find the injected section
+    for section in &pe.sections {
+        if section.virtual_address == artifact.injected_section_rva {
+            let name = String::from_utf8_lossy(&section.name).replace('\0', "");
+            let chars = section.characteristics;
+            eprintln!("[dump] Section: '{}'", name);
+            eprintln!("[dump]   VirtualAddress:    {:#x}", section.virtual_address);
+            eprintln!(
+                "[dump]   VirtualSize:       {:#x} ({} bytes)",
+                section.virtual_size, section.virtual_size
+            );
+            eprintln!(
+                "[dump]   SizeOfRawData:     {:#x} ({} bytes)",
+                section.size_of_raw_data, section.size_of_raw_data
+            );
+            eprintln!(
+                "[dump]   PointerToRawData:  {:#x}",
+                section.pointer_to_raw_data
+            );
+            eprintln!("[dump]   Characteristics:   {:#010x}", chars);
+            eprintln!("[dump]     MEM_READ:     {}", (chars & 0x4000_0000) != 0);
+            eprintln!("[dump]     MEM_WRITE:    {}", (chars & 0x8000_0000) != 0);
+            eprintln!("[dump]     MEM_EXECUTE:  {}", (chars & 0x2000_0000) != 0);
+            eprintln!("[dump]     CNT_CODE:     {}", (chars & 0x0000_0020) != 0);
+
+            // Dump first 128 bytes of section data
+            let raw_off = section.pointer_to_raw_data as usize;
+            let dump_len = std::cmp::min(128, section.size_of_raw_data as usize);
+            if raw_off + dump_len <= pe_bytes.len() {
+                eprintln!("[dump]   First {} bytes of section data:", dump_len);
+                for row in 0..dump_len.div_ceil(16) {
+                    let start = row * 16;
+                    let end = std::cmp::min(start + 16, dump_len);
+                    let hex: Vec<String> = pe_bytes[raw_off + start..raw_off + end]
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect();
+                    let ascii: String = pe_bytes[raw_off + start..raw_off + end]
+                        .iter()
+                        .map(|&b| {
+                            if (0x20..0x7f).contains(&b) {
+                                b as char
+                            } else {
+                                '.'
+                            }
+                        })
+                        .collect();
+                    eprintln!("[dump]     {:04x}: {:<48} {}", start, hex.join(" "), ascii);
+                }
+            }
+
+            // Check DllCharacteristics for process mitigations
+            let e_lfanew =
+                u32::from_le_bytes(pe_bytes[0x3C..0x40].try_into().unwrap_or([0; 4])) as usize;
+            let opt_off = e_lfanew + 4 + 20;
+            if opt_off + 0x48 <= pe_bytes.len() {
+                let dll_chars = u16::from_le_bytes(
+                    pe_bytes[opt_off + 0x46..opt_off + 0x48]
+                        .try_into()
+                        .unwrap_or([0; 2]),
+                );
+                eprintln!("[dump] DllCharacteristics: {:#06x}", dll_chars);
+                eprintln!(
+                    "[dump]   DYNAMIC_BASE (ASLR):   {}",
+                    (dll_chars & 0x0040) != 0
+                );
+                eprintln!(
+                    "[dump]   NX_COMPAT (DEP):       {}",
+                    (dll_chars & 0x0100) != 0
+                );
+                eprintln!(
+                    "[dump]   NO_SEH:                {}",
+                    (dll_chars & 0x0400) != 0
+                );
+                eprintln!(
+                    "[dump]   GUARD_CF (CFG):        {}",
+                    (dll_chars & 0x4000) != 0
+                );
+                eprintln!(
+                    "[dump]   FORCE_INTEGRITY:       {}",
+                    (dll_chars & 0x0080) != 0
+                );
+            }
+
+            break;
+        }
+    }
+    eprintln!("[dump] === End Diagnostic ===\n");
 }
 
 fn format_size(bytes: u64) -> String {
@@ -275,6 +420,9 @@ struct Args {
     redirect_mode: String,
     checkpoints: u32,
     xwin_dir: Option<PathBuf>,
+    decon: Option<String>,
+    decon_rounds: u16,
+    dump_section: bool,
 }
 
 impl Args {
@@ -293,7 +441,10 @@ impl Args {
             injection_mode: "section".into(),
             redirect_mode: "header".into(),
             checkpoints: 0,
-            xwin_dir: None,
+            xwin_dir: Some(PathBuf::from("/root/.xwin")),
+            decon: None,
+            decon_rounds: 20,
+            dump_section: false,
         };
         let argv: Vec<String> = env::args().skip(1).collect();
         let mut i = 0;
@@ -349,6 +500,18 @@ impl Args {
                     i += 1;
                     a.xwin_dir = Some(PathBuf::from(&argv[i]));
                 }
+                "--decon" => {
+                    i += 1;
+                    a.decon = Some(argv[i].clone());
+                }
+                "--decon-rounds" => {
+                    i += 1;
+                    a.decon_rounds = argv[i].parse().unwrap_or_else(|_| {
+                        eprintln!("Error: --decon-rounds must be a number");
+                        process::exit(1);
+                    });
+                }
+                "--dump-section" => a.dump_section = true,
                 other => {
                     eprintln!("Unknown argument: {}", other);
                     process::exit(1);
@@ -397,6 +560,13 @@ OPTIONS:
     --redirect-mode <MODE>          header | hijack  (default: header)
                                     header:  overwrite AddressOfEntryPoint
                                     hijack:  patch CALL/JMP in EP function body
+    --decon <PRESET>                Deconditioning preset to prepend before payload.
+                                    Presets: alloc_loop, alloc_exec, mixed_apis,
+                                    entropy_flood, thread_alloc
+                                    Requires --xwin-dir.
+    --decon-rounds <N>              Number of decon rounds (default: 20)
+    --dump-section                  Dump injected section bytes and PE characteristics
+                                    for diagnostic inspection.
 
 BINARY MUTATIONS (applied after injection):
     binary.rich_header              Inject MSVC Rich header (param: donor=notepad|calc|explorer)

