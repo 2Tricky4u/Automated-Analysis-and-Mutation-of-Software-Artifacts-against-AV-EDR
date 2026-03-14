@@ -63,7 +63,7 @@ fn main() {
                     } else {
                         "no"
                     },
-                    format!("{} sections", t.num_sections),
+                    format_args!("{} sections", t.num_sections),
                 );
             } else {
                 eprintln!(
@@ -165,6 +165,14 @@ fn main() {
         }
     };
 
+    let sc_checkpoint_count = if args.checkpoints > 0 {
+        Some(args.checkpoints)
+    } else {
+        None
+    };
+
+    let xwin_dir = args.xwin_dir.clone();
+
     let input = PeInjectInput {
         payload,
         encoding,
@@ -172,6 +180,8 @@ fn main() {
         return_to_oep: args.return_to_oep,
         injection_mode,
         redirect_mode,
+        sc_checkpoint_count,
+        xwin_dir,
     };
 
     eprintln!(
@@ -221,6 +231,12 @@ fn main() {
         "[pe_inject] mutations:         {:?}",
         artifact.mutations_applied
     );
+    if artifact.checkpoint_count > 0 {
+        eprintln!(
+            "[pe_inject] checkpoints:       {}",
+            artifact.checkpoint_count
+        );
+    }
 
     // Copy to user-specified output path
     if let Some(dest) = &args.output {
@@ -257,6 +273,8 @@ struct Args {
     output_dir: PathBuf,
     injection_mode: String,
     redirect_mode: String,
+    checkpoints: u32,
+    xwin_dir: Option<PathBuf>,
 }
 
 impl Args {
@@ -274,6 +292,8 @@ impl Args {
             output_dir: PathBuf::from("./artifacts"),
             injection_mode: "section".into(),
             redirect_mode: "header".into(),
+            checkpoints: 0,
+            xwin_dir: None,
         };
         let argv: Vec<String> = env::args().skip(1).collect();
         let mut i = 0;
@@ -317,6 +337,17 @@ impl Args {
                 "--redirect-mode" => {
                     i += 1;
                     a.redirect_mode = argv[i].clone();
+                }
+                "--checkpoints" => {
+                    i += 1;
+                    a.checkpoints = argv[i].parse().unwrap_or_else(|_| {
+                        eprintln!("Error: --checkpoints must be a number");
+                        process::exit(1);
+                    });
+                }
+                "--xwin-dir" => {
+                    i += 1;
+                    a.xwin_dir = Some(PathBuf::from(&argv[i]));
                 }
                 other => {
                     eprintln!("Unknown argument: {}", other);

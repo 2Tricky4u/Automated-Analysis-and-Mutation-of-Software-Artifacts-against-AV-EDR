@@ -323,6 +323,326 @@ pub fn build_subbyte_reverse_lut(forward: &[u8; 16]) -> [u8; 256] {
 }
 
 // =============================================================================
+// VEH Checkpoint Stub — compiled from C, extracted from .text
+// =============================================================================
+
+/// Layout information for the compiled VEH checkpoint stub.
+#[derive(Debug, Clone)]
+pub struct VehStubLayout {
+    /// Size of the compiled stub code (.text section bytes).
+    pub code_size: usize,
+    /// Offset of the disp32 in the LEA that points to checkpoint data trailer.
+    /// The sentinel value 0xDEADBEEF appears as disp32 at this offset.
+    pub data_lea_disp_offset: usize,
+    /// Offset of the disp32/imm32 in the JMP that transfers to the decode stub.
+    /// The sentinel value 0xCAFEBABE appears at this offset.
+    pub decode_jmp_disp_offset: usize,
+}
+
+/// Compile the VEH checkpoint stub C source to a COFF .o, extract .text bytes,
+/// and locate sentinel patch offsets.
+///
+/// Uses clang with PIC-compatible flags. The result is cached — if the .o file
+/// exists and has a newer mtime than the source, compilation is skipped.
+///
+/// # Arguments
+/// * `xwin_dir` - Path to xwin SDK sysroot (for Windows headers/libs)
+/// * `source_path` - Path to `veh_checkpoint_stub.c`
+/// * `cache_dir` - Directory for the compiled .o file
+///
+/// # Returns
+/// `(text_bytes, VehStubLayout)` — the raw .text section and patch offsets.
+pub fn compile_veh_stub(
+    xwin_dir: &std::path::Path,
+    source_path: &std::path::Path,
+    cache_dir: &std::path::Path,
+) -> anyhow::Result<(Vec<u8>, VehStubLayout)> {
+    use anyhow::Context;
+
+    let obj_path = cache_dir.join("veh_checkpoint_stub.o");
+
+    // Check cache: skip compilation if .o is newer than source
+    let needs_compile = if obj_path.exists() {
+        let src_mtime = std::fs::metadata(source_path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let obj_mtime = std::fs::metadata(&obj_path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        src_mtime > obj_mtime
+    } else {
+        true
+    };
+
+    if needs_compile {
+        std::fs::create_dir_all(cache_dir).context("Failed to create VEH stub cache dir")?;
+
+        let crt_include = xwin_dir.join("crt").join("include");
+        let sdk_ucrt = xwin_dir.join("sdk").join("include").join("ucrt");
+        let sdk_um = xwin_dir.join("sdk").join("include").join("um");
+        let sdk_shared = xwin_dir.join("sdk").join("include").join("shared");
+
+        let output = std::process::Command::new("clang")
+            .args([
+                "-c",
+                "-O2",
+                "-nostdlib",
+                "-fno-stack-protector",
+                "-fno-exceptions",
+                "--target=x86_64-pc-windows-msvc",
+                "-fms-compatibility",
+                "-fms-extensions",
+                "-fno-builtin",
+                "-mno-red-zone",
+            ])
+            .arg(format!("-I{}", crt_include.display()))
+            .arg(format!("-I{}", sdk_ucrt.display()))
+            .arg(format!("-I{}", sdk_um.display()))
+            .arg(format!("-I{}", sdk_shared.display()))
+            .arg(format!("--sysroot={}", xwin_dir.display()))
+            .arg("-o")
+            .arg(obj_path.to_str().unwrap_or_default())
+            .arg(source_path.to_str().unwrap_or_default())
+            .output()
+            .context("Failed to invoke clang for VEH stub compilation")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "VEH stub compilation failed (exit {}):\n{}",
+                output.status,
+                stderr
+            );
+        }
+    }
+
+    // Parse COFF .o and extract .text section
+    let obj_bytes = std::fs::read(&obj_path).context("Failed to read compiled VEH stub .o")?;
+    let text_bytes = extract_coff_text_section(&obj_bytes)
+        .context("Failed to extract .text from VEH stub COFF object")?;
+
+    // Scan for sentinel values to find patch offsets
+    let layout = find_veh_stub_sentinels(&text_bytes)
+        .context("Failed to locate sentinel values in VEH stub code")?;
+
+    Ok((text_bytes, layout))
+}
+
+/// Extract the .text section bytes from a COFF object file.
+fn extract_coff_text_section(obj_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    match goblin::Object::parse(obj_bytes)
+        .map_err(|e| anyhow::anyhow!("Failed to parse COFF object: {}", e))?
+    {
+        goblin::Object::PE(pe) => {
+            // Sometimes goblin parses .o as PE — look for .text section
+            for section in &pe.sections {
+                let name = String::from_utf8_lossy(&section.name)
+                    .trim_end_matches('\0')
+                    .to_string();
+                if name == ".text" {
+                    let start = section.pointer_to_raw_data as usize;
+                    let size = section.size_of_raw_data as usize;
+                    if start + size <= obj_bytes.len() {
+                        return Ok(obj_bytes[start..start + size].to_vec());
+                    }
+                }
+            }
+            anyhow::bail!("No .text section found in PE-parsed COFF object");
+        }
+        goblin::Object::COFF(coff) => {
+            for section in &coff.sections {
+                let name = section.name().unwrap_or_default();
+                if name == ".text" {
+                    let start = section.pointer_to_raw_data as usize;
+                    let size = section.size_of_raw_data as usize;
+                    if start + size <= obj_bytes.len() {
+                        return Ok(obj_bytes[start..start + size].to_vec());
+                    }
+                }
+            }
+            anyhow::bail!("No .text section found in COFF object");
+        }
+        other => anyhow::bail!(
+            "Expected COFF object, got {:?}",
+            std::mem::discriminant(&other)
+        ),
+    }
+}
+
+/// Scan compiled stub code for sentinel displacement values using iced-x86.
+///
+/// Looks for:
+/// - `0xDEADBEEF` as a disp32 in a LEA instruction → `data_lea_disp_offset`
+/// - `0xCAFEBABE` as a rel32 in a JMP instruction → `decode_jmp_disp_offset`
+fn find_veh_stub_sentinels(code: &[u8]) -> anyhow::Result<VehStubLayout> {
+    // Scan for the 4-byte sentinel patterns directly in the byte stream.
+    // This is more robust than instruction-level scanning since the compiler
+    // may emit the sentinels in various instruction forms.
+    let dead_beef = 0xDEADBEEFu32.to_le_bytes();
+    let cafe_babe = 0xCAFEBABEu32.to_le_bytes();
+
+    let mut data_offset = None;
+    let mut jmp_offset = None;
+
+    for i in 0..code.len().saturating_sub(3) {
+        if code[i..i + 4] == dead_beef && data_offset.is_none() {
+            data_offset = Some(i);
+        }
+        if code[i..i + 4] == cafe_babe && jmp_offset.is_none() {
+            jmp_offset = Some(i);
+        }
+    }
+
+    let data_lea_disp_offset = data_offset
+        .ok_or_else(|| anyhow::anyhow!("Sentinel 0xDEADBEEF not found in VEH stub code"))?;
+    let decode_jmp_disp_offset = jmp_offset
+        .ok_or_else(|| anyhow::anyhow!("Sentinel 0xCAFEBABE not found in VEH stub code"))?;
+
+    Ok(VehStubLayout {
+        code_size: code.len(),
+        data_lea_disp_offset,
+        decode_jmp_disp_offset,
+    })
+}
+
+/// Checkpoint data trailer layout (appended after VEH stub code):
+///
+/// ```text
+/// [u32 checkpoint_count]
+/// [checkpoint_count × {u32 offset, u8 orig_byte}]  (5 bytes each, packed)
+/// [pipe_name as null-terminated ASCII]
+/// [u32 shellcode_base_rel]   (offset from data_start to decoded payload)
+/// ```
+const PIPE_NAME: &[u8] = b"\\\\.\\pipe\\rededr_checkpoints\0";
+
+/// Pack checkpoint entries into the binary trailer format.
+///
+/// Each entry is 5 bytes: u32 LE offset + u8 original_byte.
+pub fn pack_checkpoint_table(
+    entries: &[crate::template::sc_checkpoints::BreakpointEntry],
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(entries.len() * 5);
+    for entry in entries {
+        buf.extend_from_slice(&(entry.offset as u32).to_le_bytes());
+        buf.push(entry.original_byte);
+    }
+    buf
+}
+
+/// Assemble an instrumented section with VEH checkpoint support.
+///
+/// Layout:
+/// ```text
+/// [veh_stub_code]        Compiled PIC code
+/// [checkpoint_count]     u32 LE
+/// [checkpoint_table]     N × 5 bytes (packed)
+/// [pipe_name]            null-terminated ASCII
+/// [shellcode_base_rel]   u32 LE — offset from data_start to decoded payload
+/// [decode_stub]          XOR/SubByte/None carrier stub
+/// [key_bytes]            0-256 bytes
+/// [encoded_payload]      M bytes
+/// ```
+///
+/// Patches:
+/// - VEH stub's data LEA sentinel → points to checkpoint_count
+/// - VEH stub's JMP sentinel → jumps to decode_stub start
+///
+/// # Arguments
+/// * `veh_code` - Compiled VEH stub .text bytes
+/// * `veh_layout` - Patch offsets within veh_code
+/// * `checkpoint_entries` - Breakpoint table from sc_checkpoints::patch_shellcode
+/// * `decode_stub` - Pre-assembled carrier stub (already patched for payload len, OEP)
+/// * `key_bytes` - Encoding key bytes
+/// * `encoded_payload` - Encoded shellcode (with INT3s in the pre-encoding stage)
+pub fn assemble_instrumented_section(
+    veh_code: &[u8],
+    veh_layout: &VehStubLayout,
+    checkpoint_entries: &[crate::template::sc_checkpoints::BreakpointEntry],
+    decode_stub: &[u8],
+    key_bytes: &[u8],
+    encoded_payload: &[u8],
+) -> Vec<u8> {
+    let count = checkpoint_entries.len() as u32;
+    let table_bytes = pack_checkpoint_table(checkpoint_entries);
+
+    // Compute sizes for offset calculations
+    let data_trailer_size = 4 /* count */
+        + table_bytes.len()
+        + PIPE_NAME.len()
+        + 4 /* shellcode_base_rel */;
+
+    // shellcode_base_rel: offset from data_start to the start of encoded_payload
+    // (which is where decoded shellcode lives after in-place decode)
+    let shellcode_base_rel = data_trailer_size + decode_stub.len() + key_bytes.len();
+
+    // Total section size
+    let total = veh_code.len()
+        + data_trailer_size
+        + decode_stub.len()
+        + key_bytes.len()
+        + encoded_payload.len();
+    let mut section = Vec::with_capacity(total);
+
+    // 1. VEH stub code (mutable copy for patching)
+    section.extend_from_slice(veh_code);
+
+    // 2. Data trailer
+    let data_start_offset = section.len();
+    section.extend_from_slice(&count.to_le_bytes());
+    section.extend_from_slice(&table_bytes);
+    section.extend_from_slice(PIPE_NAME);
+    section.extend_from_slice(&(shellcode_base_rel as u32).to_le_bytes());
+
+    // 3. Decode stub
+    let decode_stub_offset = section.len();
+    section.extend_from_slice(decode_stub);
+
+    // 4. Key + payload
+    section.extend_from_slice(key_bytes);
+    section.extend_from_slice(encoded_payload);
+
+    // --- Patch sentinel displacements ---
+
+    // Data LEA: RIP-relative from the instruction after the LEA.
+    // The disp32 is at veh_layout.data_lea_disp_offset.
+    // RIP after LEA = data_lea_disp_offset + 4 (disp32 is last 4 bytes of the instruction).
+    // Target = data_start_offset.
+    // disp32 = target - rip_after = data_start_offset - (data_lea_disp_offset + 4)
+    {
+        let rip_after = veh_layout.data_lea_disp_offset + 4;
+        let disp = data_start_offset as i32 - rip_after as i32;
+        section[veh_layout.data_lea_disp_offset..veh_layout.data_lea_disp_offset + 4]
+            .copy_from_slice(&disp.to_le_bytes());
+    }
+
+    // Decode JMP: RIP-relative from instruction after the JMP.
+    // disp32 at veh_layout.decode_jmp_disp_offset.
+    // For a near JMP (E9 xx xx xx xx), the disp32 is the last 4 bytes.
+    // RIP after JMP = decode_jmp_disp_offset + 4.
+    // Target = decode_stub_offset.
+    {
+        let rip_after = veh_layout.decode_jmp_disp_offset + 4;
+        let disp = decode_stub_offset as i32 - rip_after as i32;
+        section[veh_layout.decode_jmp_disp_offset..veh_layout.decode_jmp_disp_offset + 4]
+            .copy_from_slice(&disp.to_le_bytes());
+    }
+
+    section
+}
+
+/// Compute the VEH overhead in bytes for space calculations.
+///
+/// This is an estimate used by `select_best_target()` to determine if a code
+/// cave is large enough when checkpoints are requested.
+pub fn veh_overhead_estimate(veh_code_size: usize, checkpoint_count: u32) -> usize {
+    veh_code_size
+        + 4                                         // checkpoint_count u32
+        + (checkpoint_count as usize * 5)           // table entries
+        + PIPE_NAME.len()                           // pipe name
+        + 4 // shellcode_base_rel
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -484,5 +804,212 @@ mod tests {
             expected_target,
             "SubByte LEA displacement should point to reverse LUT at code_size"
         );
+    }
+
+    // =========================================================================
+    // VEH Checkpoint Stub Tests
+    // =========================================================================
+
+    #[test]
+    fn test_checkpoint_table_packing() {
+        use crate::template::sc_checkpoints::BreakpointEntry;
+
+        let entries = vec![
+            BreakpointEntry {
+                offset: 0x004A,
+                original_byte: 0x48,
+                name: "sc_checkpoint_0".to_string(),
+                progress_pct: 25,
+            },
+            BreakpointEntry {
+                offset: 0x0094,
+                original_byte: 0x89,
+                name: "sc_checkpoint_1".to_string(),
+                progress_pct: 50,
+            },
+            BreakpointEntry {
+                offset: 0x00DE,
+                original_byte: 0xC3,
+                name: "sc_checkpoint_2".to_string(),
+                progress_pct: 75,
+            },
+        ];
+
+        let packed = pack_checkpoint_table(&entries);
+
+        // Each entry: 4 bytes offset + 1 byte orig = 5 bytes
+        assert_eq!(packed.len(), 15, "3 entries × 5 bytes = 15");
+
+        // Entry 0: offset=0x004A, orig=0x48
+        assert_eq!(u32::from_le_bytes(packed[0..4].try_into().unwrap()), 0x004A);
+        assert_eq!(packed[4], 0x48);
+
+        // Entry 1: offset=0x0094, orig=0x89
+        assert_eq!(u32::from_le_bytes(packed[5..9].try_into().unwrap()), 0x0094);
+        assert_eq!(packed[9], 0x89);
+
+        // Entry 2: offset=0x00DE, orig=0xC3
+        assert_eq!(
+            u32::from_le_bytes(packed[10..14].try_into().unwrap()),
+            0x00DE
+        );
+        assert_eq!(packed[14], 0xC3);
+    }
+
+    #[test]
+    fn test_instrumented_section_layout() {
+        use crate::template::sc_checkpoints::BreakpointEntry;
+
+        // Mock VEH stub: 16 bytes with sentinels at known positions
+        let mut mock_veh = vec![0x90u8; 16];
+        // Place 0xDEADBEEF at offset 4 (data LEA disp)
+        mock_veh[4..8].copy_from_slice(&0xDEADBEEFu32.to_le_bytes());
+        // Place 0xCAFEBABE at offset 12 (JMP disp)
+        mock_veh[12..16].copy_from_slice(&0xCAFEBABEu32.to_le_bytes());
+
+        let layout = VehStubLayout {
+            code_size: 16,
+            data_lea_disp_offset: 4,
+            decode_jmp_disp_offset: 12,
+        };
+
+        let entries = vec![BreakpointEntry {
+            offset: 0x0010,
+            original_byte: 0x55,
+            name: "sc_checkpoint_0".to_string(),
+            progress_pct: 50,
+        }];
+
+        let decode_stub = vec![0xCCu8; 8]; // mock decode stub
+        let key_bytes = vec![0xAAu8, 0x55];
+        let encoded = vec![0x90u8; 32];
+
+        let section = assemble_instrumented_section(
+            &mock_veh,
+            &layout,
+            &entries,
+            &decode_stub,
+            &key_bytes,
+            &encoded,
+        );
+
+        // Verify total size
+        let pipe_name_len = b"\\\\.\\pipe\\rededr_checkpoints\0".len();
+        let data_trailer_size = 4 + 5 + pipe_name_len + 4; // count + 1 entry + pipe + base_rel
+        let expected_total = 16 + data_trailer_size + 8 + 2 + 32;
+        assert_eq!(section.len(), expected_total);
+
+        // Verify VEH code starts the section (first byte should be 0x90)
+        assert_eq!(section[0], 0x90);
+
+        // Verify checkpoint count at data_start
+        let data_start = 16;
+        let count = u32::from_le_bytes(section[data_start..data_start + 4].try_into().unwrap());
+        assert_eq!(count, 1);
+
+        // Verify checkpoint entry
+        let entry_offset =
+            u32::from_le_bytes(section[data_start + 4..data_start + 8].try_into().unwrap());
+        assert_eq!(entry_offset, 0x0010);
+        assert_eq!(section[data_start + 8], 0x55); // orig_byte
+
+        // Verify sentinel was patched (no longer 0xDEADBEEF)
+        let patched_data_disp = u32::from_le_bytes(section[4..8].try_into().unwrap());
+        assert_ne!(
+            patched_data_disp, 0xDEADBEEF,
+            "Data LEA sentinel should be patched"
+        );
+
+        let patched_jmp_disp = u32::from_le_bytes(section[12..16].try_into().unwrap());
+        assert_ne!(
+            patched_jmp_disp, 0xCAFEBABE,
+            "JMP sentinel should be patched"
+        );
+    }
+
+    #[test]
+    fn test_assemble_patches_lea_displacement() {
+        use crate::template::sc_checkpoints::BreakpointEntry;
+
+        // Build a minimal mock where we can verify the RIP-relative math
+        let mut mock_veh = vec![0x90u8; 20];
+        // LEA disp at offset 8, JMP disp at offset 16
+        mock_veh[8..12].copy_from_slice(&0xDEADBEEFu32.to_le_bytes());
+        mock_veh[16..20].copy_from_slice(&0xCAFEBABEu32.to_le_bytes());
+
+        let layout = VehStubLayout {
+            code_size: 20,
+            data_lea_disp_offset: 8,
+            decode_jmp_disp_offset: 16,
+        };
+
+        let entries = vec![BreakpointEntry {
+            offset: 0x20,
+            original_byte: 0x48,
+            name: "sc_checkpoint_0".to_string(),
+            progress_pct: 50,
+        }];
+
+        let section = assemble_instrumented_section(
+            &mock_veh,
+            &layout,
+            &entries,
+            &[0xCC; 4],  // decode stub
+            &[],         // no key
+            &[0x90; 16], // payload
+        );
+
+        // Data LEA: disp32 at offset 8
+        // RIP after = 8 + 4 = 12
+        // Target = 20 (data_start = veh_code_size)
+        // Expected disp = 20 - 12 = 8
+        let data_disp = i32::from_le_bytes(section[8..12].try_into().unwrap());
+        assert_eq!(
+            data_disp, 8,
+            "Data LEA should point to data_start (offset 20)"
+        );
+
+        // Decode JMP: disp32 at offset 16
+        // RIP after = 16 + 4 = 20
+        // data_trailer: 4 + 5 + pipe_name_len + 4
+        let pipe_name_len = b"\\\\.\\pipe\\rededr_checkpoints\0".len();
+        let data_trailer = 4 + 5 + pipe_name_len + 4;
+        let decode_stub_offset = 20 + data_trailer;
+        // Expected disp = decode_stub_offset - 20
+        let jmp_disp = i32::from_le_bytes(section[16..20].try_into().unwrap());
+        assert_eq!(
+            jmp_disp,
+            decode_stub_offset as i32 - 20,
+            "JMP should point to decode stub"
+        );
+    }
+
+    #[test]
+    fn test_veh_overhead_estimate() {
+        let overhead = veh_overhead_estimate(512, 10);
+        // 512 + 4 + 50 + pipe_name_len + 4
+        let pipe_name_len = b"\\\\.\\pipe\\rededr_checkpoints\0".len();
+        let expected = 512 + 4 + 50 + pipe_name_len + 4;
+        assert_eq!(overhead, expected);
+    }
+
+    #[test]
+    fn test_checkpoint_count_zero_is_noop() {
+        let section = assemble_instrumented_section(
+            &[0x90; 8],
+            &VehStubLayout {
+                code_size: 8,
+                data_lea_disp_offset: 0,
+                decode_jmp_disp_offset: 4,
+            },
+            &[], // no checkpoints
+            &[0xCC; 4],
+            &[],
+            &[0x90; 16],
+        );
+
+        // Count field should be 0
+        let count = u32::from_le_bytes(section[8..12].try_into().unwrap());
+        assert_eq!(count, 0, "Zero checkpoints should produce count=0");
     }
 }

