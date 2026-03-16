@@ -19,6 +19,8 @@
 //!
 //! Key sizes: XOR = 2 bytes, SubByte = 256 bytes (reverse LUT), None = 0 bytes.
 
+use tracing::{debug, warn};
+
 /// Layout information for a carrier stub — describes where to patch build-time values.
 #[derive(Debug, Clone, Copy)]
 pub struct StubLayout {
@@ -463,21 +465,54 @@ pub fn compile_veh_stub(
     Ok((text_bytes, layout))
 }
 
-/// Extract the .text section bytes from a COFF object file.
+/// Extract the .text section bytes from a COFF object or linked PE.
+///
+/// For linked PEs (post lld-link), uses `VirtualSize` when smaller than
+/// `SizeOfRawData` to avoid extracting file-alignment padding zeros.
+/// Also verifies the entry point is at offset 0 of .text for PEs.
 pub fn extract_coff_text_section(obj_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     match goblin::Object::parse(obj_bytes)
         .map_err(|e| anyhow::anyhow!("Failed to parse COFF object: {}", e))?
     {
         goblin::Object::PE(pe) => {
-            // Sometimes goblin parses .o as PE — look for .text section
+            // Linked PE — .text section with resolved relocations
             for section in &pe.sections {
                 let name = String::from_utf8_lossy(&section.name)
                     .trim_end_matches('\0')
                     .to_string();
                 if name == ".text" {
                     let start = section.pointer_to_raw_data as usize;
-                    let size = section.size_of_raw_data as usize;
-                    if start + size <= obj_bytes.len() {
+                    let raw_size = section.size_of_raw_data as usize;
+                    let virt_size = section.virtual_size as usize;
+                    // Use VirtualSize when it's smaller — SizeOfRawData includes
+                    // file-alignment padding zeros that waste space in the injection.
+                    let size = if virt_size > 0 && virt_size < raw_size {
+                        debug!(
+                            ".text extraction: using VirtualSize {:#x} (SizeOfRawData {:#x}, saving {} bytes)",
+                            virt_size,
+                            raw_size,
+                            raw_size - virt_size
+                        );
+                        virt_size
+                    } else {
+                        raw_size
+                    };
+                    if start + raw_size <= obj_bytes.len() {
+                        // Verify entry point is at offset 0 of .text
+                        let ep_rva = pe
+                            .header
+                            .optional_header
+                            .map(|oh| oh.standard_fields.address_of_entry_point)
+                            .unwrap_or(0) as usize;
+                        let text_va = section.virtual_address as usize;
+                        let ep_offset = ep_rva.saturating_sub(text_va);
+                        if ep_offset != 0 {
+                            warn!(
+                                "Entry point at offset {:#x} within .text (expected 0) — \
+                                 stub_entry may not be at the start of extracted code",
+                                ep_offset
+                            );
+                        }
                         return Ok(obj_bytes[start..start + size].to_vec());
                     }
                 }
@@ -521,16 +556,54 @@ fn find_veh_stub_sentinels(code: &[u8]) -> anyhow::Result<VehStubLayout> {
     let mut jmp_offset = None;
     let mut handler_data_offset = None;
 
+    // Count occurrences for duplicate detection
+    let mut dead_count = 0u32;
+    let mut cafe_count = 0u32;
+    let mut baad_count = 0u32;
+
     for i in 0..code.len().saturating_sub(3) {
-        if code[i..i + 4] == dead_beef && data_offset.is_none() {
-            data_offset = Some(i);
+        if code[i..i + 4] == dead_beef {
+            dead_count += 1;
+            if data_offset.is_none() {
+                data_offset = Some(i);
+            }
         }
-        if code[i..i + 4] == cafe_babe && jmp_offset.is_none() {
-            jmp_offset = Some(i);
+        if code[i..i + 4] == cafe_babe {
+            cafe_count += 1;
+            if jmp_offset.is_none() {
+                jmp_offset = Some(i);
+            }
         }
-        if code[i..i + 4] == baad_f00d && handler_data_offset.is_none() {
-            handler_data_offset = Some(i);
+        if code[i..i + 4] == baad_f00d {
+            baad_count += 1;
+            if handler_data_offset.is_none() {
+                handler_data_offset = Some(i);
+            }
         }
+    }
+
+    // Warn on duplicate sentinels — could indicate false positives from
+    // merged .rdata data that happens to contain sentinel byte patterns.
+    if dead_count > 1 {
+        warn!(
+            "DEADBEEF sentinel found {} times in stub code! First at {:#x}",
+            dead_count,
+            data_offset.unwrap()
+        );
+    }
+    if cafe_count > 1 {
+        warn!(
+            "CAFEBABE sentinel found {} times in stub code! First at {:#x}",
+            cafe_count,
+            jmp_offset.unwrap()
+        );
+    }
+    if baad_count > 1 {
+        warn!(
+            "BAADF00D sentinel found {} times in stub code! First at {:#x}",
+            baad_count,
+            handler_data_offset.unwrap()
+        );
     }
 
     let data_lea_disp_offset = data_offset
@@ -539,6 +612,14 @@ fn find_veh_stub_sentinels(code: &[u8]) -> anyhow::Result<VehStubLayout> {
         .ok_or_else(|| anyhow::anyhow!("Sentinel 0xCAFEBABE not found in VEH stub code"))?;
     let handler_data_lea_disp_offset = handler_data_offset
         .ok_or_else(|| anyhow::anyhow!("Sentinel 0xBAADF00D not found in VEH stub code"))?;
+
+    debug!(
+        "VEH stub sentinels: DEADBEEF@{:#x} CAFEBABE@{:#x} BAADF00D@{:#x} (code_size={:#x})",
+        data_lea_disp_offset,
+        decode_jmp_disp_offset,
+        handler_data_lea_disp_offset,
+        code.len()
+    );
 
     Ok(VehStubLayout {
         code_size: code.len(),

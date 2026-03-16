@@ -187,9 +187,12 @@ typedef struct _EXCEPTION_POINTERS {
 /* API function pointer types */
 typedef HANDLE (*CreateFileA_t)(LPCSTR, DWORD, DWORD, PVOID, DWORD, DWORD, HANDLE);
 typedef BOOL   (*WriteFile_t)(HANDLE, const void*, DWORD, DWORD*, PVOID);
+typedef BOOL   (*CloseHandle_t)(HANDLE);
 typedef BOOL   (*VirtualProtect_t)(LPVOID, SIZE_T, DWORD, DWORD*);
 typedef PVOID  (*AddVectoredExceptionHandler_t)(ULONG, void*);
 typedef ULONG  (*RemoveVectoredExceptionHandler_t)(PVOID);
+
+#define CREATE_ALWAYS 2
 
 /* Checkpoint table entry (packed, matches Rust assembly) */
 #pragma pack(push, 1)
@@ -256,13 +259,66 @@ static __inline __attribute__((always_inline)) LPVOID get_func_by_name(LPVOID mo
     WORD*  ordinals = (WORD*)((BYTE*)module + exp->AddressOfNameOrdinals);
     DWORD* funcs    = (DWORD*)((BYTE*)module + exp->AddressOfFunctions);
 
+    DWORD exp_start = exp_dir->VirtualAddress;
+    DWORD exp_end   = exp_start + exp_dir->Size;
+
     for (DWORD i = 0; i < exp->NumberOfNames; i++) {
         const char* name = (const char*)((BYTE*)module + names[i]);
         const char* a = func_name;
         const char* b = name;
         while (*a && *b && *a == *b) { a++; b++; }
-        if (*a == 0 && *b == 0)
-            return (BYTE*)module + funcs[ordinals[i]];
+        if (*a == 0 && *b == 0) {
+            DWORD func_rva = funcs[ordinals[i]];
+
+            /* Check for DLL export forwarder: RVA within export directory = forwarder string */
+            if (func_rva >= exp_start && func_rva < exp_end) {
+                /* Forwarder string e.g. "ntdll.RtlAddVectoredExceptionHandler" */
+                const char* fwd = (const char*)((BYTE*)module + func_rva);
+
+                /* Parse DLL name (before the dot), convert to WCHAR, append ".dll" */
+                WCHAR fwd_dll[64];
+                int j = 0;
+                while (fwd[j] && fwd[j] != '.' && j < 58) {
+                    fwd_dll[j] = (WCHAR)fwd[j];
+                    j++;
+                }
+                fwd_dll[j]   = L'.';
+                fwd_dll[j+1] = L'd';
+                fwd_dll[j+2] = L'l';
+                fwd_dll[j+3] = L'l';
+                fwd_dll[j+4] = 0;
+
+                if (fwd[j] != '.') return 0; /* malformed forwarder */
+                const char* fwd_func = &fwd[j + 1]; /* function name after the dot */
+
+                /* Resolve the target DLL from PEB */
+                LPVOID fwd_mod = get_module_by_name(fwd_dll);
+                if (!fwd_mod) return 0;
+
+                /* Resolve function from the target DLL (one level, no further forwarding) */
+                IMAGE_DOS_HEADER* fdos = (IMAGE_DOS_HEADER*)fwd_mod;
+                if (fdos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
+                IMAGE_NT_HEADERS64* fnt = (IMAGE_NT_HEADERS64*)((BYTE*)fwd_mod + fdos->e_lfanew);
+                IMAGE_DATA_DIRECTORY* fexp_dir = &fnt->OptionalHeader.DataDirectory[0];
+                if (!fexp_dir->VirtualAddress) return 0;
+                IMAGE_EXPORT_DIRECTORY* fexp = (IMAGE_EXPORT_DIRECTORY*)((BYTE*)fwd_mod + fexp_dir->VirtualAddress);
+                DWORD* fnames    = (DWORD*)((BYTE*)fwd_mod + fexp->AddressOfNames);
+                WORD*  fordinals = (WORD*)((BYTE*)fwd_mod + fexp->AddressOfNameOrdinals);
+                DWORD* ffuncs    = (DWORD*)((BYTE*)fwd_mod + fexp->AddressOfFunctions);
+
+                for (DWORD fi = 0; fi < fexp->NumberOfNames; fi++) {
+                    const char* fname = (const char*)((BYTE*)fwd_mod + fnames[fi]);
+                    const char* fa = fwd_func;
+                    const char* fb = fname;
+                    while (*fa && *fb && *fa == *fb) { fa++; fb++; }
+                    if (*fa == 0 && *fb == 0)
+                        return (BYTE*)fwd_mod + ffuncs[fordinals[fi]];
+                }
+                return 0; /* forwarder target not found */
+            }
+
+            return (BYTE*)module + func_rva;
+        }
     }
     return 0;
 }
@@ -355,21 +411,17 @@ void stub_entry(void) {
     LPVOID k32 = get_module_by_name(k32_name);
     if (!k32) goto skip_veh;
 
-    /* --- Resolve APIs --- */
+    /* --- Resolve APIs needed for stub setup --- */
     char s_CreateFileA[] = { 'C','r','e','a','t','e','F','i','l','e','A', 0 };
-    char s_WriteFile[]   = { 'W','r','i','t','e','F','i','l','e', 0 };
-    char s_VirtualProtect[] = { 'V','i','r','t','u','a','l','P','r','o','t','e','c','t', 0 };
     char s_AddVEH[]      = { 'A','d','d','V','e','c','t','o','r','e','d',
                              'E','x','c','e','p','t','i','o','n',
                              'H','a','n','d','l','e','r', 0 };
 
     CreateFileA_t pCreateFileA = (CreateFileA_t)get_func_by_name(k32, s_CreateFileA);
-    WriteFile_t pWriteFile     = (WriteFile_t)get_func_by_name(k32, s_WriteFile);
-    VirtualProtect_t pVP       = (VirtualProtect_t)get_func_by_name(k32, s_VirtualProtect);
     AddVectoredExceptionHandler_t pAddVEH =
         (AddVectoredExceptionHandler_t)get_func_by_name(k32, s_AddVEH);
 
-    if (!pCreateFileA || !pWriteFile || !pVP || !pAddVEH)
+    if (!pCreateFileA || !pAddVEH)
         goto skip_veh;
 
     /* --- Locate checkpoint data via sentinel LEA (0xDEADBEEF) --- */
@@ -393,7 +445,7 @@ void stub_entry(void) {
         /* Get pipe_name from trailer */
         char* pipe_name = (char*)(data_ptr + 4 + chk_count * sizeof(CheckpointEntry));
 
-        /* Open checkpoint pipe */
+        /* Open checkpoint pipe (best-effort — no pipe server in standalone mode) */
         HANDLE pipe_handle = pCreateFileA(
             pipe_name,
             GENERIC_WRITE,
