@@ -25,6 +25,7 @@
     <br />
     <br />
     <a href="https://github.com/2Tricky4u/Automated-Analysis-and-Mutation-of-Software-Artifacts-against-AV-EDR"><strong>Explore the docs</strong></a>
+    <a href="https://github.com/2Tricky4u/Automated-Analysis-and-Mutation-of-Software-Artifacts-against-AV-EDR/blob/main/Automated_Analysis_and_Mutation_of_Software_Artifacts_against_EDR.pdf"><strong>Explore the report</strong></a>
     <br />
     <br />
     <a href="https://github.com/2Tricky4u/Automated-Analysis-and-Mutation-of-Software-Artifacts-against-AV-EDR/issues/new?labels=bug&template=bug-report---.md">Report Bug</a>
